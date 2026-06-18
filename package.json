@@ -1,0 +1,38 @@
+{
+  "name": "open-data-agent-workbench",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "apps/api",
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "tsc -b tsconfig.build.json",
+    "typecheck": "tsc -b tsconfig.build.json --pretty",
+    "dev:api": "npm --workspace @open-data-agent/api run dev",
+    "start:api": "npm --workspace @open-data-agent/api run start",
+    "smoke:api": "node scripts/smoke-copilotkit.mjs",
+    "smoke:copilotkit": "node scripts/smoke-copilotkit.mjs",
+    "smoke:metadata": "npm run build && node scripts/smoke-metadata.mjs",
+    "smoke:data-gateway": "npm run build && node scripts/smoke-data-gateway.mjs",
+    "smoke:sql": "npm run build && node scripts/smoke-sql-readonly.mjs",
+    "smoke:agent": "npm run build && node scripts/smoke-agent-runtime.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^5.8.0",
+    "write-excel-file": "^4.1.1"
+  },
+  "dependencies": {
+    "@ag-ui/client": "^0.0.46",
+    "@ag-ui/core": "^0.0.46",
+    "@ag-ui/mastra": "^1.0.3",
+    "@ai-sdk/openai": "^3.0.72",
+    "@copilotkit/runtime": "^0.0.0-mme-ag-ui-0-0-46-20260227141603",
+    "@mastra/client-js": "^1.25.0",
+    "@mastra/core": "^1.42.0",
+    "read-excel-file": "^9.2.0",
+    "zod": "^4.4.3"
+  }
+}

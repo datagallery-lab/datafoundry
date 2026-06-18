@@ -1,0 +1,25 @@
+{
+  "name": "@open-data-agent/api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsx watch src/index.ts",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "@ag-ui/mastra": "^1.0.3",
+    "@copilotkit/runtime": "^0.0.0-mme-ag-ui-0-0-46-20260227141603",
+    "@open-data-agent/agent-runtime": "0.1.0",
+    "@open-data-agent/contracts": "0.1.0",
+    "@open-data-agent/data-gateway": "0.1.0",
+    "@open-data-agent/metadata": "0.1.0",
+    "dotenv": "^17.2.1"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.0"
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "dist"
+  },
+  "references": [
+    {
+      "path": "../../packages/contracts"
+    },
+    {
+      "path": "../../packages/agent-runtime"
+    },
+    {
+      "path": "../../packages/metadata"
+    },
+    {
+      "path": "../../packages/data-gateway"
+    }
+  ],
+  "include": [
+    "src/**/*.ts"
+  ]
+}

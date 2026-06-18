@@ -1,0 +1,29 @@
+{
+  "files": [],
+  "references": [
+    {
+      "path": "packages/contracts"
+    },
+    {
+      "path": "packages/agent-runtime"
+    },
+    {
+      "path": "packages/data-gateway"
+    },
+    {
+      "path": "packages/knowledge"
+    },
+    {
+      "path": "packages/artifacts"
+    },
+    {
+      "path": "packages/providers"
+    },
+    {
+      "path": "packages/metadata"
+    },
+    {
+      "path": "apps/api"
+    }
+  ]
+}

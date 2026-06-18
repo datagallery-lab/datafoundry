@@ -1,0 +1,19 @@
+{
+  "name": "@open-data-agent/agent-runtime",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit false"
+  },
+  "dependencies": {
+    "@mastra/core": "^1.42.0",
+    "@open-data-agent/contracts": "0.1.0",
+    "@open-data-agent/data-gateway": "0.1.0",
+    "@open-data-agent/providers": "0.1.0",
+    "zod": "^4.2.1"
+  }
+}

@@ -16,3 +16,7 @@
 ## Engineering
 
 - [DB-GPT-like Data Agent 最终研发设计文档](engineering/db-gpt-like-data-agent-final-design-zh.md)
+- [Agent / Data Gateway / Knowledge 架构设计与开发方案](engineering/rd-b-agent-gateway-knowledge-architecture-plan-zh.md)
+
+The PRD, research, and earlier engineering documents are historical inputs. The current implementation follows the
+single CopilotKit/AG-UI runtime architecture in `current-agent-architecture.svg`.
