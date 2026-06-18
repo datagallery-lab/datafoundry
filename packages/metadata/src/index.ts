@@ -1,4 +1,5 @@
-import type { ArtifactSummary, ArtifactType, RunEventEnvelope, RunEventType } from "@open-data-agent/contracts";
+import type { BaseEvent, EventType } from "@ag-ui/core";
+import type { ArtifactSummary, ArtifactType, RunEventEnvelope } from "@open-data-agent/contracts";
 import { mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -49,7 +50,7 @@ export type RunEventRecord = {
   run_id: string;
   session_id: string;
   seq: number;
-  event_type: RunEventType;
+  event_type: EventType;
   payload_json: string;
   created_at: string;
 };
@@ -129,8 +130,7 @@ export type WriteRunEventInput = {
   user_id: string;
   run_id: string;
   session_id: string;
-  type: RunEventType;
-  payload: unknown;
+  event: BaseEvent;
 };
 
 export type CreateArtifactInput = {
@@ -454,8 +454,8 @@ export class RunEventRepository {
         input.run_id,
         input.session_id,
         seq,
-        input.type,
-        JSON.stringify(input.payload),
+        input.event.type,
+        JSON.stringify(input.event),
         createdAt
       );
 
@@ -645,7 +645,7 @@ export const runEventRecordToEnvelope = (record: RunEventRecord): RunEventEnvelo
   session_id: record.session_id,
   seq: record.seq,
   ts: record.created_at,
-  payload: JSON.parse(record.payload_json) as unknown
+  event: JSON.parse(record.payload_json) as BaseEvent
 });
 
 export const artifactRecordToSummary = (record: ArtifactRecord): ArtifactSummary => ({
@@ -916,7 +916,7 @@ const mapRunEventRow = (row: unknown): Optional<RunEventRecord> => {
     run_id: requiredString(row, "run_id"),
     session_id: requiredString(row, "session_id"),
     seq: requiredNumber(row, "seq"),
-    event_type: requiredString(row, "event_type") as RunEventType,
+    event_type: requiredString(row, "event_type") as EventType,
     payload_json: requiredString(row, "payload_json"),
     created_at: requiredString(row, "created_at")
   };

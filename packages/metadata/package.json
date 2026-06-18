@@ -10,6 +10,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit false"
   },
   "dependencies": {
+    "@ag-ui/core": "^0.0.46",
     "@open-data-agent/contracts": "0.1.0"
   }
 }

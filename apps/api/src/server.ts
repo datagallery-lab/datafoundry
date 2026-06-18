@@ -1,4 +1,5 @@
 import { MastraAgent } from "@ag-ui/mastra";
+import { AbstractAgent, EventType, type BaseEvent, type RunAgentInput } from "@ag-ui/client";
 import {
   CopilotRuntime,
   ExperimentalEmptyAdapter,
@@ -7,8 +8,10 @@ import {
 import {
   createDataAgent,
   createDataAgentRunContext,
+  createActivityDelta,
+  createPlanActivityEvent,
   createModelProviderFromEnv,
-  type RunEventEmitter
+  type AgUiEventEmitter
 } from "@open-data-agent/agent-runtime";
 import { type MeResponse, createEnvConfig, createErrorResult, createSuccessResult } from "@open-data-agent/contracts";
 import { LocalDataGateway } from "@open-data-agent/data-gateway";
@@ -16,6 +19,9 @@ import { RunEventWriter, createMetadataStore, type MetadataStore } from "@open-d
 import { randomUUID } from "node:crypto";
 import { createServer as createHttpServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { join } from "node:path";
+import { Observable } from "rxjs";
+
+import { extractDatasourceId, extractLastUserText } from "./run-input.js";
 
 const DEV_USER: MeResponse = {
   id: "dev-user",
@@ -43,7 +49,6 @@ export const createServer = async (options: CreateServerOptions = {}): Promise<S
       }
     });
   const dataGateway = new LocalDataGateway(metadataStore);
-  const runEventWriter = new RunEventWriter(metadataStore.runEvents);
 
   const server = createHttpServer(async (request, response) => {
     try {
@@ -64,8 +69,7 @@ export const createServer = async (options: CreateServerOptions = {}): Promise<S
           request,
           response,
           metadataStore,
-          dataGateway,
-          runEventWriter
+          dataGateway
         });
         return;
       }
@@ -95,15 +99,13 @@ type HandleCopilotKitRequestInput = {
   response: ServerResponse;
   metadataStore: MetadataStore;
   dataGateway: LocalDataGateway;
-  runEventWriter: RunEventWriter;
 };
 
 const handleCopilotKitRequest = async ({
   request,
   response,
   metadataStore,
-  dataGateway,
-  runEventWriter
+  dataGateway
 }: HandleCopilotKitRequestInput): Promise<void> => {
   const modelProvider = createModelProviderFromEnv(process.env);
 
@@ -112,65 +114,14 @@ const handleCopilotKitRequest = async ({
     return;
   }
 
-  const sessionId = getHeaderValue(request.headers["x-session-id"]) ?? randomUUID();
-  const runId = randomUUID();
-  const selectedDatasourceId = getHeaderValue(request.headers["x-datasource-id"]) ?? "api-duckdb-demo";
-
-  ensureDemoDataSource(metadataStore, selectedDatasourceId);
-  metadataStore.sessions.create({
-    user_id: DEV_USER.id,
-    id: sessionId,
-    title: "CopilotKit session",
-    selected_datasource_id: selectedDatasourceId
-  });
-  metadataStore.runs.create({
-    user_id: DEV_USER.id,
-    id: runId,
-    session_id: sessionId,
-    user_input: "CopilotKit AG-UI run",
-    status: "running",
-    model_name: modelProvider.model_name,
-    datasource_id: selectedDatasourceId
-  });
-
-  const emitter: RunEventEmitter = {
-    create: (type, payload) =>
-      runEventWriter.write({
-        user_id: DEV_USER.id,
-        run_id: runId,
-        session_id: sessionId,
-        type,
-        payload
-      })
-  };
-  emitter.create("plan.update", {
-    tasks: [
-      { id: "schema", title: "检查数据源 schema", status: "pending" },
-      { id: "sql", title: "生成并执行只读 SQL", status: "pending" },
-      { id: "final", title: "生成最终回答", status: "pending" }
-    ]
-  });
-
-  const runContext = createDataAgentRunContext({
-    user_id: DEV_USER.id,
-    session_id: sessionId,
-    run_id: runId,
-    user_input: "CopilotKit AG-UI run",
-    chat_mode: "copilotkit",
-    selected_datasource_id: selectedDatasourceId,
-    model_name: modelProvider.model_name
-  });
-  const { agent } = createDataAgent({
-    dataGateway,
-    emitter,
-    modelProvider,
-    runContext
-  });
   const runtime = new CopilotRuntime({
     agents: {
-      dataAgent: new MastraAgent({
-        agent,
-        resourceId: DEV_USER.id
+      dataAgent: new DataAgentAgUiAgent({
+        dataGateway,
+        defaultDatasourceId: "api-duckdb-demo",
+        metadataStore,
+        modelProvider,
+        user: DEV_USER
       })
     }
   });
@@ -185,40 +136,179 @@ const handleCopilotKitRequest = async ({
 
   try {
     await endpoint(request, response);
-    metadataStore.runs.updateStatus({
-      user_id: DEV_USER.id,
-      run_id: runId,
-      status: "completed"
-    });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Unknown CopilotKit runtime error";
-
-    metadataStore.runs.updateStatus({
-      user_id: DEV_USER.id,
-      run_id: runId,
-      status: "failed",
-      error_message: message
-    });
     throw error;
   }
 };
 
-const getHeaderValue = (value: unknown): string | undefined => {
-  if (Array.isArray(value)) {
-    return typeof value[0] === "string" ? value[0] : undefined;
+type DataAgentAgUiAgentInput = {
+  dataGateway: LocalDataGateway;
+  defaultDatasourceId: string;
+  metadataStore: MetadataStore;
+  modelProvider: Exclude<ReturnType<typeof createModelProviderFromEnv>, { kind: "mock" }>;
+  user: MeResponse;
+};
+
+class DataAgentAgUiAgent extends AbstractAgent {
+  constructor(private readonly input: DataAgentAgUiAgentInput) {
+    super({
+      agentId: "dataAgent",
+      description: "Read-only data analysis agent backed by Mastra and Data Gateway."
+    });
   }
 
-  return typeof value === "string" && value.trim() ? value : undefined;
-};
+  run(runInput: RunAgentInput): Observable<BaseEvent> {
+    return new Observable<BaseEvent>((subscriber) => {
+      const run = async (): Promise<void> => {
+        const sessionId = runInput.threadId;
+        const runId = runInput.runId;
+        const selectedDatasourceId = extractDatasourceId(runInput) ?? this.input.defaultDatasourceId;
+        const userInput = extractLastUserText(runInput) ?? "CopilotKit AG-UI run";
+        const runEventWriter = new RunEventWriter(this.input.metadataStore.runEvents);
+
+        ensureDemoDataSource(this.input.metadataStore, selectedDatasourceId);
+        this.input.metadataStore.sessions.create({
+          user_id: this.input.user.id,
+          id: sessionId,
+          title: userInput.slice(0, 80),
+          selected_datasource_id: selectedDatasourceId
+        });
+        this.input.metadataStore.runs.create({
+          user_id: this.input.user.id,
+          id: runId,
+          session_id: sessionId,
+          user_input: userInput,
+          status: "running",
+          model_name: this.input.modelProvider.model_name,
+          datasource_id: selectedDatasourceId
+        });
+
+        const runContext = createDataAgentRunContext({
+          user_id: this.input.user.id,
+          session_id: sessionId,
+          run_id: runId,
+          user_input: userInput,
+          chat_mode: "copilotkit",
+          selected_datasource_id: selectedDatasourceId,
+          model_name: this.input.modelProvider.model_name
+        });
+        const emit = (event: BaseEvent): void => {
+          runEventWriter.write({
+            user_id: this.input.user.id,
+            run_id: runId,
+            session_id: sessionId,
+            event
+          });
+          subscriber.next(event);
+        };
+        const emitter: AgUiEventEmitter = { emit };
+        const { agent } = createDataAgent({
+          dataGateway: this.input.dataGateway,
+          emitter,
+          modelProvider: this.input.modelProvider,
+          runContext
+        });
+        const mastraAgent = new MastraAgent({
+          agent,
+          resourceId: this.input.user.id
+        });
+        const subscription = mastraAgent.run(runInput).subscribe({
+          next: (event) => {
+            emit(event);
+
+            if (event.type === EventType.RUN_STARTED) {
+              emit(createPlanActivityEvent(runContext));
+              emit({
+                type: EventType.STATE_SNAPSHOT,
+                snapshot: {
+                  selectedDatasourceId,
+                  runId,
+                  runStatus: "running",
+                  sessionId
+                },
+                timestamp: Date.now()
+              });
+            }
+
+            if (event.type === EventType.RUN_FINISHED) {
+              this.input.metadataStore.runs.updateStatus({
+                user_id: this.input.user.id,
+                run_id: runId,
+                status: "completed"
+              });
+              emit(createActivityDelta(runContext, "PLAN", [
+                { op: "replace", path: "/tasks/2/status", value: "completed" }
+              ]));
+              emit(createRunStatusDelta("completed"));
+            }
+
+            if (event.type === EventType.RUN_ERROR) {
+              this.input.metadataStore.runs.updateStatus({
+                user_id: this.input.user.id,
+                run_id: runId,
+                status: "failed",
+                error_message: "AG-UI run error"
+              });
+              emit(createActivityDelta(runContext, "PLAN", [
+                { op: "replace", path: "/tasks/2/status", value: "failed" }
+              ]));
+              emit(createRunStatusDelta("failed", "AG-UI run error"));
+            }
+          },
+          error: (error: unknown) => {
+            const message = error instanceof Error ? error.message : "Unknown AG-UI agent error";
+            const event: BaseEvent = {
+              type: EventType.RUN_ERROR,
+              message,
+              timestamp: Date.now()
+            };
+            emit(event);
+            this.input.metadataStore.runs.updateStatus({
+              user_id: this.input.user.id,
+              run_id: runId,
+              status: "failed",
+              error_message: message
+            });
+            emit(createActivityDelta(runContext, "PLAN", [
+              { op: "replace", path: "/tasks/2/status", value: "failed" }
+            ]));
+            emit(createRunStatusDelta("failed", message));
+            subscriber.error(error);
+          },
+          complete: () => {
+            subscriber.complete();
+          }
+        });
+
+        subscriber.add(() => {
+          subscription.unsubscribe();
+        });
+      };
+
+      run().catch((error: unknown) => {
+        subscriber.error(error);
+      });
+    });
+  }
+}
 
 const isCopilotKitPath = (pathname: string): boolean =>
   pathname === COPILOTKIT_PATH || pathname.startsWith(`${COPILOTKIT_PATH}/`);
+
+const createRunStatusDelta = (status: "completed" | "failed", errorMessage?: string): BaseEvent => ({
+  type: EventType.STATE_DELTA,
+  delta: [
+    { op: "replace", path: "/runStatus", value: status },
+    ...(errorMessage ? [{ op: "add", path: "/errorMessage", value: errorMessage }] : [])
+  ],
+  timestamp: Date.now()
+});
 
 const sendCorsPreflight = (response: ServerResponse): void => {
   response.writeHead(204, {
     "Access-Control-Allow-Origin": "*",
     "Access-Control-Allow-Methods": "POST, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Session-ID, X-Datasource-ID",
+    "Access-Control-Allow-Headers": "Content-Type, Authorization",
     "Access-Control-Max-Age": "86400"
   });
   response.end();

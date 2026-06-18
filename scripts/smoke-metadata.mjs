@@ -2,6 +2,7 @@ import {
   RunEventWriter,
   createMetadataStore
 } from "../packages/metadata/dist/index.js";
+import { EventType } from "@ag-ui/core";
 
 const databasePath = `storage/metadata/metadata-smoke-${Date.now()}.sqlite`;
 const store = createMetadataStore({ database_path: databasePath });
@@ -29,17 +30,21 @@ try {
     user_id: userId,
     run_id: runId,
     session_id: sessionId,
-    type: "plan.update",
-    payload: {
-      tasks: [{ id: "metadata", title: "metadata smoke", status: "completed" }]
+    event: {
+      type: EventType.RUN_STARTED,
+      threadId: sessionId,
+      runId
     }
   });
   writer.write({
     user_id: userId,
     run_id: runId,
     session_id: sessionId,
-    type: "done",
-    payload: { status: "completed" }
+    event: {
+      type: EventType.RUN_FINISHED,
+      threadId: sessionId,
+      runId
+    }
   });
 
   const replayed = writer.replay({ user_id: userId, run_id: runId });
@@ -51,6 +56,10 @@ try {
 
   if (otherUserReplay.length !== 0) {
     throw new Error("Expected user-scoped replay to hide another user's run events");
+  }
+
+  if (replayed[0].event.type !== EventType.RUN_STARTED || replayed[1].event.type !== EventType.RUN_FINISHED) {
+    throw new Error("Expected replayed events to preserve AG-UI event payloads");
   }
 
   console.log(`Metadata smoke OK: session=${sessionId}, run=${runId}, replayed=${replayed.length}`);

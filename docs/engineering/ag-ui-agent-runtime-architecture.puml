@@ -1,0 +1,73 @@
+@startuml
+title Open Data Agent Workbench - AG-UI Agent Runtime Architecture
+
+skinparam componentStyle rectangle
+skinparam shadowing false
+skinparam defaultFontName Arial
+skinparam packageStyle rectangle
+
+actor "Frontend\nCopilotKit / AG-UI Client" as Frontend
+
+node "apps/api\nSingle HTTP Runtime" as Api {
+  component "POST /api/copilotkit" as CopilotEndpoint
+  component "DataAgentAgUiAgent\nextends AbstractAgent" as AgUiAgent
+  component "RunInput Mapper\nthreadId/runId/context/state/forwardedProps" as RunInput
+}
+
+package "Agent Runtime" as AgentRuntime {
+  component "@ag-ui/mastra\nMastraAgent" as AgUiMastra
+  component "Mastra DataAgent\nReAct + tool calling" as DataAgent
+  component "Tool Registry\nsrc/tools/" as ToolRegistry
+  component "AG-UI Event Helpers\nACTIVITY / CUSTOM" as EventHelpers
+}
+
+package "Data Boundary" as DataBoundary {
+  component "Data Gateway\ninternal TypeScript API" as DataGateway
+  component "SQL Guard\nreadonly + limit + timeout" as SqlGuard
+  database "Datasources\nDuckDB demo / SQLite / CSV / XLSX" as Datasources
+}
+
+package "Persistence" as Persistence {
+  database "Metadata SQLite\none DB per storage path" as Metadata
+  component "Run Events\nappend-only AG-UI BaseEvent" as RunEvents
+  component "SQL Audit Logs" as SqlAudit
+  component "Artifact Service\nTable result preview" as Artifacts
+  component "Knowledge Boundary\ncollections / chunks / retrieval" as Knowledge
+}
+
+cloud "LLM Provider\nOpenAI-compatible or Mastra router" as Provider
+
+Frontend --> CopilotEndpoint : AG-UI request
+CopilotEndpoint --> AgUiAgent : route dataAgent
+AgUiAgent --> RunInput : extract run context
+AgUiAgent --> Metadata : create session/run
+AgUiAgent --> AgUiMastra : delegate RunAgentInput
+AgUiMastra --> DataAgent : stream agent run
+DataAgent --> Provider : model stream
+DataAgent --> ToolRegistry : inspect_schema / run_sql_readonly
+ToolRegistry --> EventHelpers : create ACTIVITY_SNAPSHOT / ACTIVITY_DELTA / CUSTOM
+EventHelpers --> AgUiAgent : emit AG-UI events
+AgUiAgent --> RunEvents : persist same events
+AgUiAgent --> Frontend : stream same AG-UI events
+
+ToolRegistry --> DataGateway : inspect schema / run readonly SQL
+DataGateway --> Metadata : validate datasource ownership
+DataGateway --> SqlGuard : enforce SQL policy
+SqlGuard --> Datasources : allowed read query
+DataGateway --> SqlAudit : write audit result
+DataGateway --> Artifacts : create table artifact
+Artifacts --> Metadata : persist artifact metadata
+Knowledge ..> ToolRegistry : future retrieve_knowledge tool
+
+note right of RunEvents
+Persisted event types are AG-UI EventType only.
+No custom frontend protocol events.
+end note
+
+note bottom of Metadata
+Default grain:
+METADATA_DB_PATH=storage/metadata/workbench.sqlite
+Tables are isolated by user_id/session_id/run_id.
+end note
+
+@enduml

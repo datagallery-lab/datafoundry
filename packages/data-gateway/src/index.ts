@@ -479,7 +479,7 @@ class XlsxAdapter implements DataSourceAdapter {
 
   private async readTable(limit: number): Promise<DatasetTable> {
     const filePath = stringConfig(this.config, "file_path");
-    const rows = (await readXlsxFile(filePath, { dateFormat: "yyyy-mm-dd" })) as unknown as unknown[][];
+    const rows = normalizeXlsxRows(await readXlsxFile(filePath, { dateFormat: "yyyy-mm-dd" }));
     const columns = (rows[0] ?? []).map((value: unknown) => String(value ?? ""));
     const objectRows = rows.slice(1, limit + 1).map((row) => columnsToObject(columns, row));
 
@@ -490,6 +490,22 @@ class XlsxAdapter implements DataSourceAdapter {
     };
   }
 }
+
+const normalizeXlsxRows = (value: unknown): unknown[][] => {
+  if (Array.isArray(value) && value.every(Array.isArray)) {
+    return value;
+  }
+
+  if (Array.isArray(value) && value.length > 0 && isRecord(value[0]) && Array.isArray(value[0].data)) {
+    const firstSheetRows = value[0].data;
+
+    if (firstSheetRows.every(Array.isArray)) {
+      return firstSheetRows;
+    }
+  }
+
+  throw new Error("Unsupported XLSX row format");
+};
 
 type DatasetTable = {
   name: string;

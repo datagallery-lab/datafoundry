@@ -41,8 +41,7 @@ try {
   const postResponse = await fetch(`${apiBaseUrl}/api/copilotkit`, {
     method: "POST",
     headers: {
-      "Content-Type": "application/json",
-      "X-Datasource-ID": "api-duckdb-demo"
+      "Content-Type": "application/json"
     },
     body: JSON.stringify({})
   });

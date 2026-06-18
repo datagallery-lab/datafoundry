@@ -1,17 +1,4 @@
-export const RUN_EVENT_TYPES = [
-  "plan.update",
-  "step.start",
-  "step.meta",
-  "step.output",
-  "step.chunk",
-  "step.done",
-  "final",
-  "done",
-  "error",
-  "cancel"
-] as const;
-
-export type RunEventType = (typeof RUN_EVENT_TYPES)[number];
+import type { BaseEvent, EventType } from "@ag-ui/core";
 
 export type ApiResult<T> = {
   success: boolean;
@@ -26,25 +13,6 @@ export type MeResponse = {
   display_name?: string;
 };
 
-export type PlanTaskStatus = "pending" | "running" | "completed" | "failed";
-
-export type PlanUpdatePayload = {
-  tasks: Array<{
-    id: string;
-    title: string;
-    status: PlanTaskStatus;
-  }>;
-};
-
-export type StepKind = "knowledge" | "schema" | "sql" | "analysis" | "chart" | "report" | "tool" | "final";
-
-export type StepStartPayload = {
-  step_id: string;
-  title: string;
-  kind: StepKind;
-  tool_name?: string;
-};
-
 export type Citation = {
   document_id: string;
   chunk_id: string;
@@ -55,80 +23,13 @@ export type Citation = {
   score?: number;
 };
 
-export type StepMetaPayload = {
-  step_id: string;
-  status?: "running" | "completed" | "failed";
-  input?: unknown;
-  sql?: string;
-  datasource_id?: string;
-  collection_id?: string;
-  citations?: Citation[];
-};
-
-export type StepOutputPayload = {
-  step_id: string;
-  output_type: "text" | "markdown" | "json" | "table" | "chart" | "sql" | "citation" | "error";
-  content: unknown;
-};
-
-export type StepChunkPayload = {
-  step_id: string;
-  delta: string;
-};
-
-export type StepDonePayload = {
-  step_id: string;
-  status: "completed" | "failed" | "canceled";
-  error_message?: string;
-  artifact_ids?: string[];
-};
-
-export type FinalPayload = {
-  content: string;
-  citations?: Citation[];
-  artifact_ids?: string[];
-};
-
-export type DonePayload = {
-  status: "completed";
-  artifact_ids?: string[];
-};
-
-export type ErrorPayload = {
-  code: string;
-  message: string;
-  recoverable: boolean;
-  step_id?: string;
-};
-
-export type CancelPayload = {
-  reason?: string;
-};
-
-export type RunEventPayloadMap = {
-  "plan.update": PlanUpdatePayload;
-  "step.start": StepStartPayload;
-  "step.meta": StepMetaPayload;
-  "step.output": StepOutputPayload;
-  "step.chunk": StepChunkPayload;
-  "step.done": StepDonePayload;
-  final: FinalPayload;
-  done: DonePayload;
-  error: ErrorPayload;
-  cancel: CancelPayload;
-};
-
-export type RunEventEnvelope<TPayload = unknown> = {
-  type: RunEventType;
+export type RunEventEnvelope = {
+  type: EventType;
   run_id: string;
   session_id: string;
   seq: number;
   ts: string;
-  payload: TPayload;
-};
-
-export type TypedRunEventEnvelope<TType extends RunEventType> = RunEventEnvelope<RunEventPayloadMap[TType]> & {
-  type: TType;
+  event: BaseEvent;
 };
 
 export type DataSourceSummary = {

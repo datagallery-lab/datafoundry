@@ -11,6 +11,7 @@
     "start": "node dist/index.js"
   },
   "dependencies": {
+    "@ag-ui/client": "^0.0.46",
     "@ag-ui/mastra": "^1.0.3",
     "@copilotkit/runtime": "^0.0.0-mme-ag-ui-0-0-46-20260227141603",
     "@open-data-agent/agent-runtime": "0.1.0",

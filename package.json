@@ -14,6 +14,7 @@
     "start:api": "npm --workspace @open-data-agent/api run start",
     "smoke:api": "node scripts/smoke-copilotkit.mjs",
     "smoke:copilotkit": "node scripts/smoke-copilotkit.mjs",
+    "smoke:api-context": "npm run build && node scripts/smoke-copilotkit-context.mjs",
     "smoke:metadata": "npm run build && node scripts/smoke-metadata.mjs",
     "smoke:data-gateway": "npm run build && node scripts/smoke-data-gateway.mjs",
     "smoke:sql": "npm run build && node scripts/smoke-sql-readonly.mjs",
@@ -33,6 +34,7 @@
     "@mastra/client-js": "^1.25.0",
     "@mastra/core": "^1.42.0",
     "read-excel-file": "^9.2.0",
+    "rxjs": "7.8.1",
     "zod": "^4.4.3"
   }
 }

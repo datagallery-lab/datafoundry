@@ -1,6 +1,7 @@
 import { createDataAgentRunContext, createDataAgentToolRegistry } from "../packages/agent-runtime/dist/index.js";
 import { LocalDataGateway } from "../packages/data-gateway/dist/index.js";
 import { createMetadataStore } from "../packages/metadata/dist/index.js";
+import { EventType } from "@ag-ui/core";
 
 const stamp = Date.now();
 const metadataPath = `storage/agent-smoke/${stamp}/metadata.sqlite`;
@@ -49,18 +50,15 @@ try {
     dataGateway: gateway,
     runContext,
     emitter: {
-      create: (type, payload) => {
+      emit: (event) => {
         seq += 1;
-        const event = {
-          type,
+        events.push({
+          event,
           run_id,
           session_id,
           seq,
-          ts: new Date().toISOString(),
-          payload
-        };
-        events.push(event);
-        return event;
+          ts: new Date().toISOString()
+        });
       }
     }
   });
@@ -80,29 +78,51 @@ try {
   const sql = `SELECT ${selectedColumns.join(", ")} FROM ${table?.name ?? "orders"} LIMIT 20`;
   await registry.runSqlReadonly({ sql, limit: 20 });
 
-  const schemaStart = events.find(
-    (event) => event.type === "step.start" && event.payload?.tool_name === "inspect_schema"
+  const schemaActivity = events.find(
+    (record) => record.event.type === EventType.ACTIVITY_SNAPSHOT && record.event.content?.tool_name === "inspect_schema"
   );
-  const sqlStart = events.find(
-    (event) => event.type === "step.start" && event.payload?.tool_name === "run_sql_readonly"
+  const sqlActivity = events.find(
+    (record) => record.event.type === EventType.ACTIVITY_SNAPSHOT && record.event.content?.tool_name === "run_sql_readonly"
   );
-  const sqlMeta = events.find((event) => event.type === "step.meta" && typeof event.payload?.sql === "string");
+  const sqlMeta = events.find(
+    (record) => record.event.type === EventType.ACTIVITY_SNAPSHOT && typeof record.event.content?.sql === "string"
+  );
   const tableOutput = events.find(
-    (event) => event.type === "step.output" && event.payload?.output_type === "table"
+    (record) => record.event.type === EventType.ACTIVITY_SNAPSHOT && record.event.content?.output_type === "table"
   );
-  const final = events.find((event) => event.type === "final");
+  const sqlAudit = events.find(
+    (record) => record.event.type === EventType.CUSTOM && record.event.name === "sql_audit"
+  );
+  const planDeltas = events.filter((record) => record.event.type === EventType.ACTIVITY_DELTA);
+  const legacyEvent = events.find((record) => String(record.event.type).includes("."));
   const auditLogs = store.sqlAuditLogs.listByDataSource({ user_id, datasource_id });
 
-  assert(Boolean(schemaStart), "inspect_schema tool was not called");
-  assert(Boolean(sqlStart), "run_sql_readonly tool was not called");
-  assert(Boolean(sqlMeta), "SQL metadata event was not emitted");
-  assert(Boolean(tableOutput), "table output event was not emitted");
-  assert(!final, "tool registry should not emit final responses");
+  assert(Boolean(schemaActivity), "inspect_schema activity was not emitted");
+  assert(Boolean(sqlActivity), "run_sql_readonly activity was not emitted");
+  assert(Boolean(sqlMeta), "SQL activity metadata was not emitted");
+  assert(Boolean(tableOutput), "table activity output was not emitted");
+  assert(Boolean(sqlAudit), "SQL audit custom event was not emitted");
+  assert(schemaActivity.event.replace === true, "schema activity should replace previous snapshots");
+  assert(sqlActivity.event.replace === true, "SQL activity should replace previous snapshots");
+  assert(schemaActivity.event.messageId !== sqlActivity.event.messageId, "STEP activity messageId should include step_id");
+  assert(
+    planDeltas.some((record) => record.event.patch?.some((patch) => patch.path === "/tasks/0/status" && patch.value === "running")),
+    "schema running PLAN delta missing"
+  );
+  assert(
+    planDeltas.some((record) => record.event.patch?.some((patch) => patch.path === "/tasks/1/status" && patch.value === "completed")),
+    "SQL completed PLAN delta missing"
+  );
+  assert(
+    planDeltas.some((record) => record.event.patch?.some((patch) => patch.path === "/tasks/2/status" && patch.value === "running")),
+    "final running PLAN delta missing"
+  );
+  assert(!legacyEvent, "tool registry should not emit legacy custom event types");
   assert(auditLogs.some((log) => log.status === "succeeded"), "successful SQL audit log missing");
 
   console.log(
-    `Agent tool smoke OK: events=${events.length}, sql=${sqlMeta.payload.sql}, ` +
-      `rows=${tableOutput.payload.content.row_count}, audit_logs=${auditLogs.length}`
+    `Agent tool smoke OK: events=${events.length}, sql=${sqlMeta.event.content.sql}, ` +
+      `rows=${tableOutput.event.content.content.row_count}, audit_logs=${auditLogs.length}`
   );
 } finally {
   store.close();
