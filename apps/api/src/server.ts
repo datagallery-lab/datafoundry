@@ -21,7 +21,14 @@ import { createServer as createHttpServer, type IncomingMessage, type Server, ty
 import { join } from "node:path";
 import { Observable } from "rxjs";
 
+import {
+  createInitialPlanTaskState,
+  createRunFailedPlanPatch,
+  createRunFinishedPlanPatch,
+  observePlanActivityEvent
+} from "./plan-state.js";
 import { extractDatasourceId, extractLastUserText } from "./run-input.js";
+import { createRunRequestFingerprint, resolveExistingRun, validateParentRun } from "./run-identity.js";
 
 const DEV_USER: MeResponse = {
   id: "dev-user",
@@ -165,6 +172,31 @@ class DataAgentAgUiAgent extends AbstractAgent {
         const selectedDatasourceId = extractDatasourceId(runInput) ?? this.input.defaultDatasourceId;
         const userInput = extractLastUserText(runInput) ?? "CopilotKit AG-UI run";
         const runEventWriter = new RunEventWriter(this.input.metadataStore.runEvents);
+        const planTaskState = createInitialPlanTaskState();
+        const requestFingerprint = createRunRequestFingerprint(runInput, selectedDatasourceId);
+        const existingRun = this.input.metadataStore.runs.find({
+          user_id: this.input.user.id,
+          run_id: runId
+        });
+
+        if (existingRun) {
+          const replayedEvents = resolveExistingRun({
+            existingRun,
+            requestFingerprint,
+            runEventWriter,
+            sessionId
+          });
+          replayedEvents.forEach((event) => subscriber.next(event));
+          subscriber.complete();
+          return;
+        }
+
+        validateParentRun({
+          metadataStore: this.input.metadataStore,
+          parentRunId: runInput.parentRunId,
+          sessionId,
+          userId: this.input.user.id
+        });
 
         ensureDemoDataSource(this.input.metadataStore, selectedDatasourceId);
         this.input.metadataStore.sessions.create({
@@ -173,15 +205,29 @@ class DataAgentAgUiAgent extends AbstractAgent {
           title: userInput.slice(0, 80),
           selected_datasource_id: selectedDatasourceId
         });
-        this.input.metadataStore.runs.create({
+        const claim = this.input.metadataStore.runs.claim({
           user_id: this.input.user.id,
           id: runId,
           session_id: sessionId,
+          ...(runInput.parentRunId ? { parent_run_id: runInput.parentRunId } : {}),
+          request_fingerprint: requestFingerprint,
           user_input: userInput,
           status: "running",
           model_name: this.input.modelProvider.model_name,
           datasource_id: selectedDatasourceId
         });
+
+        if (!claim.created) {
+          const replayedEvents = resolveExistingRun({
+            existingRun: claim.run,
+            requestFingerprint,
+            runEventWriter,
+            sessionId
+          });
+          replayedEvents.forEach((event) => subscriber.next(event));
+          subscriber.complete();
+          return;
+        }
 
         const runContext = createDataAgentRunContext({
           user_id: this.input.user.id,
@@ -193,6 +239,7 @@ class DataAgentAgUiAgent extends AbstractAgent {
           model_name: this.input.modelProvider.model_name
         });
         const emit = (event: BaseEvent): void => {
+          observePlanActivityEvent(planTaskState, event);
           runEventWriter.write({
             user_id: this.input.user.id,
             run_id: runId,
@@ -202,9 +249,10 @@ class DataAgentAgUiAgent extends AbstractAgent {
           subscriber.next(event);
         };
         const emitter: AgUiEventEmitter = { emit };
-        const { agent } = createDataAgent({
+        const { agent, governedMessages } = createDataAgent({
           dataGateway: this.input.dataGateway,
           emitter,
+          messages: runInput.messages,
           modelProvider: this.input.modelProvider,
           runContext
         });
@@ -212,7 +260,7 @@ class DataAgentAgUiAgent extends AbstractAgent {
           agent,
           resourceId: this.input.user.id
         });
-        const subscription = mastraAgent.run(runInput).subscribe({
+        const subscription = mastraAgent.run({ ...runInput, messages: governedMessages }).subscribe({
           next: (event) => {
             emit(event);
 
@@ -236,9 +284,7 @@ class DataAgentAgUiAgent extends AbstractAgent {
                 run_id: runId,
                 status: "completed"
               });
-              emit(createActivityDelta(runContext, "PLAN", [
-                { op: "replace", path: "/tasks/2/status", value: "completed" }
-              ]));
+              emit(createActivityDelta(runContext, "PLAN", createRunFinishedPlanPatch(planTaskState)));
               emit(createRunStatusDelta("completed"));
             }
 
@@ -249,9 +295,7 @@ class DataAgentAgUiAgent extends AbstractAgent {
                 status: "failed",
                 error_message: "AG-UI run error"
               });
-              emit(createActivityDelta(runContext, "PLAN", [
-                { op: "replace", path: "/tasks/2/status", value: "failed" }
-              ]));
+              emit(createActivityDelta(runContext, "PLAN", createRunFailedPlanPatch(planTaskState)));
               emit(createRunStatusDelta("failed", "AG-UI run error"));
             }
           },
@@ -269,9 +313,7 @@ class DataAgentAgUiAgent extends AbstractAgent {
               status: "failed",
               error_message: message
             });
-            emit(createActivityDelta(runContext, "PLAN", [
-              { op: "replace", path: "/tasks/2/status", value: "failed" }
-            ]));
+            emit(createActivityDelta(runContext, "PLAN", createRunFailedPlanPatch(planTaskState)));
             emit(createRunStatusDelta("failed", message));
             subscriber.error(error);
           },

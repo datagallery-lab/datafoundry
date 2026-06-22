@@ -15,7 +15,9 @@
     "smoke:api": "node scripts/smoke-copilotkit.mjs",
     "smoke:copilotkit": "node scripts/smoke-copilotkit.mjs",
     "smoke:api-context": "npm run build && node scripts/smoke-copilotkit-context.mjs",
+    "smoke:context-compilation": "npm run build && node scripts/smoke-context-compilation.mjs",
     "smoke:metadata": "npm run build && node scripts/smoke-metadata.mjs",
+    "smoke:run-identity": "npm run build && node scripts/smoke-run-identity.mjs",
     "smoke:data-gateway": "npm run build && node scripts/smoke-data-gateway.mjs",
     "smoke:sql": "npm run build && node scripts/smoke-sql-readonly.mjs",
     "smoke:agent": "npm run build && node scripts/smoke-agent-runtime.mjs"
@@ -31,6 +33,7 @@
     "@ag-ui/mastra": "^1.0.3",
     "@ai-sdk/openai": "^3.0.72",
     "@copilotkit/runtime": "^0.0.0-mme-ag-ui-0-0-46-20260227141603",
+    "@huggingface/tokenizers": "^0.1.3",
     "@mastra/client-js": "^1.25.0",
     "@mastra/core": "^1.42.0",
     "read-excel-file": "^9.2.0",
