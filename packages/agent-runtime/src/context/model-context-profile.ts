@@ -36,6 +36,8 @@ export class ModelContextProfileRegistry {
 
   resolve(modelName?: string): ModelContextProfile {
     const normalized = modelName?.toLowerCase() ?? "";
-    return this.profiles.find((profile) => normalized.includes(profile.modelPattern.toLowerCase())) ?? this.defaultProfile;
+    return this.profiles.find(
+      (profile) => normalized.includes(profile.modelPattern.toLowerCase())
+    ) ?? this.defaultProfile;
   }
 }

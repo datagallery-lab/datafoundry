@@ -8,15 +8,6 @@ export type JsonPatchOperation = {
   value?: unknown;
 };
 
-export const createPlanActivityEvent = (context: AgentRunContext): BaseEvent =>
-  createActivitySnapshot(context, "PLAN", {
-    tasks: [
-      { id: "schema", title: "检查数据源 schema", status: "pending" },
-      { id: "sql", title: "生成并执行只读 SQL", status: "pending" },
-      { id: "final", title: "生成最终回答", status: "pending" }
-    ]
-  });
-
 export const createActivitySnapshot = (
   context: AgentRunContext,
   activityType: string,
@@ -51,7 +42,11 @@ export const createCustomEvent = (name: string, value: unknown): BaseEvent => ({
   timestamp: Date.now()
 });
 
-const activityMessageId = (context: AgentRunContext, activityType: string, content: Record<string, unknown>): string => {
+const activityMessageId = (
+  context: AgentRunContext,
+  activityType: string,
+  content: Record<string, unknown>
+): string => {
   const normalizedActivityType = activityType.toLowerCase();
   const stepId = typeof content.step_id === "string" && normalizedActivityType === "step" ? `:${content.step_id}` : "";
 

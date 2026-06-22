@@ -67,8 +67,8 @@ export const validateParentRun = ({
   }
 };
 
-export const createRunRequestFingerprint = (runInput: RunAgentInput, selectedDatasourceId: string): string => {
-  const canonicalRequest = canonicalizeJson({ runInput, selectedDatasourceId });
+export const createRunRequestFingerprint = (runInput: RunAgentInput, effectiveRunConfig: unknown): string => {
+  const canonicalRequest = canonicalizeJson({ effectiveRunConfig, runInput });
   return createHash("sha256").update(JSON.stringify(canonicalRequest)).digest("hex");
 };
 

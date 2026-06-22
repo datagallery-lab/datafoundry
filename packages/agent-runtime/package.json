@@ -12,6 +12,8 @@
   "dependencies": {
     "@ag-ui/core": "^0.0.46",
     "@mastra/core": "^1.42.0",
+    "@mastra/libsql": "^1.14.0",
+    "@mastra/memory": "^1.21.0",
     "@open-data-agent/contracts": "0.1.0",
     "@open-data-agent/data-gateway": "0.1.0",
     "@open-data-agent/providers": "0.1.0",

@@ -35,7 +35,7 @@ export type RunRecord = {
   session_id: string;
   parent_run_id?: string;
   request_fingerprint?: string;
-  status: "queued" | "running" | "completed" | "failed" | "canceled";
+  status: "queued" | "running" | "suspended" | "completed" | "failed" | "canceled";
   user_input: string;
   model_provider?: string;
   model_name?: string;
@@ -44,6 +44,21 @@ export type RunRecord = {
   started_at: string;
   finished_at?: string;
   error_message?: string;
+};
+
+export type InteractionRecord = {
+  id: string;
+  user_id: string;
+  session_id: string;
+  run_id: string;
+  tool_call_id: string;
+  tool_name: "ask_user" | "submit_plan";
+  payload_json: string;
+  status: "pending" | "resolved" | "canceled";
+  resume_fingerprint?: string;
+  response_json?: string;
+  created_at: string;
+  resolved_at?: string;
 };
 
 export type RunEventRecord = {
@@ -188,6 +203,7 @@ const DEFAULT_DEV_USER = {
 export class MetadataStore {
   readonly artifacts: ArtifactRepository;
   readonly dataSources: DataSourceRepository;
+  readonly interactions: InteractionRepository;
   readonly runEvents: RunEventRepository;
   readonly runs: RunRepository;
   readonly sessions: SessionRepository;
@@ -201,11 +217,107 @@ export class MetadataStore {
     this.runEvents = new RunEventRepository(db);
     this.artifacts = new ArtifactRepository(db);
     this.dataSources = new DataSourceRepository(db);
+    this.interactions = new InteractionRepository(db);
     this.sqlAuditLogs = new SqlAuditLogRepository(db);
   }
 
   close(): void {
     this.db.close();
+  }
+}
+
+export class InteractionRepository {
+  constructor(private readonly db: DatabaseSync) {}
+
+  request(input: {
+    id: string;
+    user_id: string;
+    session_id: string;
+    run_id: string;
+    tool_call_id: string;
+    tool_name: InteractionRecord["tool_name"];
+    payload: unknown;
+  }): InteractionRecord {
+    const createdAt = new Date().toISOString();
+    this.db.prepare(`
+      INSERT INTO interactions (
+        id, user_id, session_id, run_id, tool_call_id, tool_name, payload_json, status, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?)
+      ON CONFLICT(user_id, run_id, tool_call_id) DO NOTHING
+    `).run(
+      input.id,
+      input.user_id,
+      input.session_id,
+      input.run_id,
+      input.tool_call_id,
+      input.tool_name,
+      JSON.stringify(input.payload),
+      createdAt
+    );
+    return this.getByToolCall(input);
+  }
+
+  getByToolCall(input: { user_id: string; run_id: string; tool_call_id: string }): InteractionRecord {
+    const interaction = mapInteractionRow(
+      this.db.prepare(
+        "SELECT * FROM interactions WHERE user_id = ? AND run_id = ? AND tool_call_id = ?"
+      ).get(input.user_id, input.run_id, input.tool_call_id)
+    );
+    if (!interaction) {
+      throw new Error(`INTERACTION_NOT_FOUND:${input.tool_call_id}`);
+    }
+    return interaction;
+  }
+
+  resolve(input: {
+    user_id: string;
+    run_id: string;
+    tool_call_id: string;
+    resume_fingerprint: string;
+    response: unknown;
+  }): InteractionRecord {
+    const current = this.getByToolCall(input);
+    if (current.status === "resolved") {
+      if (current.resume_fingerprint !== input.resume_fingerprint) {
+        throw new Error(`INTERACTION_RESUME_MISMATCH:${input.tool_call_id}`);
+      }
+      return current;
+    }
+    const resolvedAt = new Date().toISOString();
+    this.db.prepare(`
+      UPDATE interactions
+      SET status = 'resolved', resume_fingerprint = ?, response_json = ?, resolved_at = ?
+      WHERE user_id = ? AND run_id = ? AND tool_call_id = ? AND status = 'pending'
+    `).run(
+      input.resume_fingerprint,
+      JSON.stringify(input.response),
+      resolvedAt,
+      input.user_id,
+      input.run_id,
+      input.tool_call_id
+    );
+    return this.getByToolCall(input);
+  }
+
+  cancel(input: {
+    user_id: string;
+    run_id: string;
+    tool_call_id: string;
+    resume_fingerprint: string;
+  }): InteractionRecord {
+    const resolvedAt = new Date().toISOString();
+    this.db.prepare(`
+      UPDATE interactions
+      SET status = 'canceled', resume_fingerprint = ?, response_json = 'false', resolved_at = ?
+      WHERE user_id = ? AND run_id = ? AND tool_call_id = ? AND status = 'pending'
+    `).run(
+      input.resume_fingerprint,
+      resolvedAt,
+      input.user_id,
+      input.run_id,
+      input.tool_call_id
+    );
+    return this.getByToolCall(input);
   }
 }
 
@@ -427,7 +539,9 @@ export class RunRepository {
   }
 
   find(input: { user_id: string; run_id: string }): Optional<RunRecord> {
-    return mapRunRow(this.db.prepare("SELECT * FROM runs WHERE user_id = ? AND id = ?").get(input.user_id, input.run_id));
+    return mapRunRow(
+      this.db.prepare("SELECT * FROM runs WHERE user_id = ? AND id = ?").get(input.user_id, input.run_id)
+    );
   }
 
   get(input: { user_id: string; run_id: string }): RunRecord {
@@ -797,6 +911,26 @@ const runMigrations = (db: DatabaseSync): void => {
     );
     CREATE INDEX IF NOT EXISTS idx_sql_audit_logs_user_run ON sql_audit_logs(user_id, run_id);
     CREATE INDEX IF NOT EXISTS idx_sql_audit_logs_user_datasource ON sql_audit_logs(user_id, datasource_id);
+
+    CREATE TABLE IF NOT EXISTS interactions (
+      id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      session_id TEXT NOT NULL,
+      run_id TEXT NOT NULL,
+      tool_call_id TEXT NOT NULL,
+      tool_name TEXT NOT NULL,
+      payload_json TEXT NOT NULL,
+      status TEXT NOT NULL,
+      resume_fingerprint TEXT,
+      response_json TEXT,
+      created_at TEXT NOT NULL,
+      resolved_at TEXT,
+      PRIMARY KEY (user_id, id),
+      UNIQUE (user_id, run_id, tool_call_id),
+      FOREIGN KEY (user_id, session_id) REFERENCES sessions(user_id, id),
+      FOREIGN KEY (user_id, run_id) REFERENCES runs(user_id, id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_interactions_user_run ON interactions(user_id, run_id);
   `);
 
   if (requiresUserScopedIdentityMigration(db)) {
@@ -1068,6 +1202,29 @@ const mapRunRow = (row: unknown): Optional<RunRecord> => {
     started_at: requiredString(row, "started_at"),
     ...(finishedAt ? { finished_at: finishedAt } : {}),
     ...(errorMessage ? { error_message: errorMessage } : {})
+  };
+};
+
+const mapInteractionRow = (row: unknown): Optional<InteractionRecord> => {
+  if (!isRecord(row)) {
+    return undefined;
+  }
+  const resumeFingerprint = optionalString(row.resume_fingerprint);
+  const responseJson = optionalString(row.response_json);
+  const resolvedAt = optionalString(row.resolved_at);
+  return {
+    id: requiredString(row, "id"),
+    user_id: requiredString(row, "user_id"),
+    session_id: requiredString(row, "session_id"),
+    run_id: requiredString(row, "run_id"),
+    tool_call_id: requiredString(row, "tool_call_id"),
+    tool_name: requiredString(row, "tool_name") as InteractionRecord["tool_name"],
+    payload_json: requiredString(row, "payload_json"),
+    status: requiredString(row, "status") as InteractionRecord["status"],
+    ...(resumeFingerprint ? { resume_fingerprint: resumeFingerprint } : {}),
+    ...(responseJson ? { response_json: responseJson } : {}),
+    created_at: requiredString(row, "created_at"),
+    ...(resolvedAt ? { resolved_at: resolvedAt } : {})
   };
 };
 

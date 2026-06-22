@@ -63,13 +63,17 @@ export const contextPackageToItems = (
   ];
 
   contextPackage.artifactRefs.forEach((ref, index) => {
-    items.push(createProjectedItem(`${sourceType}-artifact-${index}`, sourceType, groupId, "artifact-ref", priority, ref));
+    items.push(
+      createProjectedItem(`${sourceType}-artifact-${index}`, sourceType, groupId, "artifact-ref", priority, ref)
+    );
   });
   contextPackage.auditRefs.forEach((ref, index) => {
     items.push(createProjectedItem(`${sourceType}-audit-${index}`, sourceType, groupId, "audit-ref", priority, ref));
   });
   contextPackage.truncation.forEach((entry, index) => {
-    items.push(createProjectedItem(`${sourceType}-truncation-${index}`, sourceType, groupId, "truncation", priority, entry));
+    items.push(
+      createProjectedItem(`${sourceType}-truncation-${index}`, sourceType, groupId, "truncation", priority, entry)
+    );
   });
 
   return items;

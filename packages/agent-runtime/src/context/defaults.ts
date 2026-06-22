@@ -10,10 +10,14 @@ export const SQL_MAX_MODEL_ROWS = 20;
 export const SQL_MAX_ACTIVITY_ROWS = 20;
 export const SQL_MAX_CELL_CHARS = 500;
 export const SQL_MAX_SQL_CHARS = 4000;
-export const SQL_MAX_EXECUTION_COUNT = 3;
+// Per-datasource SQL execution budget. Counted per schema capability (one datasource),
+// so multi-datasource analysis is not starved by a single source's iteration.
+// Total SQL across a run is still bounded by AGENT_MAX_STEPS.
+export const SQL_MAX_EXECUTION_COUNT = 20;
 
 // Agent configuration
-export const AGENT_MAX_STEPS = 6;
+// ReAct agents routinely run dozens of steps; 6 was far too tight for iterative analysis.
+export const AGENT_MAX_STEPS = 50;
 
 // Per-source hard context budget. Source adapters must shape data below these limits.
 export const CONTEXT_MAX_TOKENS = 32000;
