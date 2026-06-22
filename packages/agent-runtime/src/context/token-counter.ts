@@ -18,7 +18,7 @@ export type TokenCounterOptions = {
 //   DeepSeek-V2: 4.4MB, DeepSeek-V3/R1: 7.5MB, DeepSeek-V4: 6.1MB
 //   Llama3: 8.7MB, Llama4: 26.7MB, Gemma2: 16.7MB, Gemma3: 31.8MB
 const MODEL_TO_HF_ID: Record<string, string> = {
-  // ── Qwen / Alibaba ──────────────────────────────────────────────
+  // Qwen / Alibaba
   // Qwen3-Max / Qwen3.7-Max — different tokenizer from Qwen2.5 (+62% vocab)
   "qwen3.7-max": "Qwen/Qwen3-235B-A22B",
   "qwen3-max": "Qwen/Qwen3-235B-A22B",
@@ -40,7 +40,7 @@ const MODEL_TO_HF_ID: Record<string, string> = {
   "qwen-turbo": "Qwen/Qwen2.5-7B-Instruct",
   "qwen": "Qwen/Qwen2.5-7B-Instruct",
 
-  // ── DeepSeek ────────────────────────────────────────────────────
+  // DeepSeek
   // V4 family — new tokenizer class (PreTrainedTokenizerFast, 6.1MB, 1M ctx)
   "deepseek-v4-pro": "deepseek-ai/DeepSeek-V4-Pro",
   "deepseek-v4-flash": "deepseek-ai/DeepSeek-V4-Flash",
@@ -61,7 +61,7 @@ const MODEL_TO_HF_ID: Record<string, string> = {
   "deepseek-chat": "deepseek-ai/DeepSeek-V2-Lite",
   "deepseek": "deepseek-ai/DeepSeek-V2-Lite",
 
-  // ── Meta Llama ──────────────────────────────────────────────────
+  // Meta Llama
   "llama-4": "LLM-Research/Llama-4-Scout-17B-16E-Instruct",
   "llama4": "LLM-Research/Llama-4-Scout-17B-16E-Instruct",
   "llama-3.2": "LLM-Research/Meta-Llama-3-8B-Instruct",
@@ -70,7 +70,7 @@ const MODEL_TO_HF_ID: Record<string, string> = {
   "llama3": "LLM-Research/Meta-Llama-3-8B-Instruct",
   "llama": "LLM-Research/Meta-Llama-3-8B-Instruct",
 
-  // ── Mistral ─────────────────────────────────────────────────────
+  // Mistral
   "mistral-large": "AI-ModelScope/Mistral-Large-Instruct-2411",
   "mistral-small": "LLM-Research/Mistral-7B-Instruct-v0.3",
   "mistral-tiny": "LLM-Research/Mistral-7B-Instruct-v0.3",
@@ -79,14 +79,14 @@ const MODEL_TO_HF_ID: Record<string, string> = {
   "mixtral": "AI-ModelScope/Mixtral-8x7B-Instruct-v0.1",
   "codestral": "mistralai/Codestral-22B-v0.1",
 
-  // ── Google Gemma ────────────────────────────────────────────────
+  // Google Gemma
   "gemma-3": "LLM-Research/gemma-3-12b-it",
   "gemma3": "LLM-Research/gemma-3-12b-it",
   "gemma-2": "AI-ModelScope/gemma-2-9b-it",
   "gemma2": "AI-ModelScope/gemma-2-9b-it",
   "gemma": "AI-ModelScope/gemma-2-9b-it",
 
-  // ── Microsoft Phi ───────────────────────────────────────────────
+  // Microsoft Phi
   "phi-4": "LLM-Research/Phi-4-mini-instruct",
   "phi4": "LLM-Research/Phi-4-mini-instruct",
   "phi-3.5": "LLM-Research/Phi-3.5-mini-instruct",
@@ -94,7 +94,7 @@ const MODEL_TO_HF_ID: Record<string, string> = {
   "phi3": "LLM-Research/Phi-3.5-mini-instruct",
   "phi": "LLM-Research/Phi-3.5-mini-instruct",
 
-  // ── GLM / Zhipu ─────────────────────────────────────────────────
+  // GLM / Zhipu
   // GLM-4 (GLM-5 tokenizers not yet on ModelScope)
   "glm-4": "ZhipuAI/glm-4-9b-chat",
   "glm4": "ZhipuAI/glm-4-9b-chat",
@@ -102,38 +102,38 @@ const MODEL_TO_HF_ID: Record<string, string> = {
   "chatglm3": "ZhipuAI/chatglm3-6b",
   "chatglm": "ZhipuAI/chatglm3-6b",
 
-  // ── Cohere ──────────────────────────────────────────────────────
+  // Cohere
   "command-a": "AI-ModelScope/c4ai-command-a-03-2025",
   "command-r-plus": "AI-ModelScope/c4ai-command-r-plus",
   "command-r": "AI-ModelScope/c4ai-command-r-plus",
 
-  // ── Yi / 01.AI ──────────────────────────────────────────────────
+  // Yi / 01.AI
   "yi-lightning": "01ai/Yi-1.5-9B-Chat",
   "yi-large": "01ai/Yi-1.5-9B-Chat",
   "yi": "01ai/Yi-1.5-9B-Chat",
 
-  // ── MiniMax ─────────────────────────────────────────────────────
+  // MiniMax
   "minimax-m1": "MiniMax/MiniMax-M1",
   "minimax-text": "MiniMax/MiniMax-Text-01",
   "minimax": "MiniMax/MiniMax-Text-01",
 
-  // ── InternLM ────────────────────────────────────────────────────
+  // InternLM
   "internlm3": "Shanghai_AI_Laboratory/internlm3-8b-instruct",
   "internlm2": "Shanghai_AI_Laboratory/internlm2-chat-7b",
   "internlm": "Shanghai_AI_Laboratory/internlm2-chat-7b",
 
-  // ── Baichuan ────────────────────────────────────────────────────
+  // Baichuan
   "baichuan2": "baichuan-inc/Baichuan2-13B-Chat",
   "baichuan": "baichuan-inc/Baichuan2-13B-Chat",
 
-  // ── Others ──────────────────────────────────────────────────────
+  // Others
   "jamba": "AI-ModelScope/AI21-Jamba-1.5-Mini",
   "minicpm": "OpenBMB/MiniCPM3-4B",
   "telechat": "TeleAI/TeleChat2-115B",
   "bge": "BAAI/bge-large-zh-v1.5",
   "gpt2": "openai-community/gpt2",
 
-  // ── DeepSeek R1 Distill ─────────────────────────────────────────
+  // DeepSeek R1 Distill
   // (inherit tokenizer from their base models)
   "deepseek-r1-distill-qwen": "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B",
   "deepseek-r1-distill-llama": "deepseek-ai/DeepSeek-R1-Distill-Llama-8B",

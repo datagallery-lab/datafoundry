@@ -101,10 +101,25 @@ export interface DataGateway {
   runSqlReadonly(input: RunSqlReadonlyInput): Promise<SqlExecutionResult>;
 }
 
+export type DataGatewayPolicy = {
+  defaultLimit: number;
+  maxLimit: number;
+  timeoutMs: number;
+};
+
+const DEFAULT_DATA_GATEWAY_POLICY: DataGatewayPolicy = {
+  defaultLimit: 100,
+  maxLimit: 1000,
+  timeoutMs: 10000
+};
+
 export class LocalDataGateway implements DataGateway {
   private readonly artifactService: LocalArtifactService;
 
-  constructor(private readonly metadataStore: MetadataStore) {
+  constructor(
+    private readonly metadataStore: MetadataStore,
+    private readonly policy: DataGatewayPolicy = DEFAULT_DATA_GATEWAY_POLICY
+  ) {
     this.artifactService = new LocalArtifactService(metadataStore);
   }
 
@@ -159,7 +174,7 @@ export class LocalDataGateway implements DataGateway {
     const adapter = createAdapter(dataSource);
     return adapter.previewTable({
       table: input.table,
-      limit: Math.min(input.limit ?? 20, 100)
+      limit: Math.min(input.limit ?? Math.min(20, this.policy.defaultLimit), this.policy.maxLimit)
     });
   }
 
@@ -183,8 +198,8 @@ export class LocalDataGateway implements DataGateway {
       throw new Error(`SQL_BLOCKED: ${guard.reason}`);
     }
 
-    const limit = Math.min(input.limit ?? 100, 1000);
-    const timeoutMs = input.timeout_ms ?? 10000;
+    const limit = Math.min(input.limit ?? this.policy.defaultLimit, this.policy.maxLimit);
+    const timeoutMs = Math.min(input.timeout_ms ?? this.policy.timeoutMs, this.policy.timeoutMs);
 
     try {
       const adapter = createAdapter(dataSource);
@@ -206,7 +221,9 @@ export class LocalDataGateway implements DataGateway {
         elapsed_ms: elapsedMs,
         ...(input.run_id ? { run_id: input.run_id } : {})
       });
-      const run = input.run_id ? this.metadataStore.runs.get({ user_id: input.user_id, run_id: input.run_id }) : undefined;
+      const run = input.run_id
+        ? this.metadataStore.runs.get({ user_id: input.user_id, run_id: input.run_id })
+        : undefined;
       const artifact = run
         ? await this.artifactService.createArtifact({
             user_id: input.user_id,
@@ -521,10 +538,8 @@ const dataSourceRecordToSummary = (record: DataSourceRecord): DataSourceSummary 
   ...(record.description ? { description: record.description } : {})
 });
 
-const parseConfig = (dataSource: DataSourceRecord): Record<string, unknown> => JSON.parse(dataSource.config_json) as Record<
-  string,
-  unknown
->;
+const parseConfig = (dataSource: DataSourceRecord): Record<string, unknown> =>
+  JSON.parse(dataSource.config_json) as Record<string, unknown>;
 
 const stringConfig = (config: Record<string, unknown>, key: string, defaultValue?: string): string => {
   const value = config[key];
@@ -586,7 +601,9 @@ const inferColumnType = (rows: Record<string, unknown>[], column: string): strin
 };
 
 const inferCsvColumnType = (rows: Record<string, unknown>[], column: string): string => {
-  const values = rows.map((row) => row[column]).filter((value) => value !== null && value !== undefined && value !== "");
+  const values = rows
+    .map((row) => row[column])
+    .filter((value) => value !== null && value !== undefined && value !== "");
 
   if (values.length > 0 && values.every((value) => Number.isFinite(Number(value)))) {
     return "DOUBLE";
@@ -603,9 +620,18 @@ const demoTables = (config: Record<string, unknown>): DatasetTable[] => {
   }
 
   const rows = [
-    { order_id: "o_001", channel: "search", category: "electronics", user_type: "new", gmv: 1280, created_at: "2026-05-18" },
-    { order_id: "o_002", channel: "social", category: "beauty", user_type: "returning", gmv: 640, created_at: "2026-05-19" },
-    { order_id: "o_003", channel: "direct", category: "home", user_type: "returning", gmv: 920, created_at: "2026-05-20" }
+    {
+      order_id: "o_001", channel: "search", category: "electronics", user_type: "new",
+      gmv: 1280, created_at: "2026-05-18"
+    },
+    {
+      order_id: "o_002", channel: "social", category: "beauty", user_type: "returning",
+      gmv: 640, created_at: "2026-05-19"
+    },
+    {
+      order_id: "o_003", channel: "direct", category: "home", user_type: "returning",
+      gmv: 920, created_at: "2026-05-20"
+    }
   ];
 
   return [
@@ -855,4 +881,5 @@ const parseSelectedColumns = (rawColumns: string): string[] =>
     .map((column) => unquoteIdentifier(column.trim()))
     .filter((column) => column.length > 0);
 
-const unquoteIdentifier = (identifier: string): string => identifier.replace(/^"/u, "").replace(/"$/u, "").replaceAll('""', '"');
+const unquoteIdentifier = (identifier: string): string =>
+  identifier.replace(/^"/u, "").replace(/"$/u, "").replaceAll('""', '"');

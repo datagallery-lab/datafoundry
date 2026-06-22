@@ -195,7 +195,12 @@ export const ENV_VARIABLE_SPECS: EnvVariableSpec[] = [
   { name: "LLM_BASE_URL", required: true, description: "OpenAI-compatible chat completions base URL." },
   { name: "LLM_API_KEY", required: true, description: "Chat provider API key." },
   { name: "EMBEDDING_PROVIDER", required: false, default_value: "bailian", description: "Embedding provider." },
-  { name: "EMBEDDING_MODEL", required: false, default_value: "text-embedding-v4", description: "Embedding model name." },
+  {
+    name: "EMBEDDING_MODEL",
+    required: false,
+    default_value: "text-embedding-v4",
+    description: "Embedding model name."
+  },
   { name: "EMBEDDING_DIM", required: false, default_value: "1024", description: "Embedding vector dimension." },
   { name: "EMBEDDING_OUTPUT_TYPE", required: false, default_value: "dense", description: "Embedding output type." },
   { name: "EMBEDDING_BASE_URL", required: true, description: "OpenAI-compatible embeddings base URL." },

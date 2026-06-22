@@ -8,10 +8,11 @@ import {
 import {
   createDataAgent,
   createDataAgentRunContext,
-  createActivityDelta,
-  createPlanActivityEvent,
+  createTaskStateRuntime,
+  createCustomEvent,
   createModelProviderFromEnv,
-  type AgUiEventEmitter
+  type AgUiEventEmitter,
+  type TaskStateRuntime
 } from "@open-data-agent/agent-runtime";
 import { type MeResponse, createEnvConfig, createErrorResult, createSuccessResult } from "@open-data-agent/contracts";
 import { LocalDataGateway } from "@open-data-agent/data-gateway";
@@ -21,14 +22,10 @@ import { createServer as createHttpServer, type IncomingMessage, type Server, ty
 import { join } from "node:path";
 import { Observable } from "rxjs";
 
-import {
-  createInitialPlanTaskState,
-  createRunFailedPlanPatch,
-  createRunFinishedPlanPatch,
-  observePlanActivityEvent
-} from "./plan-state.js";
-import { extractDatasourceId, extractLastUserText } from "./run-input.js";
+import { extractEffectiveRunConfig, extractLastUserText } from "./run-input.js";
 import { createRunRequestFingerprint, resolveExistingRun, validateParentRun } from "./run-identity.js";
+import { extractInteractionResume, InteractionRuntimeAdapter } from "./interaction-runtime-adapter.js";
+import { TaskPlanProjector } from "./task-plan-projector.js";
 import { ToolCallResultBridge } from "./tool-call-result-bridge.js";
 
 const DEV_USER: MeResponse = {
@@ -41,6 +38,7 @@ const COPILOTKIT_PATH = "/api/copilotkit";
 
 export type CreateServerOptions = {
   metadataStore?: MetadataStore;
+  taskStateRuntime?: TaskStateRuntime;
 };
 
 export const createServer = async (options: CreateServerOptions = {}): Promise<Server> => {
@@ -56,7 +54,18 @@ export const createServer = async (options: CreateServerOptions = {}): Promise<S
         dev_token: "dev-token"
       }
     });
-  const dataGateway = new LocalDataGateway(metadataStore);
+  const dataGateway = new LocalDataGateway(metadataStore, {
+    defaultLimit: envConfig.sql.default_limit,
+    maxLimit: envConfig.sql.max_limit,
+    timeoutMs: envConfig.sql.timeout_ms
+  });
+  const ownsTaskStateRuntime = options.taskStateRuntime === undefined;
+  const taskStateRuntime =
+    options.taskStateRuntime ??
+    await createTaskStateRuntime(
+      process.env.MASTRA_STORAGE_PATH ?? join(envConfig.storage.root_dir, "mastra", "agent-state.sqlite")
+    );
+  ensureDemoDataSource(metadataStore, "api-duckdb-demo");
 
   const server = createHttpServer(async (request, response) => {
     try {
@@ -77,7 +86,8 @@ export const createServer = async (options: CreateServerOptions = {}): Promise<S
           request,
           response,
           metadataStore,
-          dataGateway
+          dataGateway,
+          taskStateRuntime
         });
         return;
       }
@@ -97,6 +107,9 @@ export const createServer = async (options: CreateServerOptions = {}): Promise<S
 
   server.on("close", () => {
     metadataStore.close();
+    if (ownsTaskStateRuntime) {
+      void taskStateRuntime.close();
+    }
   });
 
   return server;
@@ -107,13 +120,15 @@ type HandleCopilotKitRequestInput = {
   response: ServerResponse;
   metadataStore: MetadataStore;
   dataGateway: LocalDataGateway;
+  taskStateRuntime: TaskStateRuntime;
 };
 
 const handleCopilotKitRequest = async ({
   request,
   response,
   metadataStore,
-  dataGateway
+  dataGateway,
+  taskStateRuntime
 }: HandleCopilotKitRequestInput): Promise<void> => {
   const modelProvider = createModelProviderFromEnv(process.env);
 
@@ -129,7 +144,9 @@ const handleCopilotKitRequest = async ({
         defaultDatasourceId: "api-duckdb-demo",
         metadataStore,
         modelProvider,
-        user: DEV_USER
+        taskStateRuntime,
+        user: DEV_USER,
+        workspaceRoot: process.env.WORKSPACE_ROOT ?? join(process.env.STORAGE_ROOT_DIR ?? "storage", "workspaces")
       })
     }
   });
@@ -154,7 +171,9 @@ type DataAgentAgUiAgentInput = {
   defaultDatasourceId: string;
   metadataStore: MetadataStore;
   modelProvider: Exclude<ReturnType<typeof createModelProviderFromEnv>, { kind: "mock" }>;
+  taskStateRuntime: TaskStateRuntime;
   user: MeResponse;
+  workspaceRoot: string;
 };
 
 class DataAgentAgUiAgent extends AbstractAgent {
@@ -179,20 +198,34 @@ class DataAgentAgUiAgent extends AbstractAgent {
       const run = async (): Promise<void> => {
         const sessionId = runInput.threadId;
         const runId = runInput.runId;
-        const selectedDatasourceId = extractDatasourceId(runInput) ?? this.input.defaultDatasourceId;
+        const interactionResume = extractInteractionResume(runInput);
+        const effectiveRunConfig = extractEffectiveRunConfig(runInput, this.input.defaultDatasourceId);
         const userInput = extractLastUserText(runInput) ?? "CopilotKit AG-UI run";
         const runEventWriter = new RunEventWriter(this.input.metadataStore.runEvents);
-        const planTaskState = createInitialPlanTaskState();
-        const requestFingerprint = createRunRequestFingerprint(runInput, selectedDatasourceId);
+        const requestFingerprint = createRunRequestFingerprint(runInput, effectiveRunConfig);
         const existingRun = this.input.metadataStore.runs.find({
           user_id: this.input.user.id,
           run_id: runId
         });
+        const selectedDatasourceId = interactionResume && existingRun?.datasource_id
+          ? existingRun.datasource_id
+          : effectiveRunConfig.activeDatasourceId;
+        const isResume = interactionResume !== undefined && existingRun?.status === "suspended";
 
-        if (existingRun) {
+        if (existingRun && !isResume) {
+          if (interactionResume) {
+            const interaction = this.input.metadataStore.interactions.getByToolCall({
+              user_id: this.input.user.id,
+              run_id: runId,
+              tool_call_id: interactionResume.interrupt.toolCallId
+            });
+            if (interaction.status !== "resolved" || interaction.resume_fingerprint !== interactionResume.fingerprint) {
+              throw new Error(`INTERACTION_NOT_RESUMABLE:${interactionResume.interrupt.toolCallId}`);
+            }
+          }
           const replayedEvents = resolveExistingRun({
             existingRun,
-            requestFingerprint,
+            requestFingerprint: interactionResume ? existingRun.request_fingerprint ?? "" : requestFingerprint,
             runEventWriter,
             sessionId
           });
@@ -201,42 +234,58 @@ class DataAgentAgUiAgent extends AbstractAgent {
           return;
         }
 
-        validateParentRun({
-          metadataStore: this.input.metadataStore,
-          parentRunId: runInput.parentRunId,
-          sessionId,
-          userId: this.input.user.id
-        });
-
-        ensureDemoDataSource(this.input.metadataStore, selectedDatasourceId);
-        this.input.metadataStore.sessions.create({
-          user_id: this.input.user.id,
-          id: sessionId,
-          title: userInput.slice(0, 80),
-          selected_datasource_id: selectedDatasourceId
-        });
-        const claim = this.input.metadataStore.runs.claim({
-          user_id: this.input.user.id,
-          id: runId,
-          session_id: sessionId,
-          ...(runInput.parentRunId ? { parent_run_id: runInput.parentRunId } : {}),
-          request_fingerprint: requestFingerprint,
-          user_input: userInput,
-          status: "running",
-          model_name: this.input.modelProvider.model_name,
-          datasource_id: selectedDatasourceId
-        });
-
-        if (!claim.created) {
-          const replayedEvents = resolveExistingRun({
-            existingRun: claim.run,
-            requestFingerprint,
-            runEventWriter,
-            sessionId
+        if (isResume) {
+          if (existingRun?.session_id !== sessionId) {
+            throw new Error(`RUN_SESSION_MISMATCH:${runId}`);
+          }
+          const interaction = this.input.metadataStore.interactions.getByToolCall({
+            user_id: this.input.user.id,
+            run_id: runId,
+            tool_call_id: interactionResume.interrupt.toolCallId
           });
-          replayedEvents.forEach((event) => subscriber.next(event));
-          subscriber.complete();
-          return;
+          if (
+            interaction.session_id !== sessionId
+            || interaction.tool_name !== interactionResume.interrupt.toolName
+            || interaction.status !== "pending"
+          ) {
+            throw new Error(`INTERACTION_IDENTITY_MISMATCH:${interactionResume.interrupt.toolCallId}`);
+          }
+          this.input.metadataStore.runs.updateStatus({
+            user_id: this.input.user.id,
+            run_id: runId,
+            status: "running"
+          });
+        } else {
+          validateParentRun({
+            metadataStore: this.input.metadataStore,
+            parentRunId: runInput.parentRunId,
+            sessionId,
+            userId: this.input.user.id
+          });
+          this.input.metadataStore.dataSources.get({
+            user_id: this.input.user.id,
+            datasource_id: selectedDatasourceId
+          });
+          this.input.metadataStore.sessions.create({
+            user_id: this.input.user.id,
+            id: sessionId,
+            title: userInput.slice(0, 80),
+            selected_datasource_id: selectedDatasourceId
+          });
+          const claim = this.input.metadataStore.runs.claim({
+            user_id: this.input.user.id,
+            id: runId,
+            session_id: sessionId,
+            ...(runInput.parentRunId ? { parent_run_id: runInput.parentRunId } : {}),
+            request_fingerprint: requestFingerprint,
+            user_input: userInput,
+            status: "running",
+            model_name: this.input.modelProvider.model_name,
+            datasource_id: selectedDatasourceId
+          });
+          if (!claim.created) {
+            throw new Error(`RUN_CLAIM_CONFLICT:${runId}`);
+          }
         }
 
         const runContext = createDataAgentRunContext({
@@ -246,11 +295,28 @@ class DataAgentAgUiAgent extends AbstractAgent {
           user_input: userInput,
           chat_mode: "copilotkit",
           selected_datasource_id: selectedDatasourceId,
+          enabled_datasource_ids: effectiveRunConfig.enabledDatasourceIds,
+          ...(effectiveRunConfig.activeLlmProfileId
+            ? { requested_llm_profile_id: effectiveRunConfig.activeLlmProfileId }
+            : {}),
+          ...(effectiveRunConfig.activeSkillId ? { active_skill_id: effectiveRunConfig.activeSkillId } : {}),
+          ...(effectiveRunConfig.enabledKnowledgeIds.length > 0
+            ? { enabled_knowledge_ids: effectiveRunConfig.enabledKnowledgeIds }
+            : {}),
+          ...(effectiveRunConfig.enabledMcpServerIds.length > 0
+            ? { enabled_mcp_server_ids: effectiveRunConfig.enabledMcpServerIds }
+            : {}),
           model_name: this.input.modelProvider.model_name
         });
+        const taskPlanProjector = new TaskPlanProjector(runContext);
         const toolCallResultBridge = new ToolCallResultBridge();
+        const interactionRuntime = new InteractionRuntimeAdapter(
+          this.input.metadataStore,
+          this.input.user.id,
+          sessionId,
+          runId
+        );
         const emit = (event: BaseEvent): void => {
-          observePlanActivityEvent(planTaskState, event);
           const deliver = (payload: BaseEvent): void => {
             runEventWriter.write({
               user_id: this.input.user.id,
@@ -261,59 +327,105 @@ class DataAgentAgUiAgent extends AbstractAgent {
             subscriber.next(payload);
           };
           deliver(event);
-          for (const bridged of toolCallResultBridge.observe(event)) {
-            deliver(bridged);
-          }
+          toolCallResultBridge.observe(event).forEach(deliver);
+          taskPlanProjector.observe(event).forEach((projectedEvent) => emit(projectedEvent));
         };
         const emitter: AgUiEventEmitter = { emit };
-        const { agent, governedMessages } = createDataAgent({
+        const {
+          agent,
+          commandExecutionEnabled,
+          destroyWorkspace,
+          goalRuntime,
+          governedMessages,
+          isolation
+        } = await createDataAgent({
           dataGateway: this.input.dataGateway,
           emitter,
           messages: runInput.messages,
           modelProvider: this.input.modelProvider,
-          runContext
+          runContext,
+          taskStateRuntime: this.input.taskStateRuntime,
+          ...(!interactionResume && effectiveRunConfig.goal ? { goal: effectiveRunConfig.goal } : {}),
+          workspaceRoot: this.input.workspaceRoot
         });
         const mastraAgent = new MastraAgent({
           agent,
           resourceId: this.input.user.id
         });
+        let suspended = false;
+        let resumeResolved = false;
+        let finalization: Promise<void> | undefined;
         const subscription = mastraAgent.run({ ...runInput, messages: governedMessages }).subscribe({
           next: (event) => {
-            if (event.type === EventType.RUN_FINISHED) {
+            const interactionRequested = interactionRuntime.capture(event);
+            if (interactionRequested) {
+              suspended = true;
+              emit(interactionRequested);
               this.input.metadataStore.runs.updateStatus({
                 user_id: this.input.user.id,
                 run_id: runId,
-                status: "completed"
+                status: "suspended"
               });
-              emit(createActivityDelta(runContext, "PLAN", createRunFinishedPlanPatch(planTaskState)));
-              emit(createRunStatusDelta("completed"));
-              for (const bridged of toolCallResultBridge.flushPendingResults()) {
-                emit(bridged);
-              }
-              emit(event);
+              emit(createRunStatusDelta("suspended"));
               return;
             }
-
-            if (event.type === EventType.RUN_ERROR) {
+            if (event.type === EventType.RUN_FINISHED && suspended) {
+              return;
+            }
+            if (event.type === EventType.RUN_FINISHED && interactionResume?.response === false) {
+              emit(interactionRuntime.cancel(interactionResume));
+              emit(event);
               this.input.metadataStore.runs.updateStatus({
                 user_id: this.input.user.id,
                 run_id: runId,
-                status: "failed",
-                error_message: "AG-UI run error"
+                status: "canceled"
               });
-              emit(createActivityDelta(runContext, "PLAN", createRunFailedPlanPatch(planTaskState)));
-              emit(createRunStatusDelta("failed", "AG-UI run error"));
-              for (const bridged of toolCallResultBridge.flushPendingResults()) {
-                emit(bridged);
-              }
-              emit(event);
+              emit(createRunStatusDelta("canceled"));
+              void destroyWorkspace().catch(() => undefined);
               return;
             }
-
+            if (event.type === EventType.RUN_FINISHED && goalRuntime) {
+              finalization = (async () => {
+                emit(createCustomEvent("goal.updated", {
+                  goal: await goalRuntime.getSnapshot(),
+                  source: "mastra-native-goal"
+                }));
+                emit(event);
+                this.input.metadataStore.runs.updateStatus({
+                  user_id: this.input.user.id,
+                  run_id: runId,
+                  status: "completed"
+                });
+                emit(createRunStatusDelta("completed"));
+                await destroyWorkspace().catch(() => undefined);
+              })();
+              return;
+            }
             emit(event);
 
+            if (
+              interactionResume
+              && !resumeResolved
+              && event.type === EventType.TOOL_CALL_RESULT
+              && event.toolCallId === interactionResume.interrupt.toolCallId
+            ) {
+              emit(interactionRuntime.resolve(interactionResume));
+              resumeResolved = true;
+            }
+
             if (event.type === EventType.RUN_STARTED) {
-              emit(createPlanActivityEvent(runContext));
+              emit(createCustomEvent("run.config.resolved", {
+                active_datasource_id: effectiveRunConfig.activeDatasourceId,
+                active_skill_id: effectiveRunConfig.activeSkillId,
+                enabled_datasource_ids: effectiveRunConfig.enabledDatasourceIds,
+                enabled_knowledge_ids: effectiveRunConfig.enabledKnowledgeIds,
+                enabled_mcp_server_ids: effectiveRunConfig.enabledMcpServerIds,
+                requested_llm_profile_id: effectiveRunConfig.activeLlmProfileId,
+                workspace: {
+                  command_execution_enabled: commandExecutionEnabled,
+                  isolation
+                }
+              }));
               emit({
                 type: EventType.STATE_SNAPSHOT,
                 snapshot: {
@@ -325,6 +437,27 @@ class DataAgentAgUiAgent extends AbstractAgent {
                 timestamp: Date.now()
               });
             }
+
+            if (event.type === EventType.RUN_FINISHED) {
+              this.input.metadataStore.runs.updateStatus({
+                user_id: this.input.user.id,
+                run_id: runId,
+                status: "completed"
+              });
+              emit(createRunStatusDelta("completed"));
+              void destroyWorkspace().catch(() => undefined);
+            }
+
+            if (event.type === EventType.RUN_ERROR) {
+              this.input.metadataStore.runs.updateStatus({
+                user_id: this.input.user.id,
+                run_id: runId,
+                status: "failed",
+                error_message: "AG-UI run error"
+              });
+              emit(createRunStatusDelta("failed", "AG-UI run error"));
+              void destroyWorkspace().catch(() => undefined);
+            }
           },
           error: (error: unknown) => {
             const message = error instanceof Error ? error.message : "Unknown AG-UI agent error";
@@ -333,21 +466,22 @@ class DataAgentAgUiAgent extends AbstractAgent {
               message,
               timestamp: Date.now()
             };
+            emit(event);
             this.input.metadataStore.runs.updateStatus({
               user_id: this.input.user.id,
               run_id: runId,
               status: "failed",
               error_message: message
             });
-            emit(createActivityDelta(runContext, "PLAN", createRunFailedPlanPatch(planTaskState)));
             emit(createRunStatusDelta("failed", message));
-            for (const bridged of toolCallResultBridge.flushPendingResults()) {
-              emit(bridged);
-            }
-            emit(event);
+            void destroyWorkspace().catch(() => undefined);
             subscriber.error(error);
           },
           complete: () => {
+            if (finalization) {
+              void finalization.then(() => subscriber.complete(), (error: unknown) => subscriber.error(error));
+              return;
+            }
             subscriber.complete();
           }
         });
@@ -367,7 +501,10 @@ class DataAgentAgUiAgent extends AbstractAgent {
 const isCopilotKitPath = (pathname: string): boolean =>
   pathname === COPILOTKIT_PATH || pathname.startsWith(`${COPILOTKIT_PATH}/`);
 
-const createRunStatusDelta = (status: "completed" | "failed", errorMessage?: string): BaseEvent => ({
+const createRunStatusDelta = (
+  status: "running" | "suspended" | "completed" | "failed" | "canceled",
+  errorMessage?: string
+): BaseEvent => ({
   type: EventType.STATE_DELTA,
   delta: [
     { op: "replace", path: "/runStatus", value: status },

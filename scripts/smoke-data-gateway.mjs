@@ -70,7 +70,12 @@ try {
 
   const duckdbSchema = await gateway.inspectSchema({ user_id, datasource_id: "duckdb-demo" });
   const sqliteSchema = await gateway.inspectSchema({ user_id, datasource_id: "sqlite-orders" });
-  const csvPreview = await gateway.previewTable({ user_id, datasource_id: "csv-orders", table: "orders_csv", limit: 20 });
+  const csvPreview = await gateway.previewTable({
+    user_id,
+    datasource_id: "csv-orders",
+    table: "orders_csv",
+    limit: 20
+  });
   const xlsxPreview = await gateway.previewTable({
     user_id,
     datasource_id: "xlsx-orders",
@@ -85,7 +90,8 @@ try {
 
   console.log(
     `Data Gateway smoke OK: sources=${list.length}, duckdb_tables=${duckdbSchema.tables.length}, ` +
-      `sqlite_tables=${sqliteSchema.tables.length}, csv_rows=${csvPreview.row_count}, xlsx_rows=${xlsxPreview.row_count}`
+      `sqlite_tables=${sqliteSchema.tables.length}, csv_rows=${csvPreview.row_count}, ` +
+      `xlsx_rows=${xlsxPreview.row_count}`
   );
 } finally {
   store.close();

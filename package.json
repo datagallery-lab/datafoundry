@@ -23,7 +23,11 @@
     "smoke:run-identity": "npm run build && node scripts/smoke-run-identity.mjs",
     "smoke:data-gateway": "npm run build && node scripts/smoke-data-gateway.mjs",
     "smoke:sql": "npm run build && node scripts/smoke-sql-readonly.mjs",
-    "smoke:agent": "npm run build && node scripts/smoke-agent-runtime.mjs"
+    "smoke:agent": "npm run build && node scripts/smoke-agent-runtime.mjs",
+    "smoke:task-state": "npm run build && node scripts/smoke-task-state.mjs",
+    "smoke:collaboration": "npm run build && node scripts/smoke-collaboration-tools.mjs",
+    "smoke:workspace": "npm run build && node scripts/smoke-workspace-tools.mjs",
+    "smoke:tool-state": "npm run build && node scripts/smoke-tool-state-isolation.mjs"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",

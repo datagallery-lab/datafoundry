@@ -46,6 +46,11 @@ export class ContextOrchestrator {
     return contextPackage;
   }
 
+  /** Return whether a tool has an exact result adapter registered. */
+  hasToolAdapter(toolName: string): boolean {
+    return this.sourceRegistry.resolveByToolName(toolName) !== undefined;
+  }
+
 }
 
 const createPackageOptions = (runContext: AgentRunContext) => ({

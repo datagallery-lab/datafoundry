@@ -102,7 +102,10 @@ if (assistantTailGroups.length !== 1 || assistantTailGroups[0]?.members.length !
 }
 
 assertThrows(
-  () => groupMessagesByTurn([createMessage("duplicate-id", "user", "one"), createMessage("duplicate-id", "user", "two")]),
+  () => groupMessagesByTurn([
+    createMessage("duplicate-id", "user", "one"),
+    createMessage("duplicate-id", "user", "two")
+  ]),
   "CONTEXT_DUPLICATE_MESSAGE_ID"
 );
 
@@ -224,7 +227,7 @@ if (!guardEvents.some((event) => event.name === "context.prompt-verified")) {
   throw new Error("Expected the provider prompt guard to emit verification metrics before aborting");
 }
 
-const configuredAgent = createDataAgent({
+const configuredAgent = await createDataAgent({
   dataGateway: {},
   emitter: { emit: () => undefined },
   modelProvider: {
@@ -257,7 +260,8 @@ if (configuredAgent.governedMessages.some((message) => message.role === "activit
 }
 
 console.log(
-  `Context compilation smoke OK: revision=${runState.package.revision}, plans=${runState.plans.length}, processors=${configuredProcessorIds.length}`
+  `Context compilation smoke OK: revision=${runState.package.revision}, ` +
+    `plans=${runState.plans.length}, processors=${configuredProcessorIds.length}`
 );
 
 function createMessage(id, role, text) {

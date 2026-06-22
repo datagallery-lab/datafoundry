@@ -7,6 +7,7 @@ import { ContextPackageBuilder } from "./context-package-builder.js";
 import type { ContextRunState } from "./context-run-state.js";
 import { groupMessagesByTurn, isToolObservationMessage } from "./mastra-message-utils.js";
 import { StepContextPlanner } from "./step-context-planner.js";
+import type { ToolObservationRouter } from "./tool-observation-router.js";
 import { createContextItem, type ContextItem } from "./tool-result-adapter.js";
 
 export type ContextBudgetProcessorOptions = {
@@ -14,6 +15,7 @@ export type ContextBudgetProcessorOptions = {
   modelName: string | undefined;
   planner?: StepContextPlanner;
   runState: ContextRunState;
+  toolObservationRouter?: ToolObservationRouter;
 };
 
 export class ContextBudgetProcessor implements Processor<"context-budget"> {
@@ -27,7 +29,8 @@ export class ContextBudgetProcessor implements Processor<"context-budget"> {
   }
 
   processInputStep(args: ProcessInputStepArgs): ProcessInputStepResult {
-    const livePackage = this.builder.build(createLiveContextItems(args.messages, args.systemMessages), {
+    const governedMessages = this.options.toolObservationRouter?.governMessages(args.messages) ?? args.messages;
+    const livePackage = this.builder.build(createLiveContextItems(governedMessages, args.systemMessages), {
       resourceId: this.options.runState.identity.resourceId,
       sessionId: this.options.runState.identity.sessionId,
       runId: this.options.runState.identity.runId
@@ -38,7 +41,7 @@ export class ContextBudgetProcessor implements Processor<"context-budget"> {
       stepNumber: args.stepNumber,
       systemMessages: args.systemMessages,
       ...(args.tools ? { tools: args.tools } : {}),
-      messages: args.messages,
+      messages: governedMessages,
       modelName: this.options.modelName
     });
     this.options.runState.recordPlan(result.plan);

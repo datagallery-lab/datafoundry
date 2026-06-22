@@ -5,8 +5,10 @@ import {
   ContextOrchestrator,
   ContextPolicy,
   ContextSourceRegistry,
+  GovernedToolFactory,
   SchemaContextAdapter,
-  SqlResultContextAdapter
+  SqlResultContextAdapter,
+  ToolResultDispatcher
 } from "../packages/agent-runtime/dist/index.js";
 import { LocalDataGateway } from "../packages/data-gateway/dist/index.js";
 import { createMetadataStore } from "../packages/metadata/dist/index.js";
@@ -58,7 +60,8 @@ try {
     run_id,
     user_input: "分析 orders 表的 GMV",
     chat_mode: "chat_data",
-    selected_datasource_id: datasource_id
+    selected_datasource_id: datasource_id,
+    enabled_datasource_ids: [datasource_id]
   });
 
   // Create context orchestrator
@@ -72,7 +75,6 @@ try {
   const registry = createDataAgentToolRegistry({
     dataGateway: gateway,
     runContext,
-    orchestrator,
     emitter: {
       emit: (event) => {
         seq += 1;
@@ -86,29 +88,40 @@ try {
       }
     }
   });
+  let sqlPkg;
+  const factory = new GovernedToolFactory(new ToolResultDispatcher(orchestrator, runContext), (result) => {
+    registry.onGovernedResult(result);
+    if (result.toolName === "run_sql_readonly") {
+      sqlPkg = result.contextPackage;
+    }
+  });
+  const inspectSchemaTool = factory.governTool("inspect_schema", registry.mastraTools.inspect_schema);
+  const runSqlTool = factory.governTool("run_sql_readonly", registry.mastraTools.run_sql_readonly);
 
   await assertRejects(
     () =>
-      registry.runSqlReadonly({
+      runSqlTool.execute({
+        schema_id: "ds:never-issued",
         sql: "SELECT id, note FROM big_orders",
         limit: 20
-      }),
+      }, {}),
     "SCHEMA_REQUIRED_BEFORE_SQL"
   );
 
-  const schemaPkg = await registry.inspectSchema();
-  const schema = schemaPkg.model;
+  const schema = await inspectSchemaTool.execute({}, {});
+  const schemaId = schema.schema_id;
   const table = schema.tables[0];
   const selectedColumns = table?.columns.slice(0, 3).map((column) => column.name) ?? ["*"];
   const sql = `SELECT ${selectedColumns.join(", ")} FROM ${table?.name ?? "big_orders"} ORDER BY id`;
-  const sqlPkg = await registry.runSqlReadonly({ sql, limit: 100 });
-  const sqlResult = sqlPkg.model;
+  const sqlResult = await runSqlTool.execute({ schema_id: schemaId, sql, limit: 100 }, {});
 
   const schemaActivity = events.find(
-    (record) => record.event.type === EventType.ACTIVITY_SNAPSHOT && record.event.content?.tool_name === "inspect_schema"
+    (record) =>
+      record.event.type === EventType.ACTIVITY_SNAPSHOT && record.event.content?.tool_name === "inspect_schema"
   );
   const sqlActivity = events.find(
-    (record) => record.event.type === EventType.ACTIVITY_SNAPSHOT && record.event.content?.tool_name === "run_sql_readonly"
+    (record) =>
+      record.event.type === EventType.ACTIVITY_SNAPSHOT && record.event.content?.tool_name === "run_sql_readonly"
   );
   const sqlMeta = events.find(
     (record) => record.event.type === EventType.ACTIVITY_SNAPSHOT && typeof record.event.content?.sql === "string"
@@ -122,7 +135,6 @@ try {
   const artifactEvent = events.find(
     (record) => record.event.type === EventType.CUSTOM && record.event.name === "artifact"
   );
-  const planDeltas = events.filter((record) => record.event.type === EventType.ACTIVITY_DELTA);
   const legacyEvent = events.find((record) => String(record.event.type).includes("."));
   const auditLogs = store.sqlAuditLogs.listByDataSource({ user_id, datasource_id });
 
@@ -132,14 +144,20 @@ try {
   assert(Boolean(tableOutput), "table activity output was not emitted");
   assert(Boolean(sqlAudit), "SQL audit custom event was not emitted");
   assert(Boolean(artifactEvent), "artifact custom event was not emitted");
-  assert("preview_json" in artifactEvent.event.value, "artifact event should expose preview data until workspace integration");
+  assert(
+    "preview_json" in artifactEvent.event.value,
+    "artifact event should expose preview data until workspace integration"
+  );
   assert(
     artifactEvent.event.value.preview_json.row_count === 100,
     "artifact event preview should preserve the stored SQL row count"
   );
   assert(sqlResult.rows.length === 20, `model-visible SQL rows should be 20, got ${sqlResult.rows.length}`);
   assert(sqlResult.row_count === 100, `SQL row_count should preserve original count, got ${sqlResult.row_count}`);
-  assert(sqlResult.context?.truncation.truncated === true, "model-visible SQL result should include truncation metadata");
+  assert(
+    sqlResult.context?.truncation.truncated === true,
+    "model-visible SQL result should include truncation metadata"
+  );
   assert(Boolean(sqlResult.artifact_id), "SQL result should keep artifact reference after truncation");
   assert(!("artifact" in sqlResult), "model-visible SQL result must not contain artifact preview data");
   assert(sqlPkg.artifactRefs.length === 1, "SQL context package should expose one artifact reference");
@@ -151,23 +169,21 @@ try {
   assert(schemaActivity.event.replace === true, "schema activity should replace previous snapshots");
   assert(sqlActivity.event.replace === true, "SQL activity should replace previous snapshots");
   assert(tableOutput.event.content.content.rows.length === 20, "activity table preview should be truncated to 20 rows");
-  assert(tableOutput.event.content.content.context?.truncation.truncated === true, "activity output truncation metadata missing");
+  assert(
+    tableOutput.event.content.content.context?.truncation.truncated === true,
+    "activity output truncation metadata missing"
+  );
   assert(
     String(tableOutput.event.content.content.rows[0][2]).length <= 600,
     "activity output should truncate long string cells"
   );
-  assert(schemaActivity.event.messageId !== sqlActivity.event.messageId, "STEP activity messageId should include step_id");
   assert(
-    planDeltas.some((record) => record.event.patch?.some((patch) => patch.path === "/tasks/0/status" && patch.value === "running")),
-    "schema running PLAN delta missing"
+    schemaActivity.event.messageId !== sqlActivity.event.messageId,
+    "STEP activity messageId should include step_id"
   );
   assert(
-    planDeltas.some((record) => record.event.patch?.some((patch) => patch.path === "/tasks/1/status" && patch.value === "completed")),
-    "SQL completed PLAN delta missing"
-  );
-  assert(
-    planDeltas.some((record) => record.event.patch?.some((patch) => patch.path === "/tasks/2/status" && patch.value === "running")),
-    "final running PLAN delta missing"
+    !events.some((record) => record.event.activityType === "PLAN"),
+    "data tools must not emit a second, fixed PLAN state"
   );
   assert(!legacyEvent, "tool registry should not emit legacy custom event types");
   assert(auditLogs.some((log) => log.status === "succeeded"), "successful SQL audit log missing");
@@ -235,7 +251,8 @@ try {
 
   console.log(
     `Agent tool smoke OK: events=${events.length}, sql=${sqlMeta.event.content.sql}, ` +
-      `model_rows=${sqlResult.rows.length}, row_count=${tableOutput.event.content.content.row_count}, audit_logs=${auditLogs.length}`
+      `model_rows=${sqlResult.rows.length}, row_count=${tableOutput.event.content.content.row_count}, ` +
+      `audit_logs=${auditLogs.length}`
   );
 } finally {
   store.close();
