@@ -10,7 +10,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit false"
   },
   "dependencies": {
-    "@ai-sdk/openai": "^2.0.82",
+    "@ai-sdk/openai": "^3.0.73",
     "@open-data-agent/contracts": "0.1.0"
   }
 }

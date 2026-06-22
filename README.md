@@ -18,9 +18,11 @@ R&D B owns:
 - `packages/metadata`: local SQLite metadata store, runs, run events, datasource registry, SQL audit logs.
 - `packages/providers`: LLM provider adapter with mock fallback.
 - `apps/api`: single Agent Runtime HTTP service.
+- `apps/web`: Next.js data-task workspace frontend.
 
-UI work is not part of the R&D B scope. The backend exposes one CopilotKit/AG-UI agent endpoint for frontend
-integration; Data Gateway and Knowledge stay behind the agent tool boundary.
+The backend exposes one CopilotKit/AG-UI agent endpoint for frontend integration; Data Gateway and Knowledge
+stay behind the agent tool boundary. The frontend connects directly to that endpoint via
+`NEXT_PUBLIC_AGENT_RUNTIME_URL` and does **not** run its own `@copilotkit/runtime`. See [`apps/web/README.md`](apps/web/README.md).
 
 ## Current Modules
 
@@ -29,6 +31,7 @@ Current active workspace modules:
 | Module | Responsibility | Main implementation |
 | --- | --- | --- |
 | `apps/api` | Single backend runtime service. Exposes health check and CopilotKit/AG-UI agent endpoint. Creates per-request user/session/run context from AG-UI `RunAgentInput` and persists the same AG-UI event stream it returns to the frontend. | Node `http` server, `@copilotkit/runtime`, `@ag-ui/client` `AbstractAgent`, `@ag-ui/mastra`, `@open-data-agent/agent-runtime`, `@open-data-agent/metadata`, `@open-data-agent/data-gateway`. |
+| `apps/web` | Frontend data-task workspace. Connects to the backend CopilotKit/AG-UI endpoint via `NEXT_PUBLIC_AGENT_RUNTIME_URL`. Part of root npm workspaces (`@open-data-agent/web`). | Next.js 15 (App Router), React 19, `@copilotkit/react-core/v2`, Tailwind 4, Vitest. |
 | `packages/agent-runtime` | Mastra DataAgent factory, ReAct prompt, run context, tool registry, and tool-level policy. Keeps Data Gateway behind typed tools. | `@mastra/core/agent`, `@mastra/core/tools`, Zod tool schemas, `inspect_schema`, `run_sql_readonly`, AG-UI `ACTIVITY_SNAPSHOT` / `CUSTOM`, inspect-before-SQL enforcement, selected datasource enforcement, max SQL call count. |
 | `packages/data-gateway` | Datasource registry facade, schema inspection, preview, readonly SQL execution, SQL guard, audit log, and result artifact creation. | `LocalDataGateway`, `node:sqlite`, CSV parser, `read-excel-file`, internal datasource adapters for DuckDB demo, SQLite, CSV, XLSX. |
 | `packages/metadata` | Local persistence for users, sessions, runs, run events, datasource registry, SQL audit logs, artifacts. | `node:sqlite` `DatabaseSync`, repository classes, migrations, `RunEventWriter`. |
@@ -61,6 +64,12 @@ cp .env.example .env
 The API entrypoint loads the repository root `.env`, so `npm run dev:api` will pick up local keys from the project root.
 The CopilotKit runtime endpoint requires a real `LLM_API_KEY`.
 
+For the frontend, copy the web env example after install:
+
+```bash
+cp apps/web/.env.example apps/web/.env.local
+```
+
 ## Verify
 
 Run the full backend verification set:
@@ -73,6 +82,8 @@ npm run smoke:sql
 npm run smoke:agent
 npm run smoke:api-context
 npm run smoke:api
+npm run test:web
+npm run build:web
 ```
 
 Expected coverage:
@@ -104,6 +115,22 @@ Health check:
 ```bash
 curl http://127.0.0.1:8787/healthz
 ```
+
+## Run Web Frontend
+
+Start the data-task workspace (requires backend running for live agent chat):
+
+```bash
+npm run dev:web
+```
+
+Default URL:
+
+```text
+http://127.0.0.1:3000/data-tasks
+```
+
+Set `NEXT_PUBLIC_AGENT_RUNTIME_URL` in `apps/web/.env.local` (see `apps/web/.env.example`).
 
 ## Runtime API
 
@@ -214,8 +241,11 @@ because npm currently suggests breaking changes.
 
 Start here:
 
-- [Docs Index](docs/README.md)
-- [R&D B Architecture Plan](docs/engineering/rd-b-agent-gateway-knowledge-architecture-plan-zh.md)
+- [Docs Index](docs/README.md) — includes **source-of-truth priority** for AI implementation
 - [CopilotKit / AG-UI Frontend Protocol Support](docs/engineering/copilotkit-ag-ui-frontend-protocol.md)
-- [Final Engineering Design](docs/engineering/db-gpt-like-data-agent-final-design-zh.md)
+- [Config Management REST API (draft)](docs/engineering/config-management-api.md)
+- [Frontend → Backend Capability Backlog](docs/engineering/frontend-backend-capability-requests.md)
+- [Data Task Page Design](apps/web/src/app/data-tasks/DESIGN.md)
+- [R&D B Architecture Plan](docs/engineering/rd-b-agent-gateway-knowledge-architecture-plan-zh.md) (historical)
+- [Final Engineering Design](docs/engineering/db-gpt-like-data-agent-final-design-zh.md) (historical)
 - [Main PRD Chinese](docs/prd/db-gpt-like-data-agent-prd-plan-zh.md)

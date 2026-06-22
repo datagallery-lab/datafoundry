@@ -1,0 +1,26 @@
+{
+  "name": "@open-data-agent/web",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev --turbopack",
+    "build": "next build",
+    "start": "next start",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@copilotkit/react-core": "1.60.1",
+    "@shikijs/vscode-textmate": "^10.0.2",
+    "next": "15.5.15",
+    "react": "19.1.0",
+    "react-dom": "19.1.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "4.1.11",
+    "@types/react": "19.1.8",
+    "@types/react-dom": "19.1.6",
+    "tailwindcss": "4.1.11",
+    "vitest": "3.2.4"
+  }
+}

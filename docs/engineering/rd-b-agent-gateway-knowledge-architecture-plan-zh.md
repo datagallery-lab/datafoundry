@@ -33,7 +33,7 @@ POST /api/copilotkit
 
 当前架构图：
 
-[current-agent-architecture.svg](./current-agent-architecture.svg)
+[ag-ui-agent-runtime-architecture.svg](./ag-ui-agent-runtime-architecture.svg)
 
 PlantUML 架构图：
 

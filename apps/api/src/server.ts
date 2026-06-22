@@ -29,6 +29,7 @@ import {
 } from "./plan-state.js";
 import { extractDatasourceId, extractLastUserText } from "./run-input.js";
 import { createRunRequestFingerprint, resolveExistingRun, validateParentRun } from "./run-identity.js";
+import { ToolCallResultBridge } from "./tool-call-result-bridge.js";
 
 const DEV_USER: MeResponse = {
   id: "dev-user",
@@ -157,11 +158,20 @@ type DataAgentAgUiAgentInput = {
 };
 
 class DataAgentAgUiAgent extends AbstractAgent {
-  constructor(private readonly input: DataAgentAgUiAgentInput) {
+  private input: DataAgentAgUiAgentInput;
+
+  constructor(input: DataAgentAgUiAgentInput) {
     super({
       agentId: "dataAgent",
       description: "Read-only data analysis agent backed by Mastra and Data Gateway."
     });
+    this.input = input;
+  }
+
+  clone(): DataAgentAgUiAgent {
+    const cloned = super.clone() as DataAgentAgUiAgent;
+    cloned.input = this.input;
+    return cloned;
   }
 
   run(runInput: RunAgentInput): Observable<BaseEvent> {
@@ -238,15 +248,22 @@ class DataAgentAgUiAgent extends AbstractAgent {
           selected_datasource_id: selectedDatasourceId,
           model_name: this.input.modelProvider.model_name
         });
+        const toolCallResultBridge = new ToolCallResultBridge();
         const emit = (event: BaseEvent): void => {
           observePlanActivityEvent(planTaskState, event);
-          runEventWriter.write({
-            user_id: this.input.user.id,
-            run_id: runId,
-            session_id: sessionId,
-            event
-          });
-          subscriber.next(event);
+          const deliver = (payload: BaseEvent): void => {
+            runEventWriter.write({
+              user_id: this.input.user.id,
+              run_id: runId,
+              session_id: sessionId,
+              event: payload
+            });
+            subscriber.next(payload);
+          };
+          deliver(event);
+          for (const bridged of toolCallResultBridge.observe(event)) {
+            deliver(bridged);
+          }
         };
         const emitter: AgUiEventEmitter = { emit };
         const { agent, governedMessages } = createDataAgent({
@@ -262,6 +279,37 @@ class DataAgentAgUiAgent extends AbstractAgent {
         });
         const subscription = mastraAgent.run({ ...runInput, messages: governedMessages }).subscribe({
           next: (event) => {
+            if (event.type === EventType.RUN_FINISHED) {
+              this.input.metadataStore.runs.updateStatus({
+                user_id: this.input.user.id,
+                run_id: runId,
+                status: "completed"
+              });
+              emit(createActivityDelta(runContext, "PLAN", createRunFinishedPlanPatch(planTaskState)));
+              emit(createRunStatusDelta("completed"));
+              for (const bridged of toolCallResultBridge.flushPendingResults()) {
+                emit(bridged);
+              }
+              emit(event);
+              return;
+            }
+
+            if (event.type === EventType.RUN_ERROR) {
+              this.input.metadataStore.runs.updateStatus({
+                user_id: this.input.user.id,
+                run_id: runId,
+                status: "failed",
+                error_message: "AG-UI run error"
+              });
+              emit(createActivityDelta(runContext, "PLAN", createRunFailedPlanPatch(planTaskState)));
+              emit(createRunStatusDelta("failed", "AG-UI run error"));
+              for (const bridged of toolCallResultBridge.flushPendingResults()) {
+                emit(bridged);
+              }
+              emit(event);
+              return;
+            }
+
             emit(event);
 
             if (event.type === EventType.RUN_STARTED) {
@@ -277,27 +325,6 @@ class DataAgentAgUiAgent extends AbstractAgent {
                 timestamp: Date.now()
               });
             }
-
-            if (event.type === EventType.RUN_FINISHED) {
-              this.input.metadataStore.runs.updateStatus({
-                user_id: this.input.user.id,
-                run_id: runId,
-                status: "completed"
-              });
-              emit(createActivityDelta(runContext, "PLAN", createRunFinishedPlanPatch(planTaskState)));
-              emit(createRunStatusDelta("completed"));
-            }
-
-            if (event.type === EventType.RUN_ERROR) {
-              this.input.metadataStore.runs.updateStatus({
-                user_id: this.input.user.id,
-                run_id: runId,
-                status: "failed",
-                error_message: "AG-UI run error"
-              });
-              emit(createActivityDelta(runContext, "PLAN", createRunFailedPlanPatch(planTaskState)));
-              emit(createRunStatusDelta("failed", "AG-UI run error"));
-            }
           },
           error: (error: unknown) => {
             const message = error instanceof Error ? error.message : "Unknown AG-UI agent error";
@@ -306,7 +333,6 @@ class DataAgentAgUiAgent extends AbstractAgent {
               message,
               timestamp: Date.now()
             };
-            emit(event);
             this.input.metadataStore.runs.updateStatus({
               user_id: this.input.user.id,
               run_id: runId,
@@ -315,6 +341,10 @@ class DataAgentAgUiAgent extends AbstractAgent {
             });
             emit(createActivityDelta(runContext, "PLAN", createRunFailedPlanPatch(planTaskState)));
             emit(createRunStatusDelta("failed", message));
+            for (const bridged of toolCallResultBridge.flushPendingResults()) {
+              emit(bridged);
+            }
+            emit(event);
             subscriber.error(error);
           },
           complete: () => {
