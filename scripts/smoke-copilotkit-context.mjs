@@ -1,3 +1,10 @@
+import { EventType } from "@ag-ui/core";
+import {
+  createInitialPlanTaskState,
+  createRunFailedPlanPatch,
+  createRunFinishedPlanPatch,
+  observePlanActivityEvent
+} from "../apps/api/dist/plan-state.js";
 import { extractDatasourceId, extractLastUserText } from "../apps/api/dist/run-input.js";
 
 const baseInput = {
@@ -67,7 +74,39 @@ assert(
   "multi-part user text should be joined"
 );
 
-console.log("CopilotKit context smoke OK: datasource and user text extraction are stable");
+const schemaOnlyPlanState = createInitialPlanTaskState();
+observePlanActivityEvent(schemaOnlyPlanState, {
+  type: EventType.ACTIVITY_DELTA,
+  messageId: "run-smoke:activity:plan",
+  activityType: "PLAN",
+  patch: [{ op: "replace", path: "/tasks/0/status", value: "completed" }]
+});
+const schemaOnlyFinishedPatch = createRunFinishedPlanPatch(schemaOnlyPlanState);
+
+assert(
+  schemaOnlyFinishedPatch.some((patch) => patch.path === "/tasks/1/status" && patch.value === "skipped"),
+  "RUN_FINISHED should mark unexecuted SQL task as skipped"
+);
+assert(
+  schemaOnlyFinishedPatch.some((patch) => patch.path === "/tasks/2/status" && patch.value === "completed"),
+  "RUN_FINISHED should mark final task as completed"
+);
+
+const sqlRunningPlanState = createInitialPlanTaskState();
+observePlanActivityEvent(sqlRunningPlanState, {
+  type: EventType.ACTIVITY_DELTA,
+  messageId: "run-smoke:activity:plan",
+  activityType: "PLAN",
+  patch: [{ op: "replace", path: "/tasks/1/status", value: "running" }]
+});
+const failedPatch = createRunFailedPlanPatch(sqlRunningPlanState);
+
+assert(
+  failedPatch.some((patch) => patch.path === "/tasks/1/status" && patch.value === "failed"),
+  "RUN_ERROR should mark running SQL task as failed"
+);
+
+console.log("CopilotKit context smoke OK: datasource, user text, and plan state extraction are stable");
 
 function assert(condition, message) {
   if (!condition) {

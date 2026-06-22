@@ -1,17 +1,26 @@
 import { createTool } from "@mastra/core/tools";
-import type { DataGateway, SchemaSummary, SqlExecutionResult } from "@open-data-agent/data-gateway";
+import type { DataGateway } from "@open-data-agent/data-gateway";
 import { z } from "zod";
 
+import type { ContextOrchestrator } from "../context/context-orchestrator.js";
+import type { ContextPackage } from "../context/context-package.js";
+import { truncateContextText } from "../context/context-policy.js";
+import { SQL_MAX_EXECUTION_COUNT, SQL_MAX_SQL_CHARS } from "../context/defaults.js";
 import { createActivityDelta, createActivitySnapshot, createCustomEvent } from "../events.js";
 import type { AgentRunContext, AgUiEventEmitter } from "../types.js";
 
 export type ToolRegistry = {
-  inspectSchema(input?: { datasource_id?: string; table_names?: string[] }): Promise<SchemaSummary>;
+  inspectSchema(input?: { datasource_id?: string; table_names?: string[] }): Promise<ContextPackage>;
   mastraTools: {
     inspect_schema: ReturnType<typeof createTool>;
     run_sql_readonly: ReturnType<typeof createTool>;
   };
-  runSqlReadonly(input: { datasource_id?: string; sql: string; limit?: number; timeout_ms?: number }): Promise<SqlExecutionResult>;
+  runSqlReadonly(input: {
+    datasource_id?: string;
+    sql: string;
+    limit?: number;
+    timeout_ms?: number;
+  }): Promise<ContextPackage>;
   state: {
     artifact_ids: string[];
     schema_inspected_datasource_ids: Set<string>;
@@ -23,6 +32,7 @@ type CreateDataAgentToolRegistryInput = {
   dataGateway: DataGateway;
   emitter: AgUiEventEmitter;
   runContext: AgentRunContext;
+  orchestrator: ContextOrchestrator;
 };
 
 export const createDataAgentToolRegistry = (input: CreateDataAgentToolRegistryInput): ToolRegistry => {
@@ -32,7 +42,9 @@ export const createDataAgentToolRegistry = (input: CreateDataAgentToolRegistryIn
     sql_execution_count: 0
   };
 
-  const inspectSchema = async (toolInput: { datasource_id?: string; table_names?: string[] } = {}): Promise<SchemaSummary> => {
+  const inspectSchema = async (
+    toolInput: { datasource_id?: string; table_names?: string[] } = {}
+  ): Promise<ContextPackage> => {
     const datasourceId = resolveDatasourceId(input.runContext, toolInput.datasource_id);
     const stepId = "schema";
     input.emitter.emit(createPlanTaskStatusDelta(input.runContext, [{ index: 0, status: "running" }]));
@@ -52,6 +64,11 @@ export const createDataAgentToolRegistry = (input: CreateDataAgentToolRegistryIn
         datasource_id: datasourceId,
         ...(toolInput.table_names ? { table_names: toolInput.table_names } : {})
       });
+      const contextPackage = input.orchestrator.packageToolResult({
+        toolName: "inspect_schema",
+        rawResult: result,
+        runContext: input.runContext
+      });
       state.schema_inspected_datasource_ids.add(datasourceId);
       input.emitter.emit(createPlanTaskStatusDelta(input.runContext, [{ index: 0, status: "completed" }]));
       input.emitter.emit(createActivitySnapshot(input.runContext, "STEP", {
@@ -61,9 +78,9 @@ export const createDataAgentToolRegistry = (input: CreateDataAgentToolRegistryIn
         tool_name: "inspect_schema",
         status: "completed",
         output_type: "json",
-        content: result
+        content: contextPackage.activity
       }));
-      return result;
+      return contextPackage;
     } catch (error) {
       input.emitter.emit(createPlanTaskStatusDelta(input.runContext, [{ index: 0, status: "failed" }]));
       input.emitter.emit(createActivitySnapshot(input.runContext, "STEP", {
@@ -83,7 +100,7 @@ export const createDataAgentToolRegistry = (input: CreateDataAgentToolRegistryIn
     sql: string;
     limit?: number;
     timeout_ms?: number;
-  }): Promise<SqlExecutionResult> => {
+  }): Promise<ContextPackage> => {
     const datasourceId = resolveDatasourceId(input.runContext, toolInput.datasource_id);
 
     if (!state.schema_inspected_datasource_ids.has(datasourceId)) {
@@ -92,11 +109,12 @@ export const createDataAgentToolRegistry = (input: CreateDataAgentToolRegistryIn
 
     state.sql_execution_count += 1;
 
-    if (state.sql_execution_count > 3) {
+    if (state.sql_execution_count > SQL_MAX_EXECUTION_COUNT) {
       throw new Error("SQL_EXECUTION_LIMIT_EXCEEDED");
     }
 
     const stepId = `sql-${state.sql_execution_count}`;
+    const sqlActivityPreview = truncateContextText(toolInput.sql, SQL_MAX_SQL_CHARS);
     input.emitter.emit(createPlanTaskStatusDelta(input.runContext, [{ index: 1, status: "running" }]));
     input.emitter.emit(createActivitySnapshot(input.runContext, "STEP", {
       step_id: stepId,
@@ -105,8 +123,8 @@ export const createDataAgentToolRegistry = (input: CreateDataAgentToolRegistryIn
       tool_name: "run_sql_readonly",
       status: "running",
       datasource_id: datasourceId,
-      sql: toolInput.sql,
-      input: { ...toolInput, datasource_id: datasourceId }
+      sql: sqlActivityPreview,
+      input: { ...toolInput, datasource_id: datasourceId, sql: sqlActivityPreview }
     }));
 
     try {
@@ -127,6 +145,11 @@ export const createDataAgentToolRegistry = (input: CreateDataAgentToolRegistryIn
         { index: 1, status: "completed" },
         { index: 2, status: "running" }
       ]));
+      const contextPackage = input.orchestrator.packageToolResult({
+        toolName: "run_sql_readonly",
+        rawResult: { result, sql: toolInput.sql },
+        runContext: input.runContext
+      });
       input.emitter.emit(createActivitySnapshot(input.runContext, "STEP", {
         step_id: stepId,
         title: "执行只读 SQL",
@@ -134,13 +157,7 @@ export const createDataAgentToolRegistry = (input: CreateDataAgentToolRegistryIn
         tool_name: "run_sql_readonly",
         status: "completed",
         output_type: "table",
-        content: {
-          columns: result.columns,
-          rows: result.rows,
-          row_count: result.row_count,
-          audit_log_id: result.audit_log_id,
-          artifact_id: result.artifact_id
-        }
+        content: contextPackage.activity
       }));
       input.emitter.emit(createCustomEvent("sql_audit", {
         audit_log_id: result.audit_log_id,
@@ -154,7 +171,7 @@ export const createDataAgentToolRegistry = (input: CreateDataAgentToolRegistryIn
         input.emitter.emit(createCustomEvent("artifact", result.artifact));
       }
 
-      return result;
+      return contextPackage;
     } catch (error) {
       input.emitter.emit(createPlanTaskStatusDelta(input.runContext, [{ index: 1, status: "failed" }]));
       input.emitter.emit(createActivitySnapshot(input.runContext, "STEP", {
@@ -192,13 +209,22 @@ export const createDataAgentToolRegistry = (input: CreateDataAgentToolRegistryIn
                 })
               )
             })
-          )
+          ),
+          context: z.object({
+            truncation: z.record(z.string(), z.unknown())
+          }).optional()
         }),
-        execute: async (toolInput) =>
-          inspectSchema({
+        execute: async (toolInput) => {
+          const pkg = await inspectSchema({
             ...(toolInput.datasource_id ? { datasource_id: toolInput.datasource_id } : {}),
             ...(toolInput.table_names ? { table_names: toolInput.table_names } : {})
-          })
+          });
+          return pkg.model as {
+            datasource_id: string;
+            tables: Array<{ name: string; columns: Array<{ name: string; type: string; nullable?: boolean }> }>;
+            context?: { truncation: Record<string, unknown> };
+          };
+        }
       }),
       run_sql_readonly: createTool({
         id: "run_sql_readonly",
@@ -215,15 +241,28 @@ export const createDataAgentToolRegistry = (input: CreateDataAgentToolRegistryIn
           row_count: z.number(),
           audit_log_id: z.string(),
           elapsed_ms: z.number(),
-          artifact_id: z.string().optional()
+          artifact_id: z.string().optional(),
+          context: z.object({
+            truncation: z.record(z.string(), z.unknown())
+          }).optional()
         }),
-        execute: async (toolInput) =>
-          runSqlReadonly({
+        execute: async (toolInput) => {
+          const pkg = await runSqlReadonly({
             sql: toolInput.sql,
             ...(toolInput.datasource_id ? { datasource_id: toolInput.datasource_id } : {}),
             ...(toolInput.limit ? { limit: toolInput.limit } : {}),
             ...(toolInput.timeout_ms ? { timeout_ms: toolInput.timeout_ms } : {})
-          })
+          });
+          return pkg.model as {
+            columns: string[];
+            rows: unknown[][];
+            row_count: number;
+            audit_log_id: string;
+            elapsed_ms: number;
+            artifact_id?: string;
+            context?: { truncation: Record<string, unknown> };
+          };
+        }
       })
     },
     runSqlReadonly,

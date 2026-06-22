@@ -33,6 +33,8 @@ export type RunRecord = {
   id: string;
   user_id: string;
   session_id: string;
+  parent_run_id?: string;
+  request_fingerprint?: string;
   status: "queued" | "running" | "completed" | "failed" | "canceled";
   user_input: string;
   model_provider?: string;
@@ -118,12 +120,19 @@ export type CreateRunInput = {
   user_id: string;
   id: string;
   session_id: string;
+  parent_run_id?: string;
+  request_fingerprint?: string;
   user_input: string;
   status?: RunRecord["status"];
   model_provider?: string;
   model_name?: string;
   datasource_id?: string;
   collection_id?: string;
+};
+
+export type ClaimRunResult = {
+  created: boolean;
+  run: RunRecord;
 };
 
 export type WriteRunEventInput = {
@@ -251,7 +260,7 @@ export class SessionRepository {
           id, user_id, title, selected_datasource_id, selected_collection_id, created_at, updated_at
         )
         VALUES (?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(id) DO UPDATE SET
+        ON CONFLICT(user_id, id) DO UPDATE SET
           title = COALESCE(excluded.title, sessions.title),
           selected_datasource_id = COALESCE(excluded.selected_datasource_id, sessions.selected_datasource_id),
           selected_collection_id = COALESCE(excluded.selected_collection_id, sessions.selected_collection_id),
@@ -373,22 +382,35 @@ export class RunRepository {
   constructor(private readonly db: DatabaseSync) {}
 
   create(input: CreateRunInput): RunRecord {
+    const result = this.claim(input);
+
+    if (!result.created) {
+      throw new Error(`Run already exists: ${input.id}`);
+    }
+
+    return result.run;
+  }
+
+  claim(input: CreateRunInput): ClaimRunResult {
     const now = new Date().toISOString();
 
-    this.db
+    const result = this.db
       .prepare(
         `
         INSERT INTO runs (
-          id, user_id, session_id, status, user_input, model_provider, model_name,
-          datasource_id, collection_id, started_at
+          id, user_id, session_id, parent_run_id, request_fingerprint, status, user_input,
+          model_provider, model_name, datasource_id, collection_id, started_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(user_id, id) DO NOTHING
       `
       )
       .run(
         input.id,
         input.user_id,
         input.session_id,
+        input.parent_run_id ?? null,
+        input.request_fingerprint ?? null,
         input.status ?? "queued",
         input.user_input,
         input.model_provider ?? null,
@@ -398,11 +420,18 @@ export class RunRepository {
         now
       );
 
-    return this.get({ user_id: input.user_id, run_id: input.id });
+    return {
+      created: result.changes === 1,
+      run: this.get({ user_id: input.user_id, run_id: input.id })
+    };
+  }
+
+  find(input: { user_id: string; run_id: string }): Optional<RunRecord> {
+    return mapRunRow(this.db.prepare("SELECT * FROM runs WHERE user_id = ? AND id = ?").get(input.user_id, input.run_id));
   }
 
   get(input: { user_id: string; run_id: string }): RunRecord {
-    const run = mapRunRow(this.db.prepare("SELECT * FROM runs WHERE user_id = ? AND id = ?").get(input.user_id, input.run_id));
+    const run = this.find(input);
 
     if (!run) {
       throw new Error(`Run not found: ${input.run_id}`);
@@ -667,13 +696,14 @@ const runMigrations = (db: DatabaseSync): void => {
     );
 
     CREATE TABLE IF NOT EXISTS sessions (
-      id TEXT PRIMARY KEY,
+      id TEXT NOT NULL,
       user_id TEXT NOT NULL,
       title TEXT,
       selected_datasource_id TEXT,
       selected_collection_id TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
+      PRIMARY KEY (user_id, id),
       FOREIGN KEY (user_id) REFERENCES users(id)
     );
     CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
@@ -695,9 +725,11 @@ const runMigrations = (db: DatabaseSync): void => {
     CREATE INDEX IF NOT EXISTS idx_data_sources_user ON data_sources(user_id);
 
     CREATE TABLE IF NOT EXISTS runs (
-      id TEXT PRIMARY KEY,
+      id TEXT NOT NULL,
       user_id TEXT NOT NULL,
       session_id TEXT NOT NULL,
+      parent_run_id TEXT,
+      request_fingerprint TEXT,
       status TEXT NOT NULL,
       user_input TEXT NOT NULL,
       model_provider TEXT,
@@ -707,13 +739,15 @@ const runMigrations = (db: DatabaseSync): void => {
       started_at TEXT NOT NULL,
       finished_at TEXT,
       error_message TEXT,
+      PRIMARY KEY (user_id, id),
       FOREIGN KEY (user_id) REFERENCES users(id),
-      FOREIGN KEY (session_id) REFERENCES sessions(id)
+      FOREIGN KEY (user_id, session_id) REFERENCES sessions(user_id, id),
+      FOREIGN KEY (user_id, parent_run_id) REFERENCES runs(user_id, id)
     );
     CREATE INDEX IF NOT EXISTS idx_runs_user_session ON runs(user_id, session_id);
 
     CREATE TABLE IF NOT EXISTS run_events (
-      id TEXT PRIMARY KEY,
+      id TEXT NOT NULL,
       user_id TEXT NOT NULL,
       run_id TEXT NOT NULL,
       session_id TEXT NOT NULL,
@@ -721,10 +755,10 @@ const runMigrations = (db: DatabaseSync): void => {
       event_type TEXT NOT NULL,
       payload_json TEXT NOT NULL,
       created_at TEXT NOT NULL,
+      PRIMARY KEY (user_id, run_id, seq),
       FOREIGN KEY (user_id) REFERENCES users(id),
-      FOREIGN KEY (run_id) REFERENCES runs(id),
-      FOREIGN KEY (session_id) REFERENCES sessions(id),
-      UNIQUE(run_id, seq)
+      FOREIGN KEY (user_id, run_id) REFERENCES runs(user_id, id),
+      FOREIGN KEY (user_id, session_id) REFERENCES sessions(user_id, id)
     );
     CREATE INDEX IF NOT EXISTS idx_run_events_user_run ON run_events(user_id, run_id);
 
@@ -741,8 +775,8 @@ const runMigrations = (db: DatabaseSync): void => {
       metadata_json TEXT,
       created_at TEXT NOT NULL,
       FOREIGN KEY (user_id) REFERENCES users(id),
-      FOREIGN KEY (session_id) REFERENCES sessions(id),
-      FOREIGN KEY (run_id) REFERENCES runs(id)
+      FOREIGN KEY (user_id, session_id) REFERENCES sessions(user_id, id),
+      FOREIGN KEY (user_id, run_id) REFERENCES runs(user_id, id)
     );
     CREATE INDEX IF NOT EXISTS idx_artifacts_user_run ON artifacts(user_id, run_id);
 
@@ -758,9 +792,171 @@ const runMigrations = (db: DatabaseSync): void => {
       elapsed_ms INTEGER,
       created_at TEXT NOT NULL,
       FOREIGN KEY (user_id) REFERENCES users(id),
-      FOREIGN KEY (run_id) REFERENCES runs(id),
+      FOREIGN KEY (user_id, run_id) REFERENCES runs(user_id, id),
       FOREIGN KEY (datasource_id) REFERENCES data_sources(id)
     );
+    CREATE INDEX IF NOT EXISTS idx_sql_audit_logs_user_run ON sql_audit_logs(user_id, run_id);
+    CREATE INDEX IF NOT EXISTS idx_sql_audit_logs_user_datasource ON sql_audit_logs(user_id, datasource_id);
+  `);
+
+  if (requiresUserScopedIdentityMigration(db)) {
+    migrateUserScopedIdentity(db);
+  }
+
+  createMetadataIndexes(db);
+};
+
+const requiresUserScopedIdentityMigration = (db: DatabaseSync): boolean => {
+  const primaryKeyColumns = db
+    .prepare("PRAGMA table_info(sessions)")
+    .all()
+    .filter((row) => isRecord(row) && typeof row.pk === "number" && row.pk > 0)
+    .sort((left, right) => Number((left as Record<string, unknown>).pk) - Number((right as Record<string, unknown>).pk))
+    .map((row) => (row as Record<string, unknown>).name);
+
+  return primaryKeyColumns.join(",") !== "user_id,id";
+};
+
+const migrateUserScopedIdentity = (db: DatabaseSync): void => {
+  db.exec("PRAGMA foreign_keys = OFF");
+
+  try {
+    db.exec(`
+      BEGIN IMMEDIATE;
+
+      CREATE TABLE sessions_user_scoped (
+        id TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        title TEXT,
+        selected_datasource_id TEXT,
+        selected_collection_id TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (user_id, id),
+        FOREIGN KEY (user_id) REFERENCES users(id)
+      );
+
+      CREATE TABLE runs_user_scoped (
+        id TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        session_id TEXT NOT NULL,
+        parent_run_id TEXT,
+        request_fingerprint TEXT,
+        status TEXT NOT NULL,
+        user_input TEXT NOT NULL,
+        model_provider TEXT,
+        model_name TEXT,
+        datasource_id TEXT,
+        collection_id TEXT,
+        started_at TEXT NOT NULL,
+        finished_at TEXT,
+        error_message TEXT,
+        PRIMARY KEY (user_id, id),
+        FOREIGN KEY (user_id) REFERENCES users(id),
+        FOREIGN KEY (user_id, session_id) REFERENCES sessions_user_scoped(user_id, id),
+        FOREIGN KEY (user_id, parent_run_id) REFERENCES runs_user_scoped(user_id, id)
+      );
+
+      CREATE TABLE run_events_user_scoped (
+        id TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        run_id TEXT NOT NULL,
+        session_id TEXT NOT NULL,
+        seq INTEGER NOT NULL,
+        event_type TEXT NOT NULL,
+        payload_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (user_id, run_id, seq),
+        FOREIGN KEY (user_id) REFERENCES users(id),
+        FOREIGN KEY (user_id, run_id) REFERENCES runs_user_scoped(user_id, id),
+        FOREIGN KEY (user_id, session_id) REFERENCES sessions_user_scoped(user_id, id)
+      );
+
+      CREATE TABLE artifacts_user_scoped (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        session_id TEXT NOT NULL,
+        run_id TEXT NOT NULL,
+        type TEXT NOT NULL,
+        name TEXT NOT NULL,
+        mime_type TEXT,
+        storage_path TEXT,
+        preview_json TEXT,
+        metadata_json TEXT,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (user_id) REFERENCES users(id),
+        FOREIGN KEY (user_id, session_id) REFERENCES sessions_user_scoped(user_id, id),
+        FOREIGN KEY (user_id, run_id) REFERENCES runs_user_scoped(user_id, id)
+      );
+
+      CREATE TABLE sql_audit_logs_user_scoped (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        run_id TEXT,
+        datasource_id TEXT NOT NULL,
+        sql_text TEXT NOT NULL,
+        status TEXT NOT NULL,
+        blocked_reason TEXT,
+        row_count INTEGER,
+        elapsed_ms INTEGER,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (user_id) REFERENCES users(id),
+        FOREIGN KEY (user_id, run_id) REFERENCES runs_user_scoped(user_id, id),
+        FOREIGN KEY (datasource_id) REFERENCES data_sources(id)
+      );
+
+      INSERT INTO sessions_user_scoped SELECT * FROM sessions;
+      INSERT INTO runs_user_scoped (
+        id, user_id, session_id, status, user_input, model_provider, model_name,
+        datasource_id, collection_id, started_at, finished_at, error_message
+      )
+      SELECT
+        id, user_id, session_id, status, user_input, model_provider, model_name,
+        datasource_id, collection_id, started_at, finished_at, error_message
+      FROM runs;
+      INSERT INTO run_events_user_scoped SELECT * FROM run_events;
+      INSERT INTO artifacts_user_scoped SELECT * FROM artifacts;
+      INSERT INTO sql_audit_logs_user_scoped SELECT * FROM sql_audit_logs;
+
+      DROP TABLE run_events;
+      DROP TABLE artifacts;
+      DROP TABLE sql_audit_logs;
+      DROP TABLE runs;
+      DROP TABLE sessions;
+
+      ALTER TABLE sessions_user_scoped RENAME TO sessions;
+      ALTER TABLE runs_user_scoped RENAME TO runs;
+      ALTER TABLE run_events_user_scoped RENAME TO run_events;
+      ALTER TABLE artifacts_user_scoped RENAME TO artifacts;
+      ALTER TABLE sql_audit_logs_user_scoped RENAME TO sql_audit_logs;
+
+      COMMIT;
+    `);
+  } catch (error) {
+    try {
+      db.exec("ROLLBACK");
+    } catch {
+      // The migration may have failed before opening the transaction.
+    }
+    throw error;
+  } finally {
+    db.exec("PRAGMA foreign_keys = ON");
+  }
+
+  const violations = db.prepare("PRAGMA foreign_key_check").all();
+
+  if (violations.length > 0) {
+    throw new Error(`Metadata identity migration produced ${violations.length} foreign key violation(s)`);
+  }
+};
+
+const createMetadataIndexes = (db: DatabaseSync): void => {
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
+    CREATE INDEX IF NOT EXISTS idx_data_sources_user ON data_sources(user_id);
+    CREATE INDEX IF NOT EXISTS idx_runs_user_session ON runs(user_id, session_id);
+    CREATE INDEX IF NOT EXISTS idx_run_events_user_run ON run_events(user_id, run_id);
+    CREATE INDEX IF NOT EXISTS idx_artifacts_user_run ON artifacts(user_id, run_id);
     CREATE INDEX IF NOT EXISTS idx_sql_audit_logs_user_run ON sql_audit_logs(user_id, run_id);
     CREATE INDEX IF NOT EXISTS idx_sql_audit_logs_user_datasource ON sql_audit_logs(user_id, datasource_id);
   `);
@@ -850,6 +1046,8 @@ const mapRunRow = (row: unknown): Optional<RunRecord> => {
 
   const modelProvider = optionalString(row.model_provider);
   const modelName = optionalString(row.model_name);
+  const parentRunId = optionalString(row.parent_run_id);
+  const requestFingerprint = optionalString(row.request_fingerprint);
   const datasourceId = optionalString(row.datasource_id);
   const collectionId = optionalString(row.collection_id);
   const finishedAt = optionalString(row.finished_at);
@@ -859,6 +1057,8 @@ const mapRunRow = (row: unknown): Optional<RunRecord> => {
     id: requiredString(row, "id"),
     user_id: requiredString(row, "user_id"),
     session_id: requiredString(row, "session_id"),
+    ...(parentRunId ? { parent_run_id: parentRunId } : {}),
+    ...(requestFingerprint ? { request_fingerprint: requestFingerprint } : {}),
     status: requiredString(row, "status") as RunRecord["status"],
     user_input: requiredString(row, "user_input"),
     ...(modelProvider ? { model_provider: modelProvider } : {}),
