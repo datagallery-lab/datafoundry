@@ -4,6 +4,15 @@ import { mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
+import {
+  ConfigJobRepository,
+  ConfigResourceRepository,
+  EncryptedSecretStore,
+  initializeConfigSchema
+} from "./config-store.js";
+
+export * from "./config-store.js";
+
 export type UserRecord = {
   id: string;
   email?: string;
@@ -94,8 +103,9 @@ export type DataSourceRecord = {
   config_json: string;
   credential_ref?: string;
   description?: string;
-  status: "ready" | "disabled" | "failed";
+  status: "ready" | "disabled" | "failed" | "deleted";
   last_test_at?: string;
+  revision: number;
   created_at: string;
   updated_at: string;
 };
@@ -115,6 +125,7 @@ export type SqlAuditLogRecord = {
 
 export type MetadataStoreOptions = {
   database_path?: string;
+  secret_master_key?: string;
   dev_user?: {
     id: string;
     email: string;
@@ -179,6 +190,7 @@ export type CreateDataSourceInput = {
   credential_ref?: string;
   description?: string;
   status?: DataSourceRecord["status"];
+  expected_revision?: number;
 };
 
 export type CreateSqlAuditLogInput = {
@@ -202,22 +214,28 @@ const DEFAULT_DEV_USER = {
 
 export class MetadataStore {
   readonly artifacts: ArtifactRepository;
+  readonly configJobs: ConfigJobRepository;
+  readonly configResources: ConfigResourceRepository;
   readonly dataSources: DataSourceRepository;
   readonly interactions: InteractionRepository;
   readonly runEvents: RunEventRepository;
   readonly runs: RunRepository;
   readonly sessions: SessionRepository;
+  readonly secrets: EncryptedSecretStore;
   readonly sqlAuditLogs: SqlAuditLogRepository;
   readonly users: UserRepository;
 
-  constructor(readonly db: DatabaseSync) {
+  constructor(readonly db: DatabaseSync, secretMasterKey?: string) {
     this.users = new UserRepository(db);
     this.sessions = new SessionRepository(db);
     this.runs = new RunRepository(db);
     this.runEvents = new RunEventRepository(db);
     this.artifacts = new ArtifactRepository(db);
+    this.configJobs = new ConfigJobRepository(db);
+    this.configResources = new ConfigResourceRepository(db);
     this.dataSources = new DataSourceRepository(db);
     this.interactions = new InteractionRepository(db);
+    this.secrets = new EncryptedSecretStore(db, secretMasterKey);
     this.sqlAuditLogs = new SqlAuditLogRepository(db);
   }
 
@@ -417,14 +435,19 @@ export class DataSourceRepository {
 
   create(input: CreateDataSourceInput): DataSourceRecord {
     const now = new Date().toISOString();
+    const current = this.find({ user_id: input.user_id, datasource_id: input.id });
+    if (input.expected_revision !== undefined && current?.revision !== input.expected_revision) {
+      throw new Error(`REVISION_CONFLICT:${input.id}`);
+    }
+    const revision = current ? current.revision + 1 : 1;
 
     this.db
       .prepare(
         `
         INSERT INTO data_sources (
-          id, user_id, name, type, config_json, credential_ref, description, status, created_at, updated_at
+          id, user_id, name, type, config_json, credential_ref, description, status, revision, created_at, updated_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
           name = excluded.name,
           type = excluded.type,
@@ -432,7 +455,9 @@ export class DataSourceRepository {
           credential_ref = excluded.credential_ref,
           description = excluded.description,
           status = excluded.status,
+          revision = excluded.revision,
           updated_at = excluded.updated_at
+        WHERE data_sources.user_id = excluded.user_id
       `
       )
       .run(
@@ -444,11 +469,20 @@ export class DataSourceRepository {
         input.credential_ref ?? null,
         input.description ?? null,
         input.status ?? "ready",
+        revision,
         now,
         now
       );
 
     return this.get({ user_id: input.user_id, datasource_id: input.id });
+  }
+
+  /** Find one datasource without throwing. */
+  find(input: { user_id: string; datasource_id: string }): DataSourceRecord | undefined {
+    return mapDataSourceRow(
+      this.db.prepare("SELECT * FROM data_sources WHERE user_id = ? AND id = ?")
+        .get(input.user_id, input.datasource_id)
+    );
   }
 
   get(input: { user_id: string; datasource_id: string }): DataSourceRecord {
@@ -468,7 +502,7 @@ export class DataSourceRepository {
   list(input: { user_id: string; enabled_only?: boolean }): DataSourceRecord[] {
     const sql = input.enabled_only
       ? "SELECT * FROM data_sources WHERE user_id = ? AND status = 'ready' ORDER BY updated_at DESC"
-      : "SELECT * FROM data_sources WHERE user_id = ? ORDER BY updated_at DESC";
+      : "SELECT * FROM data_sources WHERE user_id = ? AND status <> 'deleted' ORDER BY updated_at DESC";
 
     return this.db.prepare(sql).all(input.user_id).map(mapRequiredDataSourceRow);
   }
@@ -487,6 +521,18 @@ export class DataSourceRepository {
       .run(input.status, now, now, input.user_id, input.datasource_id);
 
     return this.get({ user_id: input.user_id, datasource_id: input.datasource_id });
+  }
+
+  /** Tombstone one datasource while preserving SQL audit foreign-key history. */
+  delete(input: { user_id: string; datasource_id: string }): void {
+    const result = this.db.prepare(`
+      UPDATE data_sources
+      SET status = 'deleted', credential_ref = NULL, revision = revision + 1, updated_at = ?
+      WHERE user_id = ? AND id = ? AND status <> 'deleted'
+    `).run(new Date().toISOString(), input.user_id, input.datasource_id);
+    if (result.changes !== 1) {
+      throw new Error(`DATASOURCE_NOT_FOUND:${input.datasource_id}`);
+    }
   }
 }
 
@@ -776,7 +822,7 @@ export const createMetadataStore = (options: MetadataStoreOptions = {}): Metadat
   db.exec("PRAGMA foreign_keys = ON");
   runMigrations(db);
 
-  const store = new MetadataStore(db);
+  const store = new MetadataStore(db, options.secret_master_key);
   store.users.upsertDevUser(options.dev_user ?? DEFAULT_DEV_USER);
 
   return store;
@@ -832,6 +878,7 @@ const runMigrations = (db: DatabaseSync): void => {
       description TEXT,
       status TEXT NOT NULL,
       last_test_at TEXT,
+      revision INTEGER NOT NULL DEFAULT 1,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
       FOREIGN KEY (user_id) REFERENCES users(id)
@@ -933,11 +980,14 @@ const runMigrations = (db: DatabaseSync): void => {
     CREATE INDEX IF NOT EXISTS idx_interactions_user_run ON interactions(user_id, run_id);
   `);
 
+  ensureDataSourceRevision(db);
+
   if (requiresUserScopedIdentityMigration(db)) {
     migrateUserScopedIdentity(db);
   }
 
   createMetadataIndexes(db);
+  initializeConfigSchema(db);
 };
 
 const requiresUserScopedIdentityMigration = (db: DatabaseSync): boolean => {
@@ -949,6 +999,14 @@ const requiresUserScopedIdentityMigration = (db: DatabaseSync): boolean => {
     .map((row) => (row as Record<string, unknown>).name);
 
   return primaryKeyColumns.join(",") !== "user_id,id";
+};
+
+const ensureDataSourceRevision = (db: DatabaseSync): void => {
+  const hasRevision = db.prepare("PRAGMA table_info(data_sources)").all()
+    .some((row) => isRecord(row) && row.name === "revision");
+  if (!hasRevision) {
+    db.exec("ALTER TABLE data_sources ADD COLUMN revision INTEGER NOT NULL DEFAULT 1");
+  }
 };
 
 const migrateUserScopedIdentity = (db: DatabaseSync): void => {
@@ -1247,6 +1305,7 @@ const mapDataSourceRow = (row: unknown): Optional<DataSourceRecord> => {
     ...(description ? { description } : {}),
     status: requiredString(row, "status") as DataSourceRecord["status"],
     ...(lastTestAt ? { last_test_at: lastTestAt } : {}),
+    revision: requiredNumber(row, "revision"),
     created_at: requiredString(row, "created_at"),
     updated_at: requiredString(row, "updated_at")
   };

@@ -17,3 +17,12 @@ export class PreviewTableContextAdapter extends BaseToolContextAdapter {
     return asRecord(raw);
   }
 }
+
+export class RetrieveKnowledgeContextAdapter extends BaseToolContextAdapter {
+  readonly toolName = "retrieve_knowledge";
+  readonly resultType = "knowledge-retrieval";
+
+  protected project(raw: unknown): unknown {
+    return asRecord(raw);
+  }
+}

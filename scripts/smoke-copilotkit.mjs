@@ -48,7 +48,7 @@ try {
   const body = await postResponse.json();
 
   const validMissingProviderResponse =
-    postResponse.status === 503 && body?.err_code === "PROVIDER_CONFIG_MISSING";
+    postResponse.status === 503 && body?.error?.code === "PROVIDER_CONFIG_MISSING";
   const validRuntimeValidationResponse = postResponse.status === 400 && body?.message === "Missing method field";
 
   if (!validMissingProviderResponse && !validRuntimeValidationResponse) {

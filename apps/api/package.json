@@ -13,12 +13,17 @@
   "dependencies": {
     "@ag-ui/client": "^0.0.57",
     "@ag-ui/mastra": "^1.0.3",
-    "@copilotkit/runtime": "^0.0.0-mme-ag-ui-0-0-46-20260227141603",
+    "@copilotkit/runtime": "0.0.0-mme-ag-ui-0-0-46-20260227141603",
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "@open-data-agent/agent-runtime": "0.1.0",
     "@open-data-agent/contracts": "0.1.0",
     "@open-data-agent/data-gateway": "0.1.0",
+    "@open-data-agent/knowledge": "0.1.0",
     "@open-data-agent/metadata": "0.1.0",
-    "dotenv": "^17.2.1"
+    "busboy": "^1.6.0",
+    "dotenv": "^17.2.1",
+    "js-yaml": "^5.0.0",
+    "yauzl": "^3.4.0"
   },
   "devDependencies": {
     "tsx": "^4.19.0"

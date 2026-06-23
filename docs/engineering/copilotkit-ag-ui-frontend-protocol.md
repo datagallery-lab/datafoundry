@@ -1,17 +1,27 @@
 # CopilotKit / AG-UI Frontend Protocol Support
 
-日期：2026-06-22
+日期：2026-06-23
 受众：GUI / TUI 前端同学
 状态：当前后端实际支持面
 
 ## 1. 接入结论
 
-前端只接入 CopilotKit / AG-UI 协议，不接入后端内部 Data Gateway、Metadata、Artifact、Knowledge 模块。
+前端通过两类北向接口接入：
 
-当前唯一对外 Agent Runtime 入口：
+- Agent run 只走 CopilotKit / AG-UI 协议。
+- 工作区配置、资源测试和 artifact 预览/下载走 `/api/v1/*` REST。
+
+前端不直接接入后端内部 Data Gateway、Metadata、Knowledge 实现类，也不读取 SQLite。
+
+当前对外 HTTP 入口：
 
 ```text
 GET  /healthz
+GET  /api/v1/capabilities
+GET  /api/v1/workspace-config
+PATCH /api/v1/workspace-config
+GET/POST/PATCH/DELETE /api/v1/{datasources|knowledge-bases|mcp-servers|model-profiles|skills}
+GET  /api/v1/artifacts/:id[/preview|/content|/download]
 POST /api/copilotkit
 ```
 
@@ -42,12 +52,15 @@ TUI 如果不使用 CopilotKit React 组件，也应按 AG-UI `RunAgentInput` / 
 | `runId` | 支持 | `run_id` | 单次运行维度。 |
 | `parentRunId` | 支持 | `parent_run_id` | 必须属于同一 user/session；用于 retry、branch、派生 run。 |
 | `messages` | 支持 | 提取最后一条 user text 作为 `user_input` | 支持 string content 和 text part array。 |
-| `forwardedProps.datasourceId` | 支持 | selected datasource | 优先级最高。 |
-| `forwardedProps.datasource_id` | 支持 | selected datasource | snake_case 兼容。 |
-| `state.datasourceId` | 支持 | selected datasource | 优先级低于 `forwardedProps`。 |
-| `state.datasource_id` | 支持 | selected datasource | snake_case 兼容。 |
-| `context[].description === "datasource_id"` | 支持 | selected datasource | 优先级低于 `forwardedProps` 和 `state`。 |
-| `context` 其他项 | 透传给 `@ag-ui/mastra` | 暂不进入后端业务策略 | 后续 collection/user context 会扩展。 |
+| `forwardedProps.run_config` / `runConfig` | 支持 | effective run config | 优先级最高；控制 datasource、KB、MCP、model、skill、goal。 |
+| `state.run_config` / `runConfig` | 支持 | effective run config | 低于 `forwardedProps.run_config`。 |
+| `context[].description === "run_config"` | 支持 | effective run config | 可传 JSON object 或 JSON string。 |
+| `forwardedProps.datasourceId` | 支持 | legacy selected datasource | 低于 `run_config.activeDatasourceId`。 |
+| `forwardedProps.datasource_id` | 支持 | legacy selected datasource | snake_case 兼容。 |
+| `state.datasourceId` | 支持 | legacy selected datasource | 低于 `forwardedProps`。 |
+| `state.datasource_id` | 支持 | legacy selected datasource | snake_case 兼容。 |
+| `context[].description === "datasource_id"` | 支持 | legacy selected datasource | 低于 `forwardedProps` 和 `state`。 |
+| `context` 其他项 | 透传给 `@ag-ui/mastra` | 模型上下文 | 不作为凭据、权限或资源配置来源。 |
 | `tools` | 透传给 `@ag-ui/mastra` | client tools | 后端当前不依赖前端 tools。 |
 | `forwardedProps.run_config.goal` | 支持 | native goal objective | 仅接受 `objective` 和 1-20 的 `maxRuns`。 |
 | `forwardedProps.command` | 支持 | 恢复挂起 interaction | 见 3.8；必须继续使用同一 `threadId/runId`。 |
@@ -55,12 +68,15 @@ TUI 如果不使用 CopilotKit React 组件，也应按 AG-UI `RunAgentInput` / 
 Datasource 选择优先级：
 
 ```text
-forwardedProps.datasourceId
+run_config.activeDatasourceId
+-> forwardedProps.datasourceId
 -> forwardedProps.datasource_id
 -> state.datasourceId
 -> state.datasource_id
 -> context item where description = "datasource_id"
--> default "api-duckdb-demo"
+-> run_config.enabledDatasourceIds[0]
+-> workspace defaults
+-> server default "api-duckdb-demo"
 ```
 
 推荐前端传法：
@@ -68,7 +84,15 @@ forwardedProps.datasourceId
 ```json
 {
   "forwardedProps": {
-    "datasourceId": "api-duckdb-demo"
+    "run_config": {
+      "activeDatasourceId": "api-duckdb-demo",
+      "enabledDatasourceIds": ["api-duckdb-demo"],
+      "enabledKnowledgeIds": ["metrics-docs"],
+      "enabledMcpServerIds": ["local-mcp"],
+      "activeLlmProfileId": "server-default",
+      "activeSkillId": "data-analysis",
+      "enabledSkillIds": ["data-analysis"]
+    }
   }
 }
 ```
@@ -128,8 +152,10 @@ user_id=dev-user
 | Tool | 用途 | 前端可见性 |
 | --- | --- | --- |
 | `list_data_sources` / `inspect_schema` / `preview_table` / `run_sql_readonly` | 数据分析 | 可展示治理后的结果。 |
+| `retrieve_knowledge` | Knowledge / RAG | 可展示召回摘要和引用。 |
+| `mcp__{server}__{tool}` | 外部 MCP 工具 | 由启用的 MCP server 动态提供，仍走标准 `TOOL_CALL_*`。 |
 | `read_file` / `write_file` / `edit_file` / `list_files` / `grep` / `file_stat` / `mkdir` | Workspace | run 目录内文件能力。 |
-| `execute_command` | 本地变换 | 仅隔离可用时暴露，无网络，不能绕过 Data Gateway。 |
+| `execute_command` | 本地变换 | 仅 Mastra `LocalSandbox` 原生隔离可用时暴露，无网络，不能绕过 Data Gateway。 |
 | `task_write` / `task_update` / `task_complete` / `task_check` | 任务状态 | 结果同时投影 PLAN。 |
 | `ask_user` / `submit_plan` | 用户协作 | 会挂起 run，按 3.8 恢复。 |
 
@@ -243,6 +269,7 @@ run 失败 delta：
 | `artifact` | 支持 | `id`、`type`、`name`、可选 `preview_json` | workspace 集成前直接使用事件内 preview。 |
 | `context.compiled` | 支持 | step、package revision、group decisions、token report、budget | 内部可观测性；GUI/TUI 可忽略。 |
 | `context.prompt-verified` | 支持 | step、model profile、prompt/input/remaining tokens | 内部可观测性；GUI/TUI 可忽略。 |
+| `run.config.resolved` | 支持 | active datasource/model/skill、enabled KB/MCP、resource revisions | 调试用；GUI/TUI 可忽略。 |
 | `interaction.requested` | 支持 | interaction id、tool、payload、resume schema、`interrupt_event` | 渲染问题/计划审批并保存恢复参数。 |
 | `interaction.resolved` | 支持 | interaction id、tool call id、response | 清除挂起交互。 |
 | `goal.updated` | 支持 | 稳定 goal snapshot、来源 | 展示 objective 状态；可忽略。 |
@@ -291,13 +318,9 @@ run 失败 delta：
 | 自定义事件名如 `plan.update`、`step.start`、`final`、`done` | 不支持 | 统一使用 AG-UI `EventType`。 |
 | 前端直连 Data Gateway REST API | 不支持 | Data Gateway 是 agent tool 边界。 |
 | 前端直连 Metadata / run_events 查询 API | 不支持 | 当前没有对外 replay/query endpoint。 |
-| 前端直连 Artifact download/preview API | 不支持 | workspace 集成前，preview 只通过 AG-UI `CUSTOM(name="artifact")` 提供。 |
-| 前端注册/编辑 datasource 的 REST API | 不支持 | 当前 datasource 管理仍在后端内部/测试路径。 |
 | 多用户认证 | 不支持 | 当前固定 `dev-user`。 |
 | HTTP header 注入 session/datasource | 不支持 | 不使用 `X-Session-ID` / `X-Datasource-ID`，改用 AG-UI body。 |
 | 前端传 datasource credential | 不支持 | credential 不进入模型和前端协议。 |
-| Knowledge/RAG tool | 暂不支持 | `packages/knowledge` 目前只有接口和模型。 |
-| PostgreSQL / MySQL 实际连接 | 暂不支持 | 类型保留，adapter 未实现。 |
 | SQL 写操作 | 不支持 | `run_sql_readonly` + SQL guard 只允许只读查询。 |
 | 模型绕过工具直接拿数据 | 不支持 | 数据访问必须经过 Data Gateway tools。 |
 | client tools 替代后端数据工具 | 不支持 | 后端数据安全和审计边界不能交给前端工具。 |
@@ -311,9 +334,10 @@ run 失败 delta：
 
 | 场景 | HTTP / Event | 前端建议 |
 | --- | --- | --- |
-| `GET /healthz` | `200` JSON `{ ok: true, data: { status: "ok" } }` | 健康检查。 |
+| `GET /healthz` | `200` JSON `{ success: true, data: { status: "ok" } }` | 健康检查。 |
 | `OPTIONS /api/copilotkit` | `204` | CORS preflight。 |
-| 未配置 `LLM_API_KEY` | `503` JSON `err_code=PROVIDER_CONFIG_MISSING` | 提示后端模型配置缺失。 |
+| `OPTIONS /api/v1/*` | `204` | CORS preflight。 |
+| 未配置 `LLM_API_KEY` | `RUN_ERROR` 或配置 test 返回 `PROVIDER_CONFIG_MISSING` | 提示后端模型配置缺失。 |
 | AG-UI request 缺 method 等必要字段 | CopilotKit runtime 返回 validation error | 按 CopilotKit 客户端默认处理。 |
 | Agent 运行错误 | `RUN_ERROR` + `STATE_DELTA(runStatus=failed)` | 展示失败状态和错误信息。 |
 | 重复终态 run 且指纹一致 | 回放原 AG-UI event stream | 按普通 run 消费，不要重复创建本地 message。 |
@@ -324,8 +348,8 @@ CORS 当前允许：
 
 ```text
 Access-Control-Allow-Origin: *
-Access-Control-Allow-Methods: POST, OPTIONS
-Access-Control-Allow-Headers: Content-Type, Authorization
+Access-Control-Allow-Methods: GET, POST, PATCH, DELETE, OPTIONS
+Access-Control-Allow-Headers: Content-Type, Authorization, Idempotency-Key, If-Match
 ```
 
 ## 6. 前端实现建议
@@ -334,7 +358,8 @@ GUI：
 
 - 优先使用 CopilotKit 官方 runtime 接入方式。
 - 选择 agent：`dataAgent`。
-- datasource 通过 `forwardedProps.datasourceId` 传。
+- run 选择通过 `forwardedProps.run_config` 传；legacy `forwardedProps.datasourceId` 只作兼容。
+- 工作区配置通过 `/api/v1/workspace-config` 和对应资源 CRUD 读写。
 - 渲染 `TEXT_MESSAGE_CHUNK` 为主回答。
 - 渲染 `TOOL_CALL_*` 或 `ACTIVITY_*` 为执行轨迹。
 - 渲染 `CUSTOM(sql_audit)` 和 `CUSTOM(artifact)` 为审计/结果卡片；忽略未知 `CUSTOM` name。

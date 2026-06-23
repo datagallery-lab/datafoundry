@@ -10,6 +10,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit false"
   },
   "dependencies": {
-    "@open-data-agent/contracts": "0.1.0"
+    "@open-data-agent/contracts": "0.1.0",
+    "@open-data-agent/metadata": "0.1.0"
   }
 }

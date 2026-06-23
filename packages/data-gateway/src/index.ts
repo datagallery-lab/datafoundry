@@ -4,6 +4,8 @@ import type { DataSourceRecord, MetadataStore } from "@open-data-agent/metadata"
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
+import { createConnection, type Connection, type RowDataPacket } from "mysql2/promise";
+import { Pool, type PoolClient } from "pg";
 import readXlsxFile from "read-excel-file/node";
 
 export type DataSourceType = "duckdb" | "sqlite" | "csv" | "xlsx" | "postgresql" | "mysql" | string;
@@ -105,6 +107,7 @@ export type DataGatewayPolicy = {
   defaultLimit: number;
   maxLimit: number;
   timeoutMs: number;
+  workspaceId?: string;
 };
 
 const DEFAULT_DATA_GATEWAY_POLICY: DataGatewayPolicy = {
@@ -146,7 +149,7 @@ export class LocalDataGateway implements DataGateway {
 
   async testConnect(input: TestConnectInput): Promise<{ ok: boolean; message: string }> {
     const dataSource = this.metadataStore.dataSources.get(input);
-    const adapter = createAdapter(dataSource);
+    const adapter = this.createAdapter(dataSource);
     await adapter.inspectSchema();
     this.metadataStore.dataSources.touchTest({
       user_id: input.user_id,
@@ -159,7 +162,7 @@ export class LocalDataGateway implements DataGateway {
 
   async inspectSchema(input: InspectSchemaInput): Promise<SchemaSummary> {
     const dataSource = this.metadataStore.dataSources.get(input);
-    const adapter = createAdapter(dataSource);
+    const adapter = this.createAdapter(dataSource);
     const schema = await adapter.inspectSchema();
     const tableNames = new Set(input.table_names ?? []);
 
@@ -171,10 +174,15 @@ export class LocalDataGateway implements DataGateway {
 
   async previewTable(input: PreviewTableInput): Promise<TableResult> {
     const dataSource = this.metadataStore.dataSources.get(input);
-    const adapter = createAdapter(dataSource);
+    const adapter = this.createAdapter(dataSource);
+    const resourcePolicy = dataSourcePolicy(dataSource);
     return adapter.previewTable({
       table: input.table,
-      limit: Math.min(input.limit ?? Math.min(20, this.policy.defaultLimit), this.policy.maxLimit)
+      limit: Math.min(
+        input.limit ?? Math.min(20, this.policy.defaultLimit),
+        this.policy.maxLimit,
+        resourcePolicy.maxRows ?? this.policy.maxLimit
+      )
     });
   }
 
@@ -198,11 +206,20 @@ export class LocalDataGateway implements DataGateway {
       throw new Error(`SQL_BLOCKED: ${guard.reason}`);
     }
 
-    const limit = Math.min(input.limit ?? this.policy.defaultLimit, this.policy.maxLimit);
-    const timeoutMs = Math.min(input.timeout_ms ?? this.policy.timeoutMs, this.policy.timeoutMs);
+    const resourcePolicy = dataSourcePolicy(dataSource);
+    const limit = Math.min(
+      input.limit ?? this.policy.defaultLimit,
+      this.policy.maxLimit,
+      resourcePolicy.maxRows ?? this.policy.maxLimit
+    );
+    const timeoutMs = Math.min(
+      input.timeout_ms ?? this.policy.timeoutMs,
+      this.policy.timeoutMs,
+      resourcePolicy.timeoutMs ?? this.policy.timeoutMs
+    );
 
     try {
-      const adapter = createAdapter(dataSource);
+      const adapter = this.createAdapter(dataSource);
       const result = await withTimeout(
         adapter.runSqlReadonly({
           sql: applyLimit(guard.normalized_sql, limit),
@@ -257,6 +274,20 @@ export class LocalDataGateway implements DataGateway {
       throw error;
     }
   }
+
+  private createAdapter(dataSource: DataSourceRecord): DataSourceAdapter {
+    const credentials = dataSource.credential_ref
+      ? this.metadataStore.secrets.get({
+          ref: dataSource.credential_ref,
+          workspace_id: this.policy.workspaceId ?? "default",
+          user_id: dataSource.user_id
+        })
+      : {};
+    const resourcePolicy = dataSourcePolicy(dataSource);
+    return createAdapter(dataSource, credentials, {
+      timeoutMs: Math.min(this.policy.timeoutMs, resourcePolicy.timeoutMs ?? this.policy.timeoutMs)
+    });
+  }
 }
 
 type DataSourceAdapter = {
@@ -296,22 +327,26 @@ const SUPPORTED_DATA_SOURCE_TYPES: SupportedDataSourceType[] = [
   },
   {
     name: "postgresql",
-    enabled: false,
+    enabled: true,
     label: "PostgreSQL",
-    description: "Not enabled in this Day 3 build.",
-    parameters: []
+    description: "PostgreSQL read-only datasource.",
+    parameters: serverDatabaseParameters(5432)
   },
   {
     name: "mysql",
-    enabled: false,
+    enabled: true,
     label: "MySQL",
-    description: "Not enabled in this Day 3 build.",
-    parameters: []
+    description: "MySQL read-only datasource.",
+    parameters: serverDatabaseParameters(3306)
   }
 ];
 
-const createAdapter = (dataSource: DataSourceRecord): DataSourceAdapter => {
-  const config = parseConfig(dataSource);
+const createAdapter = (
+  dataSource: DataSourceRecord,
+  credentials: Record<string, unknown> = {},
+  effectivePolicy: { timeoutMs?: number } = {}
+): DataSourceAdapter => {
+  const config = { ...parseConfig(dataSource), ...credentials, ...effectivePolicy };
 
   if (dataSource.type === "sqlite") {
     return new SQLiteAdapter(config);
@@ -329,8 +364,116 @@ const createAdapter = (dataSource: DataSourceRecord): DataSourceAdapter => {
     return new DuckDbDemoAdapter(config);
   }
 
+  if (dataSource.type === "postgresql") {
+    return new PostgreSqlAdapter(config);
+  }
+
+  if (dataSource.type === "mysql") {
+    return new MySqlAdapter(config);
+  }
+
   throw new Error(`Unsupported data source type: ${dataSource.type}`);
 };
+
+class PostgreSqlAdapter implements DataSourceAdapter {
+  constructor(private readonly config: Record<string, unknown>) {}
+
+  async inspectSchema(): Promise<Omit<SchemaSummary, "datasource_id">> {
+    const schema = stringConfig(this.config, "schema", "public");
+    const rows = await this.query(`
+      SELECT table_name, column_name, data_type, is_nullable
+      FROM information_schema.columns
+      WHERE table_schema = $1
+      ORDER BY table_name, ordinal_position
+    `, [schema]);
+    return schemaRowsToSummary(rows, "table_name", "column_name", "data_type", "is_nullable");
+  }
+
+  async previewTable(input: { table: string; limit: number }): Promise<TableResult> {
+    const schema = stringConfig(this.config, "schema", "public");
+    return rowsToTableResult(await this.query(
+      `SELECT * FROM ${quoteIdentifier(schema)}.${quoteIdentifier(input.table)} LIMIT $1`,
+      [input.limit]
+    ));
+  }
+
+  async runSqlReadonly(input: { sql: string }): Promise<TableResult> {
+    return rowsToTableResult(await this.query(input.sql));
+  }
+
+  private async query(sql: string, values: unknown[] = []): Promise<Record<string, unknown>[]> {
+    const pool = new Pool({
+      host: stringConfig(this.config, "host"),
+      port: numberConfig(this.config, "port", 5432),
+      database: stringConfig(this.config, "database"),
+      user: stringConfig(this.config, "username"),
+      password: stringConfig(this.config, "password"),
+      max: 1,
+      statement_timeout: numberConfig(this.config, "timeoutMs", 30000)
+    });
+    let client: PoolClient | undefined;
+    try {
+      client = await pool.connect();
+      await client.query("BEGIN READ ONLY");
+      const result = await client.query(sql, values);
+      await client.query("ROLLBACK");
+      return result.rows.filter(isRecord);
+    } finally {
+      client?.release();
+      await pool.end();
+    }
+  }
+}
+
+class MySqlAdapter implements DataSourceAdapter {
+  constructor(private readonly config: Record<string, unknown>) {}
+
+  async inspectSchema(): Promise<Omit<SchemaSummary, "datasource_id">> {
+    const database = stringConfig(this.config, "database");
+    const rows = await this.query(`
+      SELECT table_name, column_name, data_type, is_nullable
+      FROM information_schema.columns
+      WHERE table_schema = ?
+      ORDER BY table_name, ordinal_position
+    `, [database]);
+    return schemaRowsToSummary(rows, "TABLE_NAME", "COLUMN_NAME", "DATA_TYPE", "IS_NULLABLE");
+  }
+
+  async previewTable(input: { table: string; limit: number }): Promise<TableResult> {
+    return rowsToTableResult(await this.query(
+      `SELECT * FROM ${quoteMysqlIdentifier(input.table)} LIMIT ?`,
+      [input.limit]
+    ));
+  }
+
+  async runSqlReadonly(input: { sql: string }): Promise<TableResult> {
+    return rowsToTableResult(await this.query(input.sql));
+  }
+
+  private async query(sql: string, values: unknown[] = []): Promise<Record<string, unknown>[]> {
+    let connection: Connection | undefined;
+    try {
+      connection = await createConnection({
+        host: stringConfig(this.config, "host"),
+        port: numberConfig(this.config, "port", 3306),
+        database: stringConfig(this.config, "database"),
+        user: stringConfig(this.config, "username"),
+        password: stringConfig(this.config, "password"),
+        connectTimeout: numberConfig(this.config, "timeoutMs", 30000)
+      });
+      await connection.query("SET TRANSACTION READ ONLY");
+      await connection.beginTransaction();
+      const [rows] = await connection.query<RowDataPacket[]>({
+        sql,
+        timeout: numberConfig(this.config, "timeoutMs", 30000)
+      }, values);
+      await connection.rollback();
+      return rows.filter(isRecord);
+    } finally {
+      await connection?.end();
+    }
+  }
+}
 
 class SQLiteAdapter implements DataSourceAdapter {
   constructor(private readonly config: Record<string, unknown>) {}
@@ -534,12 +677,36 @@ const dataSourceRecordToSummary = (record: DataSourceRecord): DataSourceSummary 
   id: record.id,
   name: record.name,
   type: record.type,
-  status: record.status,
+  status: record.status === "deleted" ? "disabled" : record.status,
   ...(record.description ? { description: record.description } : {})
 });
 
 const parseConfig = (dataSource: DataSourceRecord): Record<string, unknown> =>
   JSON.parse(dataSource.config_json) as Record<string, unknown>;
+
+const dataSourcePolicy = (dataSource: DataSourceRecord): { maxRows?: number; timeoutMs?: number } => {
+  const policy = parseConfig(dataSource).queryPolicy;
+  if (!isRecord(policy)) {
+    return {};
+  }
+  const maxRows = typeof policy.maxRows === "number" && policy.maxRows > 0 ? policy.maxRows : undefined;
+  const timeoutMs = typeof policy.timeoutMs === "number" && policy.timeoutMs > 0 ? policy.timeoutMs : undefined;
+  return {
+    ...(maxRows !== undefined ? { maxRows } : {}),
+    ...(timeoutMs !== undefined ? { timeoutMs } : {})
+  };
+};
+
+function serverDatabaseParameters(defaultPort: number): ConfigurableParam[] {
+  return [
+    { name: "host", label: "Host", type: "string", required: true },
+    { name: "port", label: "Port", type: "number", required: true, default_value: defaultPort },
+    { name: "database", label: "Database", type: "string", required: true },
+    { name: "schema", label: "Schema", type: "string", required: false },
+    { name: "username", label: "Username", type: "string", required: true },
+    { name: "password", label: "Password", type: "password", required: true }
+  ];
+}
 
 const stringConfig = (config: Record<string, unknown>, key: string, defaultValue?: string): string => {
   const value = config[key];
@@ -553,6 +720,17 @@ const stringConfig = (config: Record<string, unknown>, key: string, defaultValue
   }
 
   throw new Error(`Missing string config: ${key}`);
+};
+
+const numberConfig = (config: Record<string, unknown>, key: string, defaultValue: number): number => {
+  const value = config[key];
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === "string" && value.trim() && Number.isFinite(Number(value))) {
+    return Number(value);
+  }
+  return defaultValue;
 };
 
 const requiredRecordString = (row: unknown, key: string): string => {
@@ -585,6 +763,29 @@ const objectRowsToTableResult = (rows: Record<string, unknown>[], columns: strin
 });
 
 const quoteIdentifier = (identifier: string): string => `"${identifier.replaceAll('"', '""')}"`;
+
+const quoteMysqlIdentifier = (identifier: string): string => `\`${identifier.replaceAll("`", "``")}\``;
+
+const schemaRowsToSummary = (
+  rows: Record<string, unknown>[],
+  tableKey: string,
+  columnKey: string,
+  typeKey: string,
+  nullableKey: string
+): Omit<SchemaSummary, "datasource_id"> => {
+  const tables = new Map<string, SchemaSummary["tables"][number]>();
+  rows.forEach((row) => {
+    const tableName = requiredRecordString(row, tableKey);
+    const table = tables.get(tableName) ?? { name: tableName, columns: [] };
+    table.columns.push({
+      name: requiredRecordString(row, columnKey),
+      type: requiredRecordString(row, typeKey),
+      nullable: requiredRecordString(row, nullableKey).toUpperCase() === "YES"
+    });
+    tables.set(tableName, table);
+  });
+  return { tables: [...tables.values()] };
+};
 
 const inferColumnType = (rows: Record<string, unknown>[], column: string): string => {
   const value = rows.find((row) => row[column] !== null && row[column] !== undefined)?.[column];
