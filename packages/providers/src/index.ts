@@ -35,38 +35,48 @@ export type ModelProvider =
 
 export const createModelProvider = (env: Record<string, string | undefined>): ModelProvider => {
   const config = createEnvConfig(env);
-  const providerName = config.llm.provider.toLowerCase();
+  return createModelProviderFromConfig({
+    provider: config.llm.provider,
+    model: config.llm.model,
+    base_url: config.llm.base_url,
+    ...(config.llm.api_key ? { api_key: config.llm.api_key } : {})
+  });
+};
 
-  if (!config.llm.api_key) {
+/** Create one model provider from a persisted model-profile configuration. */
+export const createModelProviderFromConfig = (config: ChatProviderConfig): ModelProvider => {
+  const providerName = config.provider.toLowerCase();
+
+  if (!config.api_key) {
     return {
       kind: "mock",
-      model_name: config.llm.model
+      model_name: config.model
     };
   }
 
   if (!isOpenAiCompatibleProvider(providerName)) {
-    const modelId = normalizeMastraRouterModelId(providerName, config.llm.model);
+    const modelId = normalizeMastraRouterModelId(providerName, config.model);
 
     return {
       kind: "mastra-router",
       model_name: modelId,
       model: {
         id: modelId,
-        url: config.llm.base_url,
-        apiKey: config.llm.api_key
+        url: config.base_url,
+        apiKey: config.api_key
       }
     };
   }
 
   const provider = createOpenAI({
-    apiKey: config.llm.api_key,
-    baseURL: config.llm.base_url
+    apiKey: config.api_key,
+    baseURL: config.base_url
   });
 
   return {
     kind: "openai-compatible",
-    model_name: config.llm.model,
-    model: provider.chat(config.llm.model)
+    model_name: config.model,
+    model: provider.chat(config.model)
   };
 };
 

@@ -1,4 +1,15 @@
 import type { RunAgentInput } from "@ag-ui/client";
+import type { ConfigResourceKind, MetadataStore } from "@open-data-agent/metadata";
+
+export type RunConfigDefaults = {
+  activeDatasourceId?: string;
+  activeLlmProfileId?: string;
+  activeSkillId?: string;
+  enabledDatasourceIds: string[];
+  enabledKnowledgeIds: string[];
+  enabledMcpServerIds: string[];
+  enabledSkillIds: string[];
+};
 
 export type EffectiveRunConfig = {
   activeDatasourceId: string;
@@ -7,6 +18,8 @@ export type EffectiveRunConfig = {
   enabledDatasourceIds: string[];
   enabledKnowledgeIds: string[];
   enabledMcpServerIds: string[];
+  enabledSkillIds: string[];
+  resourceRevisions?: Record<string, number>;
   goal?: {
     maxRuns?: number;
     objective: string;
@@ -14,19 +27,37 @@ export type EffectiveRunConfig = {
 };
 
 /** Parse and validate the frontend run_config into the backend's effective run policy. */
-export const extractEffectiveRunConfig = (input: RunAgentInput, defaultDatasourceId: string): EffectiveRunConfig => {
+export const extractEffectiveRunConfig = (
+  input: RunAgentInput,
+  defaultDatasourceId: string,
+  defaults?: RunConfigDefaults
+): EffectiveRunConfig => {
   const runConfig = extractRunConfigRecord(input);
   const legacyDatasourceId = extractDatasourceId(input);
   const configuredDatasourceId = stringFromAliases(runConfig, ["activeDatasourceId", "active_datasource_id"]);
-  const activeDatasourceId = configuredDatasourceId ?? legacyDatasourceId ?? defaultDatasourceId;
-  const enabledDatasourceIds = stringArrayFromAliases(runConfig, ["enabledDatasourceIds", "enabled_datasource_ids"]);
-  const effectiveDatasourceIds = enabledDatasourceIds.length > 0 ? unique(enabledDatasourceIds) : [activeDatasourceId];
-  const activeLlmProfileId = stringFromAliases(runConfig, ["activeLlmProfileId", "active_llm_profile_id"]);
-  const activeSkillId = stringFromAliases(runConfig, ["activeSkillId", "active_skill_id"]);
+  const datasourceOverride = stringArrayOptionFromAliases(
+    runConfig,
+    ["enabledDatasourceIds", "enabled_datasource_ids"]
+  );
+  const activeDatasourceId = configuredDatasourceId ?? legacyDatasourceId ?? datasourceOverride?.[0]
+    ?? defaults?.activeDatasourceId ?? defaultDatasourceId;
+  const effectiveDatasourceIds = unique(datasourceOverride ?? defaults?.enabledDatasourceIds ?? [activeDatasourceId]);
+  const activeLlmProfileId = stringFromAliases(runConfig, ["activeLlmProfileId", "active_llm_profile_id"])
+    ?? defaults?.activeLlmProfileId;
+  const skillOverride = stringArrayOptionFromAliases(runConfig, ["enabledSkillIds", "enabled_skill_ids"]);
+  const configuredSkillId = stringFromAliases(runConfig, ["activeSkillId", "active_skill_id"]);
+  const activeSkillId = configuredSkillId
+    ?? (skillOverride ? skillOverride[0] : defaults?.activeSkillId);
+  const enabledSkillIds = unique(
+    skillOverride ?? defaults?.enabledSkillIds ?? (configuredSkillId ? [configuredSkillId] : [])
+  );
   const goal = extractGoal(runConfig);
 
   if (!effectiveDatasourceIds.includes(activeDatasourceId)) {
     throw new Error("ACTIVE_DATASOURCE_NOT_ENABLED");
+  }
+  if (activeSkillId && !enabledSkillIds.includes(activeSkillId)) {
+    throw new Error("ACTIVE_SKILL_NOT_ENABLED");
   }
 
   return {
@@ -34,10 +65,105 @@ export const extractEffectiveRunConfig = (input: RunAgentInput, defaultDatasourc
     ...(activeLlmProfileId ? { activeLlmProfileId } : {}),
     ...(activeSkillId ? { activeSkillId } : {}),
     enabledDatasourceIds: effectiveDatasourceIds,
-    enabledKnowledgeIds: stringArrayFromAliases(runConfig, ["enabledKnowledgeIds", "enabled_knowledge_ids"]),
-    enabledMcpServerIds: stringArrayFromAliases(runConfig, ["enabledMcpServerIds", "enabled_mcp_server_ids"]),
+    enabledKnowledgeIds: unique(stringArrayOptionFromAliases(
+      runConfig,
+      ["enabledKnowledgeIds", "enabled_knowledge_ids"]
+    ) ?? defaults?.enabledKnowledgeIds ?? []),
+    enabledMcpServerIds: unique(stringArrayOptionFromAliases(
+      runConfig,
+      ["enabledMcpServerIds", "enabled_mcp_server_ids"]
+    ) ?? defaults?.enabledMcpServerIds ?? []),
+    enabledSkillIds,
     ...(goal ? { goal } : {})
   };
+};
+
+/** Resolve workspace defaults, per-run overrides, and immutable resource revisions for one run. */
+export const resolveEffectiveRunConfig = (
+  input: RunAgentInput,
+  metadataStore: MetadataStore,
+  userId: string,
+  defaultDatasourceId: string,
+  workspaceId = "default"
+): EffectiveRunConfig => {
+  const defaults = loadWorkspaceRunDefaults(metadataStore, userId, workspaceId);
+  const config = extractEffectiveRunConfig(input, defaultDatasourceId, defaults);
+  return {
+    ...config,
+    resourceRevisions: resolveResourceRevisions(config, metadataStore, userId, workspaceId)
+  };
+};
+
+const loadWorkspaceRunDefaults = (
+  metadataStore: MetadataStore,
+  userId: string,
+  workspaceId: string
+): RunConfigDefaults => {
+  const datasourceIds = metadataStore.dataSources.list({ user_id: userId })
+    .filter((item) => {
+      const config = recordFromUnknown(item.config_json) ?? {};
+      return item.status === "ready" && config.defaultEnabled !== false;
+    })
+    .map((item) => item.id);
+  const enabled = (kind: ConfigResourceKind): string[] => metadataStore.configResources.list({
+    workspace_id: workspaceId,
+    user_id: userId,
+    kind
+  }).filter((item) => item.default_enabled && item.status !== "disabled").map((item) => item.id);
+  const modelProfileIds = enabled("model-profile");
+  const skillIds = enabled("skill");
+  return {
+    ...(datasourceIds[0] ? { activeDatasourceId: datasourceIds[0] } : {}),
+    ...(modelProfileIds[0] ? { activeLlmProfileId: modelProfileIds[0] } : {}),
+    ...(skillIds[0] ? { activeSkillId: skillIds[0] } : {}),
+    enabledDatasourceIds: datasourceIds,
+    enabledKnowledgeIds: enabled("knowledge-base"),
+    enabledMcpServerIds: enabled("mcp-server"),
+    enabledSkillIds: skillIds
+  };
+};
+
+const resolveResourceRevisions = (
+  config: EffectiveRunConfig,
+  metadataStore: MetadataStore,
+  userId: string,
+  workspaceId: string
+): Record<string, number> => {
+  const revisions: Record<string, number> = {};
+  config.enabledDatasourceIds.forEach((id) => {
+    revisions[`datasource:${id}`] = metadataStore.dataSources.get({ user_id: userId, datasource_id: id }).revision;
+  });
+  const addResources = (kind: ConfigResourceKind, ids: string[]): void => {
+    unique(ids).forEach((id) => {
+      revisions[`${kind}:${id}`] = metadataStore.configResources.get({
+        id,
+        workspace_id: workspaceId,
+        user_id: userId,
+        kind
+      }).revision;
+    });
+  };
+  addResources("knowledge-base", config.enabledKnowledgeIds);
+  addResources("mcp-server", config.enabledMcpServerIds);
+  addResources("skill", [...config.enabledSkillIds, ...(config.activeSkillId ? [config.activeSkillId] : [])]);
+  if (config.activeLlmProfileId) {
+    const visited = new Set<string>();
+    let profileId: string | undefined = config.activeLlmProfileId;
+    while (profileId && !visited.has(profileId)) {
+      visited.add(profileId);
+      const profile = metadataStore.configResources.get({
+        id: profileId,
+        workspace_id: workspaceId,
+        user_id: userId,
+        kind: "model-profile"
+      });
+      revisions[`model-profile:${profileId}`] = profile.revision;
+      profileId = typeof profile.payload.fallbackProfileId === "string"
+        ? profile.payload.fallbackProfileId
+        : undefined;
+    }
+  }
+  return revisions;
 };
 
 const extractGoal = (runConfig: Record<string, unknown>): EffectiveRunConfig["goal"] => {
@@ -140,6 +266,15 @@ const stringArrayFromAliases = (record: Record<string, unknown>, aliases: string
     }
   }
   return [];
+};
+
+const stringArrayOptionFromAliases = (record: Record<string, unknown>, aliases: string[]): string[] | undefined => {
+  for (const alias of aliases) {
+    if (alias in record) {
+      return stringArrayFromAliases(record, [alias]);
+    }
+  }
+  return undefined;
 };
 
 const unique = (values: string[]): string[] => [...new Set(values)];

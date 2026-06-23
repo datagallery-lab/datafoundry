@@ -5,6 +5,8 @@ import {
   ModelContextProfileRegistry,
   ProviderPromptGuardProcessor,
   ReductionStrategyRegistry,
+  SchemaContextAdapter,
+  SqlResultContextAdapter,
   StepContextPlanner,
   createDataAgent,
   createContextItem,
@@ -173,6 +175,48 @@ if (!processorResult.messages.some((message) => message.id === "current-tool-res
 }
 if (!events.some((event) => event.name === "context.compiled")) {
   throw new Error("Expected context compilation to emit a bounded AG-UI CUSTOM audit event");
+}
+
+const sqlAdapter = new SqlResultContextAdapter();
+const invalidSqlItems = sqlAdapter.toContextItems({ error: "tool failed before returning rows" }, { maxChars: 4096 });
+const invalidSqlModel = invalidSqlItems.find((item) => item.visibility === "model")?.content;
+
+if (!invalidSqlModel?.tool_result_invalid) {
+  throw new Error("Expected malformed SQL tool observations to become bounded invalid-result context");
+}
+
+const alreadyGovernedSqlItems = sqlAdapter.toContextItems({
+  columns: ["id"],
+  rows: [[1]],
+  row_count: 1,
+  audit_log_id: "audit-1",
+  elapsed_ms: 1
+}, { maxChars: 4096 });
+const alreadyGovernedSqlModel = alreadyGovernedSqlItems.find((item) => item.visibility === "model")?.content;
+
+if (!Array.isArray(alreadyGovernedSqlModel?.rows) || alreadyGovernedSqlModel.rows.length !== 1) {
+  throw new Error("Expected already-governed SQL observations to be idempotently accepted");
+}
+
+const schemaAdapter = new SchemaContextAdapter();
+const invalidSchemaItems = schemaAdapter.toContextItems({ error: "schema failed before returning tables" }, {
+  maxChars: 4096
+});
+const invalidSchemaModel = invalidSchemaItems.find((item) => item.visibility === "model")?.content;
+
+if (!invalidSchemaModel?.tool_result_invalid) {
+  throw new Error("Expected malformed schema tool observations to become bounded invalid-result context");
+}
+
+const alreadyGovernedSchemaItems = schemaAdapter.toContextItems({
+  datasource_id: "api-duckdb-demo",
+  schema_id: "schema-1",
+  tables: [{ name: "orders", columns: [{ name: "order_id", type: "INTEGER" }] }]
+}, { maxChars: 4096 });
+const alreadyGovernedSchemaModel = alreadyGovernedSchemaItems.find((item) => item.visibility === "model")?.content;
+
+if (alreadyGovernedSchemaModel?.schema_id !== "schema-1") {
+  throw new Error("Expected already-governed schema observations to preserve schema_id");
 }
 
 const customRegistry = new ReductionStrategyRegistry();

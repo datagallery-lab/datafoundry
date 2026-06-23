@@ -11,7 +11,13 @@ import { Mastra } from "@mastra/core/mastra";
 import { createWorkspaceTools } from "@mastra/core/workspace";
 import type { Message } from "@ag-ui/core";
 import type { DataGateway } from "@open-data-agent/data-gateway";
-import { createModelProvider, type ModelProvider } from "@open-data-agent/providers";
+import type { KnowledgeService } from "@open-data-agent/knowledge";
+import {
+  createModelProvider,
+  createModelProviderFromConfig,
+  type ChatProviderConfig,
+  type ModelProvider
+} from "@open-data-agent/providers";
 
 import { AGENT_MAX_STEPS, SQL_MAX_EXECUTION_COUNT, SQL_MAX_SQL_CHARS } from "./context/defaults.js";
 import { ContextBudgetAllocator } from "./context/context-budget-allocator.js";
@@ -38,7 +44,8 @@ import {
 } from "./context/adapters/workspace-tool-context-adapters.js";
 import {
   ListDataSourcesContextAdapter,
-  PreviewTableContextAdapter
+  PreviewTableContextAdapter,
+  RetrieveKnowledgeContextAdapter
 } from "./context/adapters/data-tool-context-adapters.js";
 import {
   TaskCheckContextAdapter,
@@ -50,6 +57,8 @@ import {
   AskUserContextAdapter,
   SubmitPlanContextAdapter
 } from "./context/adapters/collaboration-tool-context-adapters.js";
+import { McpToolContextAdapter } from "./context/adapters/mcp-tool-context-adapter.js";
+import type { ToolResultAdapter } from "./context/tool-result-adapter.js";
 import { ProviderPromptGuardProcessor } from "./context/provider-prompt-guard-processor.js";
 import { ModelContextProfileRegistry } from "./context/model-context-profile.js";
 import { PromptTokenCounter } from "./context/prompt-token-counter.js";
@@ -66,8 +75,31 @@ import { GovernedToolFactory } from "./tools/governed-tool-factory.js";
 import { createRunWorkspace } from "./tools/workspace-factory.js";
 import type { AgentRunContext, AgentRunContextInput, AgUiEventEmitter } from "./types.js";
 import { createCustomEvent } from "./events.js";
+import { createTool } from "@mastra/core/tools";
+import { z } from "zod";
 
 export type { AgentRunContext, AgentRunContextInput, AgUiEventEmitter } from "./types.js";
+export const STATIC_AGENT_TOOL_NAMES = [
+  "ask_user",
+  "edit_file",
+  "execute_command",
+  "file_stat",
+  "grep",
+  "inspect_schema",
+  "list_data_sources",
+  "list_files",
+  "mkdir",
+  "preview_table",
+  "read_file",
+  "retrieve_knowledge",
+  "run_sql_readonly",
+  "submit_plan",
+  "task_check",
+  "task_complete",
+  "task_update",
+  "task_write",
+  "write_file"
+] as const;
 export {
   DEFAULT_AGENT_CONTEXT_POLICY,
   applySchemaContextPolicy,
@@ -101,6 +133,7 @@ export {
   SubmitPlanContextAdapter
 } from "./context/adapters/collaboration-tool-context-adapters.js";
 export { ToolObservationRouter } from "./context/tool-observation-router.js";
+export { McpToolContextAdapter } from "./context/adapters/mcp-tool-context-adapter.js";
 export { ToolResultDispatcher } from "./context/tool-result-dispatcher.js";
 export {
   GovernedToolFactory,
@@ -157,10 +190,20 @@ export type CreateDataAgentInput = {
   contextCompilation?: ContextCompilationOptions;
   dataGateway: DataGateway;
   emitter: AgUiEventEmitter;
+  knowledgeService?: KnowledgeService;
   modelProvider: Exclude<ModelProvider, { kind: "mock" }>;
   runContext: AgentRunContext;
+  additionalToolAdapters?: ToolResultAdapter[];
+  skillPolicy?: {
+    instructions: string;
+    allowedTools?: string[];
+  };
   taskStateRuntime?: TaskStateRuntime;
   messages: Message[];
+  modelSettings?: {
+    maxOutputTokens?: number;
+    temperature?: number;
+  };
   goal?: GoalRequest;
   /**
    * 工作区根目录（调用方注入）。未提供时回落到 WORKSPACE_ROOT，再回落到系统 temp。
@@ -208,6 +251,9 @@ export const createDataAgent = async (
   sourceRegistry.registerToolAdapter(new SqlResultContextAdapter());
   sourceRegistry.registerToolAdapter(new ListDataSourcesContextAdapter());
   sourceRegistry.registerToolAdapter(new PreviewTableContextAdapter());
+  if (input.knowledgeService) {
+    sourceRegistry.registerToolAdapter(new RetrieveKnowledgeContextAdapter());
+  }
   sourceRegistry.registerToolAdapter(new ReadFileContextAdapter());
   sourceRegistry.registerToolAdapter(new WriteFileContextAdapter());
   sourceRegistry.registerToolAdapter(new EditFileContextAdapter());
@@ -222,6 +268,7 @@ export const createDataAgent = async (
   sourceRegistry.registerToolAdapter(new TaskCheckContextAdapter());
   sourceRegistry.registerToolAdapter(new AskUserContextAdapter());
   sourceRegistry.registerToolAdapter(new SubmitPlanContextAdapter());
+  input.additionalToolAdapters?.forEach((adapter) => sourceRegistry.registerToolAdapter(adapter));
 
   // 绑定到本次 run 的工作区：LocalFilesystem + LocalSandbox（macOS seatbelt / Linux bubblewrap 隔离）。
   // createDataAgent 每次 run 都调用，直接闭包捕获 runContext，不依赖下游 requestContext 注入。
@@ -296,17 +343,49 @@ export const createDataAgent = async (
         submit_plan: submitPlanTool
       }
     : {};
+  const knowledgeTools = input.knowledgeService
+    ? {
+        retrieve_knowledge: createTool({
+          id: "retrieve_knowledge",
+          description: "Retrieve relevant chunks from a knowledge base enabled for this run.",
+          inputSchema: z.object({
+            collection_id: z.string().min(1),
+            query: z.string().min(1),
+            top_k: z.number().int().min(1).max(20).optional()
+          }),
+          execute: async (toolInput) => {
+            if (!input.runContext.enabled_knowledge_ids?.includes(toolInput.collection_id)) {
+              throw new Error(`KNOWLEDGE_BASE_NOT_ENABLED:${toolInput.collection_id}`);
+            }
+            return {
+              collection_id: toolInput.collection_id,
+              chunks: await input.knowledgeService?.retrieve({
+                user_id: input.runContext.user_id,
+                collection_id: toolInput.collection_id,
+                query: toolInput.query,
+                ...(toolInput.top_k ? { top_k: toolInput.top_k } : {})
+              }) ?? []
+            };
+          }
+        })
+      }
+    : {};
   const workspaceTools = await createWorkspaceTools(runWorkspace.workspace, {
     requestContext: {},
     workspace: runWorkspace.workspace
   });
   runWorkspace.workspace.setToolsConfig({ enabled: false });
-  const tools = governedToolFactory.governTools({
+  const availableTools = {
     ...registry.mastraTools,
+    ...knowledgeTools,
     ...taskTools,
     ...collaborationTools,
     ...workspaceTools
-  });
+  };
+  const selectedTools = input.skillPolicy?.allowedTools
+    ? Object.fromEntries(Object.entries(availableTools).filter(([name]) => input.skillPolicy?.allowedTools?.includes(name)))
+    : availableTools;
+  const tools = governedToolFactory.governTools(selectedTools);
   const agent = new Agent({
     id: "data-agent",
     name: "Data Agent",
@@ -314,7 +393,9 @@ export const createDataAgent = async (
       runContext: input.runContext,
       commandExecutionEnabled: runWorkspace.commandExecutionEnabled,
       collaborationToolsEnabled: Boolean(input.taskStateRuntime),
-      taskToolsEnabled: Boolean(input.taskStateRuntime)
+      ...(input.skillPolicy?.instructions ? { skillInstructions: input.skillPolicy.instructions } : {}),
+      taskToolsEnabled: Boolean(input.taskStateRuntime),
+      toolNames: Object.keys(selectedTools)
     }),
     model: input.modelProvider.model as never,
     tools,
@@ -330,6 +411,7 @@ export const createDataAgent = async (
     ],
     defaultOptions: {
       maxSteps: AGENT_MAX_STEPS,
+      ...(input.modelSettings ? { modelSettings: input.modelSettings } : {}),
       providerOptions: {
         openai: {
           systemMessageMode: "system"
@@ -381,21 +463,48 @@ export const createDataAgentRunContext = (input: AgentRunContextInput): AgentRun
 export const createModelProviderFromEnv = (env: Record<string, string | undefined>): ModelProvider =>
   createModelProvider(env);
 
+/** Create a model provider from a resolved persisted profile. */
+export const createModelProviderFromProfile = (config: ChatProviderConfig): ModelProvider =>
+  createModelProviderFromConfig(config);
+
+/** Execute a minimal real model call through the same Mastra model boundary used by production runs. */
+export const probeModelProvider = async (
+  provider: Exclude<ModelProvider, { kind: "mock" }>,
+  timeoutMs = 30000
+): Promise<{ model: string; text: string }> => {
+  const agent = new Agent({
+    id: "model-profile-probe",
+    name: "Model Profile Probe",
+    instructions: "Reply with OK only.",
+    model: provider.model as never
+  });
+  const output = await agent.generate("Reply with OK only.", {
+    abortSignal: AbortSignal.timeout(timeoutMs),
+    maxSteps: 1,
+    modelSettings: { maxOutputTokens: 16, temperature: 0 }
+  });
+  return { model: provider.model_name, text: output.text.trim() };
+};
+
 type AgentInstructionsInput = {
   runContext: AgentRunContext;
   /** execute_command 工具是否启用（由沙箱隔离可用性与 env 决定）。 */
   commandExecutionEnabled: boolean;
   collaborationToolsEnabled: boolean;
+  skillInstructions?: string;
   /** builtin task_* 工具是否启用（取决于是否注入 taskStateRuntime）。 */
   taskToolsEnabled: boolean;
+  toolNames: string[];
 };
 
 const buildAgentInstructions = (input: AgentInstructionsInput): string => {
   const { runContext: context, collaborationToolsEnabled, commandExecutionEnabled, taskToolsEnabled } = input;
-
-  const toolGroups: string[] = [
-    "Data tools: list_data_sources, inspect_schema, preview_table, run_sql_readonly."
-  ];
+  const enabled = (name: string): boolean => input.toolNames.includes(name);
+  const dataTools = ["list_data_sources", "inspect_schema", "preview_table", "run_sql_readonly"].filter(enabled);
+  const toolGroups: string[] = dataTools.length > 0 ? [`Data tools: ${dataTools.join(", ")}.`] : [];
+  if ((context.enabled_knowledge_ids?.length ?? 0) > 0 && enabled("retrieve_knowledge")) {
+    toolGroups.push("Knowledge tools: retrieve_knowledge.");
+  }
   const workspaceTools = [
     "read_file",
     "write_file",
@@ -405,24 +514,26 @@ const buildAgentInstructions = (input: AgentInstructionsInput): string => {
     "mkdir",
     "grep",
     ...(commandExecutionEnabled ? ["execute_command"] : [])
-  ];
-  toolGroups.push(
-    `Workspace tools (per-run isolated directory): ${workspaceTools.join(", ")}. `
+  ].filter(enabled);
+  if (workspaceTools.length > 0) {
+    toolGroups.push(`Workspace tools (per-run isolated directory): ${workspaceTools.join(", ")}. `
       + "Files you write stay within this run's directory. "
-      + (commandExecutionEnabled
+      + (enabled("execute_command")
         ? "execute_command runs in a sandbox without network access. Use it only for local transforms, charts, "
           + "or exports; never use it to access external services."
-        : "execute_command is disabled this run; rely on the data tools and file tools only.")
-  );
-  if (taskToolsEnabled) {
-    toolGroups.push("Task tools: task_write, task_update, task_complete, task_check.");
+        : "execute_command is disabled this run; rely on the available data and file tools only."));
   }
-  if (collaborationToolsEnabled) {
-    toolGroups.push("Collaboration tools: ask_user, submit_plan.");
+  const taskTools = ["task_write", "task_update", "task_complete", "task_check"].filter(enabled);
+  if (taskToolsEnabled && taskTools.length > 0) {
+    toolGroups.push(`Task tools: ${taskTools.join(", ")}.`);
+  }
+  const collaborationTools = ["ask_user", "submit_plan"].filter(enabled);
+  if (collaborationToolsEnabled && collaborationTools.length > 0) {
+    toolGroups.push(`Collaboration tools: ${collaborationTools.join(", ")}.`);
   }
 
   const policies: string[] = [];
-  if (taskToolsEnabled) {
+  if (taskToolsEnabled && taskTools.length === 4) {
     policies.push(
       "Plan with tasks. For work with three or more distinct actions, call task_write first and keep exactly one "
         + "task in_progress at a time. "
@@ -431,24 +542,26 @@ const buildAgentInstructions = (input: AgentInstructionsInput): string => {
         + "Never invent task IDs; reuse only those returned by tool results."
     );
   }
-  if (collaborationToolsEnabled) {
+  if (collaborationToolsEnabled && collaborationTools.length > 0) {
     policies.push(
       "Use ask_user only when progress requires information or a decision that cannot be inferred safely. "
         + "Use submit_plan when explicit user approval is required before implementation; both tools suspend the run."
     );
   }
-  policies.push(
-    "Inspect before you query, then reuse the schema_id. inspect_schema returns a schema_id token that authorizes "
+  if (enabled("inspect_schema") && (enabled("run_sql_readonly") || enabled("preview_table"))) {
+    policies.push("Inspect before you query, then reuse the schema_id. inspect_schema returns a schema_id token that authorizes "
       + "run_sql_readonly and preview_table; pass it as their schema_id argument. The first SQL or preview against a "
       + "datasource must be preceded by an inspect_schema for it; without a valid schema_id the tools fail with "
       + "SCHEMA_REQUIRED. The token enforces inspect-before-query ordering within this run; Data Gateway remains the "
       + "authorization and read-only SQL boundary. Reuse the token instead of repeatedly inspecting the same schema."
-  );
-  policies.push(
-    "Write read-only SQL only. Generate SELECT or WITH queries and run them through run_sql_readonly. "
+    );
+  }
+  if (enabled("run_sql_readonly")) {
+    policies.push("Write read-only SQL only. Generate SELECT or WITH queries and run them through run_sql_readonly. "
       + "Do not attempt writes, DDL, or multi-statement scripts through SQL"
       + ". Never use execute_command or direct database clients to bypass Data Gateway."
-  );
+    );
+  }
   policies.push(
     `Respect limits. This run allows at most ${AGENT_MAX_STEPS} steps and `
       + `${SQL_MAX_EXECUTION_COUNT} SQL executions total `
@@ -471,6 +584,9 @@ const buildAgentInstructions = (input: AgentInstructionsInput): string => {
     "Confidentiality. Never reveal credentials, datasource config, internal environment values, or workspace "
       + "absolute paths in your responses."
   );
+  if (input.skillInstructions) {
+    policies.push(`Active skill policy: ${input.skillInstructions}`);
+  }
 
   return `
 You are a general-purpose data agent. Analyze data by calling tools. Never invent schema, rows, SQL results,

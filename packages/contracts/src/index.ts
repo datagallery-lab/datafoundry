@@ -3,8 +3,11 @@ import type { BaseEvent, EventType } from "@ag-ui/core";
 export type ApiResult<T> = {
   success: boolean;
   data?: T;
-  err_code?: string;
-  err_msg?: string;
+  error?: {
+    code: AppErrorCode;
+    message: string;
+    details?: unknown;
+  };
 };
 
 export type MeResponse = {
@@ -129,6 +132,14 @@ export type ArtifactSummary = {
 };
 
 export type AppErrorCode =
+  | "BAD_REQUEST"
+  | "CONFLICT"
+  | "DATASOURCE_TEST_FAILED"
+  | "INTERNAL_ERROR"
+  | "JOB_NOT_FOUND"
+  | "PROVIDER_TEST_FAILED"
+  | "REVISION_CONFLICT"
+  | "SECRET_MASTER_KEY_REQUIRED"
   | "UNAUTHORIZED"
   | "RESOURCE_NOT_FOUND"
   | "NOT_ENABLED"
@@ -145,10 +156,17 @@ export const createSuccessResult = <T>(data: T): ApiResult<T> => ({
   data
 });
 
-export const createErrorResult = (err_code: AppErrorCode, err_msg: string): ApiResult<never> => ({
+export const createErrorResult = (
+  code: AppErrorCode,
+  message: string,
+  details?: unknown
+): ApiResult<never> => ({
   success: false,
-  err_code,
-  err_msg
+  error: {
+    code,
+    message,
+    ...(details === undefined ? {} : { details })
+  }
 });
 
 export type EnvVariableSpec = {
@@ -179,6 +197,7 @@ export type EnvConfig = {
   };
   storage: {
     root_dir: string;
+    secret_master_key?: string;
   };
   sql: {
     default_limit: number;
@@ -207,6 +226,7 @@ export const ENV_VARIABLE_SPECS: EnvVariableSpec[] = [
   { name: "EMBEDDING_API_KEY", required: true, description: "Embedding provider API key." },
   { name: "STORAGE_ROOT_DIR", required: false, default_value: "storage", description: "Local storage root." },
   { name: "METADATA_DB_PATH", required: false, description: "SQLite metadata database path." },
+  { name: "SECRET_MASTER_KEY", required: false, description: "Master key for local AES-GCM credential storage." },
   { name: "SQL_DEFAULT_LIMIT", required: false, default_value: "100", description: "Default read-only SQL row limit." },
   { name: "SQL_MAX_LIMIT", required: false, default_value: "1000", description: "Maximum read-only SQL row limit." },
   { name: "SQL_TIMEOUT_MS", required: false, default_value: "10000", description: "Read-only SQL timeout in ms." }
@@ -232,7 +252,8 @@ export const createEnvConfig = (env: Record<string, string | undefined>): EnvCon
     ...(env.EMBEDDING_API_KEY ? { api_key: env.EMBEDDING_API_KEY } : {})
   },
   storage: {
-    root_dir: env.STORAGE_ROOT_DIR ?? "storage"
+    root_dir: env.STORAGE_ROOT_DIR ?? "storage",
+    ...(env.SECRET_MASTER_KEY ? { secret_master_key: env.SECRET_MASTER_KEY } : {})
   },
   sql: {
     default_limit: Number.parseInt(env.SQL_DEFAULT_LIMIT ?? "100", 10),

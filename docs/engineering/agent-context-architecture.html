@@ -1,0 +1,527 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Agent Context Control Room</title>
+  <style>
+    :root {
+      --ink: #20252b;
+      --paper: #f7f4ed;
+      --white: #fffdf8;
+      --blue: #b9dce8;
+      --green: #cddfb5;
+      --yellow: #f4cf58;
+      --coral: #eead91;
+      --lilac: #d7c6e5;
+      --muted: #6d7278;
+      --line: #30343b;
+      --shadow: 5px 5px 0 #30343b;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      color: var(--ink);
+      background-color: var(--paper);
+      background-image:
+        linear-gradient(#dedad0 1px, transparent 1px),
+        linear-gradient(90deg, #dedad0 1px, transparent 1px);
+      background-size: 24px 24px;
+      font-family: "Avenir Next", "PingFang SC", "Microsoft YaHei", sans-serif;
+      letter-spacing: 0;
+    }
+
+    button { font: inherit; }
+
+    .shell {
+      width: min(1500px, calc(100% - 32px));
+      margin: 24px auto 48px;
+    }
+
+    .masthead {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 24px;
+      align-items: end;
+      padding: 22px 24px;
+      border: 2px solid var(--line);
+      border-radius: 6px;
+      background: var(--white);
+      box-shadow: var(--shadow);
+    }
+
+    .kicker {
+      margin: 0 0 7px;
+      color: #8a3f2c;
+      font-size: 12px;
+      font-weight: 800;
+      text-transform: uppercase;
+    }
+
+    h1 {
+      margin: 0;
+      font-family: "Rockwell", "Songti SC", serif;
+      font-size: clamp(28px, 4vw, 54px);
+      line-height: 1;
+      letter-spacing: 0;
+    }
+
+    .subtitle {
+      max-width: 820px;
+      margin: 12px 0 0;
+      color: var(--muted);
+      font-size: 15px;
+      line-height: 1.6;
+    }
+
+    .stamp {
+      min-width: 190px;
+      padding: 12px 15px;
+      border: 2px solid var(--line);
+      background: var(--yellow);
+      box-shadow: 3px 3px 0 var(--line);
+      font-family: "Rockwell", serif;
+      font-size: 13px;
+      font-weight: 800;
+      text-align: center;
+      transform: rotate(1deg);
+    }
+
+    .toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin: 22px 0 14px;
+      padding: 10px;
+      border: 2px solid var(--line);
+      border-radius: 6px;
+      background: var(--white);
+    }
+
+    .toolbar button {
+      min-height: 38px;
+      padding: 8px 14px;
+      border: 2px solid var(--line);
+      border-radius: 4px;
+      color: var(--ink);
+      background: #fff;
+      cursor: pointer;
+      font-size: 13px;
+      font-weight: 800;
+    }
+
+    .toolbar button:hover,
+    .toolbar button:focus-visible {
+      transform: translate(-1px, -1px);
+      box-shadow: 3px 3px 0 var(--line);
+      outline: none;
+    }
+
+    .toolbar button[aria-pressed="true"] { background: var(--yellow); }
+
+    .board {
+      overflow: hidden;
+      border: 2px solid var(--line);
+      border-radius: 7px;
+      background: rgba(255, 253, 248, 0.96);
+      box-shadow: 8px 8px 0 var(--line);
+    }
+
+    .lane {
+      display: grid;
+      grid-template-columns: 152px minmax(0, 1fr);
+      min-height: 168px;
+      border-bottom: 2px solid var(--line);
+      transition: opacity 160ms ease;
+    }
+
+    .lane:last-child { border-bottom: 0; }
+
+    .lane-label {
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      padding: 18px 16px;
+      border-right: 2px solid var(--line);
+      background: var(--lane-color);
+    }
+
+    .lane-number {
+      font-family: "Rockwell", serif;
+      font-size: 34px;
+      font-weight: 900;
+    }
+
+    .lane-title {
+      font-size: 13px;
+      font-weight: 900;
+      text-transform: uppercase;
+    }
+
+    .track {
+      display: flex;
+      gap: 13px;
+      align-items: stretch;
+      overflow-x: auto;
+      padding: 22px 20px 25px;
+      scrollbar-color: var(--line) transparent;
+    }
+
+    .module {
+      position: relative;
+      flex: 1 0 166px;
+      min-width: 166px;
+      max-width: 230px;
+      min-height: 118px;
+      padding: 16px 14px 13px;
+      border: 2px solid var(--line);
+      border-radius: 6px;
+      background: var(--module-color, #fff);
+      box-shadow: 4px 4px 0 var(--line);
+      cursor: pointer;
+      transition: opacity 160ms ease, transform 160ms ease, box-shadow 160ms ease;
+    }
+
+    .module:hover,
+    .module:focus-visible,
+    .module.selected {
+      z-index: 2;
+      transform: translate(-2px, -3px) rotate(-0.4deg);
+      box-shadow: 7px 8px 0 var(--line);
+      outline: none;
+    }
+
+    .module.future { border-style: dashed; }
+
+    .module .tag {
+      display: inline-block;
+      margin-bottom: 12px;
+      padding: 3px 6px;
+      border: 1px solid var(--line);
+      background: var(--white);
+      font-size: 9px;
+      font-weight: 900;
+      text-transform: uppercase;
+    }
+
+    .module h2 {
+      margin: 0;
+      font-family: "Rockwell", "Songti SC", serif;
+      font-size: 17px;
+      line-height: 1.15;
+      letter-spacing: 0;
+    }
+
+    .module p {
+      margin: 9px 0 0;
+      color: #4f555b;
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
+    .arrow {
+      flex: 0 0 30px;
+      align-self: center;
+      color: var(--line);
+      font-family: "Rockwell", serif;
+      font-size: 27px;
+      font-weight: 900;
+      text-align: center;
+    }
+
+    .loopback {
+      flex: 0 0 150px;
+      align-self: center;
+      padding: 9px;
+      border: 2px dashed var(--line);
+      color: #5c4634;
+      background: #fff8dc;
+      font-size: 11px;
+      font-weight: 800;
+      text-align: center;
+    }
+
+    .dimmed { opacity: 0.16; }
+    .hidden-lane { display: none; }
+
+    .inspector {
+      display: grid;
+      grid-template-columns: 160px minmax(0, 1fr) minmax(220px, 0.45fr);
+      gap: 18px;
+      align-items: start;
+      margin-top: 20px;
+      padding: 20px;
+      border: 2px solid var(--line);
+      border-radius: 6px;
+      background: var(--white);
+      box-shadow: var(--shadow);
+    }
+
+    .inspector-label {
+      padding: 8px;
+      border: 2px solid var(--line);
+      background: var(--coral);
+      font-size: 12px;
+      font-weight: 900;
+      text-align: center;
+      text-transform: uppercase;
+    }
+
+    #detail-title {
+      margin: 0 0 7px;
+      font-family: "Rockwell", "Songti SC", serif;
+      font-size: 21px;
+    }
+
+    #detail-copy {
+      margin: 0;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.6;
+    }
+
+    .invariants {
+      margin: 0;
+      padding-left: 18px;
+      font-size: 12px;
+      line-height: 1.65;
+    }
+
+    .legend {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      margin: 18px 0 0;
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 700;
+    }
+
+    .swatch {
+      display: inline-block;
+      width: 15px;
+      height: 15px;
+      margin-right: 5px;
+      border: 1px solid var(--line);
+      vertical-align: -3px;
+    }
+
+    @media (max-width: 820px) {
+      .shell { width: min(100% - 20px, 720px); margin-top: 10px; }
+      .masthead { grid-template-columns: 1fr; }
+      .stamp { justify-self: start; }
+      .lane { grid-template-columns: 1fr; }
+      .lane-label {
+        min-height: 64px;
+        flex-direction: row;
+        align-items: center;
+        border-right: 0;
+        border-bottom: 2px solid var(--line);
+      }
+      .lane-number { font-size: 25px; }
+      .track {
+        flex-direction: column;
+        overflow: visible;
+        padding: 18px;
+      }
+      .module { width: 100%; max-width: none; min-height: 0; }
+      .arrow { transform: rotate(90deg); }
+      .loopback { width: 100%; }
+      .inspector { grid-template-columns: 1fr; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      * { scroll-behavior: auto !important; transition: none !important; }
+    }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <header class="masthead">
+      <div>
+        <p class="kicker">Open Data Agent Workbench / R&amp;D B</p>
+        <h1>Context Control Room</h1>
+        <p class="subtitle">一张图看清每个 ReAct step 如何把 conversation、system、tools 和 observation 编译成受预算约束的 PromptView。</p>
+      </div>
+      <div class="stamp">PHASE 1-3<br>IMPLEMENTED</div>
+    </header>
+
+    <nav class="toolbar" aria-label="Architecture views">
+      <button type="button" data-filter="all" aria-pressed="true">All paths</button>
+      <button type="button" data-filter="step" aria-pressed="false">Step loop</button>
+      <button type="button" data-filter="tool" aria-pressed="false">Tool path</button>
+      <button type="button" data-filter="audit" aria-pressed="false">Audit path</button>
+      <button type="button" data-filter="future" aria-pressed="false">Phase 4-5</button>
+    </nav>
+
+    <section class="board" aria-label="Context architecture diagram">
+      <article class="lane" data-lane="step" style="--lane-color: var(--blue)">
+        <header class="lane-label"><span class="lane-number">01</span><span class="lane-title">Ingress</span></header>
+        <div class="track">
+          <div class="module" tabindex="0" data-zone="step" style="--module-color: var(--blue)" data-title="AG-UI Ingress" data-copy="入口只过滤 activity/reasoning 等非模型输入，不执行第二套 conversation window。">
+            <span class="tag">Northbound</span><h2>RunAgentInput</h2><p>threadId · runId · messages · datasource</p>
+          </div>
+          <span class="arrow" aria-hidden="true">&rarr;</span>
+          <div class="module" tabindex="0" data-zone="step" style="--module-color: var(--white)" data-title="Mastra MessageList" data-copy="Mastra 在每一步追加 assistant tool-call 和 tool-result，并重新组装当前 trajectory。">
+            <span class="tag">Trajectory</span><h2>MessageList</h2><p>system · messages · tools · step number</p>
+          </div>
+          <span class="arrow" aria-hidden="true">&rarr;</span>
+          <div class="module" tabindex="0" data-zone="step" style="--module-color: var(--yellow)" data-title="ContextBudgetProcessor" data-copy="Mastra processInputStep 生命周期中的唯一 conversation 治理入口，每个 ReAct step 都会执行。">
+            <span class="tag">Every step</span><h2>Context Budget Processor</h2><p>collect · group · merge · plan</p>
+          </div>
+        </div>
+      </article>
+
+      <article class="lane" data-lane="step" style="--lane-color: var(--green)">
+        <header class="lane-label"><span class="lane-number">02</span><span class="lane-title">Compile</span></header>
+        <div class="track">
+          <div class="module" tabindex="0" data-zone="step" style="--module-color: var(--green)" data-title="Conversation Turn Grouper" data-copy="自然 user 消息开启新 turn；assistant 和 tool observation 追加到当前 turn；最后一个 turn mandatory。">
+            <span class="tag">Authority</span><h2>Turn Grouper</h2><p>stable ID · atomic turn · retention</p>
+          </div>
+          <span class="arrow" aria-hidden="true">&rarr;</span>
+          <div class="module" tabindex="0" data-zone="step audit" style="--module-color: var(--white)" data-title="ContextPackage v2" data-copy="规范化 inventory，保存 items、groups、source snapshots、artifact/audit refs；revision 在 run 内递增。">
+            <span class="tag">Inventory</span><h2>Context Package</h2><p>items · groups · provenance · revision</p>
+          </div>
+          <span class="arrow" aria-hidden="true">&rarr;</span>
+          <div class="module" tabindex="0" data-zone="step" style="--module-color: var(--yellow)" data-title="Step Context Planner" data-copy="计算 system、tools、messages、output reserve 和 safety margin 的全局预算，并维护 mandatory/atomic 不变量。">
+            <span class="tag">Token first</span><h2>Step Planner</h2><p>budget · constraints · convergence</p>
+          </div>
+          <span class="arrow" aria-hidden="true">&rarr;</span>
+          <div class="module" tabindex="0" data-zone="step" style="--module-color: var(--coral)" data-title="Reduction Strategies" data-copy="策略只提出候选；selector 决定当前动作。默认仅提供最旧 historical turn 淘汰，不固化完整压缩顺序。">
+            <span class="tag">Replaceable</span><h2>Strategies + Selector</h2><p>propose · compare · re-count</p>
+          </div>
+          <span class="loopback">over budget?<br>&larr; iterate until valid</span>
+        </div>
+      </article>
+
+      <article class="lane" data-lane="step audit" style="--lane-color: var(--coral)">
+        <header class="lane-label"><span class="lane-number">03</span><span class="lane-title">Provider</span></header>
+        <div class="track">
+          <div class="module" tabindex="0" data-zone="step audit" style="--module-color: var(--green)" data-title="PromptView" data-copy="只服务当前模型调用的瞬时投影，不替代长期 memory，也不覆盖 ContextPackage inventory。">
+            <span class="tag">Transient</span><h2>Prompt View</h2><p>selected messages · token report</p>
+          </div>
+          <span class="arrow" aria-hidden="true">&rarr;</span>
+          <div class="module" tabindex="0" data-zone="step audit" style="--module-color: var(--lilac)" data-title="Provider Prompt Guard" data-copy="processLLMRequest 统计 provider-shaped prompt。超出 contextWindow - outputReserve - safetyMargin 时调用前 abort。">
+            <span class="tag">Final gate</span><h2>Prompt Guard</h2><p>verify · emit metrics · allow / abort</p>
+          </div>
+          <span class="arrow" aria-hidden="true">&rarr;</span>
+          <div class="module" tabindex="0" data-zone="step" style="--module-color: var(--blue)" data-title="Model Provider" data-copy="只接收已经通过最终预算校验的 prompt 和活动工具定义。">
+            <span class="tag">Model call</span><h2>LLM Provider</h2><p>text response or typed tool call</p>
+          </div>
+        </div>
+      </article>
+
+      <article class="lane" data-lane="tool audit" style="--lane-color: var(--lilac)">
+        <header class="lane-label"><span class="lane-number">04</span><span class="lane-title">Tools</span></header>
+        <div class="track">
+          <div class="module" tabindex="0" data-zone="tool" style="--module-color: var(--lilac)" data-title="Typed Data Tools" data-copy="当前工具为 inspect_schema 和 run_sql_readonly；强制 selected datasource、inspect-before-SQL 和 SQL 次数上限。">
+            <span class="tag">ReAct action</span><h2>Data Tools</h2><p>inspect schema · readonly SQL</p>
+          </div>
+          <span class="arrow" aria-hidden="true">&rarr;</span>
+          <div class="module" tabindex="0" data-zone="tool" style="--module-color: var(--coral)" data-title="Data Gateway" data-copy="执行 ownership、readonly guard、limit、timeout、SQL audit 和 artifact 创建，模型不能绕过。">
+            <span class="tag">Safety</span><h2>Data Gateway</h2><p>guard · execute · audit · artifact</p>
+          </div>
+          <span class="arrow" aria-hidden="true">&rarr;</span>
+          <div class="module" tabindex="0" data-zone="tool audit" style="--module-color: var(--white)" data-title="Tool Result Adapter" data-copy="schema/SQL 原始结果在来源边界确定性缩减，模型、activity、artifact ref、audit ref 和 truncation 分层。">
+            <span class="tag">Observation</span><h2>Result Adapter</h2><p>bounded sample · refs · truncation</p>
+          </div>
+          <span class="loopback">bounded tool-result<br>&larr; next ReAct step</span>
+        </div>
+      </article>
+
+      <article class="lane" data-lane="audit" style="--lane-color: var(--yellow)">
+        <header class="lane-label"><span class="lane-number">05</span><span class="lane-title">Audit</span></header>
+        <div class="track">
+          <div class="module" tabindex="0" data-zone="audit" style="--module-color: var(--yellow)" data-title="Context Metrics" data-copy="context.compiled 和 context.prompt-verified 只记录 bounded decision metadata，不持久化完整 prompt 或 hidden thought。">
+            <span class="tag">CUSTOM</span><h2>Context Events</h2><p>plan · token budget · remaining tokens</p>
+          </div>
+          <span class="arrow" aria-hidden="true">&rarr;</span>
+          <div class="module" tabindex="0" data-zone="audit" style="--module-color: var(--white)" data-title="Run Events" data-copy="与 CopilotKit 客户端收到的同一 AG-UI BaseEvent 流按 seq 持久化，用于终态重复 run 回放。">
+            <span class="tag">Replay</span><h2>run_events</h2><p>user · session · run · seq · BaseEvent</p>
+          </div>
+          <span class="arrow" aria-hidden="true">&rarr;</span>
+          <div class="module" tabindex="0" data-zone="audit" style="--module-color: var(--blue)" data-title="Northbound Stream" data-copy="GUI/TUI 使用标准 AG-UI；workspace 接入前 artifact CUSTOM 仍携带 preview_json。">
+            <span class="tag">CopilotKit</span><h2>Same Event Stream</h2><p>activity · state · tool · text · custom</p>
+          </div>
+        </div>
+      </article>
+
+      <article class="lane" data-lane="future" style="--lane-color: #dedede">
+        <header class="lane-label"><span class="lane-number">06</span><span class="lane-title">Next</span></header>
+        <div class="track">
+          <div class="module future" tabindex="0" data-zone="future" style="--module-color: var(--blue)" data-title="Phase 4 Memory" data-copy="Mastra Memory 以 resourceId + threadId 接入；recent、summary、working memory 仍要进入同一 ContextPackage 和 planner。">
+            <span class="tag">Phase 4</span><h2>Memory Sources</h2><p>recent · summary · working memory</p>
+          </div>
+          <span class="arrow" aria-hidden="true">&rarr;</span>
+          <div class="module future" tabindex="0" data-zone="future" style="--module-color: var(--lilac)" data-title="Phase 5 Knowledge" data-copy="retrieval chunks、citation 和 relevance 作为独立 atomic groups 进入全局预算，不因 top-k 绕过治理。">
+            <span class="tag">Phase 5</span><h2>Knowledge Sources</h2><p>retrieve · rerank · cite · reference</p>
+          </div>
+          <span class="arrow" aria-hidden="true">&rarr;</span>
+          <div class="module future" tabindex="0" data-zone="future" style="--module-color: var(--coral)" data-title="Workspace Artifact" data-copy="workspace contract 确认后，再实施北向 artifact 引用化、分页 detail API 和 preview/content 存储分层。">
+            <span class="tag">Workspace</span><h2>Artifact Reference</h2><p>reference · detail · content lifecycle</p>
+          </div>
+        </div>
+      </article>
+    </section>
+
+    <aside class="inspector" aria-live="polite">
+      <div class="inspector-label">Selected module</div>
+      <div><h2 id="detail-title">Context Compiler</h2><p id="detail-copy">选择任一模块查看职责边界。默认视图展示当前 Phase 1-3 与未来 Memory / Knowledge 接入点。</p></div>
+      <ul class="invariants">
+        <li>mandatory group 不可删除</li>
+        <li>tool exchange 不拆分</li>
+        <li>无合法候选时 fail closed</li>
+        <li>provider 边界不静默裁剪</li>
+      </ul>
+    </aside>
+
+    <div class="legend" aria-label="Legend">
+      <span><i class="swatch" style="background: var(--blue)"></i>protocol / provider</span>
+      <span><i class="swatch" style="background: var(--green)"></i>context inventory</span>
+      <span><i class="swatch" style="background: var(--yellow)"></i>planning / metrics</span>
+      <span><i class="swatch" style="background: var(--coral)"></i>policy / safety</span>
+      <span><i class="swatch" style="background: var(--lilac)"></i>tools / persistence</span>
+      <span>dashed border = future</span>
+    </div>
+  </main>
+
+  <script>
+    const buttons = [...document.querySelectorAll("[data-filter]")];
+    const modules = [...document.querySelectorAll(".module")];
+    const lanes = [...document.querySelectorAll(".lane")];
+    const title = document.querySelector("#detail-title");
+    const copy = document.querySelector("#detail-copy");
+
+    function applyFilter(filter) {
+      buttons.forEach((button) => button.setAttribute("aria-pressed", String(button.dataset.filter === filter)));
+      lanes.forEach((lane) => {
+        const matches = filter === "all" || lane.dataset.lane.split(" ").includes(filter);
+        lane.classList.toggle("hidden-lane", !matches);
+      });
+      modules.forEach((module) => {
+        const matches = filter === "all" || module.dataset.zone.split(" ").includes(filter);
+        module.classList.toggle("dimmed", !matches);
+      });
+    }
+
+    function inspectModule(module) {
+      modules.forEach((entry) => entry.classList.toggle("selected", entry === module));
+      title.textContent = module.dataset.title;
+      copy.textContent = module.dataset.copy;
+    }
+
+    buttons.forEach((button) => button.addEventListener("click", () => applyFilter(button.dataset.filter)));
+    modules.forEach((module) => {
+      module.addEventListener("click", () => inspectModule(module));
+      module.addEventListener("keydown", (event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          inspectModule(module);
+        }
+      });
+    });
+  </script>
+</body>
+</html>

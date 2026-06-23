@@ -1,7 +1,8 @@
 # Agent / Data Gateway / Knowledge 架构设计与开发方案
 
-日期：2026-06-18
-当前阶段：Day 1 - Day 5 后端骨架与 Agent 工具链
+日期：2026-06-22
+当前阶段：Context Governance Phase 1-3 已完成；配置管理 REST、effective run config、
+Knowledge local-first、MCP middleware、Skill policy、PG/MySQL adapter 基础版已完成。
 
 ## 1. 当前结论
 
@@ -16,32 +17,25 @@ CopilotKit / AG-UI
 -> Metadata / Artifacts / Knowledge
 ```
 
-对外只保留一个后端运行时服务和一个 Agent 协议入口：
+对外保留一个后端运行时服务，包含 Agent 协议入口和配置管理 REST 入口：
 
 ```text
 GET  /healthz
 POST /api/copilotkit
+GET/POST/PATCH/DELETE /api/v1/*
 ```
 
 不再保留以下早期设计：
 
 - 独立 BFF 服务框架层。
 - 早期自定义 SSE 聊天入口。
-- 前端直连 Data Gateway REST API。
+- 前端直连 Data Gateway REST API（Data Gateway 仍只在 agent tools 内部使用；配置管理 REST 不执行查询）。
 - `AgentRuntimeAdapter` / mock adapter 抽象层。
 - `apps/web` / `apps/tui` 在研发 B 工作区内的实现。
 
-当前架构图：
+当前架构图：[PlantUML](./ag-ui-agent-runtime-architecture.puml) / [SVG](./ag-ui-agent-runtime-architecture.svg)
 
-[ag-ui-agent-runtime-architecture.svg](./ag-ui-agent-runtime-architecture.svg)
-
-PlantUML 架构图：
-
-[ag-ui-agent-runtime-architecture.puml](./ag-ui-agent-runtime-architecture.puml)
-
-PlantUML 渲染图：
-
-[ag-ui-agent-runtime-architecture.svg](./ag-ui-agent-runtime-architecture.svg)
+上下文架构：[交互 HTML](./agent-context-architecture.html) / [当前组件 SVG](./agent-context-current.svg)
 
 ## 2. 目标和边界
 
@@ -69,15 +63,15 @@ PlantUML 渲染图：
 
 | 模块 | 职责 | 当前实现 |
 | --- | --- | --- |
-| `apps/api` | 单一后端运行时服务。负责 `/healthz`、`/api/copilotkit`、AG-UI `RunAgentInput` 解析、session/run 创建、CopilotKit runtime 装配、AG-UI event 持久化。 | Node `http` server；`@copilotkit/runtime` 的 `copilotRuntimeNodeHttpEndpoint`；自定义 `DataAgentAgUiAgent extends AbstractAgent`；`@ag-ui/mastra` 的 `MastraAgent`；`threadId -> session_id`，`runId -> run_id`。 |
-| `packages/agent-runtime` | Agent 工厂和工具边界。创建 Mastra DataAgent、prompt、run context、typed tool registry。 | `@mastra/core/agent`；`@mastra/core/tools`；Zod input/output schema；工具实现位于 `src/tools/`；工具 `inspect_schema`、`run_sql_readonly`；AG-UI `ACTIVITY_SNAPSHOT` / `CUSTOM`；强制 inspect-before-SQL、selected datasource、最多 3 次 SQL。 |
-| `packages/data-gateway` | 数据源注册、schema inspect、preview、只读 SQL、SQL guard、SQL audit、artifact 创建。 | `LocalDataGateway`；`node:sqlite`；CSV parser；`read-excel-file`；DuckDB demo / SQLite / CSV / XLSX adapters；`guardReadonlySql`。 |
-| `packages/metadata` | 本地元数据事实源。 | `node:sqlite` `DatabaseSync`；migration；users/sessions/runs/run_events/data_sources/sql_audit_logs/artifacts repositories；`RunEventWriter` 写入 AG-UI `BaseEvent`。 |
-| `packages/contracts` | 共享合约。 | API result、AG-UI `BaseEvent`-backed `RunEventEnvelope`、tool input types、artifact summary、env schema、`createEnvConfig`。 |
-| `packages/providers` | 模型 provider 适配。 | `@ai-sdk/openai` 的 `provider.chat(model)` 用于 OpenAI-compatible `/chat/completions`；非 OpenAI-compatible provider 走 Mastra model router object；无 key 返回 mock marker。 |
+| `apps/api` | 单一 runtime；CopilotKit/AG-UI run；配置管理 REST；run identity、claim、回放和 task PLAN 投影。 | Node HTTP；CopilotKit runtime；`@ag-ui/mastra`；`@ag-ui/mcp-middleware`；`/api/v1` router。 |
+| `packages/agent-runtime` | ReAct、逐 step context、数据/Workspace/task/协作/Knowledge 工具治理，Skill policy。 | Mastra；Memory task-state；ToolResultAdapter registry；`retrieve_knowledge`；allowedTools 过滤。 |
+| `packages/data-gateway` | 数据源注册、schema inspect、preview、只读 SQL、SQL guard、SQL audit、artifact 创建。 | `LocalDataGateway`；`node:sqlite`；CSV parser；`read-excel-file`；DuckDB demo / SQLite / CSV / XLSX / PostgreSQL / MySQL adapters；`guardReadonlySql`。 |
+| `packages/metadata` | 本地元数据事实源。 | `node:sqlite`；用户级复合主键；identity migration；claim/find/replay；`RunEventWriter`；配置资源、加密 secret、job repository。 |
+| `packages/contracts` | 共享合约。 | API result、AG-UI `BaseEvent`-backed `RunEventEnvelope`、tool input types、artifact summary、env schema、`SECRET_MASTER_KEY`。 |
+| `packages/providers` | 模型 provider 适配。 | OpenAI-compatible `/chat/completions`；Mastra model router object；profile-based provider factory；mock marker。 |
 | `packages/artifacts` | Artifact 创建服务。 | `LocalArtifactService` 写 metadata artifact record，当前主要用于 SQL table result preview。 |
-| `packages/knowledge` | Knowledge/RAG 边界。 | 当前是接口和数据模型定义，为后续 collection/document/chunk/retrieval 实现留边界。 |
-| `scripts` | 验证脚本。 | `smoke-metadata`、`smoke-data-gateway`、`smoke-sql`、`smoke-agent`、`smoke-copilotkit`。 |
+| `packages/knowledge` | Knowledge/RAG 边界。 | `LocalKnowledgeService`；document/chunk schema；FTS fallback；可选 embedding 向量索引；retrieve/reindex。 |
+| `scripts` | 验证脚本。 | metadata、gateway、SQL、Agent、CopilotKit、context、collaboration、workspace、config API smoke。 |
 
 ## 4. 运行时流程
 
@@ -97,7 +91,7 @@ sequenceDiagram
   FE->>API: POST /api/copilotkit
   API->>CK: create runtime with dataAgent
   CK->>AG: delegate AG-UI run
-  AG->>Meta: create session + run from threadId/runId
+  AG->>Meta: claim or replay run from threadId/runId/fingerprint
   AG->>Agent: run Mastra agent
   Agent->>Tools: inspect_schema
   Tools->>DG: inspectSchema(user_id, datasource_id)
@@ -139,6 +133,7 @@ sequenceDiagram
 | --- | --- | --- | --- |
 | `inspect_schema` | `{ datasource_id?: string; table_names?: string[] }` | `{ datasource_id; tables[] }` | datasource 必须等于 selected datasource。 |
 | `run_sql_readonly` | `{ datasource_id?: string; sql: string; limit?: number; timeout_ms?: number }` | `{ columns; rows; row_count; audit_log_id; elapsed_ms; artifact_id? }` | 必须先 inspect schema；最多 3 次；SQL 再交给 Data Gateway guard。 |
+| `retrieve_knowledge` | `{ query: string; knowledge_ids?: string[]; top_k?: number }` | `{ chunks[]; citations[] }` | 只能访问本轮 effective config 启用的 KB。 |
 
 Tool wrapper 只发 AG-UI 事件，不发自定义事件类型：
 
@@ -147,6 +142,66 @@ Tool wrapper 只发 AG-UI 事件，不发自定义事件类型：
 - `CUSTOM(name: "artifact")`：artifact 摘要。
 
 `DataAgentAgUiAgent` 负责把这些事件和 `@ag-ui/mastra` 自动生成的 `RUN_*`、`TEXT_MESSAGE_*`、`TOOL_CALL_*`、`REASONING_*` 合成同一条 AG-UI event stream，并按同一格式写入 `run_events`。
+
+### 5.3 Day 6 Agent Context Management
+
+Day 6 先做 Agent 上下文治理，不接 Mastra memory。原因是工具返回值、SQL 结果、schema 摘要和 artifact 引用属于后端安全与审计边界，不能直接交给框架默认 memory 行为处理。
+
+详细设计：
+
+[agent-context-management-design.md](./agent-context-management-design.md)
+
+Phase 1-3 已实现：
+
+- 工具返回给模型的内容必须受预算控制。
+- 大 SQL 结果不能完整进入模型上下文。
+- 完整结果继续通过 artifact/audit 保留。
+- schema 输出可以被压缩，但必须保留 datasource、表、列的基本可推理信息。
+- AG-UI trace 继续可见，但事件 payload 不能无限增长。
+- 不保存 hidden thought，不把 credential 放入上下文或 memory。
+- conversation 只在 `processInputStep` 生产路径治理，没有第二套 AG-UI window adapter。
+- 每个 ReAct step 生成 `ContextPlan`，按完整 turn 原子选择。
+- provider-bound prompt 通过 `processLLMRequest` 最终硬校验。
+- strategy registry 与 candidate selector 可替换，不固化完整压缩顺序。
+
+上下文策略层：
+
+```text
+packages/agent-runtime/src/context/
+  context-policy.ts
+```
+
+默认策略：
+
+| 策略项 | 默认值 | 说明 |
+| --- | --- | --- |
+| `max_schema_tables` | 20 | 模型可见 schema 最多表数。 |
+| `max_schema_columns_per_table` | 50 | 每张表最多列数。 |
+| `max_sql_model_rows` | 20 | `run_sql_readonly` 返回给模型的最大行数。 |
+| `max_sql_activity_rows` | 20 | AG-UI activity 中展示的最大行数。 |
+| `max_cell_chars` | 500 | 单元格字符串最大长度。 |
+| `max_sql_chars` | 4000 | activity 中 SQL 文本最大长度。 |
+
+工具输出分层：
+
+```text
+Data Gateway result
+-> Context policy
+   -> model-visible tool result: small sample + audit_log_id + artifact_id
+   -> AG-UI activity: small preview + truncation metadata
+   -> artifact: full bounded query result preview
+   -> sql_audit_logs: audit fact
+```
+
+Phase 4-5 尚未做：
+
+- 不启用 conversation Memory；task thread-state slice 可使用只读 Memory + 独立 LibSQL。
+- 不启用 observational memory。
+- 不做 semantic recall。
+- Knowledge/RAG 当前是 local-first tool，不等同于 conversation memory。
+
+`ask_user` / `submit_plan` suspend-resume 已完成；native goal 已完成基础封装，仍缺独立 judge budget 和失败/耗尽
+smoke。之后进入 Phase 3 数据通道，再设计 conversation Memory 所有权。
 
 ## 6. Data Gateway 设计
 
@@ -174,7 +229,11 @@ Data Gateway 当前公开 TypeScript 接口，而不是 HTTP API：
 - SQLite。
 - CSV。
 - XLSX。
-- `postgresql` / `mysql` 类型保留在类型层，具体 adapter 还未实现。
+- PostgreSQL。
+- MySQL。
+
+PG/MySQL adapter 已实现只读连接、schema introspection、preview 和 query timeout，但缺少本机真实服务端
+smoke；正式交付前需要用用户提供的测试库再跑一轮端到端。
 
 ## 7. Metadata / Artifacts / Knowledge
 
@@ -208,18 +267,17 @@ METADATA_DB_PATH=storage/metadata/workbench.sqlite
 
 - artifact metadata 写入 SQLite。
 - preview JSON 存在 artifact record。
-- 当前不暴露 artifact download REST endpoint。
+- 已暴露 artifact detail / preview / content / download REST endpoint。
+- workspace 集成前，北向 `CUSTOM(name="artifact")` 继续携带 preview JSON；模型只保留 `artifact_id`。
 
 ### Knowledge
 
-当前 `packages/knowledge` 只定义接口和模型：
+当前 `packages/knowledge` 已实现 local-first RAG：
 
-- collection
-- document
-- chunk
-- retrieval result
-
-后续 Day 计划再实现 ingestion、embedding、retrieval。
+- collection/resource 配置由 `/api/v1/knowledge-bases` 管理。
+- 文档上传后切 chunk 并写入 SQLite FTS5。
+- 配置 embedding key 时写入向量索引并按 cosine 检索；无 key 时使用 FTS fallback。
+- agent 通过 `retrieve_knowledge` tool 访问，不把整库内容注入 prompt。
 
 ## 8. Provider 策略
 
@@ -265,6 +323,7 @@ EMBEDDING_DIM=1024
 EMBEDDING_OUTPUT_TYPE=dense
 EMBEDDING_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
 EMBEDDING_API_KEY=
+SECRET_MASTER_KEY=replace-with-a-long-random-local-key
 STORAGE_ROOT_DIR=storage
 METADATA_DB_PATH=storage/metadata/workbench.sqlite
 SQL_DEFAULT_LIMIT=100
@@ -297,12 +356,19 @@ AG-UI event stream 的 append-only 持久化副本
 
 ```bash
 npm run typecheck
+npm run smoke:run-identity
 npm run smoke:metadata
 npm run smoke:data-gateway
 npm run smoke:sql
 npm run smoke:agent
+npm run smoke:context-compilation
 npm run smoke:api-context
 npm run smoke:api
+npm run smoke:config-api
+npm run smoke:collaboration
+npm run smoke:workspace
+npm run smoke:tool-state
+npm run test:web
 ```
 
 验收覆盖：
@@ -310,36 +376,34 @@ npm run smoke:api
 - metadata schema/repository/run event。
 - datasource register/schema/preview。
 - readonly SQL guard/audit/artifact。
-- tool registry inspect-before-SQL policy。
-- CopilotKit/AG-UI request context 中 datasource 和 user input 的提取。
+- tool registry inspect-before-SQL policy 和上下文预算策略。
+- run fingerprint、claim、parent run、active conflict 和终态事件回放。
+- 每 step context grouping/budget/reduction/provider guard。
+- CopilotKit/AG-UI run_config、动态 task PLAN 投影和 datasource 提取。
 - `/api/copilotkit` CORS 和 AG-UI runtime validation。
+- `/api/v1` 配置资源、secret、revision、job、artifact、MCP、Skill、KB。
+- ask_user/submit_plan suspend-resume、workspace tools、tool state isolation。
 
 ## 12. 后续开发顺序
 
 继续遵守研发 B 顺序，不做 UI：
 
-1. 强化 CopilotKit 真实请求集成测试，确认前端真实 payload 可以稳定触发 `dataAgent`。
-2. 补齐 collection/user context 从 CopilotKit `context` / `forwardedProps` / `state` 中提取。
-3. 完成 Knowledge ingestion/retrieval 的本地实现，并加入 `retrieve_knowledge` tool。
-4. 增加更多 Data Gateway adapter，优先 PostgreSQL 或 MySQL 二选一。
-5. 完善 artifact 生命周期和下载/预览策略，但只在需要时暴露服务端 endpoint。
-6. 补充 agent policy 测试：跨 datasource、未 inspect 先 SQL、SQL 次数上限、危险 SQL。
+1. 前端把配置源从 localStorage 接到 `/api/v1`，但不改变 AG-UI run 协议。
+2. 用真实 PostgreSQL / MySQL / 外部 model / MCP / embedding key 做集成验收。
+3. Conversation Memory：历史所有权、message ID 去重、summary 和 working memory。
+4. Artifact 北向事件收敛到 workspace artifact 模型，逐步减少 AG-UI preview JSON。
+5. Knowledge citation/rerank、生产级向量库和后台 job 恢复。
+6. 多用户认证与 workspace 共享。
 
 ## 13. npm audit 状态
 
-当前 audit 状态：
+当前 `npm audit` 已无 high / critical。已做的安全相关依赖处理：
 
-```text
-10 low / 10 moderate / 1 high
-```
+- `next` 升级到 `15.5.19`，消除 Next 相关 high。
+- `vitest` 升级到 `3.2.6`，消除 Vitest critical。
+- root `overrides` 将 `@ag-ui/langgraph` 固定到 `0.0.42`，在 CopilotKit runtime 的
+  semver 范围内避开旧 LangSmith high 链路。
 
-high 来自 CopilotKit 依赖链：
-
-```text
-@copilotkit/runtime
--> @ag-ui/langgraph
--> @langchain/core
--> langsmith
-```
-
-当前应用代码不直接调用 LangSmith，也不使用 LangGraph agent。不要直接执行 `npm audit fix --force`，后续优先等 CopilotKit / AG-UI 上游升级，或评估替换 runtime 版本。
+剩余 low/moderate 主要来自 CopilotKit canary、AI SDK、Mastra client/core、Next 内嵌
+PostCSS 与 uuid 传递依赖。不要直接执行 `npm audit fix --force`，因为 npm 会建议
+破坏性版本变更。

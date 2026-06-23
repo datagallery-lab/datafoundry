@@ -1,73 +1,133 @@
 @startuml
-title Open Data Agent Workbench - AG-UI Agent Runtime Architecture
+title Data Agent - Current Runtime
 
+left to right direction
 skinparam componentStyle rectangle
-skinparam shadowing false
-skinparam defaultFontName Arial
 skinparam packageStyle rectangle
-
-actor "Frontend\nCopilotKit / AG-UI Client" as Frontend
-
-node "apps/api\nSingle HTTP Runtime" as Api {
-  component "POST /api/copilotkit" as CopilotEndpoint
-  component "DataAgentAgUiAgent\nextends AbstractAgent" as AgUiAgent
-  component "RunInput Mapper\nthreadId/runId/context/state/forwardedProps" as RunInput
+skinparam shadowing false
+skinparam backgroundColor #F7F4ED
+skinparam defaultFontName Arial
+skinparam ArrowColor #30343B
+skinparam component {
+  BackgroundColor #FFFFFF
+  BorderColor #30343B
 }
 
-package "Agent Runtime" as AgentRuntime {
+actor "GUI / TUI\nCopilotKit AG-UI" as Client #F9D65C
+
+package "API Surface :8787" #D8EAF1 {
+  component "GET /healthz" as Health #FFFFFF
+  component "/api/v1/*\nConfig REST" as ConfigRest #FFFFFF
+  component "ConfigApiRequest\nresources / jobs / artifacts" as ConfigApi #FFFFFF
+  component "POST /api/copilotkit" as Endpoint #FFFFFF
+  component "DataAgentAgUiAgent" as Bridge #FFFFFF
+  component "Run Identity\nfingerprint / claim / replay" as Identity #F7C9B6
+  component "TaskPlanProjector\ndynamic PLAN snapshot" as Plan #F7C9B6
+}
+
+package "Mastra Agent Runtime" #DCE8C9 {
   component "@ag-ui/mastra\nMastraAgent" as AgUiMastra
-  component "Mastra DataAgent\nReAct + tool calling" as DataAgent
-  component "Tool Registry\nsrc/tools/" as ToolRegistry
-  component "AG-UI Event Helpers\nACTIVITY / CUSTOM" as EventHelpers
+  component "Mastra DataAgent\nReAct + tool calling" as Agent
+  component "@ag-ui/mcp-middleware\nenabled MCP servers" as McpMiddleware
+  component "ContextBudgetProcessor\nevery ReAct step" as ContextProcessor #F9D65C
+  component "TaskStateContextProcessor\nthread task snapshot" as TaskProcessor #F9D65C
+  component "ProviderPromptGuard\nbefore model call" as PromptGuard #F9D65C
+  component "Typed Data Tools\nlist / inspect / preview / SQL" as Tools
+  component "Knowledge Tool\nretrieve_knowledge" as KnowledgeTool
+  component "Mastra Builtin Task Tools\nwrite / update / complete / check" as TaskTools
+  component "Mastra Workspace Tools\nfile ops / isolated command" as WorkspaceTools
 }
 
-package "Data Boundary" as DataBoundary {
-  component "Data Gateway\ninternal TypeScript API" as DataGateway
-  component "SQL Guard\nreadonly + limit + timeout" as SqlGuard
-  database "Datasources\nDuckDB demo / SQLite / CSV / XLSX" as Datasources
+package "Data Safety Boundary" #F2D8D5 {
+  component "ToolObservationRouter\nstep-level interception" as ObservationRouter
+  component "One Adapter per Tool\ndata / task / workspace" as ContextAdapters
+  component "LocalDataGateway" as Gateway
+  component "LocalKnowledgeService\nFTS + optional embeddings" as Knowledge
+  component "Readonly SQL Guard\nlimit / timeout" as SqlGuard
+  folder "Run Workspace\nuser / session / run" as RunWorkspace
+  database "Datasources\nDuckDB / SQLite / CSV / XLSX / PG / MySQL" as Sources
 }
 
-package "Persistence" as Persistence {
-  database "Metadata SQLite\none DB per storage path" as Metadata
-  component "Run Events\nappend-only AG-UI BaseEvent" as RunEvents
-  component "SQL Audit Logs" as SqlAudit
-  component "Artifact Service\nTable result preview" as Artifacts
-  component "Knowledge Boundary\ncollections / chunks / retrieval" as Knowledge
+package "Persistence" #E7DDF1 {
+  database "Metadata SQLite\nruns / events / config / secrets / jobs" as Metadata
+  database "Mastra LibSQL\nthread task state only" as TaskState
+  component "run_events\nAG-UI BaseEvent replay" as Events
+  component "SQL Audit Logs" as Audit
+  component "Artifacts\nmetadata + preview_json" as Artifacts
+  component "Config Resources\nKB / MCP / model / skill" as ConfigResources
+  component "Encrypted Secrets\nSECRET_MASTER_KEY" as Secrets
 }
 
-cloud "LLM Provider\nOpenAI-compatible or Mastra router" as Provider
+cloud "LLM Provider\nOpenAI-compatible or Mastra router" as Model #D8EAF1
 
-Frontend --> CopilotEndpoint : AG-UI request
-CopilotEndpoint --> AgUiAgent : route dataAgent
-AgUiAgent --> RunInput : extract run context
-AgUiAgent --> Metadata : create session/run
-AgUiAgent --> AgUiMastra : delegate RunAgentInput
-AgUiMastra --> DataAgent : stream agent run
-DataAgent --> Provider : model stream
-DataAgent --> ToolRegistry : inspect_schema / run_sql_readonly
-ToolRegistry --> EventHelpers : create ACTIVITY_SNAPSHOT / ACTIVITY_DELTA / CUSTOM
-EventHelpers --> AgUiAgent : emit AG-UI events
-AgUiAgent --> RunEvents : persist same events
-AgUiAgent --> Frontend : stream same AG-UI events
+Client --> Endpoint : RunAgentInput
+Client --> ConfigRest : workspace config CRUD
+Client --> Health
+ConfigRest --> ConfigApi
+ConfigApi --> Metadata
+ConfigApi --> ConfigResources
+ConfigApi --> Secrets
+ConfigApi --> Gateway : datasource test / introspect
+ConfigApi --> Knowledge : KB upload / search / reindex
+ConfigApi --> Artifacts : detail / preview / download
+Endpoint --> Bridge : route dataAgent
+Bridge --> Identity : threadId / runId / parentRunId
+Identity --> Metadata : find or atomic claim
+Identity --> Events : terminal duplicate replay
+Events --> Client : same ordered events
 
-ToolRegistry --> DataGateway : inspect schema / run readonly SQL
-DataGateway --> Metadata : validate datasource ownership
-DataGateway --> SqlGuard : enforce SQL policy
-SqlGuard --> Datasources : allowed read query
-DataGateway --> SqlAudit : write audit result
-DataGateway --> Artifacts : create table artifact
-Artifacts --> Metadata : persist artifact metadata
-Knowledge ..> ToolRegistry : future retrieve_knowledge tool
+Bridge --> AgUiMastra : new run
+AgUiMastra --> Agent
+AgUiMastra --> McpMiddleware : use when enabled
+McpMiddleware --> Agent : dynamic mcp__ tools
+Agent --> ContextProcessor : processInputStep
+Agent --> TaskProcessor : processInputStep
+TaskProcessor --> TaskState : read thread state
+ContextProcessor --> Agent : governed messages
+Agent --> PromptGuard : processLLMRequest
+PromptGuard --> Model : allow within budget
+Model --> Agent : text or tool call
 
-note right of RunEvents
-Persisted event types are AG-UI EventType only.
-No custom frontend protocol events.
+Agent --> Tools
+Agent --> KnowledgeTool
+Agent --> TaskTools
+Agent --> WorkspaceTools
+KnowledgeTool --> Knowledge
+Knowledge --> Metadata
+KnowledgeTool --> ContextAdapters : package observation
+Tools --> ContextAdapters : package observation
+TaskTools --> TaskState : native threadState mutation
+TaskTools --> ObservationRouter : next-step tool result
+WorkspaceTools --> ObservationRouter : next-step tool result
+ObservationRouter --> ContextAdapters : exact toolName
+WorkspaceTools --> RunWorkspace
+Tools --> Gateway
+Gateway --> SqlGuard
+SqlGuard --> Sources
+Gateway --> Audit
+Gateway --> Artifacts
+Audit --> Metadata
+Artifacts --> Metadata
+ConfigResources --> Metadata
+Secrets --> Metadata
+
+Tools --> Bridge : ACTIVITY / CUSTOM
+KnowledgeTool --> Bridge : TOOL / CUSTOM references
+AgUiMastra --> Bridge : RUN / TEXT / TOOL / REASONING
+Bridge --> Plan : project task TOOL_CALL_RESULT
+Plan --> Events : append PLAN snapshot
+Bridge --> Events : append same BaseEvent
+Bridge --> Client : stream same BaseEvent
+
+note bottom of Identity
+Terminal duplicate + same fingerprint = replay.
+Active duplicate or mismatch = fail closed.
 end note
 
-note bottom of Metadata
-Default grain:
-METADATA_DB_PATH=storage/metadata/workbench.sqlite
-Tables are isolated by user_id/session_id/run_id.
+note bottom of Artifacts
+Temporary northbound behavior:
+CUSTOM artifact includes preview_json until workspace integration.
+Model observation keeps artifact_id only.
 end note
 
 @enduml
