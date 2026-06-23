@@ -2,8 +2,19 @@ export const RIGHT_PANEL_MIN_WIDTH = 320;
 export const RIGHT_PANEL_MAX_WIDTH = 640;
 export const RIGHT_PANEL_DEFAULT_WIDTH = 400;
 export const CHAT_MIN_WIDTH = 400;
+/** Preferred chat input card width (Tailwind `max-w-3xl`). */
+export const CHAT_INPUT_PREFERRED_WIDTH = 768;
+/** Minimum chat input card width before extreme squeeze. */
+export const CHAT_INPUT_MIN_WIDTH = 360;
+/** Horizontal margin around the chat input within the middle column. */
+export const CHAT_INPUT_HORIZONTAL_PADDING = 32;
 export const LEFT_PANEL_WIDTH_EXPANDED = 320;
 export const LEFT_PANEL_WIDTH_COLLAPSED = 56;
+
+/** Width the middle column must reserve for the chat input at full size. */
+export function getChatInputReservedWidth(): number {
+  return CHAT_INPUT_PREFERRED_WIDTH + CHAT_INPUT_HORIZONTAL_PADDING;
+}
 
 /** Prevent CSS Grid from compressing a side column below its design width. */
 export function fixedGridColumn(width: number): string {
@@ -27,7 +38,7 @@ export function getRequiredWorkspaceWidth({
 }): number {
   const left = getLeftPanelWidth(sidebarCollapsed);
   const right = rightPanelOpen ? rightPanelWidth : 0;
-  return left + right + CHAT_MIN_WIDTH;
+  return left + right + getChatInputReservedWidth();
 }
 
 export function getWorkspaceGridTemplateColumns({
@@ -64,9 +75,9 @@ export function clampRightPanelWidth(width: number): number {
 }
 
 /**
- * When the viewport is too narrow for the user's sidebar preferences, collapse
- * the left panel first, then close the right panel. When space returns, user
- * preferences are restored by re-running this from the latest user* state.
+ * When the viewport is too narrow for the user's sidebar preferences, close
+ * the right panel first, then collapse the left panel. When space returns,
+ * user preferences are restored by re-running this from the latest user* state.
  */
 export function resolveResponsiveSidebars({
   viewportWidth,
@@ -92,12 +103,12 @@ export function resolveResponsiveSidebars({
       rightPanelWidth,
     }) > viewportWidth;
 
-  if (overflows() && !sidebarCollapsed) {
-    sidebarCollapsed = true;
-  }
-
   if (overflows() && rightPanelOpen) {
     rightPanelOpen = false;
+  }
+
+  if (overflows() && !sidebarCollapsed) {
+    sidebarCollapsed = true;
   }
 
   return { sidebarCollapsed, rightPanelOpen };

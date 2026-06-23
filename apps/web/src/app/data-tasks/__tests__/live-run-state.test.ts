@@ -341,6 +341,76 @@ describe("live run state reducer", () => {
     expect(session.tokens.outputTokens).toBe(340);
   });
 
+  it("preserves sql tool identity when bridged TOOL_CALL_RESULT omits toolCallName", () => {
+    let run = createInitialLiveRun();
+    run = reduceLiveRunEvent(run, { type: "RUN_STARTED" });
+    run = reduceLiveRunEvent(run, {
+      type: "TOOL_CALL_START",
+      toolCallId: "tool-sql-1",
+      toolCallName: "run_sql_readonly",
+      args: { sql: "SELECT * FROM orders LIMIT 10" },
+    });
+    run = reduceLiveRunEvent(run, {
+      type: "TOOL_CALL_END",
+      toolCallId: "tool-sql-1",
+      toolCallName: "run_sql_readonly",
+    });
+    run = reduceLiveRunEvent(run, {
+      type: "ACTIVITY_SNAPSHOT",
+      activityType: "STEP",
+      content: {
+        step_id: "sql-1",
+        title: "执行只读 SQL",
+        tool_name: "run_sql_readonly",
+        status: "completed",
+        output_type: "table",
+        content: {
+          columns: ["order_id"],
+          rows: [["1"]],
+          row_count: 1,
+        },
+      },
+    });
+    run = reduceLiveRunEvent(run, {
+      type: "CUSTOM",
+      name: "artifact",
+      value: {
+        id: "artifact-1",
+        type: "table",
+        name: "SQL result audit-1",
+        preview_json: {
+          columns: ["order_id"],
+          rows: [["1"]],
+          row_count: 1,
+        },
+      },
+    });
+    run = reduceLiveRunEvent(run, {
+      type: "TOOL_CALL_RESULT",
+      toolCallId: "tool-sql-1",
+      content: JSON.stringify({
+        columns: ["order_id"],
+        rows: [["1"]],
+        row_count: 1,
+        elapsed_ms: 6,
+      }),
+    });
+
+    expect(run.toolCalls[0]).toMatchObject({
+      id: "tool-sql-1",
+      name: "run_sql_readonly",
+      stepId: "sql-1",
+      status: "success",
+    });
+    expect(run.events.find((event) => event.id === "tool-sql-1")).toMatchObject({
+      kind: "query",
+      toolName: "run_sql_readonly",
+      artifactIds: ["artifact-1"],
+      stepId: "sql-1",
+    });
+    expect(run.artifacts[0]?.createdByEventId).toBe("tool-sql-1");
+  });
+
   it("correlates ACTIVITY STEP with toolCallId and keeps failed status consistent", () => {
     let run = createInitialLiveRun();
     run = reduceLiveRunEvent(run, { type: "RUN_STARTED" });

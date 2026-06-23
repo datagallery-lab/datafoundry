@@ -14,10 +14,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ComponentProps, ComponentType, ReactNode } from "react";
 import { z } from "zod";
 import {
+  buildMentionResources,
+  buildRunConfig,
   createChatSession,
   createWorkspaceConfigItem,
-  DEFAULT_SKILL_ID,
   defaultSettingsForKind,
+  emptyPerRunSelection,
   getEnabledLlmItems,
   loadActiveLlmId,
   loadChatSessions,
@@ -30,12 +32,19 @@ import {
   isWorkspaceConfigItemValid,
   normalizeSkillSettings,
   parseSkillPackageFile,
+  prunePerRunSelection,
+  removePerRunMention,
+  resolveActiveDatasourceId,
   skillSettingsFromPackage,
   SKILL_PACKAGE_LOCAL_ONLY_KEYS,
   summarizeConfigItems,
   summarizeLlmItems,
   summarizeMcpItems,
+  togglePerRunMention,
+  toggleSessionResource,
   visibleConfigFields,
+  WORKSPACE_CONFIG_BADGE_CLASS,
+  WORKSPACE_CONFIG_SHORT_LABEL,
 } from "./data-task-state";
 import type {
   CopilotChatAssistantMessageProps,
@@ -43,7 +52,10 @@ import type {
 } from "@copilotkit/react-core/v2";
 import type {
   ChatSession,
+  MentionResource,
   ParsedSkillPackage,
+  PerRunMentionKind,
+  PerRunSelection,
   WorkspaceConfigItem,
   WorkspaceConfigKind,
   WorkspaceConfigStore,
@@ -51,6 +63,11 @@ import type {
 import { TaskConsole } from "./components/task-console/TaskConsole";
 import { TraceOverlay } from "./components/task-console/TraceOverlay";
 import { DataTaskChatInput } from "./components/chat/DataTaskChatInput";
+import { scheduleChatTextareaResize } from "./components/chat/use-chat-textarea-autoresize";
+import {
+  DataTaskChatInputBindingsProvider,
+  useDataTaskChatInputBindings,
+} from "./components/chat/DataTaskChatInputBindingsContext";
 import {
   BackendToolRuntimeProvider,
   useBackendToolPhase,
@@ -73,6 +90,7 @@ import {
   getWorkspaceGridTemplateColumns,
 } from "./workspace-layout";
 import { usePanelResize } from "./hooks/use-panel-resize";
+import { useChatColumnWidth } from "./hooks/use-chat-column-width";
 import { useWorkspaceResponsiveLayout } from "./hooks/use-workspace-responsive-layout";
 import { useWorkspaceViewportWidth } from "./hooks/use-workspace-viewport-width";
 import { PanelResizeHandle } from "./components/layout/PanelResizeHandle";
@@ -93,6 +111,27 @@ export type TaskSelection =
 export type WorkspaceConfigPanelKey = "db" | "kb" | "mcp" | "skill" | "llm";
 
 const NEW_CONFIG_ITEM_ID = "__new__";
+
+function StableDataTaskChatInput({
+  inputProps,
+}: {
+  inputProps: ComponentProps<typeof DataTaskChatInput>;
+}) {
+  const bindings = useDataTaskChatInputBindings();
+  const handleSubmitMessage = (value: string) => {
+    inputProps.onSubmitMessage?.(value);
+    bindings.onClearPerRunMentions();
+    requestAnimationFrame(scheduleChatTextareaResize);
+  };
+  return (
+    <DataTaskChatInput
+      {...inputProps}
+      {...bindings}
+      onSubmitMessage={handleSubmitMessage}
+      showDisclaimer={false}
+    />
+  );
+}
 
 function configSummary(
   kind: WorkspaceConfigKind,
@@ -141,27 +180,6 @@ function activeLlmProfile(
 
 function enabledSkillIds(workspaceConfig: WorkspaceConfigStore): string[] {
   return workspaceConfig.skill.map((item) => item.id);
-}
-
-/**
- * The single run-level config the backend should read from
- * `context.run_config` (see config-management-api.md §5). Carries only ids /
- * selections — never credentials. Backend ignores it until it wires
- * run_config consumption (#3); sending it now is forward-compatible.
- */
-function buildRunConfig(
-  workspaceConfig: WorkspaceConfigStore,
-  activeLlmId: string | null,
-) {
-  return {
-    enabledDatasourceIds: workspaceConfig.db.map((item) => item.id),
-    enabledKnowledgeIds: workspaceConfig.kb.map((item) => item.id),
-    enabledMcpServerIds: workspaceConfig.mcp.map((item) => item.id),
-    enabledSkillIds: enabledSkillIds(workspaceConfig),
-    activeDatasourceId: defaultDatasourceId,
-    activeLlmProfileId: activeLlmId,
-    activeSkillId: DEFAULT_SKILL_ID,
-  };
 }
 
 const SECRET_SETTING_KEYS = [
@@ -259,6 +277,29 @@ function DataTaskWorkspace() {
   const [activeLlmId, setActiveLlmId] = useState<string | null>(() =>
     loadActiveLlmId(loadWorkspaceConfig()),
   );
+  // Layer-2 per-run override (DESIGN.md): `@`-selected capabilities for the next
+  // run only. Cleared after each send so it never mutates workspace defaults.
+  const [perRunSelection, setPerRunSelection] = useState<PerRunSelection>(
+    emptyPerRunSelection,
+  );
+  const [chatColumnWidth, setChatColumnWidth] = useState(1280);
+
+  const togglePerRunMentionItem = useCallback(
+    (kind: PerRunMentionKind, id: string) => {
+      setPerRunSelection((current) => togglePerRunMention(current, kind, id));
+    },
+    [],
+  );
+  const removePerRunMentionItem = useCallback(
+    (kind: PerRunMentionKind, id: string) => {
+      setPerRunSelection((current) => removePerRunMention(current, kind, id));
+    },
+    [],
+  );
+  const clearPerRunMentions = useCallback(
+    () => setPerRunSelection(emptyPerRunSelection()),
+    [],
+  );
 
   const {
     width: rightPanelWidth,
@@ -288,6 +329,12 @@ function DataTaskWorkspace() {
   });
 
   const isRightConsoleVisible = rightPanelOpen && !configPanel;
+
+  useEffect(() => {
+    if (workspaceViewportWidth > 0) {
+      setChatColumnWidth(workspaceViewportWidth);
+    }
+  }, [workspaceViewportWidth]);
 
   useEffect(() => {
     const stored = loadChatSessions();
@@ -387,6 +434,32 @@ function DataTaskWorkspace() {
     sessions[0] ??
     null;
   const activeThreadId = activeSession?.threadId;
+
+  const mentionResources = useMemo(
+    () => buildMentionResources(workspaceConfig, activeSession),
+    [workspaceConfig, activeSession],
+  );
+
+  const toggleSessionResourceItem = useCallback(
+    (kind: PerRunMentionKind, id: string) => {
+      if (!activeSessionId) return;
+      setSessions((current) =>
+        current.map((session) =>
+          session.id === activeSessionId
+            ? toggleSessionResource(session, kind, id)
+            : session,
+        ),
+      );
+    },
+    [activeSessionId],
+  );
+
+  // Drop @ picks for resources removed from workspace or disabled in session.
+  useEffect(() => {
+    setPerRunSelection((current) =>
+      prunePerRunSelection(workspaceConfig, activeSession, current),
+    );
+  }, [workspaceConfig, activeSession]);
   const { liveRun, sessionUsage, latestQuestion } = useDataAgentRun(
     agentId,
     activeThreadId,
@@ -447,17 +520,28 @@ function DataTaskWorkspace() {
   const visibleArtifacts = liveRun.artifacts;
   const visibleTimelineEvents = liveRun.events;
 
-  // Kept: backend currently honors `datasource_id` (protocol doc §2).
+  // Kept: backend currently honors `datasource_id` (protocol doc §2). A per-run
+  // `@db` mention sets the active datasource within the session-enabled set.
   useAgentContext({
     description: "datasource_id",
-    value: defaultDatasourceId,
+    value: resolveActiveDatasourceId(
+      workspaceConfig,
+      activeSession,
+      perRunSelection,
+      defaultDatasourceId,
+    ),
   });
   // Forward-compatible single run config (config-management-api.md §5). Backend
   // ignores it until it wires run_config consumption (#3); ids/selections only,
-  // no credentials. Replaces the old per-kind context items.
+  // no credentials. enabled*Ids = session set; @ sets active/mentioned only.
   useAgentContext({
     description: "run_config",
-    value: buildRunConfig(workspaceConfig, activeLlmId),
+    value: buildRunConfig(workspaceConfig, {
+      activeLlmId,
+      defaultDatasourceId,
+      session: activeSession,
+      perRunSelection,
+    }),
   });
   // General workspace state for debugging / richer context (secrets stripped).
   useAgentContext({
@@ -465,25 +549,45 @@ function DataTaskWorkspace() {
     value: agentContext,
   });
 
+  const chatInputBindings = useMemo(
+    () => ({
+      activeLlmId,
+      llmOptions: enabledLlmOptions,
+      onActiveLlmChange: setActiveLlmId,
+      onOpenLlmConfig: () => setConfigPanel("llm"),
+      mentionResources,
+      perRunSelection,
+      onTogglePerRunMention: togglePerRunMentionItem,
+      onRemovePerRunMention: removePerRunMentionItem,
+      onClearPerRunMentions: clearPerRunMentions,
+      workspaceConfig,
+      activeSession,
+      onToggleSessionResource: toggleSessionResourceItem,
+      chatColumnWidth,
+    }),
+    [
+      activeLlmId,
+      activeSession,
+      chatColumnWidth,
+      enabledLlmOptions,
+      mentionResources,
+      perRunSelection,
+      togglePerRunMentionItem,
+      removePerRunMentionItem,
+      clearPerRunMentions,
+      toggleSessionResourceItem,
+      workspaceConfig,
+    ],
+  );
+
   const chatInput = useMemo(
     () =>
       function BoundDataTaskChatInput(
         inputProps: ComponentProps<typeof DataTaskChatInput>,
       ) {
-        return (
-          <DataTaskChatInput
-            {...inputProps}
-            autoFocus
-            bottomAnchored={false}
-            showDisclaimer={false}
-            activeLlmId={activeLlmId}
-            llmOptions={enabledLlmOptions}
-            onActiveLlmChange={setActiveLlmId}
-            onOpenLlmConfig={() => setConfigPanel("llm")}
-          />
-        );
+        return <StableDataTaskChatInput inputProps={inputProps} />;
       },
-    [activeLlmId, enabledLlmOptions],
+    [],
   );
 
   useFrontendTool(
@@ -506,9 +610,14 @@ function DataTaskWorkspace() {
     [sessions],
   );
 
+  const handleSelectToolAction = useCallback((toolCallId: string) => {
+    setSelection({ type: "action", id: toolCallId });
+    setUserRightPanelOpen(true);
+  }, []);
+
   return (
     <BackendToolRuntimeProvider runtime={backendToolRuntime}>
-      <DataTaskToolRenderers />
+      <DataTaskToolRenderers onSelectToolAction={handleSelectToolAction} />
       <div
       ref={gridRef}
       className={[
@@ -561,6 +670,7 @@ function DataTaskWorkspace() {
         </div>
       ) : (
         <>
+      <DataTaskChatInputBindingsProvider value={chatInputBindings}>
       <ChatPane
         activeThreadId={activeThreadId}
         title={activeSession?.title ?? "数据任务"}
@@ -569,7 +679,9 @@ function DataTaskWorkspace() {
         chatInput={chatInput}
         rightPanelOpen={rightPanelOpen}
         onOpenRightPanel={() => setUserRightPanelOpen(true)}
+        onChatColumnWidthChange={setChatColumnWidth}
       />
+      </DataTaskChatInputBindingsProvider>
 
       {rightPanelOpen ? (
         <div
@@ -627,7 +739,11 @@ function DataTaskWorkspace() {
   );
 }
 
-function DataTaskToolRenderers() {
+function DataTaskToolRenderers({
+  onSelectToolAction,
+}: {
+  onSelectToolAction: (toolCallId: string) => void;
+}) {
   useRenderTool(
     {
       name: "inspect_schema",
@@ -643,10 +759,11 @@ function DataTaskToolRenderers() {
           parameters={parameters}
           result={result}
           status={status}
+          onSelectToolAction={onSelectToolAction}
         />
       ),
     },
-    [],
+    [onSelectToolAction],
   );
 
   useRenderTool(
@@ -664,10 +781,11 @@ function DataTaskToolRenderers() {
           parameters={parameters}
           result={result}
           status={status}
+          onSelectToolAction={onSelectToolAction}
         />
       ),
     },
-    [],
+    [onSelectToolAction],
   );
 
   useRenderTool({
@@ -680,6 +798,7 @@ function DataTaskToolRenderers() {
         parameters={parameters}
         result={result}
         status={status}
+        onSelectToolAction={onSelectToolAction}
       />
     ),
   });
@@ -712,8 +831,49 @@ function useResolvedToolDisplayStatus(
 
 type ToolStatus = CopilotToolStatus;
 
-function ToolCallSplitLayout({ children }: { children: ReactNode }) {
-  return <div className="mb-3 grid gap-2 last:mb-0">{children}</div>;
+function ToolCallSplitLayout({
+  toolCallId,
+  onSelectToolAction,
+  children,
+}: {
+  toolCallId?: string;
+  onSelectToolAction?: (toolCallId: string) => void;
+  children: ReactNode;
+}) {
+  const selectable = Boolean(toolCallId && onSelectToolAction);
+  const handleActivate = () => {
+    if (toolCallId && onSelectToolAction) {
+      onSelectToolAction(toolCallId);
+    }
+  };
+
+  return (
+    <div
+      data-testid={selectable ? "selectable-tool-card" : undefined}
+      className={[
+        "mb-3 grid gap-2 last:mb-0",
+        selectable
+          ? "cursor-pointer rounded-xl ring-offset-2 transition hover:bg-slate-50/80 hover:ring-2 hover:ring-slate-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
+          : "",
+      ].join(" ")}
+      role={selectable ? "button" : undefined}
+      tabIndex={selectable ? 0 : undefined}
+      onClick={selectable ? handleActivate : undefined}
+      onKeyDown={
+        selectable
+          ? (event) => {
+              if (event.key === "Enter" || event.key === " ") {
+                event.preventDefault();
+                handleActivate();
+              }
+            }
+          : undefined
+      }
+      title={selectable ? "在任务控制台中查看详情" : undefined}
+    >
+      {children}
+    </div>
+  );
 }
 
 function ToolInvocationCard({
@@ -988,12 +1148,14 @@ function SqlToolCard({
   parameters,
   result,
   status,
+  onSelectToolAction,
 }: {
   toolCallId?: string;
   name: string;
   parameters: { sql?: string; limit?: number } | undefined;
   result?: string;
   status: ToolStatus;
+  onSelectToolAction?: (toolCallId: string) => void;
 }) {
   const displayStatus = useResolvedToolDisplayStatus(toolCallId, status, result);
   const effectiveResult = useEffectiveToolResult(toolCallId, result);
@@ -1002,7 +1164,10 @@ function SqlToolCard({
   const resultIsError = toolResultLooksLikeError(effectiveResult);
 
   return (
-    <ToolCallSplitLayout>
+    <ToolCallSplitLayout
+      toolCallId={toolCallId}
+      onSelectToolAction={onSelectToolAction}
+    >
       <ToolInvocationCard name={name} displayStatus={displayStatus}>
         {parameters?.sql && (
           <ToolSection title="SQL">
@@ -1063,12 +1228,14 @@ function SchemaToolCard({
   parameters,
   result,
   status,
+  onSelectToolAction,
 }: {
   toolCallId?: string;
   name: string;
   parameters: { datasource_id?: string; table_names?: string[] } | undefined;
   result?: string;
   status: ToolStatus;
+  onSelectToolAction?: (toolCallId: string) => void;
 }) {
   const displayStatus = useResolvedToolDisplayStatus(toolCallId, status, result);
   const effectiveResult = useEffectiveToolResult(toolCallId, result);
@@ -1078,7 +1245,10 @@ function SchemaToolCard({
   const resultIsError = toolResultLooksLikeError(effectiveResult);
 
   return (
-    <ToolCallSplitLayout>
+    <ToolCallSplitLayout
+      toolCallId={toolCallId}
+      onSelectToolAction={onSelectToolAction}
+    >
       <ToolInvocationCard name={name} displayStatus={displayStatus}>
         {requested.length > 0 && (
           <ToolSection title="检查的表">
@@ -1143,12 +1313,14 @@ function GenericToolCard({
   parameters,
   result,
   status,
+  onSelectToolAction,
 }: {
   toolCallId?: string;
   name: string;
   parameters: unknown;
   result?: string;
   status: ToolStatus;
+  onSelectToolAction?: (toolCallId: string) => void;
 }) {
   const displayStatus = useResolvedToolDisplayStatus(toolCallId, status, result);
   const effectiveResult = useEffectiveToolResult(toolCallId, result);
@@ -1156,7 +1328,10 @@ function GenericToolCard({
   const resultIsError = toolResultLooksLikeError(effectiveResult);
 
   return (
-    <ToolCallSplitLayout>
+    <ToolCallSplitLayout
+      toolCallId={toolCallId}
+      onSelectToolAction={onSelectToolAction}
+    >
       <ToolInvocationCard name={name} displayStatus={displayStatus}>
         {parameters !== undefined && (
           <ToolPayloadBlock title="参数" value={parameters} tone="dark" />
@@ -1776,41 +1951,36 @@ function SessionPane({
         </p>
         <div className="flex flex-col gap-0.5">
           <ConfigRow
-            label="DB"
+            kind="db"
             value={configSummary("db", workspaceConfig)}
-            tone="blue"
             active={activeConfigPanel === "db"}
             onClick={() => onOpenConfigPanel("db")}
           />
           <ConfigRow
-            label="KB"
+            kind="kb"
             value={configSummary("kb", workspaceConfig)}
-            tone="violet"
             unsupported={workspaceConfig.kb.length === 0}
             active={activeConfigPanel === "kb"}
             onClick={() => onOpenConfigPanel("kb")}
           />
           <ConfigRow
-            label="MCP"
+            kind="mcp"
             value={configSummary("mcp", workspaceConfig)}
-            tone="rose"
             unsupported
             active={activeConfigPanel === "mcp"}
             onClick={() => onOpenConfigPanel("mcp")}
           />
           <ConfigRow
-            label="LLM"
-            value={configSummary("llm", workspaceConfig)}
-            tone="amber"
-            active={activeConfigPanel === "llm"}
-            onClick={() => onOpenConfigPanel("llm")}
-          />
-          <ConfigRow
-            label="Skill"
+            kind="skill"
             value={configSummary("skill", workspaceConfig)}
-            tone="emerald"
             active={activeConfigPanel === "skill"}
             onClick={() => onOpenConfigPanel("skill")}
+          />
+          <ConfigRow
+            kind="llm"
+            value={configSummary("llm", workspaceConfig)}
+            active={activeConfigPanel === "llm"}
+            onClick={() => onOpenConfigPanel("llm")}
           />
         </div>
       </div>
@@ -2515,30 +2685,20 @@ function ConfigItemCard({
 }
 
 function ConfigRow({
-  label,
+  kind,
   value,
-  tone,
   unsupported,
   active,
   onClick,
 }: {
-  label: string;
+  kind: WorkspaceConfigKind;
   value: string;
-  tone: "blue" | "violet" | "amber" | "emerald" | "rose";
   unsupported?: boolean;
   active?: boolean;
   onClick?: () => void;
 }) {
-  const toneClass =
-    tone === "blue"
-      ? "text-blue-700"
-      : tone === "violet"
-        ? "text-violet-600"
-        : tone === "emerald"
-          ? "text-emerald-700"
-          : tone === "rose"
-            ? "text-rose-700"
-            : "text-amber-700";
+  const label = WORKSPACE_CONFIG_SHORT_LABEL[kind];
+  const badgeClass = WORKSPACE_CONFIG_BADGE_CLASS[kind];
 
   const className = [
     "flex w-full items-center gap-2 rounded-md px-2 py-1 text-xs transition",
@@ -2548,7 +2708,14 @@ function ConfigRow({
 
   const content = (
     <>
-      <span className={`w-7 shrink-0 font-semibold ${toneClass}`}>{label}</span>
+      <span
+        className={[
+          "inline-flex w-9 shrink-0 items-center justify-center rounded-md px-1 py-px text-[10px] font-semibold uppercase tracking-wide",
+          badgeClass,
+        ].join(" ")}
+      >
+        {label}
+      </span>
       <span className="min-w-0 flex-1 truncate text-left text-slate-600">{value}</span>
       {unsupported && (
         <span className="shrink-0 rounded bg-slate-100 px-1 py-0.5 text-[10px] text-slate-400">
@@ -2591,6 +2758,7 @@ function ChatPane({
   chatInput: ChatInput,
   rightPanelOpen,
   onOpenRightPanel,
+  onChatColumnWidthChange,
 }: {
   activeThreadId?: string;
   title: string;
@@ -2599,7 +2767,16 @@ function ChatPane({
   chatInput: ComponentType<ComponentProps<typeof DataTaskChatInput>>;
   rightPanelOpen: boolean;
   onOpenRightPanel: () => void;
+  onChatColumnWidthChange: (width: number) => void;
 }) {
+  const { containerRef, chatColumnWidth } = useChatColumnWidth();
+
+  useEffect(() => {
+    if (chatColumnWidth > 0) {
+      onChatColumnWidthChange(chatColumnWidth);
+    }
+  }, [chatColumnWidth, onChatColumnWidthChange]);
+
   return (
     <main className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-slate-50">
       <header className="flex h-16 items-center justify-between gap-3 border-b border-slate-200 bg-white px-5">
@@ -2624,7 +2801,10 @@ function ChatPane({
           ) : null}
         </div>
       </header>
-      <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+      <div
+        ref={containerRef}
+        className="flex min-h-0 flex-1 flex-col overflow-hidden"
+      >
         {activeThreadId ? (
           <CopilotChat
             agentId={agentId}

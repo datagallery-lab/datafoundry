@@ -169,11 +169,23 @@ export function emptyStepPayload(kind: DataStepKind): DataStepPayload {
  * only a per-run `threadId`. Each session here owns its own `threadId`, which
  * keeps CopilotKit's per-(agentId, threadId) agent clone isolated.
  */
+/** Per-session disabled resource ids (store "off" list; default = all enabled). */
+export type SessionDisabledMap = Record<
+  Exclude<WorkspaceConfigKind, "llm">,
+  string[]
+>;
+
+export interface SessionConfigOverride {
+  disabled: SessionDisabledMap;
+}
+
 export interface ChatSession {
   id: string;
   threadId: string;
   title: string;
   createdAt: number;
+  /** Per-session resource enablement; omitted = all workspace resources enabled. */
+  config?: SessionConfigOverride;
 }
 
 const SESSIONS_STORAGE_KEY = "data-tasks:sessions:v1";
@@ -220,15 +232,42 @@ export function persistChatSessions(sessions: ChatSession[]): void {
   }
 }
 
-function isChatSession(value: unknown): value is ChatSession {
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((entry) => typeof entry === "string");
+}
+
+function isSessionDisabledMap(value: unknown): value is SessionDisabledMap {
   if (typeof value !== "object" || value === null) return false;
   const record = value as Record<string, unknown>;
   return (
-    typeof record.id === "string" &&
-    typeof record.threadId === "string" &&
-    typeof record.title === "string" &&
-    typeof record.createdAt === "number"
+    isStringArray(record.db) &&
+    isStringArray(record.kb) &&
+    isStringArray(record.mcp) &&
+    isStringArray(record.skill)
   );
+}
+
+function isSessionConfigOverride(value: unknown): value is SessionConfigOverride {
+  if (typeof value !== "object" || value === null) return false;
+  const record = value as Record<string, unknown>;
+  return isSessionDisabledMap(record.disabled);
+}
+
+function isChatSession(value: unknown): value is ChatSession {
+  if (typeof value !== "object" || value === null) return false;
+  const record = value as Record<string, unknown>;
+  if (
+    typeof record.id !== "string" ||
+    typeof record.threadId !== "string" ||
+    typeof record.title !== "string" ||
+    typeof record.createdAt !== "number"
+  ) {
+    return false;
+  }
+  if (record.config !== undefined && !isSessionConfigOverride(record.config)) {
+    return false;
+  }
+  return true;
 }
 
 /** Client-side skill catalog. Backend skill execution is not wired yet. */
@@ -1150,4 +1189,361 @@ export function createWorkspaceConfigItem(
     enabled: true,
     settings: defaultSettingsForKind(kind, name),
   };
+}
+
+// ---------------------------------------------------------------------------
+// Session config — layer between workspace defaults and per-run @ mentions.
+// Each chat session stores a per-kind *disabled* list (default = all enabled).
+// ---------------------------------------------------------------------------
+
+export function emptySessionDisabledMap(): SessionDisabledMap {
+  return { db: [], kb: [], mcp: [], skill: [] };
+}
+
+export function emptySessionConfig(): SessionConfigOverride {
+  return { disabled: emptySessionDisabledMap() };
+}
+
+export function getSessionDisabled(
+  session: ChatSession | null | undefined,
+): SessionDisabledMap {
+  return session?.config?.disabled ?? emptySessionDisabledMap();
+}
+
+export function sessionEnabledItems(
+  store: WorkspaceConfigStore,
+  kind: PerRunMentionKind,
+  session: ChatSession | null | undefined,
+): WorkspaceConfigItem[] {
+  const disabled = new Set(getSessionDisabled(session)[kind]);
+  return store[kind].filter((item) => !disabled.has(item.id));
+}
+
+export function sessionEnabledIds(
+  store: WorkspaceConfigStore,
+  kind: PerRunMentionKind,
+  session: ChatSession | null | undefined,
+): string[] {
+  return sessionEnabledItems(store, kind, session).map((item) => item.id);
+}
+
+export function isSessionResourceEnabled(
+  session: ChatSession | null | undefined,
+  kind: PerRunMentionKind,
+  id: string,
+): boolean {
+  return !getSessionDisabled(session)[kind].includes(id);
+}
+
+export function toggleSessionResource(
+  session: ChatSession,
+  kind: PerRunMentionKind,
+  id: string,
+): ChatSession {
+  const disabled = getSessionDisabled(session);
+  const current = disabled[kind];
+  const nextIds = current.includes(id)
+    ? current.filter((value) => value !== id)
+    : [...current, id];
+  return {
+    ...session,
+    config: {
+      disabled: { ...disabled, [kind]: nextIds },
+    },
+  };
+}
+
+export function sessionResourceCounts(
+  store: WorkspaceConfigStore,
+  kind: PerRunMentionKind,
+  session: ChatSession | null | undefined,
+): { enabled: number; total: number } {
+  const total = store[kind].length;
+  const enabled = sessionEnabledItems(store, kind, session).length;
+  return { enabled, total };
+}
+
+// ---------------------------------------------------------------------------
+// Per-run @ mentions — layer-3 override: specify active/mentioned for one run.
+// `@` picks from the session-enabled set only; it does not narrow `enabled*Ids`.
+// LLM is excluded — it has its own model picker.
+// ---------------------------------------------------------------------------
+
+export type PerRunMentionKind = Exclude<WorkspaceConfigKind, "llm">;
+
+export const PER_RUN_MENTION_KINDS: PerRunMentionKind[] = [
+  "db",
+  "kb",
+  "mcp",
+  "skill",
+];
+
+export type PerRunSelection = Record<PerRunMentionKind, string[]>;
+
+export function emptyPerRunSelection(): PerRunSelection {
+  return { db: [], kb: [], mcp: [], skill: [] };
+}
+
+export function countPerRunMentions(selection: PerRunSelection): number {
+  return PER_RUN_MENTION_KINDS.reduce(
+    (total, kind) => total + selection[kind].length,
+    0,
+  );
+}
+
+/**
+ * Per-kind metadata for the `@` picker. `backendSupported` reflects whether the
+ * selection has a real runtime effect today: only `db` is honored (via
+ * `datasource_id` / `forwardedProps`). The rest ride along in `run_config` for
+ * forward-compatibility and are surfaced with a 「后端未支持」 hint so the UI never
+ * implies an effect the backend can't yet deliver.
+ */
+export const PER_RUN_MENTION_META: Record<
+  PerRunMentionKind,
+  { label: string; token: string; backendSupported: boolean }
+> = {
+  db: { label: "数据源", token: "db", backendSupported: true },
+  kb: { label: "知识库", token: "kb", backendSupported: false },
+  mcp: { label: "MCP", token: "mcp", backendSupported: false },
+  skill: { label: "技能", token: "skill", backendSupported: false },
+};
+
+/** Shared per-kind palette for sidebar labels and session/@ pills. */
+const CONFIG_APPEARANCE = {
+  db: {
+    badge:
+      "bg-sky-200 text-sky-800 ring-1 ring-inset ring-sky-300/80 dark:bg-sky-500/25 dark:text-sky-200 dark:ring-sky-500/40",
+    pill: "border-sky-300 bg-sky-100 text-sky-900 hover:border-sky-400 hover:bg-sky-200 dark:border-sky-600 dark:bg-sky-500/20 dark:text-sky-100 dark:hover:bg-sky-500/30",
+    pillOpen:
+      "border-sky-400 bg-sky-200 text-sky-950 dark:border-sky-500 dark:bg-sky-500/35 dark:text-sky-50",
+    chip: "border-sky-300 bg-sky-100 text-sky-900 dark:border-sky-600 dark:bg-sky-500/20 dark:text-sky-100",
+  },
+  kb: {
+    badge:
+      "bg-violet-200 text-violet-800 ring-1 ring-inset ring-violet-300/80 dark:bg-violet-500/25 dark:text-violet-200 dark:ring-violet-500/40",
+    pill: "border-violet-300 bg-violet-100 text-violet-900 hover:border-violet-400 hover:bg-violet-200 dark:border-violet-600 dark:bg-violet-500/20 dark:text-violet-100 dark:hover:bg-violet-500/30",
+    pillOpen:
+      "border-violet-400 bg-violet-200 text-violet-950 dark:border-violet-500 dark:bg-violet-500/35 dark:text-violet-50",
+    chip: "border-violet-300 bg-violet-100 text-violet-900 dark:border-violet-600 dark:bg-violet-500/20 dark:text-violet-100",
+  },
+  mcp: {
+    badge:
+      "bg-emerald-200 text-emerald-800 ring-1 ring-inset ring-emerald-300/80 dark:bg-emerald-500/25 dark:text-emerald-200 dark:ring-emerald-500/40",
+    pill: "border-emerald-300 bg-emerald-100 text-emerald-900 hover:border-emerald-400 hover:bg-emerald-200 dark:border-emerald-600 dark:bg-emerald-500/20 dark:text-emerald-100 dark:hover:bg-emerald-500/30",
+    pillOpen:
+      "border-emerald-400 bg-emerald-200 text-emerald-950 dark:border-emerald-500 dark:bg-emerald-500/35 dark:text-emerald-50",
+    chip: "border-emerald-300 bg-emerald-100 text-emerald-900 dark:border-emerald-600 dark:bg-emerald-500/20 dark:text-emerald-100",
+  },
+  llm: {
+    badge:
+      "bg-red-200 text-red-800 ring-1 ring-inset ring-red-300/80 dark:bg-red-500/25 dark:text-red-200 dark:ring-red-500/40",
+    pill: "border-red-300 bg-red-100 text-red-900 hover:border-red-400 hover:bg-red-200 dark:border-red-600 dark:bg-red-500/20 dark:text-red-100 dark:hover:bg-red-500/30",
+    pillOpen:
+      "border-red-400 bg-red-200 text-red-950 dark:border-red-500 dark:bg-red-500/35 dark:text-red-50",
+    chip: "border-red-300 bg-red-100 text-red-900 dark:border-red-600 dark:bg-red-500/20 dark:text-red-100",
+  },
+  skill: {
+    badge:
+      "bg-amber-200 text-amber-900 ring-1 ring-inset ring-amber-300/80 dark:bg-amber-500/25 dark:text-amber-200 dark:ring-amber-500/40",
+    pill: "border-amber-300 bg-amber-100 text-amber-950 hover:border-amber-400 hover:bg-amber-200 dark:border-amber-600 dark:bg-amber-500/20 dark:text-amber-100 dark:hover:bg-amber-500/30",
+    pillOpen:
+      "border-amber-400 bg-amber-200 text-amber-950 dark:border-amber-500 dark:bg-amber-500/35 dark:text-amber-50",
+    chip: "border-amber-300 bg-amber-100 text-amber-950 dark:border-amber-600 dark:bg-amber-500/20 dark:text-amber-100",
+  },
+} as const satisfies Record<
+  WorkspaceConfigKind,
+  {
+    badge: string;
+    pill: string;
+    pillOpen: string;
+    chip: string;
+  }
+>;
+
+export const WORKSPACE_CONFIG_SHORT_LABEL: Record<WorkspaceConfigKind, string> = {
+  db: "DB",
+  kb: "KB",
+  mcp: "MCP",
+  llm: "LLM",
+  skill: "SKILL",
+};
+
+export const WORKSPACE_CONFIG_BADGE_CLASS: Record<WorkspaceConfigKind, string> =
+  {
+    db: CONFIG_APPEARANCE.db.badge,
+    kb: CONFIG_APPEARANCE.kb.badge,
+    mcp: CONFIG_APPEARANCE.mcp.badge,
+    llm: CONFIG_APPEARANCE.llm.badge,
+    skill: CONFIG_APPEARANCE.skill.badge,
+  };
+
+export const PER_RUN_MENTION_APPEARANCE: Record<
+  PerRunMentionKind,
+  { badge: string; pill: string; pillOpen: string; chip: string }
+> = {
+  db: CONFIG_APPEARANCE.db,
+  kb: CONFIG_APPEARANCE.kb,
+  mcp: CONFIG_APPEARANCE.mcp,
+  skill: CONFIG_APPEARANCE.skill,
+};
+
+export interface MentionResource {
+  kind: PerRunMentionKind;
+  id: string;
+  name: string;
+  description: string;
+  backendSupported: boolean;
+}
+
+/** Lists session-enabled resources for the `@` picker. */
+export function buildMentionResources(
+  store: WorkspaceConfigStore,
+  session: ChatSession | null | undefined,
+): MentionResource[] {
+  const resources: MentionResource[] = [];
+  for (const kind of PER_RUN_MENTION_KINDS) {
+    for (const item of sessionEnabledItems(store, kind, session)) {
+      resources.push({
+        kind,
+        id: item.id,
+        name: item.name,
+        description: item.description,
+        backendSupported: PER_RUN_MENTION_META[kind].backendSupported,
+      });
+    }
+  }
+  return resources;
+}
+
+export function togglePerRunMention(
+  selection: PerRunSelection,
+  kind: PerRunMentionKind,
+  id: string,
+): PerRunSelection {
+  const current = selection[kind];
+  const next = current.includes(id)
+    ? current.filter((value) => value !== id)
+    : [...current, id];
+  return { ...selection, [kind]: next };
+}
+
+export function removePerRunMention(
+  selection: PerRunSelection,
+  kind: PerRunMentionKind,
+  id: string,
+): PerRunSelection {
+  return { ...selection, [kind]: selection[kind].filter((v) => v !== id) };
+}
+
+/** Drops @ mentions for resources no longer session-enabled or removed from workspace. */
+export function prunePerRunSelection(
+  store: WorkspaceConfigStore,
+  session: ChatSession | null | undefined,
+  selection: PerRunSelection,
+): PerRunSelection {
+  const next = emptyPerRunSelection();
+  let changed = false;
+  for (const kind of PER_RUN_MENTION_KINDS) {
+    const available = new Set(sessionEnabledIds(store, kind, session));
+    const kept = selection[kind].filter((id) => available.has(id));
+    if (kept.length !== selection[kind].length) changed = true;
+    next[kind] = kept;
+  }
+  return changed ? next : selection;
+}
+
+export type RunConfigPayload = {
+  enabledDatasourceIds: string[];
+  enabledKnowledgeIds: string[];
+  enabledMcpServerIds: string[];
+  enabledSkillIds: string[];
+  activeDatasourceId: string;
+  activeLlmProfileId: string | null;
+  activeSkillId: string;
+  mentioned: PerRunSelection;
+};
+
+export interface BuildRunConfigOptions {
+  activeLlmId: string | null;
+  defaultDatasourceId: string;
+  session?: ChatSession | null;
+  perRunSelection?: PerRunSelection;
+  defaultSkillId?: string;
+}
+
+function filterMentionedIds(
+  ids: readonly string[],
+  available: ReadonlySet<string>,
+): string[] {
+  return ids.filter((id) => available.has(id));
+}
+
+/**
+ * Builds the forward-compatible `run_config` payload (config-management-api.md
+ * §5). Ids / selections only — never credentials.
+ *
+ * - `enabled*Ids` = session-enabled set (all available this session); `@` does
+ *   not narrow these.
+ * - `active*` = first `@` mention for that kind, else default.
+ * - `mentioned` = this run's `@` picks (subset of session-enabled).
+ */
+export function buildRunConfig(
+  store: WorkspaceConfigStore,
+  options: BuildRunConfigOptions,
+): RunConfigPayload {
+  const selection = options.perRunSelection ?? emptyPerRunSelection();
+  const session = options.session;
+  const enabledDb = sessionEnabledIds(store, "db", session);
+  const enabledKb = sessionEnabledIds(store, "kb", session);
+  const enabledMcp = sessionEnabledIds(store, "mcp", session);
+  const enabledSkill = sessionEnabledIds(store, "skill", session);
+  const enabledDbSet = new Set(enabledDb);
+  const enabledKbSet = new Set(enabledKb);
+  const enabledMcpSet = new Set(enabledMcp);
+  const enabledSkillSet = new Set(enabledSkill);
+
+  const mentioned: PerRunSelection = {
+    db: filterMentionedIds(selection.db, enabledDbSet),
+    kb: filterMentionedIds(selection.kb, enabledKbSet),
+    mcp: filterMentionedIds(selection.mcp, enabledMcpSet),
+    skill: filterMentionedIds(selection.skill, enabledSkillSet),
+  };
+
+  const activeDatasourceId =
+    mentioned.db[0] ??
+    (enabledDbSet.has(options.defaultDatasourceId)
+      ? options.defaultDatasourceId
+      : (enabledDb[0] ?? options.defaultDatasourceId));
+
+  const activeSkillId =
+    mentioned.skill[0] ??
+    (options.defaultSkillId && enabledSkillSet.has(options.defaultSkillId)
+      ? options.defaultSkillId
+      : (enabledSkill[0] ?? options.defaultSkillId ?? DEFAULT_SKILL_ID));
+
+  return {
+    enabledDatasourceIds: enabledDb,
+    enabledKnowledgeIds: enabledKb,
+    enabledMcpServerIds: enabledMcp,
+    enabledSkillIds: enabledSkill,
+    activeDatasourceId,
+    activeLlmProfileId: options.activeLlmId,
+    activeSkillId,
+    mentioned,
+  };
+}
+
+/** Honors a per-run `@db` mention within the session-enabled db set. */
+export function resolveActiveDatasourceId(
+  store: WorkspaceConfigStore,
+  session: ChatSession | null | undefined,
+  selection: PerRunSelection,
+  fallback: string,
+): string {
+  const enabled = sessionEnabledIds(store, "db", session);
+  const enabledSet = new Set(enabled);
+  const mentioned = selection.db.find((id) => enabledSet.has(id));
+  if (mentioned) return mentioned;
+  if (enabledSet.has(fallback)) return fallback;
+  return enabled[0] ?? fallback;
 }

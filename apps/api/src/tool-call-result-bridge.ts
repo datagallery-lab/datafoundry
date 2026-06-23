@@ -43,14 +43,15 @@ export class ToolCallResultBridge {
       if (!pending) return extras;
 
       if (status === "failed") {
-        extras.push(
-          createToolCallResult(
-            pending.toolCallId,
-            JSON.stringify({
-              error: readString(content?.error_message) ?? "Tool execution failed"
-            })
-          )
-        );
+          extras.push(
+            createToolCallResult(
+              pending.toolCallId,
+              pending.toolName,
+              JSON.stringify({
+                error: readString(content?.error_message) ?? "Tool execution failed"
+              })
+            )
+          );
         pending.hasResult = true;
         return extras;
       }
@@ -61,6 +62,7 @@ export class ToolCallResultBridge {
           extras.push(
             createToolCallResult(
               pending.toolCallId,
+              pending.toolName,
               typeof payload === "string" ? payload : JSON.stringify(payload)
             )
           );
@@ -80,6 +82,7 @@ export class ToolCallResultBridge {
       extras.push(
         createToolCallResult(
           pending.toolCallId,
+          pending.toolName,
           JSON.stringify({
             error: "TOOL_RESULT_NOT_DELIVERED",
             message:
@@ -93,9 +96,14 @@ export class ToolCallResultBridge {
   }
 }
 
-const createToolCallResult = (toolCallId: string, content: string): BaseEvent => ({
+const createToolCallResult = (
+  toolCallId: string,
+  toolCallName: string,
+  content: string,
+): BaseEvent => ({
   type: EventType.TOOL_CALL_RESULT,
   toolCallId,
+  toolCallName,
   content,
   messageId: randomUUID(),
   role: "tool",

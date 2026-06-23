@@ -18,8 +18,8 @@ type UseWorkspaceResponsiveLayoutResult = {
 };
 
 /**
- * Applies viewport-driven sidebar overrides: auto-collapse left, then close
- * right, while preserving user preferences for restoration when space returns.
+ * Applies viewport-driven sidebar overrides: close right first, then collapse
+ * left, while preserving user preferences for restoration when space returns.
  */
 export function useWorkspaceResponsiveLayout({
   viewportWidth,

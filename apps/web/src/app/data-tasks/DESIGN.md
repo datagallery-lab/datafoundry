@@ -40,30 +40,57 @@ State + schema live in [data-task-state.ts](./data-task-state.ts); UI lives in
 
 ### Three-layer resolution
 
-The left panel is a **workspace default config center**, not a per-run picker.
+The left panel is the **static resource library**; the chat input carries two
+more layers before a run is dispatched.
 
 ```
-effectiveRunConfig = merge(workspaceDefaults, perRunOverrides, serverPolicy)
+effectiveRunConfig = merge(workspaceDefaults, sessionEnabled, perRunMentioned, serverPolicy)
 ```
 
 1. **Workspace defaults (left panel)** — DB / KB / MCP / LLM / Skill entries are
    *static defaults*. Every entry is **default-available**; there are **no
    per-item enable toggles**. Wording is "工作区默认配置 / 默认可用", never
    "本轮启用/禁用". Persisted in `localStorage` (`data-tasks:workspace-config:v1`).
-2. **Per-run override (chat input area)** — deferred. The dialog near the input
-   is where a single run turns things on/off without mutating workspace
-   defaults. Today only the LLM model picker (`ChatModelPicker`) exists as a
-   partial implementation.
-3. **Server policy (backend)** — the final authority; merges the above with
+2. **Session config (chat input bottom pills)** — `SessionConfigBar` shows four
+   per-kind pills (`数据源 / 知识库 / MCP / 技能`) with `启用数/总数`. Clicking a
+   pill opens an upward popover with a switch list to disable specific resources
+   for **this chat session only**. Stored as a per-session *disabled* list on
+   `ChatSession.config.disabled` (default = all workspace resources enabled; new
+   resources added to the left panel auto-appear in old sessions). Persisted in
+   `localStorage` (`data-tasks:sessions:v1`). See
+   [§Session config pills](#session-config-pills-layer-2).
+3. **Per-run `@` mentions (chips above textarea)** — Cursor-style `@` to **name**
+   resources for this single run. Pickable only from the session-enabled set.
+   `@` sets `active*` + `mentioned` in `run_config`; it does **not** narrow
+   `enabled*Ids` (other session-enabled resources remain available). Cleared after
+   send. See [§Per-run `@` mentions](#per-run--mentions-layer-3).
+4. **Server policy (backend)** — the final authority; merges the above with
    permission/policy. Today the backend only honors `datasourceId` (capability
    request #3 wires full `run_config` consumption).
 
-### Expose only what the backend can consume
+LLM model selection stays in `ChatModelPicker` (not a session pill).
 
-The visible field set is **grounded in the backend's verified Data Gateway
-capability**, not in aspiration. Speculative fields are NOT shown; their full
-contract is kept in `config-management-api.md` and restored to the UI when the
-matching backend capability ships.
+### Build ahead of the backend — but label it honestly
+
+Earlier this page hid anything the backend could not yet consume. That rule is
+**relaxed**: the frontend MAY ship UX ahead of the backend **as long as**
+
+1. the requirement is a reasonable ask of the backend, and is written down in
+   [frontend-backend-capability-requests.md](../../../../../docs/engineering/frontend-backend-capability-requests.md);
+2. nothing the user sees implies an effect the backend can't deliver — anything
+   inert is surfaced with a 「后端未支持」 hint (the `ConfigRow` `unsupported`
+   badge, the `@` menu/chip badge, etc.); and
+3. the data it produces is **forward-compatible** (ids/selections only, no
+   secrets) so wiring the backend later is a no-op on the protocol.
+
+Concretely, the `@` picker lets a run select `@kb` / `@mcp` / `@skill` today even
+though only `@db` has runtime effect; the rest ride along in `run_config` with a
+visible 「后端未支持」 marker until capability #3 (+ each impl) lands.
+
+For per-field config the visible set is still **grounded in the backend's
+verified Data Gateway capability**; speculative fields stay gated-off (see
+[§Capability gating](#capability-gating-forward-compatible-flip-a-flag)) and
+their full contract lives in `config-management-api.md`.
 
 | Config | UI exposes today | Backend reality |
 | --- | --- | --- |
@@ -118,16 +145,61 @@ Two `useAgentContext` items (+ `forwardedProps.datasourceId`):
 
 ```jsonc
 {
-  "enabledDatasourceIds": [...], "enabledKnowledgeIds": [...],
-  "enabledMcpServerIds": [...], "enabledSkillIds": [...],
-  "activeDatasourceId": "api-duckdb-demo",
-  "activeLlmProfileId": "...", "activeSkillId": "data-agent-default"
+  "enabledDatasourceIds": [...],   // session-enabled set (all available)
+  "enabledKnowledgeIds": [...],
+  "enabledMcpServerIds": [...],
+  "enabledSkillIds": [...],
+  "activeDatasourceId": "...",     // first @db mention, else default
+  "activeLlmProfileId": "...",
+  "activeSkillId": "...",
+  "mentioned": {                   // this run's @ picks (subset of session-enabled)
+    "db": [...], "kb": [...], "mcp": [...], "skill": [...]
+  }
 }
 ```
 
 The backend ignores `run_config` until capability #3 lands; sending it now means
 no protocol change is needed later. (A third `当前数据任务工作区状态` item carries
 sanitized workspace state for debugging.)
+
+### Session config pills (layer 2)
+
+`SessionConfigBar` (`components/chat/SessionConfigBar.tsx`) sits at the **bottom**
+of the chat input card (below the textarea row, above the card border). It is the
+session-scoped enablement layer between the left-panel library and per-run `@`.
+
+- **Pills**: one per kind (`db/kb/mcp/skill`), label + `启用数/总数`; kb/mcp/skill
+  carry a compact 「未支持」 badge.
+- **Popover**: click a pill → upward list with name + switch. Off = id appended to
+  `ChatSession.config.disabled[kind]`. On = removed from disabled list.
+- **Storage**: per-session in `data-tasks:sessions:v1`. Omitted `config` = all
+  workspace resources enabled for that session.
+- **Effect on run**: `buildRunConfig` sets each `enabled*Ids` to the
+  session-enabled id list. Disabling a resource in session removes it from
+  availability for that session's runs and from the `@` picker.
+- **Pruning**: disabling a resource also drops it from `perRunSelection` chips.
+
+### Per-run `@` mentions (layer 3)
+
+A Cursor-style `@` picker lets one run **name** resources from the session-enabled
+set. `@` is **specify / prioritize**, not **restrict** — other session-enabled
+resources stay in `enabled*Ids` and remain available to the agent.
+
+- **Scope**: `@db` / `@kb` / `@mcp` / `@skill`. LLM excluded (`ChatModelPicker`).
+  (`/` commands reserved; CopilotKit owns `/` for `toolsMenu`.)
+- **Trigger**: typing `@` at a word boundary, or the `@` toolbar button
+  (`openAtCaret`). Menu lists **session-enabled** resources only; ↑/↓, Enter/Tab,
+  Esc.
+- **Wiring** (`chat-mentions.tsx`): native capture-phase `keydown` on the textarea;
+  text rewrite via native value setter + `input` event.
+- **State**: `perRunSelection` in `page.tsx`; chips above textarea; pruned when
+  workspace items are deleted or session-disabled.
+- **Effect**: `enabled*Ids` = session set (unchanged by `@`). `activeDatasourceId`
+  / `activeSkillId` = first `@` mention for that kind, else default.
+  `mentioned` = full `@` pick list. Only `@db` has runtime effect today via
+  `datasource_id`; rest forward-compatible per
+  [§Build ahead of the backend](#build-ahead-of-the-backend--but-label-it-honestly).
+- **Lifetime**: per-run only; cleared after send via `BoundDataTaskChatInput`.
 
 ## Backend wiring (the real data flow)
 
@@ -236,6 +308,12 @@ These exist in the UI for shape/affordance but are explicitly marked
 
 - **KB** and **MCP** config rows — editable + persisted locally, but backend has
   no RAG / MCP implementation, so they never affect a run yet.
+- **Session pills for kb/mcp/skill** — toggle session enablement and ship in
+  `enabled*Ids`, but carry a 「未支持」 badge; only db pills have runtime effect
+  today.
+- **`@kb` / `@mcp` / `@skill` per-run mentions** — selectable from session-enabled
+  resources and shipped in `mentioned` / `active*`, but carry a 「后端未支持」 badge;
+  only `@db` has runtime effect today.
 - **LLM model picker** (`ChatModelPicker`) — selects an `activeLlmProfileId`
   client-side and ships it in `run_config`, but the backend still uses its
   server `LLM_*` env until capability #4 lands. Selection has no runtime effect
@@ -248,7 +326,8 @@ These exist in the UI for shape/affordance but are explicitly marked
 
 ## Deferred (not in this delivery)
 
-- Per-run override dialog (layer 2 of the config model) beyond the model picker.
+- `/` slash commands for run-level **actions** (e.g. `/clear`, `/export`); the
+  `@` mention picker (layer 2 resource selection) has shipped.
 - Backend-gated config fields/capabilities — see `BACKEND_CAPABILITIES` and
   `frontend-backend-capability-requests.md`; restored to the UI by flipping a
   flag when each backend capability ships.

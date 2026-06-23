@@ -3,6 +3,7 @@ import {
   chatPaneClassName,
   clampRightPanelWidth,
   fixedGridColumn,
+  getChatInputReservedWidth,
   getRequiredWorkspaceWidth,
   getWorkspaceGridTemplateColumns,
   RIGHT_PANEL_DEFAULT_WIDTH,
@@ -71,10 +72,10 @@ describe("clampRightPanelWidth", () => {
 });
 
 describe("resolveResponsiveSidebars", () => {
-  it("keeps user preferences when the viewport is wide enough", () => {
+  it("keeps user preferences when the viewport fits the preferred chat input", () => {
     expect(
       resolveResponsiveSidebars({
-        viewportWidth: 1200,
+        viewportWidth: 1500,
         userSidebarCollapsed: false,
         userRightPanelOpen: true,
         rightPanelWidth: 360,
@@ -85,7 +86,35 @@ describe("resolveResponsiveSidebars", () => {
     });
   });
 
-  it("auto-collapses the left panel instead of shrinking panel widths", () => {
+  it("closes the right panel first to preserve the preferred chat input width", () => {
+    expect(
+      resolveResponsiveSidebars({
+        viewportWidth: 1200,
+        userSidebarCollapsed: false,
+        userRightPanelOpen: true,
+        rightPanelWidth: 360,
+      }),
+    ).toEqual({
+      sidebarCollapsed: false,
+      rightPanelOpen: false,
+    });
+  });
+
+  it("closes the right panel before collapsing the left panel", () => {
+    expect(
+      resolveResponsiveSidebars({
+        viewportWidth: 1300,
+        userSidebarCollapsed: false,
+        userRightPanelOpen: true,
+        rightPanelWidth: 360,
+      }),
+    ).toEqual({
+      sidebarCollapsed: false,
+      rightPanelOpen: false,
+    });
+  });
+
+  it("collapses the left panel when closing the right panel is not enough", () => {
     expect(
       resolveResponsiveSidebars({
         viewportWidth: 900,
@@ -95,11 +124,11 @@ describe("resolveResponsiveSidebars", () => {
       }),
     ).toEqual({
       sidebarCollapsed: true,
-      rightPanelOpen: true,
+      rightPanelOpen: false,
     });
   });
 
-  it("closes the right panel when the viewport is still too narrow", () => {
+  it("collapses the left panel on very narrow viewports", () => {
     expect(
       resolveResponsiveSidebars({
         viewportWidth: 700,
@@ -116,7 +145,7 @@ describe("resolveResponsiveSidebars", () => {
   it("restores user preferences when the viewport becomes wide enough again", () => {
     expect(
       resolveResponsiveSidebars({
-        viewportWidth: 1300,
+        viewportWidth: 1500,
         userSidebarCollapsed: false,
         userRightPanelOpen: true,
         rightPanelWidth: 360,
@@ -129,13 +158,13 @@ describe("resolveResponsiveSidebars", () => {
 });
 
 describe("getRequiredWorkspaceWidth", () => {
-  it("sums fixed side widths plus the chat minimum", () => {
+  it("sums fixed side widths plus the preferred chat input reservation", () => {
     expect(
       getRequiredWorkspaceWidth({
         sidebarCollapsed: false,
         rightPanelOpen: true,
         rightPanelWidth: 360,
       }),
-    ).toBe(320 + 360 + CHAT_MIN_WIDTH);
+    ).toBe(320 + 360 + getChatInputReservedWidth());
   });
 });

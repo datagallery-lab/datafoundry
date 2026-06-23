@@ -4,19 +4,38 @@ import {
   CopilotChatInput,
   type CopilotChatInputProps,
 } from "@copilotkit/react-core/v2";
-import { useEffect, useRef, useState } from "react";
-import type { ReactNode } from "react";
-import type { WorkspaceConfigItem } from "../../data-task-state";
+import { useCallback, useEffect, useRef, useState } from "react";
+import type { CSSProperties, ReactNode } from "react";
+import type {
+  MentionResource,
+  PerRunMentionKind,
+  PerRunSelection,
+  WorkspaceConfigItem,
+} from "../../data-task-state";
 import {
   getLlmDisplayLabel,
   getLlmOptionSubtitle,
 } from "../../data-task-state";
+import { MentionChips, useMentionAutocomplete } from "./chat-mentions";
+import { SessionConfigBar } from "./SessionConfigBar";
+import { useChatTextareaAutoresize, scheduleChatTextareaResize } from "./use-chat-textarea-autoresize";
+import { resolveChatInputWidth } from "../../chat-input-layout";
+import { useDataTaskChatInputBindings } from "./DataTaskChatInputBindingsContext";
+import type { ChatSession, WorkspaceConfigStore } from "../../data-task-state";
 
 type DataTaskChatInputProps = CopilotChatInputProps & {
   llmOptions: WorkspaceConfigItem[];
   activeLlmId: string | null;
   onActiveLlmChange: (llmId: string) => void;
   onOpenLlmConfig?: () => void;
+  mentionResources: MentionResource[];
+  perRunSelection: PerRunSelection;
+  onTogglePerRunMention: (kind: PerRunMentionKind, id: string) => void;
+  onRemovePerRunMention: (kind: PerRunMentionKind, id: string) => void;
+  onClearPerRunMentions: () => void;
+  workspaceConfig: WorkspaceConfigStore;
+  activeSession: ChatSession | null;
+  onToggleSessionResource: (kind: PerRunMentionKind, id: string) => void;
 };
 
 export function DataTaskChatInput({
@@ -24,10 +43,44 @@ export function DataTaskChatInput({
   activeLlmId,
   onActiveLlmChange,
   onOpenLlmConfig,
+  mentionResources,
+  perRunSelection,
+  onTogglePerRunMention,
+  onRemovePerRunMention,
+  onClearPerRunMentions,
+  workspaceConfig,
+  activeSession,
+  onToggleSessionResource,
+  textArea,
+  onChange,
   ...props
 }: DataTaskChatInputProps) {
+  const textAreaSlot =
+    textArea && typeof textArea === "object" && !Array.isArray(textArea)
+      ? {
+          ...textArea,
+          style: {
+            overflow: "hidden",
+            resize: "none" as const,
+            ...(textArea as { style?: CSSProperties }).style,
+          },
+        }
+      : {
+          style: {
+            overflow: "hidden",
+            resize: "none" as const,
+          },
+        };
+
   return (
-    <CopilotChatInput {...props}>
+    <CopilotChatInput
+      {...props}
+      onChange={(value) => {
+        onChange?.(value);
+        requestAnimationFrame(scheduleChatTextareaResize);
+      }}
+      textArea={textAreaSlot}
+    >
       {(slots) => (
         <DataTaskChatInputLayout
           {...slots}
@@ -35,6 +88,14 @@ export function DataTaskChatInput({
           llmOptions={llmOptions}
           onActiveLlmChange={onActiveLlmChange}
           onOpenLlmConfig={onOpenLlmConfig}
+          mentionResources={mentionResources}
+          perRunSelection={perRunSelection}
+          onTogglePerRunMention={onTogglePerRunMention}
+          onRemovePerRunMention={onRemovePerRunMention}
+          onClearPerRunMentions={onClearPerRunMentions}
+          workspaceConfig={workspaceConfig}
+          activeSession={activeSession}
+          onToggleSessionResource={onToggleSessionResource}
         />
       )}
     </CopilotChatInput>
@@ -60,6 +121,14 @@ function DataTaskChatInputLayout({
   activeLlmId,
   onActiveLlmChange,
   onOpenLlmConfig,
+  mentionResources,
+  perRunSelection,
+  onTogglePerRunMention,
+  onRemovePerRunMention,
+  onClearPerRunMentions,
+  workspaceConfig,
+  activeSession,
+  onToggleSessionResource,
 }: {
   textArea: ReactNode;
   sendButton: ReactNode;
@@ -79,19 +148,43 @@ function DataTaskChatInputLayout({
   activeLlmId: string | null;
   onActiveLlmChange: (llmId: string) => void;
   onOpenLlmConfig?: () => void;
+  mentionResources: MentionResource[];
+  perRunSelection: PerRunSelection;
+  onTogglePerRunMention: (kind: PerRunMentionKind, id: string) => void;
+  onRemovePerRunMention: (kind: PerRunMentionKind, id: string) => void;
+  onClearPerRunMentions: () => void;
+  workspaceConfig: WorkspaceConfigStore;
+  activeSession: ChatSession | null;
+  onToggleSessionResource: (kind: PerRunMentionKind, id: string) => void;
 }) {
+  const { chatColumnWidth } = useDataTaskChatInputBindings();
+  const chatInputWidth = resolveChatInputWidth(chatColumnWidth);
+  const mention = useMentionAutocomplete({
+    resources: mentionResources,
+    selection: perRunSelection,
+    onToggle: onTogglePerRunMention,
+    refreshToken: mode,
+  });
+  const autoresizeRef = useChatTextareaAutoresize(mode);
+  const columnRef = useCallback(
+    (node: HTMLDivElement | null) => {
+      mention.columnRef(node);
+      autoresizeRef(node);
+    },
+    [mention.columnRef, autoresizeRef],
+  );
+
   const focusTextArea = (textarea: HTMLTextAreaElement) => {
     textarea.focus({ preventScroll: true });
     const end = textarea.value.length;
     textarea.setSelectionRange(end, end);
   };
 
-  const handleTextAreaColumnMouseDown = (
+  const handleTextAreaMouseDown = (
     event: React.MouseEvent<HTMLDivElement>,
   ) => {
     const target = event.target as HTMLElement;
     if (target.tagName === "TEXTAREA") return;
-    if (target.tagName === "BUTTON" || target.closest("button")) return;
 
     const textarea = event.currentTarget.querySelector("textarea");
     if (!textarea || mode !== "input") return;
@@ -113,39 +206,77 @@ function DataTaskChatInputLayout({
           keyboardHeight > 0 ? `translateY(-${keyboardHeight}px)` : undefined,
         transition: "transform 0.2s ease-out",
         paddingBottom:
-          "calc(1.25rem + var(--copilotkit-license-banner-offset, 0px))",
+          "calc(0.75rem + var(--copilotkit-license-banner-offset, 0px))",
       }}
     >
-      <div className="pointer-events-auto mx-auto max-w-3xl px-4 sm:px-0">
+      <div
+        className="pointer-events-auto mx-auto w-full"
+        style={{ width: chatInputWidth, maxWidth: "100%" }}
+      >
         <div
           data-testid="copilot-chat-input"
-          className="flex w-full flex-col items-center justify-center overflow-visible rounded-[28px] border border-slate-200/70 bg-white shadow-[0_12px_40px_-8px_rgba(15,23,42,0.18),0_4px_12px_-4px_rgba(15,23,42,0.08),0_0_0_1px_rgba(15,23,42,0.04)] dark:border-slate-700/60 dark:bg-[#303030]"
+          className="flex w-full flex-col overflow-visible rounded-2xl border border-slate-200/70 bg-white shadow-[0_8px_28px_-6px_rgba(15,23,42,0.14),0_2px_8px_-2px_rgba(15,23,42,0.06)] dark:border-slate-700/60 dark:bg-[#303030]"
         >
-          <div className="grid w-full grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-x-3 gap-y-3 px-3 py-2">
-            <div className="col-start-1 row-start-1 flex items-center">
-              {addMenuButton}
-            </div>
+          <div className="w-full px-3 py-1.5">
             <div
-              className="relative col-start-2 row-start-1 flex min-h-[50px] min-w-0 cursor-text flex-col justify-center"
-              onMouseDown={handleTextAreaColumnMouseDown}
+              ref={columnRef}
+              className="relative flex w-full min-w-0 flex-col gap-1"
             >
-              {mode === "transcribe"
-                ? audioRecorder
-                : mode === "processing"
-                  ? (
-                    <div className="flex w-full items-center justify-center px-5 py-3">
-                      <span className="h-[26px] w-[26px] animate-spin rounded-full border-2 border-slate-300 border-t-slate-600" />
-                    </div>
-                  )
-                  : textArea}
-            </div>
-            <div className="col-start-3 row-start-1 flex items-center justify-end gap-1">
+              {mode === "input" ? mention.menu : null}
               {mode === "transcribe" ? (
-                <>
-                  {cancelTranscribeButton}
-                  {finishTranscribeButton}
-                </>
+                audioRecorder
+              ) : mode === "processing" ? (
+                <div className="flex w-full items-center justify-center px-5 py-3">
+                  <span className="h-[26px] w-[26px] animate-spin rounded-full border-2 border-slate-300 border-t-slate-600" />
+                </div>
               ) : (
+                <>
+                  <MentionChips
+                    resources={mentionResources}
+                    selection={perRunSelection}
+                    onRemove={onRemovePerRunMention}
+                    onClear={onClearPerRunMentions}
+                  />
+                  <div
+                    className={[
+                      "w-full cursor-text",
+                      "[&_[data-testid=copilot-chat-textarea]]:block",
+                      "[&_[data-testid=copilot-chat-textarea]]:w-full",
+                      "[&_[data-testid=copilot-chat-textarea]]:resize-none",
+                      "[&_[data-testid=copilot-chat-textarea]]:bg-transparent",
+                      "[&_[data-testid=copilot-chat-textarea]]:!px-0.5",
+                      "[&_[data-testid=copilot-chat-textarea]]:!py-1.5",
+                      "[&_[data-testid=copilot-chat-textarea]]:text-[15px]",
+                      "[&_[data-testid=copilot-chat-textarea]]:leading-6",
+                      "[&_[data-testid=copilot-chat-textarea]]:outline-none",
+                      "[&_[data-testid=copilot-chat-textarea]]:overflow-y-hidden",
+                      "[&_[data-testid=copilot-chat-textarea]:not(:focus)]:caret-transparent",
+                    ].join(" ")}
+                    onMouseDown={handleTextAreaMouseDown}
+                  >
+                    {textArea}
+                  </div>
+                </>
+              )}
+            </div>
+            {mode === "transcribe" && (
+              <div className="mt-2 flex items-center justify-end gap-1">
+                {cancelTranscribeButton}
+                {finishTranscribeButton}
+              </div>
+            )}
+          </div>
+          {mode !== "transcribe" && (
+            <SessionConfigBar
+              workspaceConfig={workspaceConfig}
+              session={activeSession}
+              onToggleSessionResource={onToggleSessionResource}
+              leading={
+                <div className="grid h-7 w-7 place-items-center [&_button]:flex [&_button]:h-7 [&_button]:w-7 [&_button]:items-center [&_button]:justify-center">
+                  {addMenuButton}
+                </div>
+              }
+              trailing={
                 <>
                   <ChatModelPicker
                     activeLlmId={activeLlmId}
@@ -153,12 +284,11 @@ function DataTaskChatInputLayout({
                     onActiveLlmChange={onActiveLlmChange}
                     onOpenLlmConfig={onOpenLlmConfig}
                   />
-                  {startTranscribeButton}
                   {sendButton}
                 </>
-              )}
-            </div>
-          </div>
+              }
+            />
+          )}
         </div>
       </div>
       {showDisclaimer ? disclaimer : null}
@@ -195,7 +325,7 @@ function ChatModelPicker({
   }, [open]);
 
   return (
-    <div ref={rootRef} className="relative mr-1">
+    <div ref={rootRef} className="relative">
       <button
         type="button"
         aria-haspopup="listbox"
@@ -203,10 +333,10 @@ function ChatModelPicker({
         title="切换模型"
         onClick={() => setOpen((value) => !value)}
         className={[
-          "flex max-w-[168px] items-center gap-1 rounded-full px-2.5 py-1.5 text-xs font-medium transition",
+          "flex max-w-[168px] items-center gap-1 rounded-full border px-2.5 py-1 text-xs font-medium transition",
           open
-            ? "bg-slate-100 text-slate-900"
-            : "text-slate-500 hover:bg-slate-100 hover:text-slate-800",
+            ? "border-slate-300 bg-slate-200 text-slate-900 dark:border-slate-500 dark:bg-slate-600 dark:text-slate-100"
+            : "border-slate-200 bg-slate-100 text-slate-700 hover:border-slate-300 hover:bg-slate-200 hover:text-slate-900 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-200 dark:hover:bg-slate-600",
         ].join(" ")}
       >
         <span className="truncate">{label}</span>

@@ -82,8 +82,20 @@ datasourceId 自动兜底创建 duckdb demo。
 - 与 workspace 默认 + server policy 合并为 `effectiveRunConfig`。
 - 这是 #4/#6/#7/#8 真正生效的总开关。
 
+**前端现状（已先行实现，等后端消费）**：
+- 对话框底 **session 配置胶囊**（`SessionConfigBar`）：按会话持久化启用集，
+  写入 `run_config.enabled*Ids`；默认全开，可逐项关闭某 db/kb/mcp/skill。
+- 对话框 **`@` 点名**（`chat-mentions.tsx`）：只能从 session 启用集里选；
+  写入 `run_config.mentioned` 与 `active*`；**不收窄** `enabled*Ids`（@ 是指定
+  优先，不是限定可用）；per-run，发送后即清。
+- 目前只有 `@db` / session db 启用集经 `datasource_id` 真正生效；kb/mcp/skill
+  已带「后端未支持」标记，**等本能力（及 #6/#7/#8）落地即自动生效**。
+
 **验收标准**：
-- 前端在对话框切换数据源/模型，后端 run 实际使用切换后的值（可在 `run_events` 验证）。
+- 前端在对话框切换 session 启用集 / `@` 点名 / 模型，后端 run 实际使用对应值
+  （可在 `run_events` 验证）。
+- 后端按 `enabled*Ids` 使用 session 启用集；按 `mentioned` / `active*` 理解用户
+  显式点名；未被 @ 的 session 启用资源仍应可用。
 
 **依赖**：无（但是 #4/#6/#7/#8 的前置）。
 

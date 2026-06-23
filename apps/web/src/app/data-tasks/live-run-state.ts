@@ -302,10 +302,15 @@ function reduceActivitySnapshot(state: LiveRun, event: AgUiLikeEvent): LiveRun {
     const fallbackId =
       stepId ?? stringValue(event.messageId) ?? `step-${state.events.length + 1}`;
 
-    const toolCall = findCorrelatedToolCall(state.toolCalls, toolName, stepId);
+    const toolCall = findCorrelatedToolCall(state.toolCalls, toolName, stepId) ??
+      findMisnamedToolCall(state.toolCalls, toolName);
     const eventId = toolCall?.id ?? fallbackId;
 
     let nextState = state;
+
+    if (toolCall && toolName && toolCall.name !== toolName) {
+      nextState = upsertToolCallRecord(nextState, { ...toolCall, name: toolName });
+    }
 
     if (toolCall && stepId) {
       const toolUpdate: LiveToolCallRecord = { ...toolCall, stepId };
@@ -354,12 +359,10 @@ function reduceActivityDelta(state: LiveRun, event: AgUiLikeEvent): LiveRun {
 }
 
 function reduceToolEvent(state: LiveRun, event: AgUiLikeEvent): LiveRun {
-  const toolName =
-    stringValue(event.toolCallName) ??
-    stringValue(event.toolName) ??
-    stringValue(event.name) ??
-    "tool";
-  const id = stringValue(event.toolCallId) ?? `${toolName}-${state.events.length + 1}`;
+  const id = stringValue(event.toolCallId) ?? `${state.events.length + 1}`;
+  const existing = state.toolCalls.find((item) => item.id === id);
+  const existingEvent = state.events.find((item) => item.id === id);
+  const toolName = resolveIncomingToolName(event, existing, existingEvent);
   const eventType = stringValue(event.type);
 
   let nextState = state;
@@ -373,7 +376,6 @@ function reduceToolEvent(state: LiveRun, event: AgUiLikeEvent): LiveRun {
       startedAtMs: Date.now(),
     });
   } else if (eventType === "TOOL_CALL_END") {
-    const existing = state.toolCalls.find((item) => item.id === id);
     nextState = upsertToolCallRecord(nextState, {
       id,
       name: toolName,
@@ -381,7 +383,6 @@ function reduceToolEvent(state: LiveRun, event: AgUiLikeEvent): LiveRun {
       startedAtMs: existing?.startedAtMs ?? Date.now(),
     });
   } else if (eventType === "TOOL_CALL_RESULT") {
-    const existing = state.toolCalls.find((item) => item.id === id);
     const parsed = parseResultObject(resultPayload);
     const failed = toolResultPayloadLooksFailed(parsed);
     nextState = upsertToolCallRecord(nextState, {
@@ -394,13 +395,20 @@ function reduceToolEvent(state: LiveRun, event: AgUiLikeEvent): LiveRun {
     });
   }
 
-  const kind = dataStepKindForTool(toolName);
+  const kind =
+    dataStepKindForTool(toolName) !== "other"
+      ? dataStepKindForTool(toolName)
+      : existingEvent?.kind ?? dataStepKindForTool(toolName);
+  const effectiveToolName =
+    toolName !== "tool" && toolName !== "unknown"
+      ? toolName
+      : (existingEvent?.toolName ?? toolName);
   const title =
-    toolName === "run_sql_readonly"
+    effectiveToolName === "run_sql_readonly"
       ? "生成并执行 SQL"
-      : toolName === "inspect_schema"
+      : effectiveToolName === "inspect_schema"
         ? "检查数据源 Schema"
-        : toolName;
+        : effectiveToolName;
   const args = recordValue(event.args) ?? recordValue(event.parameters);
   const sql = stringValue(args?.sql) ?? stringValue(event.delta) ?? "";
   const result = resultPayload;
@@ -413,7 +421,7 @@ function reduceToolEvent(state: LiveRun, event: AgUiLikeEvent): LiveRun {
     return upsertTimelineEvent(nextState, {
       id,
       kind,
-      toolName,
+      toolName: effectiveToolName,
       title,
       summary: summarizeSqlResult(result, parsed, event.type),
       thought: "Agent 将自然语言问题转换成只读 SQL，并通过后端 Data Gateway 执行。",
@@ -423,6 +431,9 @@ function reduceToolEvent(state: LiveRun, event: AgUiLikeEvent): LiveRun {
         scannedRows: rowCount,
         durationMs: elapsedMs,
       },
+      ...(existingEvent?.artifactIds ? { artifactIds: existingEvent.artifactIds } : {}),
+      ...(existingEvent?.stepId ? { stepId: existingEvent.stepId } : {}),
+      ...(existingEvent?.activityStatus ? { activityStatus: existingEvent.activityStatus } : {}),
     });
   }
 
@@ -432,22 +443,28 @@ function reduceToolEvent(state: LiveRun, event: AgUiLikeEvent): LiveRun {
     return upsertTimelineEvent(nextState, {
       id,
       kind,
-      toolName,
+      toolName: effectiveToolName,
       title,
       summary: summarizeSchemaResult(result, tables, event.type),
       thought: "Agent 先确认数据源结构，避免在不可靠字段上直接下结论。",
       payload: { tables },
+      ...(existingEvent?.artifactIds ? { artifactIds: existingEvent.artifactIds } : {}),
+      ...(existingEvent?.stepId ? { stepId: existingEvent.stepId } : {}),
+      ...(existingEvent?.activityStatus ? { activityStatus: existingEvent.activityStatus } : {}),
     });
   }
 
   return upsertTimelineEvent(nextState, {
     id,
     kind,
-    toolName,
+    toolName: effectiveToolName,
     title,
     summary: summarizeGenericResult(result, event.type),
     thought: "Agent 正在执行一次数据操作。",
     payload: { description: result || "", rawResult: result || undefined },
+    ...(existingEvent?.artifactIds ? { artifactIds: existingEvent.artifactIds } : {}),
+    ...(existingEvent?.stepId ? { stepId: existingEvent.stepId } : {}),
+    ...(existingEvent?.activityStatus ? { activityStatus: existingEvent.activityStatus } : {}),
   });
 }
 
@@ -661,13 +678,17 @@ function parseArtifactFromCustom(value: Record<string, unknown>): DataArtifact {
 }
 
 function findSqlToolForArtifact(state: LiveRun): LiveToolCallRecord | undefined {
+  const isSqlToolCall = (tool: LiveToolCallRecord): boolean =>
+    tool.name === "run_sql_readonly" ||
+    state.events.some((event) => event.id === tool.id && event.kind === "query");
+
   for (let index = state.toolCalls.length - 1; index >= 0; index -= 1) {
     const tool = state.toolCalls[index];
-    if (tool.name !== "run_sql_readonly") continue;
+    if (!isSqlToolCall(tool)) continue;
     const event = state.events.find((item) => item.id === tool.id);
     if (!event?.artifactIds?.length) return tool;
   }
-  return state.toolCalls.filter((call) => call.name === "run_sql_readonly").at(-1);
+  return state.toolCalls.filter(isSqlToolCall).at(-1);
 }
 
 function linkArtifactToToolCall(
@@ -760,6 +781,81 @@ function statusSummary(value: unknown): string {
   if (status === "completed") return "已完成。";
   if (status === "failed") return "执行失败。";
   return "等待执行。";
+}
+
+export function resolveIncomingToolName(
+  event: AgUiLikeEvent,
+  existing?: LiveToolCallRecord,
+  existingEvent?: TimelineEvent,
+): string {
+  const fromEvent =
+    stringValue(event.toolCallName) ??
+    stringValue(event.toolName) ??
+    stringValue(event.name);
+  if (fromEvent && fromEvent !== "tool" && fromEvent !== "unknown") {
+    return fromEvent;
+  }
+  if (existing?.name && existing.name !== "tool" && existing.name !== "unknown") {
+    return existing.name;
+  }
+  if (
+    existingEvent?.toolName &&
+    existingEvent.toolName !== "tool" &&
+    existingEvent.toolName !== "unknown"
+  ) {
+    return existingEvent.toolName;
+  }
+  return fromEvent ?? existing?.name ?? existingEvent?.toolName ?? "tool";
+}
+
+function findMisnamedToolCall(
+  toolCalls: LiveToolCallRecord[],
+  toolName: string | undefined,
+): LiveToolCallRecord | undefined {
+  if (!toolName) return undefined;
+  const candidates = toolCalls.filter(
+    (call) =>
+      !call.stepId &&
+      (call.name === "tool" || call.name === "unknown") &&
+      (call.status === "running" || call.status === "success"),
+  );
+  if (candidates.length === 1) return candidates[0];
+  return candidates.find((call) => call.status === "running") ?? candidates.at(-1);
+}
+
+export function resolveProducedArtifacts(
+  liveRun: LiveRun,
+  event: TimelineEvent | null,
+  artifacts: DataArtifact[],
+): DataArtifact[] {
+  if (!event) return [];
+
+  const toolCall = resolveToolCallForEvent(liveRun, event);
+  const linkedEventIds = new Set<string>([event.id]);
+  if (toolCall) linkedEventIds.add(toolCall.id);
+  if (event.stepId) {
+    for (const timelineEvent of liveRun.events) {
+      if (timelineEvent.stepId === event.stepId) linkedEventIds.add(timelineEvent.id);
+    }
+  }
+  if (toolCall?.stepId) {
+    for (const timelineEvent of liveRun.events) {
+      if (timelineEvent.stepId === toolCall.stepId) linkedEventIds.add(timelineEvent.id);
+    }
+  }
+
+  const artifactIds = new Set<string>();
+  for (const eventId of linkedEventIds) {
+    const timelineEvent = liveRun.events.find((item) => item.id === eventId);
+    timelineEvent?.artifactIds?.forEach((id) => artifactIds.add(id));
+  }
+  for (const artifact of artifacts) {
+    if (artifact.createdByEventId && linkedEventIds.has(artifact.createdByEventId)) {
+      artifactIds.add(artifact.id);
+    }
+  }
+
+  return artifacts.filter((artifact) => artifactIds.has(artifact.id));
 }
 
 export function findCorrelatedToolCall(

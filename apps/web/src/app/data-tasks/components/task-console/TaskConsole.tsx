@@ -9,6 +9,7 @@ import type {
 import { dataStepKindForTool, dataStepLabel, hasCapability } from "../../data-task-state";
 import {
   deriveRunUsage,
+  resolveProducedArtifacts,
   resolveToolCallForEvent,
   resolveTraceToolStatus,
   type LiveRun,
@@ -667,11 +668,14 @@ function DetailView({
   onSelectEvent: (eventId: string) => void;
 }) {
   const toolCall = event ? resolveToolCallForEvent(liveRun, event) : undefined;
+  const producedArtifacts = event
+    ? resolveProducedArtifacts(liveRun, event, artifacts)
+    : [];
 
   return (
     <ActionDetail
-      artifacts={artifacts}
       event={event}
+      producedArtifacts={producedArtifacts}
       toolCall={toolCall}
       onBack={onBack}
     />
@@ -765,13 +769,13 @@ function detailStatusLabel(
 }
 
 function ActionDetail({
-  artifacts,
   event,
+  producedArtifacts,
   toolCall,
   onBack,
 }: {
-  artifacts: DataArtifact[];
   event: TimelineEvent | null;
+  producedArtifacts: DataArtifact[];
   toolCall?: LiveToolCallRecord;
   onBack: () => void;
 }) {
@@ -787,9 +791,6 @@ function ActionDetail({
       />
     );
   }
-  const producedArtifacts = artifacts.filter((artifact) =>
-    event.artifactIds?.includes(artifact.id),
-  );
 
   return (
     <div className="grid gap-3">
