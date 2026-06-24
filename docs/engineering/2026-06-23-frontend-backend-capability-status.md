@@ -26,7 +26,8 @@
 
 ## 已验证
 
-- `smoke:config-api` 覆盖配置 CRUD、secretRef、revision、job、schema cache、artifact API。
+- `smoke:config-api` 覆盖配置 CRUD、secretRef、revision、job、schema cache、artifact API、
+  本地 OpenAI-compatible model profile `/test`。
 - `smoke:data-gateway` / `smoke:sql` 覆盖文件型与 demo datasource adapter。
 - `smoke-copilotkit-context` 覆盖 run config、用户输入、task PLAN 投影。
 - `typecheck`、`test:web`、`build:web` 在本轮相关变更后通过。

@@ -300,13 +300,13 @@ MCP middleware 不能成为模型上下文和安全策略的旁路：
    `SecretStore` 在服务端解析成 outbound headers。
 2. manifest 进入模型前校验 JSON Schema、名称冲突和工具数量上限；只允许 server policy
    明确授权的 MCP server。
-3. 根据已缓存 manifest 为每个解析后的 MCP tool 注册独立 `ToolResultAdapter`；可以共享
-   参数化 `McpToolContextAdapter` 类，但 registry 中仍是一工具一 adapter 实例。
+3. 根据已缓存 manifest 为每个解析后的 MCP tool 注册独立 `ToolObservationAdapter`；可以共享
+   参数化 `McpToolObservationAdapter` 类，但 registry 中仍是一工具一 adapter 实例。
 4. middleware 挂在 run 内创建的 `MastraAgent` 上，而不是包裹最外层
    `DataAgentAgUiAgent`。这样它生成的 continuation 不会重复进入 run claim，所有标准
    `TOOL_CALL_RESULT` 也继续经过现有 `emit -> RunEventWriter -> subscriber` 北向链路。
 5. middleware 把 MCP observation 追加到下一轮 messages 后，现有 Mastra
-   `ContextBudgetProcessor.processInputStep` 和 `ToolObservationRouter` 在每一步将结果路由到
+   `MastraContextBudgetProcessor.processInputStep` 和 `MastraToolObservationRouter` 在每一步将结果路由到
    对应 adapter，再交给模型；不新增 MCP 专用 context pipeline。
 6. 北向保持 middleware 原生 AG-UI 事件，不增加私有事件或私有结果 envelope；
    `maxIterations` 由 server policy 收紧。

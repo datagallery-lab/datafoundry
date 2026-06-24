@@ -1,0 +1,111 @@
+@startuml
+!theme spacelab
+title Conversation Memory - Server-authoritative History
+
+skinparam backgroundColor #F8FAFC
+skinparam handwritten false
+skinparam shadowing false
+skinparam roundcorner 12
+skinparam componentStyle rectangle
+
+actor "CopilotKit / AG-UI\nClient" as Client
+
+package "apps/api" #E0F2FE {
+  component "DataAgentAgUiAgent" as Api
+  component "ConversationMemory\nService" as MemoryService
+  component "Window Policy\nToken + Char Budget" as WindowPolicy
+  component "ConversationMemory\nEventObserver" as Observer
+  component "ConversationSummarizer\nMastra Agent + fallback" as SummaryGen
+  component "Run Identity\nclaim/replay/resume" as Identity
+}
+
+package "packages/metadata" #ECFDF5 {
+  database "metadata.sqlite" as Metadata
+  component "ConversationMessage\nRepository" as ConvRepo
+  component "ConversationSummary\nRepository" as SummaryRepo
+  component "RunEventWriter" as RunEvents
+}
+
+package "packages/agent-runtime" #FEF3C7 {
+  component "createDataAgent" as Factory
+  component "MastraContextBudgetProcessor" as Budget
+  component "MastraTaskStateContextProcessor" as TaskState
+  component "Mastra DataAgent\nReAct + tools" as Agent
+}
+
+package "Mastra / AG-UI" #FCE7F3 {
+  component "@ag-ui/mastra\nMastraAgent" as AgMastra
+  component "@mastra/core/agent\nSummary Agent.generate()" as SummaryAgent
+}
+
+cloud "LLM Provider" as Model
+
+Client --> Api : RunAgentInput\nthreadId + runId + messages
+Api --> Identity : validate identity
+Identity --> Metadata : sessions / runs
+
+Api --> MemoryService : prepare new run
+MemoryService --> ConvRepo : persist current user message
+ConvRepo --> Metadata : conversation_messages
+
+MemoryService --> ConvRepo : listRecent(user_id, session_id)
+MemoryService --> SummaryRepo : latest(user_id, session_id)
+MemoryService --> WindowPolicy : select budgeted history
+WindowPolicy --> MemoryService : summary + recent history + current user
+MemoryService --> Api : model messages
+
+Api --> Factory : messages = authoritative history
+Factory --> Budget : inputProcessors
+Factory --> TaskState : task slice only
+Factory --> Agent
+Api --> AgMastra : run({ messages: governedMessages })
+AgMastra --> Agent
+Agent --> Model : provider prompt
+
+AgMastra --> Api : AG-UI events
+Api --> RunEvents : persist every event
+RunEvents --> Metadata : run_events
+Api --> MemoryService : create observer
+MemoryService --> Observer
+Api --> Observer : observe TEXT_MESSAGE_*
+Observer --> ConvRepo : flush assistant text on RUN_FINISHED
+Observer --> SummaryGen : maybe summarize
+SummaryGen --> ConvRepo : load unsummarized messages
+SummaryGen --> SummaryAgent : generate compact summary
+SummaryAgent --> Model : native Mastra model call
+SummaryGen --> SummaryRepo : create conversation summary
+
+note right of MemoryService
+Client historical assistant/system/developer
+messages are not trusted as model history.
+Only the latest user text is appended.
+end note
+
+note right of WindowPolicy
+Default window:
+24 history messages
+6000 estimated tokens
+24000 total chars
+end note
+
+note bottom of Metadata
+run_events = complete replay/audit stream
+conversation_messages = model-reusable
+natural-language user/assistant messages
+conversation_summaries = compact long-term
+session context by message position range
+end note
+
+note right of SummaryGen
+Summary generation is best-effort.
+If Mastra generation fails or returns empty text,
+the deterministic summarizer writes a bounded fallback
+to the same conversation_summaries table.
+end note
+
+note bottom of Budget
+Conversation Memory is only the entry history.
+Every Mastra step is still governed by
+MastraContextBudgetProcessor before provider calls.
+end note
+@enduml

@@ -68,8 +68,25 @@ export const validateParentRun = ({
 };
 
 export const createRunRequestFingerprint = (runInput: RunAgentInput, effectiveRunConfig: unknown): string => {
-  const canonicalRequest = canonicalizeJson({ effectiveRunConfig, runInput });
+  const canonicalRequest = canonicalizeJson({
+    effectiveRunConfig,
+    runInput: {
+      context: runInput.context,
+      forwardedProps: runInput.forwardedProps,
+      messages: latestUserFingerprintMessages(runInput),
+      parentRunId: runInput.parentRunId,
+      runId: runInput.runId,
+      state: runInput.state,
+      threadId: runInput.threadId,
+      tools: runInput.tools
+    }
+  });
   return createHash("sha256").update(JSON.stringify(canonicalRequest)).digest("hex");
+};
+
+const latestUserFingerprintMessages = (runInput: RunAgentInput): Array<{ content: unknown; role: "user" }> => {
+  const latestUser = [...runInput.messages].reverse().find((message) => message.role === "user");
+  return latestUser ? [{ role: "user", content: latestUser.content }] : [];
 };
 
 const canonicalizeJson = (value: unknown): unknown => {

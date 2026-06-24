@@ -28,11 +28,37 @@ try {
     runId,
     threadId: sessionId
   };
+  const changedHistoryRequestInput = {
+    threadId: sessionId,
+    runId,
+    messages: [
+      { id: "older-user", role: "user", content: "old question" },
+      { id: "changed-assistant", role: "assistant", content: "changed untrusted client history" },
+      { id: "message-regenerated", role: "user", content: "inspect orders" }
+    ],
+    tools: [],
+    context: []
+  };
+  const changedCurrentUserRequestInput = {
+    threadId: sessionId,
+    runId,
+    messages: [{ id: "message-1", role: "user", content: "inspect customers" }],
+    tools: [],
+    context: []
+  };
   const fingerprint = createRunRequestFingerprint(requestInput, "api-duckdb-demo");
   const reorderedFingerprint = createRunRequestFingerprint(reorderedRequestInput, "api-duckdb-demo");
+  const changedHistoryFingerprint = createRunRequestFingerprint(changedHistoryRequestInput, "api-duckdb-demo");
+  const changedCurrentUserFingerprint = createRunRequestFingerprint(changedCurrentUserRequestInput, "api-duckdb-demo");
 
   if (fingerprint !== reorderedFingerprint) {
     throw new Error("Expected semantically identical request objects to have the same fingerprint");
+  }
+  if (fingerprint !== changedHistoryFingerprint) {
+    throw new Error("Expected untrusted client history changes to be ignored by run fingerprint");
+  }
+  if (fingerprint === changedCurrentUserFingerprint) {
+    throw new Error("Expected current user changes to affect run fingerprint");
   }
 
   store.sessions.create({ user_id: userId, id: sessionId, title: "identity smoke" });

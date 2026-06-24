@@ -1,5 +1,6 @@
 import type { BaseEvent, EventType } from "@ag-ui/core";
 import type { ArtifactSummary, ArtifactType, RunEventEnvelope } from "@open-data-agent/contracts";
+import { createHash } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -79,6 +80,60 @@ export type RunEventRecord = {
   event_type: EventType;
   payload_json: string;
   created_at: string;
+};
+
+export type ConversationMessageRole = "user" | "assistant";
+
+export type ConversationMessageSource = "client" | "agent";
+
+export type ConversationMessageRecord = {
+  id: string;
+  user_id: string;
+  session_id: string;
+  run_id: string;
+  role: ConversationMessageRole;
+  source: ConversationMessageSource;
+  message_id?: string;
+  content_json: string;
+  content_text: string;
+  content_hash: string;
+  position: number;
+  created_at: string;
+};
+
+export type ConversationSummaryRecord = {
+  id: string;
+  user_id: string;
+  session_id: string;
+  source_run_id?: string;
+  from_position: number;
+  to_position: number;
+  summary_text: string;
+  summary_hash: string;
+  created_at: string;
+};
+
+export type LongTermMemoryScope = "user" | "session" | "datasource";
+
+export type LongTermMemoryStatus = "active" | "archived";
+
+export type LongTermMemoryRecord = {
+  id: string;
+  user_id: string;
+  scope: LongTermMemoryScope;
+  kind: string;
+  content_text: string;
+  content_json: string;
+  memory_hash: string;
+  confidence: number;
+  status: LongTermMemoryStatus;
+  session_id?: string;
+  datasource_id?: string;
+  source?: string;
+  source_run_id?: string;
+  created_at: string;
+  updated_at: string;
+  last_accessed_at?: string;
 };
 
 export type ArtifactRecord = {
@@ -168,6 +223,50 @@ export type WriteRunEventInput = {
   event: BaseEvent;
 };
 
+export type CreateConversationMessageInput = {
+  user_id: string;
+  session_id: string;
+  run_id: string;
+  id: string;
+  role: ConversationMessageRole;
+  source: ConversationMessageSource;
+  content_text: string;
+  content?: unknown;
+  message_id?: string;
+};
+
+export type CreateConversationSummaryInput = {
+  user_id: string;
+  session_id: string;
+  id: string;
+  from_position: number;
+  to_position: number;
+  summary_text: string;
+  source_run_id?: string;
+};
+
+export type CreateLongTermMemoryInput = {
+  id: string;
+  user_id: string;
+  scope: LongTermMemoryScope;
+  kind: string;
+  content_text: string;
+  content?: unknown;
+  confidence?: number;
+  session_id?: string;
+  datasource_id?: string;
+  source?: string;
+  source_run_id?: string;
+};
+
+export type ListRelevantLongTermMemoriesInput = {
+  user_id: string;
+  query: string;
+  limit: number;
+  session_id?: string;
+  datasource_id?: string;
+};
+
 export type CreateArtifactInput = {
   user_id: string;
   session_id: string;
@@ -216,8 +315,11 @@ export class MetadataStore {
   readonly artifacts: ArtifactRepository;
   readonly configJobs: ConfigJobRepository;
   readonly configResources: ConfigResourceRepository;
+  readonly conversationMessages: ConversationMessageRepository;
+  readonly conversationSummaries: ConversationSummaryRepository;
   readonly dataSources: DataSourceRepository;
   readonly interactions: InteractionRepository;
+  readonly longTermMemories: LongTermMemoryRepository;
   readonly runEvents: RunEventRepository;
   readonly runs: RunRepository;
   readonly sessions: SessionRepository;
@@ -230,11 +332,14 @@ export class MetadataStore {
     this.sessions = new SessionRepository(db);
     this.runs = new RunRepository(db);
     this.runEvents = new RunEventRepository(db);
+    this.conversationMessages = new ConversationMessageRepository(db);
+    this.conversationSummaries = new ConversationSummaryRepository(db);
     this.artifacts = new ArtifactRepository(db);
     this.configJobs = new ConfigJobRepository(db);
     this.configResources = new ConfigResourceRepository(db);
     this.dataSources = new DataSourceRepository(db);
     this.interactions = new InteractionRepository(db);
+    this.longTermMemories = new LongTermMemoryRepository(db);
     this.secrets = new EncryptedSecretStore(db, secretMasterKey);
     this.sqlAuditLogs = new SqlAuditLogRepository(db);
   }
@@ -685,6 +790,396 @@ export class RunEventRepository {
   }
 }
 
+export class ConversationMessageRepository {
+  constructor(private readonly db: DatabaseSync) {}
+
+  append(input: CreateConversationMessageInput): ConversationMessageRecord {
+    const createdAt = new Date().toISOString();
+    const contentJson = JSON.stringify(input.content ?? { text: input.content_text });
+    const contentHash = createHash("sha256")
+      .update(JSON.stringify({ role: input.role, content_text: input.content_text }))
+      .digest("hex");
+    const position = this.nextPosition({ user_id: input.user_id, session_id: input.session_id });
+
+    const result = this.db
+      .prepare(
+        `
+        INSERT OR IGNORE INTO conversation_messages (
+          id, user_id, session_id, run_id, role, source, message_id,
+          content_json, content_text, content_hash, position, created_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `
+      )
+      .run(
+        input.id,
+        input.user_id,
+        input.session_id,
+        input.run_id,
+        input.role,
+        input.source,
+        input.message_id ?? null,
+        contentJson,
+        input.content_text,
+        contentHash,
+        position,
+        createdAt
+      );
+
+    if (result.changes === 1) {
+      return this.get({ user_id: input.user_id, message_record_id: input.id });
+    }
+
+    const existing = input.message_id
+      ? this.findByMessageId({
+        user_id: input.user_id,
+        session_id: input.session_id,
+        message_id: input.message_id
+      })
+      : undefined;
+
+    return existing ?? this.getByRunHash({
+      user_id: input.user_id,
+      session_id: input.session_id,
+      run_id: input.run_id,
+      role: input.role,
+      content_hash: contentHash
+    });
+  }
+
+  get(input: { user_id: string; message_record_id: string }): ConversationMessageRecord {
+    const message = mapConversationMessageRow(
+      this.db
+        .prepare("SELECT * FROM conversation_messages WHERE user_id = ? AND id = ?")
+        .get(input.user_id, input.message_record_id)
+    );
+
+    if (!message) {
+      throw new Error(`Conversation message not found: ${input.message_record_id}`);
+    }
+
+    return message;
+  }
+
+  listRecent(input: {
+    user_id: string;
+    session_id: string;
+    limit: number;
+    exclude_run_id?: string;
+  }): ConversationMessageRecord[] {
+    const limit = Math.max(0, Math.floor(input.limit));
+    if (limit === 0) {
+      return [];
+    }
+    const rows = input.exclude_run_id
+      ? this.db
+        .prepare(
+          `
+          SELECT * FROM conversation_messages
+          WHERE user_id = ? AND session_id = ? AND run_id <> ?
+          ORDER BY position DESC
+          LIMIT ?
+        `
+        )
+        .all(input.user_id, input.session_id, input.exclude_run_id, limit)
+      : this.db
+        .prepare(
+          `
+          SELECT * FROM conversation_messages
+          WHERE user_id = ? AND session_id = ?
+          ORDER BY position DESC
+          LIMIT ?
+        `
+        )
+        .all(input.user_id, input.session_id, limit);
+
+    return rows.map(mapRequiredConversationMessageRow).reverse();
+  }
+
+  private findByMessageId(input: {
+    user_id: string;
+    session_id: string;
+    message_id: string;
+  }): Optional<ConversationMessageRecord> {
+    return mapConversationMessageRow(
+      this.db
+        .prepare("SELECT * FROM conversation_messages WHERE user_id = ? AND session_id = ? AND message_id = ?")
+        .get(input.user_id, input.session_id, input.message_id)
+    );
+  }
+
+  private getByRunHash(input: {
+    user_id: string;
+    session_id: string;
+    run_id: string;
+    role: ConversationMessageRole;
+    content_hash: string;
+  }): ConversationMessageRecord {
+    const message = mapConversationMessageRow(
+      this.db
+        .prepare(
+          `
+          SELECT * FROM conversation_messages
+          WHERE user_id = ? AND session_id = ? AND run_id = ? AND role = ? AND content_hash = ?
+        `
+        )
+        .get(input.user_id, input.session_id, input.run_id, input.role, input.content_hash)
+    );
+
+    if (!message) {
+      throw new Error(`Conversation message conflict could not be resolved: ${input.run_id}`);
+    }
+
+    return message;
+  }
+
+  private nextPosition(input: { user_id: string; session_id: string }): number {
+    const row = this.db
+      .prepare(
+        `
+        SELECT COALESCE(MAX(position), 0) + 1 AS next_position
+        FROM conversation_messages
+        WHERE user_id = ? AND session_id = ?
+      `
+      )
+      .get(input.user_id, input.session_id);
+
+    if (!isRecord(row) || typeof row.next_position !== "number") {
+      throw new Error(`Unable to allocate conversation message position for session: ${input.session_id}`);
+    }
+
+    return row.next_position;
+  }
+}
+
+export class ConversationSummaryRepository {
+  constructor(private readonly db: DatabaseSync) {}
+
+  create(input: CreateConversationSummaryInput): ConversationSummaryRecord {
+    const createdAt = new Date().toISOString();
+    const summaryHash = createHash("sha256")
+      .update(JSON.stringify({
+        from_position: input.from_position,
+        summary_text: input.summary_text,
+        to_position: input.to_position
+      }))
+      .digest("hex");
+
+    const result = this.db
+      .prepare(
+        `
+        INSERT OR IGNORE INTO conversation_summaries (
+          id, user_id, session_id, source_run_id, from_position, to_position,
+          summary_text, summary_hash, created_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `
+      )
+      .run(
+        input.id,
+        input.user_id,
+        input.session_id,
+        input.source_run_id ?? null,
+        input.from_position,
+        input.to_position,
+        input.summary_text,
+        summaryHash,
+        createdAt
+      );
+
+    if (result.changes === 1) {
+      return this.get({ user_id: input.user_id, summary_id: input.id });
+    }
+
+    return this.getByRange({
+      user_id: input.user_id,
+      session_id: input.session_id,
+      from_position: input.from_position,
+      to_position: input.to_position
+    });
+  }
+
+  get(input: { user_id: string; summary_id: string }): ConversationSummaryRecord {
+    const summary = mapConversationSummaryRow(
+      this.db
+        .prepare("SELECT * FROM conversation_summaries WHERE user_id = ? AND id = ?")
+        .get(input.user_id, input.summary_id)
+    );
+
+    if (!summary) {
+      throw new Error(`Conversation summary not found: ${input.summary_id}`);
+    }
+
+    return summary;
+  }
+
+  latest(input: { user_id: string; session_id: string }): Optional<ConversationSummaryRecord> {
+    return mapConversationSummaryRow(
+      this.db
+        .prepare(
+          `
+          SELECT * FROM conversation_summaries
+          WHERE user_id = ? AND session_id = ?
+          ORDER BY to_position DESC, created_at DESC
+          LIMIT 1
+        `
+        )
+        .get(input.user_id, input.session_id)
+    );
+  }
+
+  private getByRange(input: {
+    user_id: string;
+    session_id: string;
+    from_position: number;
+    to_position: number;
+  }): ConversationSummaryRecord {
+    const summary = mapConversationSummaryRow(
+      this.db
+        .prepare(
+          `
+          SELECT * FROM conversation_summaries
+          WHERE user_id = ? AND session_id = ? AND from_position = ? AND to_position = ?
+        `
+        )
+        .get(input.user_id, input.session_id, input.from_position, input.to_position)
+    );
+
+    if (!summary) {
+      throw new Error(`Conversation summary conflict could not be resolved: ${input.session_id}`);
+    }
+
+    return summary;
+  }
+}
+
+export class LongTermMemoryRepository {
+  constructor(private readonly db: DatabaseSync) {}
+
+  upsert(input: CreateLongTermMemoryInput): LongTermMemoryRecord {
+    const now = new Date().toISOString();
+    const contentJson = JSON.stringify(input.content ?? { text: input.content_text });
+    const memoryHash = createLongTermMemoryHash(input);
+    const result = this.db
+      .prepare(
+        `
+        INSERT INTO long_term_memories (
+          id, user_id, scope, session_id, datasource_id, kind, content_json, content_text,
+          memory_hash, confidence, status, source, source_run_id, created_at, updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?)
+        ON CONFLICT(user_id, memory_hash) DO UPDATE SET
+          content_json = excluded.content_json,
+          content_text = excluded.content_text,
+          confidence = excluded.confidence,
+          status = 'active',
+          source = excluded.source,
+          source_run_id = excluded.source_run_id,
+          updated_at = excluded.updated_at
+      `
+      )
+      .run(
+        input.id,
+        input.user_id,
+        input.scope,
+        input.session_id ?? null,
+        input.datasource_id ?? null,
+        input.kind,
+        contentJson,
+        input.content_text,
+        memoryHash,
+        clampConfidence(input.confidence ?? 0.8),
+        input.source ?? null,
+        input.source_run_id ?? null,
+        now,
+        now
+      );
+
+    if (result.changes < 1) {
+      throw new Error(`Unable to upsert long-term memory: ${input.id}`);
+    }
+
+    return this.getByHash({ user_id: input.user_id, memory_hash: memoryHash });
+  }
+
+  get(input: { user_id: string; memory_id: string }): LongTermMemoryRecord {
+    const memory = mapLongTermMemoryRow(
+      this.db
+        .prepare("SELECT * FROM long_term_memories WHERE user_id = ? AND id = ?")
+        .get(input.user_id, input.memory_id)
+    );
+
+    if (!memory) {
+      throw new Error(`Long-term memory not found: ${input.memory_id}`);
+    }
+
+    return memory;
+  }
+
+  listRelevant(input: ListRelevantLongTermMemoriesInput): LongTermMemoryRecord[] {
+    const limit = Math.max(0, Math.floor(input.limit));
+    if (limit === 0) {
+      return [];
+    }
+    const rows = this.db
+      .prepare(
+        `
+        SELECT * FROM long_term_memories
+        WHERE user_id = ?
+          AND status = 'active'
+          AND (
+            scope = 'user'
+            OR (scope = 'session' AND session_id = ?)
+            OR (scope = 'datasource' AND datasource_id = ?)
+          )
+        ORDER BY updated_at DESC
+        LIMIT ?
+      `
+      )
+      .all(input.user_id, input.session_id ?? null, input.datasource_id ?? null, Math.max(limit * 4, limit));
+    const queryTerms = tokenizeMemoryText(input.query);
+    return rows
+      .map(mapRequiredLongTermMemoryRow)
+      .map((memory) => ({ memory, score: scoreLongTermMemory(memory, queryTerms, input) }))
+      .filter((entry) => entry.score > 0)
+      .sort((left, right) => right.score - left.score)
+      .slice(0, limit)
+      .map((entry) => entry.memory);
+  }
+
+  markAccessed(input: { user_id: string; memory_ids: string[] }): void {
+    if (input.memory_ids.length === 0) {
+      return;
+    }
+    const now = new Date().toISOString();
+    const statement = this.db.prepare(
+      "UPDATE long_term_memories SET last_accessed_at = ? WHERE user_id = ? AND id = ?"
+    );
+    this.db.exec("BEGIN");
+    try {
+      input.memory_ids.forEach((id) => statement.run(now, input.user_id, id));
+      this.db.exec("COMMIT");
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  private getByHash(input: { user_id: string; memory_hash: string }): LongTermMemoryRecord {
+    const memory = mapLongTermMemoryRow(
+      this.db
+        .prepare("SELECT * FROM long_term_memories WHERE user_id = ? AND memory_hash = ?")
+        .get(input.user_id, input.memory_hash)
+    );
+
+    if (!memory) {
+      throw new Error(`Long-term memory conflict could not be resolved: ${input.memory_hash}`);
+    }
+
+    return memory;
+  }
+}
+
 export class ArtifactRepository {
   constructor(private readonly db: DatabaseSync) {}
 
@@ -923,6 +1418,79 @@ const runMigrations = (db: DatabaseSync): void => {
     );
     CREATE INDEX IF NOT EXISTS idx_run_events_user_run ON run_events(user_id, run_id);
 
+    CREATE TABLE IF NOT EXISTS conversation_messages (
+      id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      session_id TEXT NOT NULL,
+      run_id TEXT NOT NULL,
+      role TEXT NOT NULL,
+      source TEXT NOT NULL,
+      message_id TEXT,
+      content_json TEXT NOT NULL,
+      content_text TEXT NOT NULL,
+      content_hash TEXT NOT NULL,
+      position INTEGER NOT NULL,
+      created_at TEXT NOT NULL,
+      PRIMARY KEY (user_id, id),
+      FOREIGN KEY (user_id, session_id) REFERENCES sessions(user_id, id),
+      FOREIGN KEY (user_id, run_id) REFERENCES runs(user_id, id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_conversation_messages_user_session
+      ON conversation_messages(user_id, session_id, position);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_conversation_messages_message_id
+      ON conversation_messages(user_id, session_id, message_id)
+      WHERE message_id IS NOT NULL;
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_conversation_messages_run_hash
+      ON conversation_messages(user_id, session_id, run_id, role, content_hash);
+
+    CREATE TABLE IF NOT EXISTS conversation_summaries (
+      id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      session_id TEXT NOT NULL,
+      source_run_id TEXT,
+      from_position INTEGER NOT NULL,
+      to_position INTEGER NOT NULL,
+      summary_text TEXT NOT NULL,
+      summary_hash TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      PRIMARY KEY (user_id, id),
+      UNIQUE (user_id, session_id, from_position, to_position),
+      FOREIGN KEY (user_id, session_id) REFERENCES sessions(user_id, id),
+      FOREIGN KEY (user_id, source_run_id) REFERENCES runs(user_id, id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_conversation_summaries_user_session
+      ON conversation_summaries(user_id, session_id, to_position);
+
+    CREATE TABLE IF NOT EXISTS long_term_memories (
+      id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      scope TEXT NOT NULL,
+      session_id TEXT,
+      datasource_id TEXT,
+      kind TEXT NOT NULL,
+      content_json TEXT NOT NULL,
+      content_text TEXT NOT NULL,
+      memory_hash TEXT NOT NULL,
+      confidence REAL NOT NULL,
+      status TEXT NOT NULL,
+      source TEXT,
+      source_run_id TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      last_accessed_at TEXT,
+      PRIMARY KEY (user_id, id),
+      UNIQUE (user_id, memory_hash),
+      FOREIGN KEY (user_id) REFERENCES users(id),
+      FOREIGN KEY (user_id, session_id) REFERENCES sessions(user_id, id),
+      FOREIGN KEY (user_id, source_run_id) REFERENCES runs(user_id, id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_long_term_memories_user_scope
+      ON long_term_memories(user_id, scope, status, updated_at);
+    CREATE INDEX IF NOT EXISTS idx_long_term_memories_user_session
+      ON long_term_memories(user_id, session_id, status, updated_at);
+    CREATE INDEX IF NOT EXISTS idx_long_term_memories_user_datasource
+      ON long_term_memories(user_id, datasource_id, status, updated_at);
+
     CREATE TABLE IF NOT EXISTS artifacts (
       id TEXT PRIMARY KEY,
       user_id TEXT NOT NULL,
@@ -1148,6 +1716,21 @@ const createMetadataIndexes = (db: DatabaseSync): void => {
     CREATE INDEX IF NOT EXISTS idx_data_sources_user ON data_sources(user_id);
     CREATE INDEX IF NOT EXISTS idx_runs_user_session ON runs(user_id, session_id);
     CREATE INDEX IF NOT EXISTS idx_run_events_user_run ON run_events(user_id, run_id);
+    CREATE INDEX IF NOT EXISTS idx_conversation_messages_user_session
+      ON conversation_messages(user_id, session_id, position);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_conversation_messages_message_id
+      ON conversation_messages(user_id, session_id, message_id)
+      WHERE message_id IS NOT NULL;
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_conversation_messages_run_hash
+      ON conversation_messages(user_id, session_id, run_id, role, content_hash);
+    CREATE INDEX IF NOT EXISTS idx_conversation_summaries_user_session
+      ON conversation_summaries(user_id, session_id, to_position);
+    CREATE INDEX IF NOT EXISTS idx_long_term_memories_user_scope
+      ON long_term_memories(user_id, scope, status, updated_at);
+    CREATE INDEX IF NOT EXISTS idx_long_term_memories_user_session
+      ON long_term_memories(user_id, session_id, status, updated_at);
+    CREATE INDEX IF NOT EXISTS idx_long_term_memories_user_datasource
+      ON long_term_memories(user_id, datasource_id, status, updated_at);
     CREATE INDEX IF NOT EXISTS idx_artifacts_user_run ON artifacts(user_id, run_id);
     CREATE INDEX IF NOT EXISTS idx_sql_audit_logs_user_run ON sql_audit_logs(user_id, run_id);
     CREATE INDEX IF NOT EXISTS idx_sql_audit_logs_user_datasource ON sql_audit_logs(user_id, datasource_id);
@@ -1161,6 +1744,39 @@ const isRecord = (value: unknown): value is Record<string, unknown> => typeof va
 const optionalString = (value: unknown): Optional<string> => (typeof value === "string" ? value : undefined);
 
 const optionalNumber = (value: unknown): Optional<number> => (typeof value === "number" ? value : undefined);
+
+const clampConfidence = (value: number): number => Math.max(0, Math.min(1, value));
+
+const createLongTermMemoryHash = (input: CreateLongTermMemoryInput): string =>
+  createHash("sha256")
+    .update(JSON.stringify({
+      content_text: input.content_text,
+      datasource_id: input.datasource_id ?? null,
+      kind: input.kind,
+      scope: input.scope,
+      session_id: input.session_id ?? null
+    }))
+    .digest("hex");
+
+const tokenizeMemoryText = (text: string): string[] =>
+  [...new Set(text.toLowerCase().split(/[^\p{L}\p{N}_]+/u).filter((term) => term.length >= 2))];
+
+const scoreLongTermMemory = (
+  memory: LongTermMemoryRecord,
+  queryTerms: string[],
+  input: ListRelevantLongTermMemoriesInput
+): number => {
+  const content = `${memory.kind} ${memory.content_text}`.toLowerCase();
+  const lexicalScore = queryTerms.reduce((score, term) => score + (content.includes(term) ? 1 : 0), 0);
+  const scopeScore =
+    memory.scope === "session" && memory.session_id === input.session_id
+      ? 3
+      : memory.scope === "datasource" && memory.datasource_id === input.datasource_id
+        ? 2
+        : 1;
+  const queryScore = queryTerms.length === 0 ? 1 : lexicalScore;
+  return queryScore > 0 ? queryScore + scopeScore + memory.confidence : 0;
+};
 
 const requiredString = (row: Record<string, unknown>, key: string): string => {
   const value = row[key];
@@ -1346,6 +1962,100 @@ const mapRequiredRunEventRow = (row: unknown): RunEventRecord => {
   }
 
   return event;
+};
+
+const mapConversationMessageRow = (row: unknown): Optional<ConversationMessageRecord> => {
+  if (!isRecord(row)) {
+    return undefined;
+  }
+
+  const messageId = optionalString(row.message_id);
+
+  return {
+    id: requiredString(row, "id"),
+    user_id: requiredString(row, "user_id"),
+    session_id: requiredString(row, "session_id"),
+    run_id: requiredString(row, "run_id"),
+    role: requiredString(row, "role") as ConversationMessageRole,
+    source: requiredString(row, "source") as ConversationMessageSource,
+    ...(messageId ? { message_id: messageId } : {}),
+    content_json: requiredString(row, "content_json"),
+    content_text: requiredString(row, "content_text"),
+    content_hash: requiredString(row, "content_hash"),
+    position: requiredNumber(row, "position"),
+    created_at: requiredString(row, "created_at")
+  };
+};
+
+const mapRequiredConversationMessageRow = (row: unknown): ConversationMessageRecord => {
+  const message = mapConversationMessageRow(row);
+
+  if (!message) {
+    throw new Error("Invalid conversation message row");
+  }
+
+  return message;
+};
+
+const mapConversationSummaryRow = (row: unknown): Optional<ConversationSummaryRecord> => {
+  if (!isRecord(row)) {
+    return undefined;
+  }
+
+  const sourceRunId = optionalString(row.source_run_id);
+
+  return {
+    id: requiredString(row, "id"),
+    user_id: requiredString(row, "user_id"),
+    session_id: requiredString(row, "session_id"),
+    ...(sourceRunId ? { source_run_id: sourceRunId } : {}),
+    from_position: requiredNumber(row, "from_position"),
+    to_position: requiredNumber(row, "to_position"),
+    summary_text: requiredString(row, "summary_text"),
+    summary_hash: requiredString(row, "summary_hash"),
+    created_at: requiredString(row, "created_at")
+  };
+};
+
+const mapLongTermMemoryRow = (row: unknown): Optional<LongTermMemoryRecord> => {
+  if (!isRecord(row)) {
+    return undefined;
+  }
+
+  const datasourceId = optionalString(row.datasource_id);
+  const lastAccessedAt = optionalString(row.last_accessed_at);
+  const sessionId = optionalString(row.session_id);
+  const source = optionalString(row.source);
+  const sourceRunId = optionalString(row.source_run_id);
+
+  return {
+    id: requiredString(row, "id"),
+    user_id: requiredString(row, "user_id"),
+    scope: requiredString(row, "scope") as LongTermMemoryScope,
+    ...(sessionId ? { session_id: sessionId } : {}),
+    ...(datasourceId ? { datasource_id: datasourceId } : {}),
+    kind: requiredString(row, "kind"),
+    content_json: requiredString(row, "content_json"),
+    content_text: requiredString(row, "content_text"),
+    memory_hash: requiredString(row, "memory_hash"),
+    confidence: requiredNumber(row, "confidence"),
+    status: requiredString(row, "status") as LongTermMemoryStatus,
+    ...(source ? { source } : {}),
+    ...(sourceRunId ? { source_run_id: sourceRunId } : {}),
+    created_at: requiredString(row, "created_at"),
+    updated_at: requiredString(row, "updated_at"),
+    ...(lastAccessedAt ? { last_accessed_at: lastAccessedAt } : {})
+  };
+};
+
+const mapRequiredLongTermMemoryRow = (row: unknown): LongTermMemoryRecord => {
+  const memory = mapLongTermMemoryRow(row);
+
+  if (!memory) {
+    throw new Error("Invalid long-term memory row");
+  }
+
+  return memory;
 };
 
 const mapArtifactRow = (row: unknown): Optional<ArtifactRecord> => {

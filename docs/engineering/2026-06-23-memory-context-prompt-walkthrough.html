@@ -1,0 +1,763 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Memory / Context Prompt Walkthrough</title>
+  <style>
+    :root {
+      --ink: #24313d;
+      --muted: #697783;
+      --line: #d9e1e8;
+      --paper: #fffdf8;
+      --blue: #b9dcff;
+      --green: #c9edcf;
+      --yellow: #ffe28a;
+      --coral: #ffb5a7;
+      --lilac: #d6c8ff;
+      --mint: #bdebdc;
+      --white: #ffffff;
+      --shadow: 0 10px 30px rgba(49, 67, 86, 0.12);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at top left, rgba(255, 226, 138, 0.34), transparent 28rem),
+        linear-gradient(180deg, #f8fbff 0%, #fff9ec 100%);
+    }
+
+    main {
+      max-width: 1240px;
+      margin: 0 auto;
+      padding: 32px 24px 64px;
+    }
+
+    header {
+      display: grid;
+      grid-template-columns: 1.5fr 1fr;
+      gap: 24px;
+      align-items: end;
+      margin-bottom: 24px;
+    }
+
+    h1 {
+      margin: 0 0 12px;
+      font-size: 38px;
+      line-height: 1.12;
+      letter-spacing: 0;
+    }
+
+    h2 {
+      margin: 0 0 16px;
+      font-size: 24px;
+      letter-spacing: 0;
+    }
+
+    h3 {
+      margin: 0 0 8px;
+      font-size: 16px;
+      letter-spacing: 0;
+    }
+
+    p {
+      margin: 0;
+      line-height: 1.65;
+    }
+
+    code, pre {
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+    }
+
+    pre {
+      margin: 0;
+      padding: 14px;
+      overflow: auto;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fbfcfe;
+      color: #263544;
+      line-height: 1.5;
+      font-size: 12px;
+      white-space: pre-wrap;
+    }
+
+    .subtitle {
+      color: var(--muted);
+      font-size: 17px;
+      max-width: 760px;
+    }
+
+    .stamp {
+      justify-self: end;
+      padding: 14px 16px;
+      border: 2px solid var(--ink);
+      border-radius: 8px;
+      background: var(--yellow);
+      box-shadow: 6px 6px 0 rgba(36, 49, 61, 0.16);
+      font-weight: 700;
+      line-height: 1.5;
+    }
+
+    .grid {
+      display: grid;
+      gap: 18px;
+    }
+
+    .grid.cols-2 {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .grid.cols-3 {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+
+    .panel {
+      border: 2px solid var(--ink);
+      border-radius: 10px;
+      background: var(--white);
+      box-shadow: var(--shadow);
+      padding: 18px;
+    }
+
+    .panel.yellow {
+      background: #fff6cf;
+    }
+
+    .panel.blue {
+      background: #eef7ff;
+    }
+
+    .panel.green {
+      background: #f0fbf0;
+    }
+
+    .tag {
+      display: inline-flex;
+      align-items: center;
+      height: 24px;
+      padding: 0 8px;
+      border: 1px solid var(--ink);
+      border-radius: 999px;
+      background: var(--paper);
+      font-size: 12px;
+      font-weight: 700;
+      margin-bottom: 10px;
+    }
+
+    .flow {
+      display: grid;
+      grid-template-columns: repeat(6, minmax(120px, 1fr));
+      gap: 12px;
+      align-items: stretch;
+    }
+
+    .node {
+      min-height: 116px;
+      border: 2px solid var(--ink);
+      border-radius: 10px;
+      padding: 12px;
+      background: var(--white);
+      position: relative;
+      box-shadow: 5px 5px 0 rgba(36, 49, 61, 0.12);
+    }
+
+    .node::after {
+      content: ">";
+      position: absolute;
+      right: -14px;
+      top: 42%;
+      font-weight: 900;
+      color: var(--ink);
+    }
+
+    .node:last-child::after {
+      display: none;
+    }
+
+    .node.blue {
+      background: var(--blue);
+    }
+
+    .node.green {
+      background: var(--green);
+    }
+
+    .node.yellow {
+      background: var(--yellow);
+    }
+
+    .node.coral {
+      background: var(--coral);
+    }
+
+    .node.lilac {
+      background: var(--lilac);
+    }
+
+    .node.mint {
+      background: var(--mint);
+    }
+
+    .node p {
+      font-size: 13px;
+      line-height: 1.45;
+      color: #304252;
+    }
+
+    .lane {
+      display: grid;
+      grid-template-columns: 210px 1fr;
+      gap: 14px;
+      align-items: start;
+      margin: 12px 0;
+    }
+
+    .lane-label {
+      border: 2px solid var(--ink);
+      border-radius: 8px;
+      padding: 10px;
+      background: var(--yellow);
+      font-weight: 800;
+      box-shadow: 4px 4px 0 rgba(36, 49, 61, 0.12);
+    }
+
+    .message-stack {
+      display: grid;
+      gap: 10px;
+    }
+
+    .message {
+      border: 1px solid var(--line);
+      border-left: 8px solid var(--blue);
+      border-radius: 8px;
+      padding: 12px;
+      background: #ffffff;
+    }
+
+    .message.system {
+      border-left-color: var(--lilac);
+    }
+
+    .message.user {
+      border-left-color: var(--green);
+    }
+
+    .message.tool {
+      border-left-color: var(--coral);
+    }
+
+    .message strong {
+      display: block;
+      margin-bottom: 6px;
+    }
+
+    .matrix {
+      width: 100%;
+      border-collapse: collapse;
+      overflow: hidden;
+      border-radius: 8px;
+      border: 1px solid var(--line);
+      background: #fff;
+    }
+
+    .matrix th,
+    .matrix td {
+      border-bottom: 1px solid var(--line);
+      padding: 10px;
+      text-align: left;
+      vertical-align: top;
+      font-size: 14px;
+      line-height: 1.5;
+    }
+
+    .matrix th {
+      background: #eef4fa;
+      font-weight: 800;
+    }
+
+    .matrix tr:last-child td {
+      border-bottom: 0;
+    }
+
+    .status {
+      font-weight: 800;
+      white-space: nowrap;
+    }
+
+    .ok {
+      color: #1d6f42;
+    }
+
+    .warn {
+      color: #9a5a00;
+    }
+
+    .bad {
+      color: #a22d2d;
+    }
+
+    .section {
+      margin-top: 24px;
+    }
+
+    .callout {
+      border: 2px dashed var(--ink);
+      border-radius: 10px;
+      padding: 16px;
+      background: #fff9e8;
+      line-height: 1.6;
+    }
+
+    ul {
+      padding-left: 18px;
+      margin: 8px 0 0;
+      line-height: 1.65;
+    }
+
+    @media (max-width: 940px) {
+      header,
+      .grid.cols-2,
+      .grid.cols-3,
+      .lane {
+        grid-template-columns: 1fr;
+      }
+
+      .stamp {
+        justify-self: start;
+      }
+
+      .flow {
+        grid-template-columns: 1fr;
+      }
+
+      .node::after {
+        content: "v";
+        right: 14px;
+        top: auto;
+        bottom: -17px;
+      }
+    }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <div>
+      <h1>Memory / Context Prompt Walkthrough</h1>
+      <p class="subtitle">
+        这份文档用一次真实的本地模型请求捕获，说明当前 dataAgent 的 prompt 是如何从 metadata、
+        Mastra Memory、ContextPackage、tool schema 和 ReAct loop 组装出来的，并给出下一阶段治理计划。
+      </p>
+    </div>
+    <div class="stamp">
+      2026-06-23<br />
+      典型任务：分析 orders 表，先 inspect schema
+    </div>
+  </header>
+
+  <section class="panel yellow">
+    <span class="tag">结论</span>
+    <h2>当前真实情况</h2>
+    <p>
+      首轮模型请求不是一个单独的大字符串，而是 OpenAI-compatible <code>/chat/completions</code>
+      请求：<code>messages</code> 中包含 agent instructions、workspace system、Mastra WorkingMemory system、
+      当前用户消息；<code>tools</code> 中包含所有可用 tool schema。随后每个 ReAct step 前，Mastra
+      input processors 会再次运行，当前由 <code>MastraContextBudgetProcessor</code> 输出被裁剪后的
+      <code>ContextPromptView.messages</code>。
+    </p>
+    <p>
+      关键风险是：有些 memory-like 内容已经进入 ContextPackage，但路径不统一。长期记忆目前先被
+      <code>LongTermMemoryContextProcessor</code> 注入为一条 user message，再被
+      <code>MastraContextBudgetProcessor</code> 识别为 <code>long-term-memory</code> source。这是可用的过渡方案，
+      但不是最终的 single-entry 形态。
+    </p>
+  </section>
+
+  <section class="section">
+    <h2>1. Run 启动到首轮模型请求</h2>
+    <div class="flow">
+      <div class="node blue">
+        <h3>RunInput</h3>
+        <p>CopilotKit AG-UI 输入：threadId、runId、messages、forwardedProps.run_config。</p>
+      </div>
+      <div class="node green">
+        <h3>MemoryAssembly</h3>
+        <p>写入当前 user；选择历史 conversation_messages；选择 summary 或 WorkingMemory。</p>
+      </div>
+      <div class="node yellow">
+        <h3>AgentAssembly</h3>
+        <p>创建 runContext；装配 createDataAgent、MastraAgent、MCP middleware。</p>
+      </div>
+      <div class="node coral">
+        <h3>Processors</h3>
+        <p>TaskState、LongTermMemory、ContextBudget、ProviderPromptGuard 按顺序运行。</p>
+      </div>
+      <div class="node lilac">
+        <h3>ContextPromptView</h3>
+        <p>ContextPackage merge 后，planner 选择消息组，生成进入模型的 messages。</p>
+      </div>
+      <div class="node mint">
+        <h3>/chat/completions</h3>
+        <p>发送 messages + tools + modelSettings；模型返回 text 或 tool_calls。</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="section panel">
+    <span class="tag">真实捕获</span>
+    <h2>2. 首轮模型请求长什么样</h2>
+    <p>
+      捕获方式：本地启动 fake OpenAI-compatible endpoint，运行 <code>/api/copilotkit</code>
+      的 <code>agent/run</code>，任务为 <code>分析 orders 表，先看 schema。</code>。
+      请求实际打到 <code>/chat/completions</code>。
+    </p>
+
+    <div class="lane">
+      <div class="lane-label">messages[0]</div>
+      <div class="message system">
+        <strong>role=system：Data Agent instructions</strong>
+        <pre>You are a general-purpose data agent. Analyze data by calling tools. Never invent schema, rows, SQL results,
+file contents, or command output.
+
+Datasources available this run: [api-duckdb-demo]
+Default datasource: "api-duckdb-demo".
+You may query any datasource in the list above by passing its id to a data tool's datasource_id argument.
+Never reference a datasource id outside this list; the tool rejects it with DATASOURCE_NOT_SELECTED.
+
+Tool groups:
+- Data tools: list_data_sources, inspect_schema, preview_table, run_sql_readonly.
+- Workspace tools ...
+- Task tools: task_write, task_update, task_complete, task_check.
+- Collaboration tools: ask_user, submit_plan.
+
+Operating policy:
+1. Plan with tasks ...
+2. Use ask_user only when ...
+3. Inspect before you query, then reuse the schema_id ...
+4. Write read-only SQL only ...
+5. Respect limits ...</pre>
+      </div>
+    </div>
+
+    <div class="lane">
+      <div class="lane-label">messages[1]</div>
+      <div class="message system">
+        <strong>role=system：Mastra workspace system</strong>
+        <pre>Local command execution. Working directory: ".../workspaces/dev-user/prompt-capture-thread/prompt-capture-run".
+
+Local filesystem at ".../workspaces/dev-user/prompt-capture-thread/prompt-capture-run".
+Relative paths resolve from this directory. File access is restricted to this directory.</pre>
+      </div>
+    </div>
+
+    <div class="lane">
+      <div class="lane-label">messages[2]</div>
+      <div class="message system">
+        <strong>role=system：Mastra WorkingMemory system</strong>
+        <pre>WORKING_MEMORY_SYSTEM_INSTRUCTION:
+Store and update any conversation-relevant information by calling the updateWorkingMemory tool.
+
+&lt;working_memory_template&gt;
+# Conversation Summary
+- Range:
+- Durable facts:
+- User constraints:
+- Open questions:
+&lt;/working_memory_template&gt;
+
+&lt;working_memory_data&gt;
+null
+&lt;/working_memory_data&gt;</pre>
+      </div>
+    </div>
+
+    <div class="lane">
+      <div class="lane-label">messages[3]</div>
+      <div class="message user">
+        <strong>role=user：当前用户问题</strong>
+        <pre>分析 orders 表，先看 schema。</pre>
+      </div>
+    </div>
+
+    <div class="callout">
+      <strong>注意：</strong>tool schema 不在 <code>messages</code> 里，而在请求体的 <code>tools</code> 字段里。
+      这次捕获中至少包含 <code>list_data_sources</code>、<code>inspect_schema</code>、
+      <code>preview_table</code>、<code>run_sql_readonly</code>、<code>retrieve_knowledge</code>、
+      <code>task_*</code>、<code>ask_user</code>、<code>submit_plan</code> 和 workspace tools。
+    </div>
+  </section>
+
+  <section class="section grid cols-2">
+    <div class="panel blue">
+      <span class="tag">工具 schema 示例</span>
+      <h2>inspect_schema</h2>
+      <pre>{
+  "type": "function",
+  "function": {
+    "name": "inspect_schema",
+    "description": "Inspect a datasource schema and return a run-local schema_id that must precede SQL or preview calls.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "datasource_id": { "type": "string" },
+        "table_names": { "type": "array", "items": { "type": "string" } }
+      }
+    }
+  }
+}</pre>
+    </div>
+    <div class="panel green">
+      <span class="tag">工具 schema 示例</span>
+      <h2>run_sql_readonly</h2>
+      <pre>{
+  "type": "function",
+  "function": {
+    "name": "run_sql_readonly",
+    "description": "Execute one read-only SELECT/WITH query using a schema_id returned in this run.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "schema_id": { "type": "string" },
+        "sql": { "type": "string" },
+        "limit": { "type": "integer" },
+        "timeout_ms": { "type": "integer" }
+      }
+    }
+  }
+}</pre>
+    </div>
+  </section>
+
+  <section class="section panel">
+    <span class="tag">ReAct loop</span>
+    <h2>3. 第二轮模型请求会怎么变</h2>
+    <div class="flow">
+      <div class="node green">
+        <h3>Step 1</h3>
+        <p>模型看到 instructions + memory + user，选择调用 <code>inspect_schema</code>。</p>
+      </div>
+      <div class="node coral">
+        <h3>Tool Execute</h3>
+        <p>工具执行；Data Gateway 返回 schema、schema_id、审计/上下文包。</p>
+      </div>
+      <div class="node yellow">
+        <h3>MastraToolObservationRouter</h3>
+        <p>把 raw tool result 转成受治理的 model projection，超长内容被 adapter 处理。</p>
+      </div>
+      <div class="node blue">
+        <h3>MastraContextBudgetProcessor</h3>
+        <p>重新 group messages，当前轮 user + assistant tool_call + tool result 成为 mandatory turn。</p>
+      </div>
+      <div class="node lilac">
+        <h3>Step 2 Prompt</h3>
+        <p>模型收到 schema observation，再决定 final answer、preview_table 或 run_sql_readonly。</p>
+      </div>
+      <div class="node mint">
+        <h3>Terminal</h3>
+        <p>RUN_FINISHED 前 Finalizer flush conversation memory 和 long-term extraction。</p>
+      </div>
+    </div>
+
+    <div class="grid cols-2 section">
+      <div class="message tool">
+        <strong>第二轮 messages 新增的典型结构</strong>
+        <pre>assistant:
+  tool_calls: [{
+    id: "call_inspect_schema",
+    function: {
+      name: "inspect_schema",
+      arguments: "{\"datasource_id\":\"api-duckdb-demo\"}"
+    }
+  }]
+
+tool:
+  tool_call_id: "call_inspect_schema"
+  content/result: {
+    schema_id: "...",
+    tables: [...bounded schema projection...]
+  }</pre>
+      </div>
+      <div class="message system">
+        <strong>第二轮 processors 再次执行</strong>
+        <pre>MastraTaskStateContextProcessor
+  -> optional current-task-list system message
+
+LongTermMemoryContextProcessor
+  -> optional context:long-term-memory user message
+
+MastraContextBudgetProcessor
+  -> tool observation governance
+  -> ContextPackage merge
+  -> ContextStepPlanner.plan()
+  -> ContextPromptView.messages
+
+MastraProviderPromptGuardProcessor
+  -> verify final provider prompt token budget</pre>
+      </div>
+    </div>
+  </section>
+
+  <section class="section panel">
+    <span class="tag">完成阶段</span>
+    <h2>4. RUN_FINISHED 后还有一个独立模型请求</h2>
+    <p>
+      当前完成阶段会调用 long-term memory extractor。它不是主 ReAct prompt，而是独立 LLM 调用。
+      这解释了为什么完成阶段可能变慢。
+    </p>
+    <pre>system:
+You extract durable long-term memory for a data analysis agent.
+Return only strict JSON. No markdown, prose, or XML.
+Extract only stable user preferences, user constraints, durable project facts, verified dataset facts,
+analysis decisions, or open analysis state likely useful in future runs.
+
+user:
+Extract up to 6 long-term memory candidates from these completed run messages.
+
+Active datasource: api-duckdb-demo
+
+&lt;source_messages&gt;
+&lt;message role="user" id="prompt-capture-run:user"&gt;
+分析 orders 表，先看 schema。
+&lt;/message&gt;
+&lt;message role="assistant" id="prompt-capture-run:assistant:..."&gt;
+已检查 schema。
+&lt;/message&gt;
+&lt;/source_messages&gt;</pre>
+  </section>
+
+  <section class="section">
+    <h2>5. 现在的 Memory-like Source 状态表</h2>
+    <table class="matrix">
+      <thead>
+      <tr>
+        <th>Source</th>
+        <th>当前入口</th>
+        <th>是否进入 ContextPackage</th>
+        <th>风险</th>
+        <th>目标治理</th>
+      </tr>
+      </thead>
+      <tbody>
+      <tr>
+        <td>metadata conversation_messages</td>
+        <td><code>ConversationMemoryService.buildRunMessages()</code></td>
+        <td><span class="status ok">是</span>，作为 conversation turn</td>
+        <td>历史窗口和 ReAct step planner 是两层裁剪。</td>
+        <td>保留为 conversation source，但窗口选择策略要纳入统一 plan 事件。</td>
+      </tr>
+      <tr>
+        <td>metadata conversation_summaries</td>
+        <td>metadata-summary 模式下转成 <code>memory-summary:*</code> user message</td>
+        <td><span class="status warn">间接进入</span></td>
+        <td>与 WorkingMemory 可能重复；已有 one-source-only 防线。</td>
+        <td>改为 summary runtime source，和 WorkingMemory 互斥声明。</td>
+      </tr>
+      <tr>
+        <td>Mastra WorkingMemory</td>
+        <td>Mastra memory input processor 注入 system message</td>
+        <td><span class="status warn">部分进入</span>，被 live system item 观察</td>
+        <td>这是 Mastra 原生通路，可能绕过我们对 memory source 的显式归因。</td>
+        <td>增加 WorkingMemory source snapshot，标记 compact memory owner。</td>
+      </tr>
+      <tr>
+        <td>metadata long_term_memories</td>
+        <td><code>LongTermMemoryContextSource</code> 经 Mastra runtime source processor 注入</td>
+        <td><span class="status ok">直接进入</span> ContextPackage source inventory</td>
+        <td>已经消除先 message 再 source 的绕行。</td>
+        <td>继续由 ContextPromptView 统一预算、选择和协议转换。</td>
+      </tr>
+      <tr>
+        <td>future Semantic Recall / OM</td>
+        <td>未启用</td>
+        <td><span class="status bad">未定义</span></td>
+        <td>最容易与 summary、LTM、Knowledge 重复。</td>
+        <td>必须先进入 ContextPackage source inventory，不允许直接注入 prompt。</td>
+      </tr>
+      <tr>
+        <td>Knowledge retrieval</td>
+        <td>tool result adapter</td>
+        <td><span class="status ok">是</span>，作为 tool observation</td>
+        <td>同一事实可能也出现在 memory 中。</td>
+        <td>增加 source fingerprint / dedupe key，planner 可去重或降权。</td>
+      </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section class="section grid cols-3">
+    <div class="panel yellow">
+      <span class="tag">Phase 1</span>
+      <h2>Inventory 明确化</h2>
+      <ul>
+        <li>定义 <code>RuntimeContextSource</code> 抽象。</li>
+        <li>summary、working memory、long-term memory 都产出 <code>ContextItem</code>。</li>
+        <li>为每个 item 写入 source type、source id、scope、retention、trust、dedupe key。</li>
+        <li>禁止新增 memory-like source 直接塞 message。</li>
+      </ul>
+    </div>
+    <div class="panel blue">
+      <span class="tag">Phase 2</span>
+      <h2>One-source-only</h2>
+      <ul>
+        <li>把 compact memory owner 从断言升级为 source policy。</li>
+        <li>summary vs WorkingMemory 只能一个进入 model-visible prompt。</li>
+        <li>LTM 和 Knowledge 增加相似 dedupe 或同源降权。</li>
+        <li><code>context.compiled</code> 事件暴露 selected/omitted source。</li>
+      </ul>
+    </div>
+    <div class="panel green">
+      <span class="tag">Phase 3</span>
+      <h2>Prompt Compiler 收口</h2>
+      <ul>
+        <li>长期记忆不再先变成 user message。</li>
+        <li>ContextRunState 接收 source inventory。</li>
+        <li>ContextStepPlanner 同时规划 conversation、memory、knowledge、tool observations。</li>
+        <li>ContextPromptView 成为唯一的模型输入投影。</li>
+      </ul>
+    </div>
+  </section>
+
+  <section class="section panel">
+    <span class="tag">设计决策</span>
+    <h2>6. 下一阶段验收标准</h2>
+    <table class="matrix">
+      <thead>
+      <tr>
+        <th>验收项</th>
+        <th>必须看到的结果</th>
+      </tr>
+      </thead>
+      <tbody>
+      <tr>
+        <td>Prompt source 可审计</td>
+        <td><code>context.compiled</code> 能说明每条 memory-like 内容来自哪个 source，为什么选中或省略。</td>
+      </tr>
+      <tr>
+        <td>不重复注入</td>
+        <td>metadata summary 和 WorkingMemory 同时存在时，只允许一个 model-visible compact memory source。</td>
+      </tr>
+      <tr>
+        <td>LTM 不绕行</td>
+        <td>long-term memory 不再通过 synthetic user message 进入，而是作为 source group 由 planner 物化。</td>
+      </tr>
+      <tr>
+        <td>完成阶段不拖慢</td>
+        <td>summary / LTM extraction 有 timeout 或 background 化方案，不阻塞 terminal event 的用户感知。</td>
+      </tr>
+      <tr>
+        <td>ReAct step 一致</td>
+        <td>首轮、工具后第二轮、多轮历史、resume 都走同一 ContextPackage/ContextPromptView 编译路径。</td>
+      </tr>
+      </tbody>
+    </table>
+  </section>
+</main>
+</body>
+</html>

@@ -19,58 +19,19 @@ import {
   type ModelProvider
 } from "@open-data-agent/providers";
 
-import { AGENT_MAX_STEPS, SQL_MAX_EXECUTION_COUNT, SQL_MAX_SQL_CHARS } from "./context/defaults.js";
-import { ContextBudgetAllocator } from "./context/context-budget-allocator.js";
-import { ContextBudgetProcessor } from "./context/context-budget-processor.js";
-import { ContextOrchestrator } from "./context/context-orchestrator.js";
-import { ContextPolicy } from "./context/context-policy.js";
-import { ContextSourceRegistry } from "./context/context-source-registry.js";
-import { ContextRunState } from "./context/context-run-state.js";
+import { AGENT_MAX_STEPS, SQL_MAX_EXECUTION_COUNT } from "./runtime-limits.js";
+import { SQL_MAX_SQL_CHARS } from "./context/inventory/context-limits.js";
+import { createToolObservationBoundary } from "./context/tool-observation/tool-observation-boundary.js";
 import {
-  ReductionStrategyRegistry,
-  type ReductionCandidateSelector
-} from "./context/context-reduction-strategy.js";
-import { SchemaContextAdapter } from "./context/schema-context-adapter.js";
-import { SqlResultContextAdapter } from "./context/sql-result-context-adapter.js";
-import {
-  EditFileContextAdapter,
-  ExecuteCommandContextAdapter,
-  FileStatContextAdapter,
-  GrepContextAdapter,
-  ListFilesContextAdapter,
-  MkdirContextAdapter,
-  ReadFileContextAdapter,
-  WriteFileContextAdapter
-} from "./context/adapters/workspace-tool-context-adapters.js";
-import {
-  ListDataSourcesContextAdapter,
-  PreviewTableContextAdapter,
-  RetrieveKnowledgeContextAdapter
-} from "./context/adapters/data-tool-context-adapters.js";
-import {
-  TaskCheckContextAdapter,
-  TaskCompleteContextAdapter,
-  TaskUpdateContextAdapter,
-  TaskWriteContextAdapter
-} from "./context/adapters/task-tool-context-adapters.js";
-import {
-  AskUserContextAdapter,
-  SubmitPlanContextAdapter
-} from "./context/adapters/collaboration-tool-context-adapters.js";
-import { McpToolContextAdapter } from "./context/adapters/mcp-tool-context-adapter.js";
-import type { ToolResultAdapter } from "./context/tool-result-adapter.js";
-import { ProviderPromptGuardProcessor } from "./context/provider-prompt-guard-processor.js";
-import { ModelContextProfileRegistry } from "./context/model-context-profile.js";
-import { PromptTokenCounter } from "./context/prompt-token-counter.js";
-import { StepContextPlanner } from "./context/step-context-planner.js";
-import { TaskStateContextProcessor } from "./context/task-state-context-processor.js";
-import { ToolObservationRouter } from "./context/tool-observation-router.js";
-import { ToolResultDispatcher } from "./context/tool-result-dispatcher.js";
+  createMastraContextProcessorBoundary
+} from "./context/protocol/mastra/mastra-context-processor-boundary.js";
+import { ToolObservationDispatcher } from "./context/tool-observation/tool-observation-dispatcher.js";
+import { createAgUiContextEventSink } from "./context/protocol/ag-ui/ag-ui-context-event-sink.js";
 import {
   type TaskStateRuntime
 } from "./memory/task-state-runtime.js";
 import { GoalRuntimeAdapter, type GoalRequest } from "./memory/goal-runtime-adapter.js";
-import { createDataAgentToolRegistry, type ToolRegistry } from "./tools/data-tools.js";
+import { createDataAgentToolRegistry } from "./tools/data-tools.js";
 import { GovernedToolFactory } from "./tools/governed-tool-factory.js";
 import { createRunWorkspace } from "./tools/workspace-factory.js";
 import type { AgentRunContext, AgentRunContextInput, AgUiEventEmitter } from "./types.js";
@@ -101,104 +62,59 @@ export const STATIC_AGENT_TOOL_NAMES = [
   "write_file"
 ] as const;
 export {
-  DEFAULT_AGENT_CONTEXT_POLICY,
-  applySchemaContextPolicy,
-  applySqlModelContextPolicy,
-  truncateContextText,
-  type AgentContextPolicy
-} from "./context/context-policy.js";
-export type {
-  ArtifactRef,
-  AuditRef,
-  ContextPackage,
-  ContextProjection,
-  ContextGroup,
-  ContextGroupKind,
-  ContextSourceSnapshot,
-  ContextTruncation
-} from "./context/context-package.js";
-export type {
-  ContextItem,
-  ContextItemVisibility,
-  ContextRetention,
-  ContextTrust,
-  ContextSourceAdapter,
-  ToolResultAdapter
-} from "./context/tool-result-adapter.js";
-export { createContextItem, hashContextContent } from "./context/tool-result-adapter.js";
-export { SchemaContextAdapter } from "./context/schema-context-adapter.js";
-export { SqlResultContextAdapter } from "./context/sql-result-context-adapter.js";
-export {
-  AskUserContextAdapter,
-  SubmitPlanContextAdapter
-} from "./context/adapters/collaboration-tool-context-adapters.js";
-export { ToolObservationRouter } from "./context/tool-observation-router.js";
-export { McpToolContextAdapter } from "./context/adapters/mcp-tool-context-adapter.js";
-export { ToolResultDispatcher } from "./context/tool-result-dispatcher.js";
-export {
-  GovernedToolFactory,
-  type GovernedToolErrorHandler,
-  type GovernedToolResultHandler
-} from "./tools/governed-tool-factory.js";
-export { ContextBudgetAllocator } from "./context/context-budget-allocator.js";
-export { ContextPackageBuilder } from "./context/context-package-builder.js";
-export { ContextOrchestrator } from "./context/context-orchestrator.js";
-export { ContextRunState, type ContextRunIdentity } from "./context/context-run-state.js";
-export { ContextBudgetProcessor } from "./context/context-budget-processor.js";
-export { TaskStateContextProcessor } from "./context/task-state-context-processor.js";
-export { ProviderPromptGuardProcessor } from "./context/provider-prompt-guard-processor.js";
-export {
-  StepContextPlanner,
-  type ContextDecision,
-  type ContextPlan,
-  type GlobalContextBudget,
-  type PromptView,
-  type PromptMessageGroup
-} from "./context/step-context-planner.js";
-export {
-  LowestQualityLossSelector,
-  OmitHistoricalGroupStrategy,
-  ReductionStrategyRegistry,
-  type ContextReductionStrategy,
-  type ReductionCandidateSelector,
-  type ReductionGroup,
-  type ReductionProposal,
-  type ReductionState
-} from "./context/context-reduction-strategy.js";
-export {
-  ModelContextProfileRegistry,
-  type ModelContextProfile,
-  type ModelContextProfileRegistryOptions
-} from "./context/model-context-profile.js";
-export { PromptTokenCounter, type PromptTokenReport } from "./context/prompt-token-counter.js";
-export {
-  groupMessagesByTurn,
-  isConversationTurnStart,
-  isToolObservationMessage,
-  type ConversationTurnGroup,
-  type GroupedConversationMessage
-} from "./context/mastra-message-utils.js";
-export { ContextPolicy } from "./context/context-policy.js";
-export { ContextSourceRegistry } from "./context/context-source-registry.js";
-export { TokenCounter } from "./context/token-counter.js";
+  ContextTokenCounter,
+  type ContextTokenCounterOptions
+} from "./context/policy/context-token-counter.js";
 export { createActivityDelta, createActivitySnapshot, createCustomEvent } from "./events.js";
-export { createDataAgentToolRegistry, type ToolRegistry } from "./tools/data-tools.js";
-export { createTaskStateRuntime, type TaskStateRuntime } from "./memory/task-state-runtime.js";
+export {
+  AGENT_MEMORY_MODES,
+  createAgentMemoryRuntime,
+  createTaskStateRuntime,
+  parseAgentMemoryMode,
+  type AgentMemoryMode,
+  type AgentMemoryRuntime,
+  type AgentMemoryRuntimeOptions,
+  type TaskStateRuntime
+} from "./memory/task-state-runtime.js";
 export { GoalRuntimeAdapter, type GoalRequest, type GoalSnapshot } from "./memory/goal-runtime-adapter.js";
+export {
+  CONVERSATION_WORKING_MEMORY_CONFIG,
+  CONVERSATION_WORKING_MEMORY_TEMPLATE,
+  MastraConversationMemoryBridge,
+  createMastraConversationMemoryBridge,
+  formatConversationProjection,
+  type ConversationMemoryBridge,
+  type ConversationMemoryProjection
+} from "./memory/conversation-memory-bridge.js";
+
+export type AgentLongTermMemoryRecord = {
+  confidence: number;
+  content_text: string;
+  datasource_id?: string;
+  id: string;
+  kind: string;
+  scope: "datasource" | "session" | "user";
+  session_id?: string;
+  source?: string;
+  source_run_id?: string;
+};
 
 export type CreateDataAgentInput = {
-  contextCompilation?: ContextCompilationOptions;
   dataGateway: DataGateway;
   emitter: AgUiEventEmitter;
   knowledgeService?: KnowledgeService;
   modelProvider: Exclude<ModelProvider, { kind: "mock" }>;
   runContext: AgentRunContext;
-  additionalToolAdapters?: ToolResultAdapter[];
+  mcpToolNames?: string[];
   skillPolicy?: {
     instructions: string;
     allowedTools?: string[];
   };
   taskStateRuntime?: TaskStateRuntime;
+  longTermMemory?: {
+    records: AgentLongTermMemoryRecord[];
+    maxChars?: number;
+  };
   messages: Message[];
   modelSettings?: {
     maxOutputTokens?: number;
@@ -213,62 +129,27 @@ export type CreateDataAgentInput = {
   workspaceRoot?: string | undefined;
 };
 
-export type ContextCompilationOptions = {
-  candidateSelector?: ReductionCandidateSelector;
-  profileRegistry?: ModelContextProfileRegistry;
-  registerDefaultStrategies?: boolean;
-  strategyRegistry?: ReductionStrategyRegistry;
-  tokenCounter?: PromptTokenCounter;
-};
-
 export const createDataAgent = async (
   input: CreateDataAgentInput
 ): Promise<{
   agent: Agent;
-  mastra?: Mastra;
-  contextRunState: ContextRunState;
   governedMessages: Message[];
   goalRuntime?: GoalRuntimeAdapter;
-  registry: ToolRegistry;
   commandExecutionEnabled: boolean;
   isolation: "bwrap" | "none" | "seatbelt";
   workspaceDir: string;
   destroyWorkspace(): Promise<void>;
 }> => {
-  // Create context orchestrator
-  const budgetAllocator = new ContextBudgetAllocator();
-  const sourceRegistry = new ContextSourceRegistry();
-  const policy = new ContextPolicy();
-  const contextRunState = new ContextRunState({
-    resourceId: input.runContext.user_id,
-    sessionId: input.runContext.session_id,
-    runId: input.runContext.run_id
+  const toolObservationBoundary = createToolObservationBoundary({
+    identity: {
+      resourceId: input.runContext.user_id,
+      sessionId: input.runContext.session_id,
+      runId: input.runContext.run_id
+    },
+    includeKnowledge: Boolean(input.knowledgeService),
+    ...(input.mcpToolNames?.length ? { mcpToolNames: input.mcpToolNames } : {})
   });
-  const orchestrator = new ContextOrchestrator(budgetAllocator, sourceRegistry, policy, contextRunState);
-
-  // Register tool adapters
-  sourceRegistry.registerToolAdapter(new SchemaContextAdapter());
-  sourceRegistry.registerToolAdapter(new SqlResultContextAdapter());
-  sourceRegistry.registerToolAdapter(new ListDataSourcesContextAdapter());
-  sourceRegistry.registerToolAdapter(new PreviewTableContextAdapter());
-  if (input.knowledgeService) {
-    sourceRegistry.registerToolAdapter(new RetrieveKnowledgeContextAdapter());
-  }
-  sourceRegistry.registerToolAdapter(new ReadFileContextAdapter());
-  sourceRegistry.registerToolAdapter(new WriteFileContextAdapter());
-  sourceRegistry.registerToolAdapter(new EditFileContextAdapter());
-  sourceRegistry.registerToolAdapter(new ListFilesContextAdapter());
-  sourceRegistry.registerToolAdapter(new GrepContextAdapter());
-  sourceRegistry.registerToolAdapter(new FileStatContextAdapter());
-  sourceRegistry.registerToolAdapter(new MkdirContextAdapter());
-  sourceRegistry.registerToolAdapter(new ExecuteCommandContextAdapter());
-  sourceRegistry.registerToolAdapter(new TaskWriteContextAdapter());
-  sourceRegistry.registerToolAdapter(new TaskUpdateContextAdapter());
-  sourceRegistry.registerToolAdapter(new TaskCompleteContextAdapter());
-  sourceRegistry.registerToolAdapter(new TaskCheckContextAdapter());
-  sourceRegistry.registerToolAdapter(new AskUserContextAdapter());
-  sourceRegistry.registerToolAdapter(new SubmitPlanContextAdapter());
-  input.additionalToolAdapters?.forEach((adapter) => sourceRegistry.registerToolAdapter(adapter));
+  const contextRunState = toolObservationBoundary.contextRunState;
 
   // 绑定到本次 run 的工作区：LocalFilesystem + LocalSandbox（macOS seatbelt / Linux bubblewrap 隔离）。
   // createDataAgent 每次 run 都调用，直接闭包捕获 runContext，不依赖下游 requestContext 注入。
@@ -284,51 +165,31 @@ export const createDataAgent = async (
     emitter: input.emitter,
     runContext: input.runContext
   });
-  const dispatcher = new ToolResultDispatcher(orchestrator, input.runContext);
+  const dispatcher = new ToolObservationDispatcher(toolObservationBoundary.packager, {
+    modelName: input.runContext.model_name,
+    resourceId: input.runContext.user_id,
+    runId: input.runContext.run_id,
+    sessionId: input.runContext.session_id
+  });
   const governedToolFactory = new GovernedToolFactory(
     dispatcher,
     registry.onGovernedResult,
     registry.onGovernanceError
   );
-  const profileRegistry = input.contextCompilation?.profileRegistry ?? new ModelContextProfileRegistry();
-  const tokenCounter = input.contextCompilation?.tokenCounter ?? new PromptTokenCounter();
-  const planner = new StepContextPlanner({
-    profileRegistry,
-    tokenCounter,
-    ...(input.contextCompilation?.strategyRegistry
-      ? { strategyRegistry: input.contextCompilation.strategyRegistry }
-      : {}),
-    ...(input.contextCompilation?.candidateSelector
-      ? { candidateSelector: input.contextCompilation.candidateSelector }
-      : {}),
-    ...(input.contextCompilation?.registerDefaultStrategies !== undefined
-      ? { registerDefaultStrategies: input.contextCompilation.registerDefaultStrategies }
-      : {})
-  });
-  const toolObservationRouter = new ToolObservationRouter({
+  const contextEventSink = createAgUiContextEventSink(input.emitter);
+  const mastraContextProcessors = createMastraContextProcessorBoundary({
     dispatcher,
-    emitter: input.emitter,
-    runContext: input.runContext
-  });
-  const contextBudgetProcessor = new ContextBudgetProcessor({
-    emitter: input.emitter,
+    eventSink: contextEventSink,
+    ...(input.longTermMemory ? { longTermMemory: input.longTermMemory } : {}),
     modelName: input.runContext.model_name,
-    planner,
+    runScope: {
+      runId: input.runContext.run_id,
+      sessionId: input.runContext.session_id,
+      userId: input.runContext.user_id
+    },
     runState: contextRunState,
-    toolObservationRouter
+    ...(input.taskStateRuntime ? { taskStateRuntime: input.taskStateRuntime } : {})
   });
-  const providerPromptGuard = new ProviderPromptGuardProcessor({
-    emitter: input.emitter,
-    modelName: input.runContext.model_name,
-    profileRegistry,
-    tokenCounter
-  });
-  const taskStateContextProcessor = input.taskStateRuntime
-    ? new TaskStateContextProcessor({
-        runtime: input.taskStateRuntime,
-        threadId: input.runContext.session_id
-      })
-    : undefined;
   const taskTools = input.taskStateRuntime
     ? {
         task_check: taskCheckTool,
@@ -404,11 +265,7 @@ export const createDataAgent = async (
     // Workspace remains attached for execution context, while auto-injection is disabled above.
     // Explicitly created tools are wrapped by the same governed execution boundary as every other tool.
     workspace: runWorkspace.workspace,
-    inputProcessors: [
-      ...(taskStateContextProcessor ? [taskStateContextProcessor] : []),
-      contextBudgetProcessor,
-      providerPromptGuard
-    ],
+    inputProcessors: mastraContextProcessors.inputProcessors,
     defaultOptions: {
       maxSteps: AGENT_MAX_STEPS,
       ...(input.modelSettings ? { modelSettings: input.modelSettings } : {}),
@@ -438,13 +295,10 @@ export const createDataAgent = async (
   return {
     agent,
     commandExecutionEnabled: runWorkspace.commandExecutionEnabled,
-    contextRunState,
     destroyWorkspace: () => runWorkspace.workspace.destroy(),
     governedMessages,
     ...(goalRuntime ? { goalRuntime } : {}),
     isolation: runWorkspace.isolation,
-    ...(mastra ? { mastra } : {}),
-    registry,
     workspaceDir: runWorkspace.runDir
   };
 };

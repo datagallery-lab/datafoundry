@@ -1,0 +1,187 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 9609 868" width="9609" height="868" style="--bg:#ffffff;--fg:#1f2328;--line:#d1d9e0;--accent:#0969da;--muted:#59636e;background:var(--bg)">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap');
+  text { font-family: 'Inter', system-ui, sans-serif; }
+  svg {
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
+    --_text:          var(--fg);
+    --_text-sec:      var(--muted, color-mix(in srgb, var(--fg) 60%, var(--bg)));
+    --_text-muted:    var(--muted, color-mix(in srgb, var(--fg) 40%, var(--bg)));
+    --_text-faint:    color-mix(in srgb, var(--fg) 25%, var(--bg));
+    --_line:          var(--line, color-mix(in srgb, var(--fg) 30%, var(--bg)));
+    --_arrow:         var(--accent, color-mix(in srgb, var(--fg) 50%, var(--bg)));
+    --_node-fill:     var(--surface, color-mix(in srgb, var(--fg) 3%, var(--bg)));
+    --_node-stroke:   var(--border, color-mix(in srgb, var(--fg) 20%, var(--bg)));
+    --_group-fill:    var(--bg);
+    --_group-hdr:     color-mix(in srgb, var(--fg) 5%, var(--bg));
+    --_inner-stroke:  color-mix(in srgb, var(--fg) 12%, var(--bg));
+    --_key-badge:     color-mix(in srgb, var(--fg) 10%, var(--bg));
+  }
+</style>
+<defs>
+  <marker id="arrowhead" markerWidth="8" markerHeight="4.8" refX="8" refY="2.4" orient="auto">
+    <polygon points="0 0, 8 2.4, 0 4.8" fill="var(--_arrow)" />
+  </marker>
+  <marker id="arrowhead-start" markerWidth="8" markerHeight="4.8" refX="0" refY="2.4" orient="auto-start-reverse">
+    <polygon points="8 0, 0 2.4, 8 4.8" fill="var(--_arrow)" />
+  </marker>
+</defs>
+<rect x="39.99999999999997" y="62" width="479.55" height="726" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+<rect x="39.99999999999997" y="62" width="479.55" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+<text x="51.99999999999997" y="76" dy="0.35em" font-size="12" font-weight="600" fill="var(--_text-sec)">&quot;External / Runtime Content&quot;</text>
+<rect x="599.5500000000001" y="582" width="888.95" height="246" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+<rect x="599.5500000000001" y="582" width="888.95" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+<text x="611.5500000000001" y="596" dy="0.35em" font-size="12" font-weight="600" fill="var(--_text-sec)">&quot;agent-runtime Package Boundary&quot;</text>
+<rect x="958.8999999999999" y="62" width="1146.35" height="536" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+<rect x="958.8999999999999" y="62" width="1146.35" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+<text x="970.8999999999999" y="76" dy="0.35em" font-size="12" font-weight="600" fill="var(--_text-sec)">&quot;1. Source Layer&lt;br/&gt;runtime sources + tool observation subdomain&quot;</text>
+<rect x="2185.25" y="82" width="1779.2500000000005" height="496" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+<rect x="2185.25" y="82" width="1779.2500000000005" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+<text x="2197.25" y="96" dy="0.35em" font-size="12" font-weight="600" fill="var(--_text-sec)">&quot;2. Inventory Layer&quot;</text>
+<rect x="4044.5" y="412" width="3443.6" height="416" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+<rect x="4044.5" y="412" width="3443.6" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+<text x="4056.5" y="426" dy="0.35em" font-size="12" font-weight="600" fill="var(--_text-sec)">&quot;3. Policy / Decision Layer&quot;</text>
+<rect x="7568.1" y="342" width="788.8500000000004" height="146" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+<rect x="7568.1" y="342" width="788.8500000000004" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+<text x="7580.1" y="356" dy="0.35em" font-size="12" font-weight="600" fill="var(--_text-sec)">&quot;4. Projection Layer&quot;</text>
+<rect x="8436.95" y="282" width="508.14999999999964" height="536" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+<rect x="8436.95" y="282" width="508.14999999999964" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+<text x="8448.95" y="296" dy="0.35em" font-size="12" font-weight="600" fill="var(--_text-sec)">&quot;5. Protocol Layer&quot;</text>
+<rect x="9025.099999999999" y="282" width="543.8999999999996" height="296" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+<rect x="9025.099999999999" y="282" width="543.8999999999996" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+<text x="9037.099999999999" y="296" dy="0.35em" font-size="12" font-weight="600" fill="var(--_text-sec)">&quot;Model-Visible Context&quot;</text>
+<polyline points="406.59999999999997,688 619.55,688" fill="none" stroke="var(--_line)" stroke-width="0.75" marker-end="url(#arrowhead)" />
+<polyline points="858.8999999999999,688 1014.6500000000001,688" fill="none" stroke="var(--_line)" stroke-width="0.75" marker-end="url(#arrowhead)" />
+<polyline points="445.92499999999995,748 1057.55,748" fill="none" stroke="var(--_line)" stroke-width="0.75" stroke-dasharray="4 4" marker-end="url(#arrowhead)" />
+<polyline points="1389.8500000000001,748 1488.5,748 1488.5,708 1508.5,708 1508.5,478 1836.875,478 1836.875,336" fill="none" stroke="var(--_line)" stroke-width="0.75" stroke-dasharray="4 4" marker-end="url(#arrowhead)" />
+<polyline points="1389.8500000000001,748 1488.5,748 1488.5,798 4262.825000000001,798 4262.825000000001,796" fill="none" stroke="var(--_line)" stroke-width="0.75" stroke-dasharray="4 4" marker-end="url(#arrowhead)" />
+<polyline points="1389.8500000000001,748 3984.5000000000005,748 3984.5000000000005,428 7508.1,428 7508.1,508 8496.275000000001,508" fill="none" stroke="var(--_line)" stroke-width="0.75" stroke-dasharray="4 4" marker-end="url(#arrowhead)" />
+<polyline points="1432.75,688 1488.5,688 1488.5,728 1508.5,728 1508.5,578 1836.875,578 1836.875,576" fill="none" stroke="var(--_line)" stroke-width="0.75" marker-end="url(#arrowhead)" />
+<polyline points="1432.75,688 1508.5,688 1508.5,458 1836.875,458 1836.875,336" fill="none" stroke="var(--_line)" stroke-width="0.75" marker-end="url(#arrowhead)" />
+<polyline points="1432.75,688 1488.5,688 1488.5,658 1508.5,658 1508.5,178 1836.875,178 1836.875,176" fill="none" stroke="var(--_line)" stroke-width="0.75" marker-end="url(#arrowhead)" />
+<polyline points="431.625,558 1699.325,558" fill="none" stroke="var(--_line)" stroke-width="0.75" marker-end="url(#arrowhead)" />
+<polyline points="499.54999999999995,498 1836.875,498 1836.875,540" fill="none" stroke="var(--_line)" stroke-width="0.75" marker-end="url(#arrowhead)" />
+<polyline points="495.975,438 1075.425,438" fill="none" stroke="var(--_line)" stroke-width="0.75" marker-end="url(#arrowhead)" />
+<polyline points="478.1,378 978.9000000000001,378" fill="none" stroke="var(--_line)" stroke-width="0.75" marker-end="url(#arrowhead)" />
+<polyline points="474.525,318 1104.025,318" fill="none" stroke="var(--_line)" stroke-width="0.75" marker-end="url(#arrowhead)" />
+<polyline points="474.525,258 1093.3,258" fill="none" stroke="var(--_line)" stroke-width="0.75" marker-end="url(#arrowhead)" />
+<polyline points="495.975,198 1079,198" fill="none" stroke="var(--_line)" stroke-width="0.75" marker-end="url(#arrowhead)" />
+<polyline points="470.95,138 1014.6500000000001,138" fill="none" stroke="var(--_line)" stroke-width="0.75" marker-end="url(#arrowhead)" />
+<polyline points="1974.425,558 2367.825,558 2367.825,386" fill="none" stroke="var(--_line)" stroke-width="0.75" marker-end="url(#arrowhead)" />
+<polyline points="1371.9750000000001,438 1836.875,438 1836.875,336" fill="none" stroke="var(--_line)" stroke-width="0.75" marker-end="url(#arrowhead)" />
+<polyline points="1468.5,378 1836.875,378 1836.875,336" fill="none" stroke="var(--_line)" stroke-width="0.75" marker-end="url(#arrowhead)" />
+<polyline points="1343.375,318 1631.4,318" fill="none" stroke="var(--_line)" stroke-width="0.75" marker-end="url(#arrowhead)" />
+<polyline points="1354.1000000000001,258 1836.875,258 1836.875,300" fill="none" stroke="var(--_line)" stroke-width="0.75" marker-end="url(#arrowhead)" />
+<polyline points="1368.4,198 1836.875,198 1836.875,300" fill="none" stroke="var(--_line)" stroke-width="0.75" marker-end="url(#arrowhead)" />
+<polyline points="1432.75,138 1836.875,138 1836.875,140" fill="none" stroke="var(--_line)" stroke-width="0.75" marker-end="url(#arrowhead)" />
+<polyline points="2042.35,318 2367.825,318 2367.825,350" fill="none" stroke="var(--_line)" stroke-width="0.75" marker-end="url(#arrowhead)" />
+<polyline points="2085.25,158 2367.825,158 2367.825,350" fill="none" stroke="var(--_line)" stroke-width="0.75" marker-end="url(#arrowhead)" />
+<polyline points="2530.3999999999996,368 2650.4,368" fill="none" stroke="var(--_line)" stroke-width="0.75" marker-end="url(#arrowhead)" />
+<polyline points="2968.4,368 3088.4,368" fill="none" stroke="var(--_line)" stroke-width="0.75" marker-end="url(#arrowhead)" />
+<polyline points="3420.7000000000003,368 3540.7000000000003,368" fill="none" stroke="var(--_line)" stroke-width="0.75" marker-end="url(#arrowhead)" />
+<polyline points="3944.5000000000005,368 3984.5000000000005,368 3984.5000000000005,488 4262.825000000001,488 4262.825000000001,760" fill="none" stroke="var(--_line)" stroke-width="0.75" marker-end="url(#arrowhead)" />
+<polyline points="4461.150000000001,778 4581.150000000001,778" fill="none" stroke="var(--_line)" stroke-width="0.75" marker-end="url(#arrowhead)" />
+<polyline points="5049.3,778 5169.3,778" fill="none" stroke="var(--_line)" stroke-width="0.75" marker-end="url(#arrowhead)" />
+<polyline points="5487.3,778 5607.3,778" fill="none" stroke="var(--_line)" stroke-width="0.75" marker-end="url(#arrowhead)" />
+<polyline points="5989.650000000001,778 6109.650000000001,778" fill="none" stroke="var(--_line)" stroke-width="0.75" marker-end="url(#arrowhead)" />
+<polyline points="6520.600000000001,778 6640.6,778" fill="none" stroke="var(--_line)" stroke-width="0.75" marker-end="url(#arrowhead)" />
+<polyline points="7001.5,778 7125.075,778" fill="none" stroke="var(--_line)" stroke-width="0.75" marker-end="url(#arrowhead)" />
+<polyline points="7001.5,778 7021.5,778 7021.5,568 7121.5,568" fill="none" stroke="var(--_line)" stroke-width="0.75" marker-end="url(#arrowhead)" />
+<polyline points="3420.7000000000003,368 3440.7000000000003,368 3440.7000000000003,238 7508.1,238 7508.1,458 7700.625,458 7700.625,466" fill="none" stroke="var(--_line)" stroke-width="0.75" marker-end="url(#arrowhead)" />
+<polyline points="7464.525000000001,778 7488.1,778 7488.1,508 7508.1,508 7508.1,438 7700.625,438 7700.625,430" fill="none" stroke="var(--_line)" stroke-width="0.75" marker-end="url(#arrowhead)" />
+<polyline points="7468.1,568 7488.1,568 7488.1,488 7508.1,488 7508.1,418 7700.625,418 7700.625,430" fill="none" stroke="var(--_line)" stroke-width="0.75" marker-end="url(#arrowhead)" />
+<polyline points="7813.15,448 7933.150000000001,448" fill="none" stroke="var(--_line)" stroke-width="0.75" marker-end="url(#arrowhead)" />
+<polyline points="8336.95,448 8691.025000000001,448 8691.025000000001,490" fill="none" stroke="var(--_line)" stroke-width="0.75" marker-end="url(#arrowhead)" />
+<polyline points="7464.525000000001,778 8456.95,778" fill="none" stroke="var(--_line)" stroke-width="0.75" marker-end="url(#arrowhead)" />
+<polyline points="7468.1,568 8691.025000000001,568 8691.025000000001,760" fill="none" stroke="var(--_line)" stroke-width="0.75" marker-end="url(#arrowhead)" />
+<polyline points="8885.775000000001,508 8945.1,508 8945.1,358 9102.300000000001,358" fill="none" stroke="var(--_line)" stroke-width="0.75" marker-end="url(#arrowhead)" />
+<polyline points="8885.775000000001,508 8945.1,508 8945.1,418 9045.1,418" fill="none" stroke="var(--_line)" stroke-width="0.75" marker-end="url(#arrowhead)" />
+<polyline points="8885.775000000001,508 8945.1,508 8945.1,478 9202.400000000001,478" fill="none" stroke="var(--_line)" stroke-width="0.75" marker-end="url(#arrowhead)" />
+<polyline points="8885.775000000001,508 8945.1,508 8945.1,538 9134.475,538" fill="none" stroke="var(--_line)" stroke-width="0.75" marker-end="url(#arrowhead)" />
+<rect x="245.89999999999998" y="40" width="67.75" height="36" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+<rect x="152.95" y="670" width="253.65" height="36" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+<rect x="113.62499999999997" y="730" width="332.3" height="36" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+<rect x="127.92499999999995" y="540" width="303.70000000000005" height="36" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+<rect x="59.99999999999997" y="480" width="439.55" height="36" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+<rect x="63.57499999999996" y="420" width="432.40000000000003" height="36" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+<rect x="81.44999999999996" y="360" width="396.65000000000003" height="36" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+<rect x="85.02499999999995" y="300" width="389.50000000000006" height="36" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+<rect x="85.02499999999995" y="240" width="389.50000000000006" height="36" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+<rect x="63.57499999999996" y="180" width="432.40000000000003" height="36" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+<rect x="88.59999999999997" y="120" width="382.35" height="36" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+<rect x="619.55" y="670" width="239.35000000000002" height="36" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+<rect x="1057.55" y="730" width="332.3" height="36" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+<rect x="1014.6500000000001" y="670" width="418.1" height="36" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+<rect x="1631.4" y="300" width="410.95000000000005" height="36" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+<rect x="1588.5" y="140" width="496.75000000000006" height="36" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+<rect x="1699.325" y="540" width="275.1" height="36" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+<rect x="1075.425" y="420" width="296.55" height="36" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+<rect x="978.9000000000001" y="360" width="489.6" height="36" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+<rect x="1104.025" y="300" width="239.35000000000002" height="36" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+<rect x="1093.3" y="240" width="260.8" height="36" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+<rect x="1079" y="180" width="289.40000000000003" height="36" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+<rect x="1014.6500000000001" y="120" width="418.1" height="36" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+<rect x="2205.25" y="350" width="325.15000000000003" height="36" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+<rect x="2650.4" y="350" width="318" height="36" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+<rect x="3088.4" y="350" width="332.3" height="36" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+<rect x="3540.7000000000003" y="350" width="403.8" height="36" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+<rect x="4064.500000000001" y="760" width="396.65000000000003" height="36" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+<rect x="4581.150000000001" y="760" width="468.15000000000003" height="36" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+<rect x="5169.3" y="760" width="318" height="36" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+<rect x="5607.3" y="760" width="382.35" height="36" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+<rect x="6109.650000000001" y="760" width="410.95000000000005" height="36" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+<rect x="6640.6" y="760" width="360.90000000000003" height="36" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+<rect x="7125.075" y="760" width="339.45000000000005" height="36" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+<rect x="7121.5" y="550" width="346.6" height="36" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+<rect x="7588.1" y="430" width="225.05" height="36" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+<rect x="7933.150000000001" y="430" width="403.8" height="36" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+<rect x="8496.275000000001" y="490" width="389.50000000000006" height="36" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+<rect x="8456.95" y="760" width="468.15000000000003" height="36" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+<rect x="9102.300000000001" y="340" width="389.50000000000006" height="36" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+<rect x="9045.1" y="400" width="503.90000000000003" height="36" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+<rect x="9202.400000000001" y="460" width="189.3" height="36" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+<rect x="9134.475" y="520" width="325.15000000000003" height="36" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+<text x="279.775" y="58" text-anchor="middle" dy="0.35em" font-size="13" font-weight="500" fill="var(--_text)">class</text>
+<text x="279.775" y="688" text-anchor="middle" dy="0.35em" font-size="13" font-weight="500" fill="var(--_text)">&quot;apps/api&lt;br/&gt;Run Orchestrator&quot;</text>
+<text x="279.775" y="748" text-anchor="middle" dy="0.35em" font-size="13" font-weight="500" fill="var(--_text)">&quot;Smoke Tests&lt;br/&gt;architecture / internals&quot;</text>
+<text x="279.775" y="558" text-anchor="middle" dy="0.35em" font-size="13" font-weight="500" fill="var(--_text)">&quot;User Query&lt;br/&gt;AG-UI current message&quot;</text>
+<text x="279.775" y="498" text-anchor="middle" dy="0.35em" font-size="13" font-weight="500" fill="var(--_text)">&quot;Conversation History&lt;br/&gt;metadata.conversation_messages&quot;</text>
+<text x="279.775" y="438" text-anchor="middle" dy="0.35em" font-size="13" font-weight="500" fill="var(--_text)">&quot;Compact Memory Authority&lt;br/&gt;CompactConversationMemory&quot;</text>
+<text x="279.775" y="378" text-anchor="middle" dy="0.35em" font-size="13" font-weight="500" fill="var(--_text)">&quot;WorkingMemory Projection&lt;br/&gt;Mastra runtime cache&quot;</text>
+<text x="279.775" y="318" text-anchor="middle" dy="0.35em" font-size="13" font-weight="500" fill="var(--_text)">&quot;Long-Term Memory&lt;br/&gt;metadata.long_term_memories&quot;</text>
+<text x="279.775" y="258" text-anchor="middle" dy="0.35em" font-size="13" font-weight="500" fill="var(--_text)">&quot;Knowledge Evidence&lt;br/&gt;docs / chunks / citations&quot;</text>
+<text x="279.775" y="198" text-anchor="middle" dy="0.35em" font-size="13" font-weight="500" fill="var(--_text)">&quot;Runtime State&lt;br/&gt;task / goal / datasource / workspace&quot;</text>
+<text x="279.775" y="138" text-anchor="middle" dy="0.35em" font-size="13" font-weight="500" fill="var(--_text)">&quot;Tool Raw Results&lt;br/&gt;schema / sql / files / MCP&quot;</text>
+<text x="739.2249999999999" y="688" text-anchor="middle" dy="0.35em" font-size="13" font-weight="500" fill="var(--_text)">&quot;index.ts&lt;br/&gt;public app API&quot;</text>
+<text x="1223.7" y="748" text-anchor="middle" dy="0.35em" font-size="13" font-weight="500" fill="var(--_text)">&quot;testing.ts&lt;br/&gt;smoke-only internal seams&quot;</text>
+<text x="1223.7" y="688" text-anchor="middle" dy="0.35em" font-size="13" font-weight="500" fill="var(--_text)">&quot;createDataAgent&lt;br/&gt;tool + context boundary assembly&quot;</text>
+<text x="1836.875" y="318" text-anchor="middle" dy="0.35em" font-size="13" font-weight="500" fill="var(--_text)">&quot;RuntimeContextSourceRegistry&lt;br/&gt;run-scoped sources&quot;</text>
+<text x="1836.875" y="158" text-anchor="middle" dy="0.35em" font-size="13" font-weight="500" fill="var(--_text)">&quot;ToolObservationAdapterRegistry&lt;br/&gt;tool-result source subdomain&quot;</text>
+<text x="1836.875" y="558" text-anchor="middle" dy="0.35em" font-size="13" font-weight="500" fill="var(--_text)">&quot;MastraConversationContextAdapter&quot;</text>
+<text x="1223.7" y="438" text-anchor="middle" dy="0.35em" font-size="13" font-weight="500" fill="var(--_text)">&quot;Compact Memory RuntimeContextSource&quot;</text>
+<text x="1223.7" y="378" text-anchor="middle" dy="0.35em" font-size="13" font-weight="500" fill="var(--_text)">&quot;WorkingMemoryProjectionContextSource&lt;br/&gt;snapshot / audit only&quot;</text>
+<text x="1223.7" y="318" text-anchor="middle" dy="0.35em" font-size="13" font-weight="500" fill="var(--_text)">&quot;LongTermMemoryContextSource&quot;</text>
+<text x="1223.7" y="258" text-anchor="middle" dy="0.35em" font-size="13" font-weight="500" fill="var(--_text)">&quot;Knowledge RuntimeContextSource&quot;</text>
+<text x="1223.7" y="198" text-anchor="middle" dy="0.35em" font-size="13" font-weight="500" fill="var(--_text)">&quot;Runtime State RuntimeContextSource&quot;</text>
+<text x="1223.7" y="138" text-anchor="middle" dy="0.35em" font-size="13" font-weight="500" fill="var(--_text)">&quot;ToolObservationAdapter&lt;br/&gt;raw result -&gt; ContextItem[</text>
+<text x="2367.825" y="368" text-anchor="middle" dy="0.35em" font-size="13" font-weight="500" fill="var(--_text)">&quot;ContextItem&lt;br/&gt;smallest inventory unit&quot;</text>
+<text x="2809.4" y="368" text-anchor="middle" dy="0.35em" font-size="13" font-weight="500" fill="var(--_text)">&quot;ContextGroup&lt;br/&gt;atomic selection unit&quot;</text>
+<text x="3254.55" y="368" text-anchor="middle" dy="0.35em" font-size="13" font-weight="500" fill="var(--_text)">&quot;ContextPackage&lt;br/&gt;run revision snapshot&quot;</text>
+<text x="3742.6000000000004" y="368" text-anchor="middle" dy="0.35em" font-size="13" font-weight="500" fill="var(--_text)">&quot;ContextRunState&lt;br/&gt;current package + plan records&quot;</text>
+<text x="4262.825000000001" y="778" text-anchor="middle" dy="0.35em" font-size="13" font-weight="500" fill="var(--_text)">&quot;ContextSourceAuthorityProfile&lt;br/&gt;authority order&quot;</text>
+<text x="4815.225" y="778" text-anchor="middle" dy="0.35em" font-size="13" font-weight="500" fill="var(--_text)">&quot;ContextSourcePolicy&lt;br/&gt;model-visible / shadow / audit-only&quot;</text>
+<text x="5328.3" y="778" text-anchor="middle" dy="0.35em" font-size="13" font-weight="500" fill="var(--_text)">&quot;ContextPolicy&lt;br/&gt;redaction / boundary&quot;</text>
+<text x="5798.475" y="778" text-anchor="middle" dy="0.35em" font-size="13" font-weight="500" fill="var(--_text)">&quot;ContextBudgetAllocator&lt;br/&gt;token / char budgets&quot;</text>
+<text x="6315.125000000001" y="778" text-anchor="middle" dy="0.35em" font-size="13" font-weight="500" fill="var(--_text)">&quot;Source decisions&lt;br/&gt;exact duplicate / overlap flag&quot;</text>
+<text x="6821.05" y="778" text-anchor="middle" dy="0.35em" font-size="13" font-weight="500" fill="var(--_text)">&quot;ContextStepPlanner&lt;br/&gt;selection &amp; reduction&quot;</text>
+<text x="7294.8" y="778" text-anchor="middle" dy="0.35em" font-size="13" font-weight="500" fill="var(--_text)">&quot;ContextPlan&lt;br/&gt;selected + omitted groups&quot;</text>
+<text x="7294.8" y="568" text-anchor="middle" dy="0.35em" font-size="13" font-weight="500" fill="var(--_text)">&quot;ContextDecision&lt;br/&gt;why selected / omitted&quot;</text>
+<text x="7700.625" y="448" text-anchor="middle" dy="0.35em" font-size="13" font-weight="500" fill="var(--_text)">&quot;ContextPromptMaterializer&quot;</text>
+<text x="8135.05" y="448" text-anchor="middle" dy="0.35em" font-size="13" font-weight="500" fill="var(--_text)">&quot;ContextPromptView&lt;br/&gt;provider-neutral model input&quot;</text>
+<text x="8691.025000000001" y="508" text-anchor="middle" dy="0.35em" font-size="13" font-weight="500" fill="var(--_text)">&quot;MastraContextProtocolAdapter&lt;br/&gt;MastraDBMessage[</text>
+<text x="8691.025000000001" y="778" text-anchor="middle" dy="0.35em" font-size="13" font-weight="500" fill="var(--_text)">&quot;AgUiContextEventSink&lt;br/&gt;context.compiled / prompt-verified&quot;</text>
+<text x="9297.050000000001" y="358" text-anchor="middle" dy="0.35em" font-size="13" font-weight="500" fill="var(--_text)">&quot;System messages&lt;br/&gt;policy / safety / tool rules&quot;</text>
+<text x="9297.050000000001" y="418" text-anchor="middle" dy="0.35em" font-size="13" font-weight="500" fill="var(--_text)">&quot;User-role context block&lt;br/&gt;memory / knowledge / runtime context&quot;</text>
+<text x="9297.050000000001" y="478" text-anchor="middle" dy="0.35em" font-size="13" font-weight="500" fill="var(--_text)">&quot;Current user message&quot;</text>
+<text x="9297.050000000001" y="538" text-anchor="middle" dy="0.35em" font-size="13" font-weight="500" fill="var(--_text)">&quot;Tool messages&lt;br/&gt;governed observations&quot;</text>
+</svg>

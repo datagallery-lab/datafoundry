@@ -3,10 +3,12 @@ import type { DataGateway, SchemaSummary, SqlExecutionResult } from "@open-data-
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 
-import type { ContextPackage } from "../context/context-package.js";
-import { truncateContextText } from "../context/context-policy.js";
-import { SQL_MAX_EXECUTION_COUNT, SQL_MAX_SQL_CHARS } from "../context/defaults.js";
+import type { ContextPackage } from "../context/inventory/context-package.js";
+import { truncateContextText } from "../context/inventory/context-text.js";
+import { SQL_MAX_SQL_CHARS } from "../context/inventory/context-limits.js";
+import { toolObservationActivityFromPackage } from "../context/tool-observation/tool-observation-projection-items.js";
 import { createActivitySnapshot, createCustomEvent } from "../events.js";
+import { SQL_MAX_EXECUTION_COUNT } from "../runtime-limits.js";
 import type { AgentRunContext, AgUiEventEmitter } from "../types.js";
 
 type SchemaCapability = {
@@ -204,7 +206,7 @@ export const createDataAgentToolRegistry = (input: CreateDataAgentToolRegistryIn
       tool_name: governed.toolName,
       status: "completed",
       output_type: isSchema ? "json" : "table",
-      content: governed.contextPackage.activity
+      content: toolObservationActivityFromPackage(governed.contextPackage)
     }));
   };
 

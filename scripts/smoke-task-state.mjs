@@ -3,17 +3,20 @@ import { Mastra } from "@mastra/core/mastra";
 import { rmSync } from "node:fs";
 
 import {
+  CONVERSATION_WORKING_MEMORY_CONFIG,
+  createAgentMemoryRuntime,
   createDataAgent,
-  createTaskStateRuntime,
-  TaskStateContextProcessor
-} from "../packages/agent-runtime/dist/index.js";
+  MastraTaskStateContextProcessor
+} from "../packages/agent-runtime/dist/testing.js";
 
-const databasePath = `storage/task-state-smoke/${Date.now()}/task-state.sqlite`;
+const smokeRoot = `storage/task-state-smoke/${Date.now()}`;
+const databasePath = `${smokeRoot}/task-state.sqlite`;
+const workingMemoryDatabasePath = `${smokeRoot}/working-memory.sqlite`;
 const threadId = "task-state-thread";
 const resourceId = "dev-user";
 
 try {
-  const firstRuntime = await createTaskStateRuntime(databasePath);
+  const firstRuntime = await createAgentMemoryRuntime(databasePath);
   const firstMastra = new Mastra({ storage: firstRuntime.storage });
   const firstContext = { agent: { threadId, resourceId }, mastra: firstMastra };
   const written = await taskWriteTool.execute({
@@ -28,7 +31,7 @@ try {
     ]
   }, firstContext);
   assert(written.isError === false, `task_write failed: ${written.content}`);
-  const processor = new TaskStateContextProcessor({ runtime: firstRuntime, threadId });
+  const processor = new MastraTaskStateContextProcessor({ runtime: firstRuntime, threadId });
   const injected = await processor.processInputStep({ messages: [], systemMessages: [] });
   assert(
     injected.systemMessages[0].content.includes("Inspecting schema"),
@@ -40,7 +43,7 @@ try {
   );
   await firstRuntime.close();
 
-  const secondRuntime = await createTaskStateRuntime(databasePath);
+  const secondRuntime = await createAgentMemoryRuntime(databasePath);
   const secondMastra = new Mastra({ storage: secondRuntime.storage });
   const secondContext = { agent: { threadId, resourceId }, mastra: secondMastra };
   const recovered = await taskCheckTool.execute({}, secondContext);
@@ -73,9 +76,37 @@ try {
   assert(processorIds.includes("task-state-context"), "agent should include durable task context injection");
   await configured.destroyWorkspace();
   await secondRuntime.close();
+  const workingMemoryRuntime = await createAgentMemoryRuntime(workingMemoryDatabasePath, {
+    conversationMemoryMode: "working-memory-readonly"
+  });
+  const memoryTools = workingMemoryRuntime.memory.listTools();
+  assert(!("updateWorkingMemory" in memoryTools), "read-only WorkingMemory should not expose updateWorkingMemory");
+  assert(!("setWorkingMemory" in memoryTools), "read-only WorkingMemory should not expose setWorkingMemory");
+  await workingMemoryRuntime.memory.createThread({
+    threadId,
+    resourceId,
+    saveThread: true,
+    memoryConfig: CONVERSATION_WORKING_MEMORY_CONFIG
+  });
+  await workingMemoryRuntime.memory.updateWorkingMemory({
+    threadId,
+    resourceId,
+    workingMemory: "# Conversation Summary\nfrom_position: 1\nto_position: 2\n\nPersisted test summary.",
+    memoryConfig: CONVERSATION_WORKING_MEMORY_CONFIG
+  });
+  const workingMemory = await workingMemoryRuntime.memory.getWorkingMemory({
+    threadId,
+    resourceId,
+    memoryConfig: CONVERSATION_WORKING_MEMORY_CONFIG
+  });
+  assert(
+    workingMemory?.includes("Persisted test summary."),
+    "read-only WorkingMemory should still be readable after backend-controlled writes"
+  );
+  await workingMemoryRuntime.close();
   console.log("Task state smoke OK: builtin tools persist by thread in application-level Mastra LibSQL");
 } finally {
-  rmSync(databasePath.replace(/\/task-state\.sqlite$/, ""), { force: true, recursive: true });
+  rmSync(smokeRoot, { force: true, recursive: true });
 }
 
 function assert(condition, message) {

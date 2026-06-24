@@ -29,8 +29,8 @@ package "Mastra Agent Runtime" #DCE8C9 {
   component "@ag-ui/mastra\nMastraAgent" as AgUiMastra
   component "Mastra DataAgent\nReAct + tool calling" as Agent
   component "@ag-ui/mcp-middleware\nenabled MCP servers" as McpMiddleware
-  component "ContextBudgetProcessor\nevery ReAct step" as ContextProcessor #F9D65C
-  component "TaskStateContextProcessor\nthread task snapshot" as TaskProcessor #F9D65C
+  component "MastraContextBudgetProcessor\nevery ReAct step" as ContextProcessor #F9D65C
+  component "MastraTaskStateContextProcessor\nthread task snapshot" as TaskProcessor #F9D65C
   component "ProviderPromptGuard\nbefore model call" as PromptGuard #F9D65C
   component "Typed Data Tools\nlist / inspect / preview / SQL" as Tools
   component "Knowledge Tool\nretrieve_knowledge" as KnowledgeTool
@@ -39,8 +39,8 @@ package "Mastra Agent Runtime" #DCE8C9 {
 }
 
 package "Data Safety Boundary" #F2D8D5 {
-  component "ToolObservationRouter\nstep-level interception" as ObservationRouter
-  component "One Adapter per Tool\ndata / task / workspace" as ContextAdapters
+  component "MastraToolObservationRouter\nstep-level interception" as ObservationRouter
+  component "ToolObservationAdapters\none adapter per tool" as ToolObservationAdapters
   component "LocalDataGateway" as Gateway
   component "LocalKnowledgeService\nFTS + optional embeddings" as Knowledge
   component "Readonly SQL Guard\nlimit / timeout" as SqlGuard
@@ -94,12 +94,12 @@ Agent --> TaskTools
 Agent --> WorkspaceTools
 KnowledgeTool --> Knowledge
 Knowledge --> Metadata
-KnowledgeTool --> ContextAdapters : package observation
-Tools --> ContextAdapters : package observation
+KnowledgeTool --> ToolObservationAdapters : package observation
+Tools --> ToolObservationAdapters : package observation
 TaskTools --> TaskState : native threadState mutation
 TaskTools --> ObservationRouter : next-step tool result
 WorkspaceTools --> ObservationRouter : next-step tool result
-ObservationRouter --> ContextAdapters : exact toolName
+ObservationRouter --> ToolObservationAdapters : exact toolName
 WorkspaceTools --> RunWorkspace
 Tools --> Gateway
 Gateway --> SqlGuard

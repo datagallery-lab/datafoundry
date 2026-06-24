@@ -1,15 +1,10 @@
 import {
   createDataAgentRunContext,
   createDataAgentToolRegistry,
-  ContextBudgetAllocator,
-  ContextOrchestrator,
-  ContextPolicy,
-  ContextSourceRegistry,
+  createToolObservationBoundary,
   GovernedToolFactory,
-  SchemaContextAdapter,
-  SqlResultContextAdapter,
-  ToolResultDispatcher
-} from "../packages/agent-runtime/dist/index.js";
+  ToolObservationDispatcher
+} from "../packages/agent-runtime/dist/testing.js";
 import { LocalDataGateway } from "../packages/data-gateway/dist/index.js";
 import { createMetadataStore } from "../packages/metadata/dist/index.js";
 import { mkdirSync, rmSync } from "node:fs";
@@ -58,12 +53,20 @@ try {
     selected_datasource_id: datasource_a,
     enabled_datasource_ids: [datasource_a, datasource_b]
   });
+  const runScope = {
+    modelName: runContext.model_name,
+    resourceId: runContext.user_id,
+    runId: runContext.run_id,
+    sessionId: runContext.session_id
+  };
 
-  const budgetAllocator = new ContextBudgetAllocator();
-  const sourceRegistry = new ContextSourceRegistry();
-  const orchestrator = new ContextOrchestrator(budgetAllocator, sourceRegistry, new ContextPolicy());
-  sourceRegistry.registerToolAdapter(new SchemaContextAdapter());
-  sourceRegistry.registerToolAdapter(new SqlResultContextAdapter());
+  const { packager } = createToolObservationBoundary({
+    identity: {
+      resourceId: runContext.user_id,
+      runId: runContext.run_id,
+      sessionId: runContext.session_id
+    }
+  });
 
   const events = [];
   const registry = createDataAgentToolRegistry({
@@ -72,7 +75,7 @@ try {
     emitter: { emit: (event) => events.push(event) }
   });
   const factory = new GovernedToolFactory(
-    new ToolResultDispatcher(orchestrator, runContext),
+    new ToolObservationDispatcher(packager, runScope),
     registry.onGovernedResult
   );
   const inspectSchema = factory.governTool("inspect_schema", registry.mastraTools.inspect_schema);

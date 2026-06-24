@@ -1,8 +1,8 @@
 # Agent / Data Gateway / Knowledge 架构设计与开发方案
 
-日期：2026-06-22
+日期：2026-06-23
 当前阶段：Context Governance Phase 1-3 已完成；配置管理 REST、effective run config、
-Knowledge local-first、MCP middleware、Skill policy、PG/MySQL adapter 基础版已完成。
+Knowledge local-first、MCP middleware、Skill policy、PG/MySQL adapter 基础版、Conversation Memory 第一阶段已完成。
 
 ## 1. 当前结论
 
@@ -35,7 +35,8 @@ GET/POST/PATCH/DELETE /api/v1/*
 
 当前架构图：[PlantUML](./ag-ui-agent-runtime-architecture.puml) / [SVG](./ag-ui-agent-runtime-architecture.svg)
 
-上下文架构：[交互 HTML](./agent-context-architecture.html) / [当前组件 SVG](./agent-context-current.svg)
+上下文架构：[权威交互 HTML](./agent-context-architecture.html) /
+[五层流水线 SVG](./context-governance-pipeline.svg)
 
 ## 2. 目标和边界
 
@@ -63,10 +64,10 @@ GET/POST/PATCH/DELETE /api/v1/*
 
 | 模块 | 职责 | 当前实现 |
 | --- | --- | --- |
-| `apps/api` | 单一 runtime；CopilotKit/AG-UI run；配置管理 REST；run identity、claim、回放和 task PLAN 投影。 | Node HTTP；CopilotKit runtime；`@ag-ui/mastra`；`@ag-ui/mcp-middleware`；`/api/v1` router。 |
-| `packages/agent-runtime` | ReAct、逐 step context、数据/Workspace/task/协作/Knowledge 工具治理，Skill policy。 | Mastra；Memory task-state；ToolResultAdapter registry；`retrieve_knowledge`；allowedTools 过滤。 |
+| `apps/api` | 单一 runtime；CopilotKit/AG-UI run；配置管理 REST；run identity、claim、回放、task PLAN 投影和服务端 conversation history 组装。 | Node HTTP；CopilotKit runtime；`@ag-ui/mastra`；`@ag-ui/mcp-middleware`；`/api/v1` router。 |
+| `packages/agent-runtime` | ReAct、逐 step context、数据/Workspace/task/协作/Knowledge 工具治理，Skill policy。 | Mastra；Memory task-state；ToolObservationAdapter registry；`retrieve_knowledge`；allowedTools 过滤。 |
 | `packages/data-gateway` | 数据源注册、schema inspect、preview、只读 SQL、SQL guard、SQL audit、artifact 创建。 | `LocalDataGateway`；`node:sqlite`；CSV parser；`read-excel-file`；DuckDB demo / SQLite / CSV / XLSX / PostgreSQL / MySQL adapters；`guardReadonlySql`。 |
-| `packages/metadata` | 本地元数据事实源。 | `node:sqlite`；用户级复合主键；identity migration；claim/find/replay；`RunEventWriter`；配置资源、加密 secret、job repository。 |
+| `packages/metadata` | 本地元数据事实源。 | `node:sqlite`；用户级复合主键；identity migration；claim/find/replay；`RunEventWriter`；conversation message/summary repositories；配置资源、加密 secret、job repository。 |
 | `packages/contracts` | 共享合约。 | API result、AG-UI `BaseEvent`-backed `RunEventEnvelope`、tool input types、artifact summary、env schema、`SECRET_MASTER_KEY`。 |
 | `packages/providers` | 模型 provider 适配。 | OpenAI-compatible `/chat/completions`；Mastra model router object；profile-based provider factory；mock marker。 |
 | `packages/artifacts` | Artifact 创建服务。 | `LocalArtifactService` 写 metadata artifact record，当前主要用于 SQL table result preview。 |
@@ -193,15 +194,33 @@ Data Gateway result
    -> sql_audit_logs: audit fact
 ```
 
-Phase 4-5 尚未做：
+Phase 4 已实现到 4.3：
 
-- 不启用 conversation Memory；task thread-state slice 可使用只读 Memory + 独立 LibSQL。
+- 新增 `conversation_messages`，按 `user_id + session_id` 保存可复用 user/assistant 自然语言消息。
+- 新 run 进入 Mastra 前，由服务端组装最近历史和当前 user message，不再完全信任客户端回传历史。
+- assistant 文本从 AG-UI `TEXT_MESSAGE_CONTENT` / `TEXT_MESSAGE_CHUNK` 提炼，完成运行后写入 conversation memory。
+- `run_events` 仍负责完整 AG-UI 回放；conversation memory 只负责模型可复用历史。
+- resume suspended run 暂时保持原链路，避免破坏 human-in-the-loop 恢复上下文。
+- `ConversationMemoryService` 已成为生产入口，统一处理 current user 写入、history load、window policy 和 observer。
+- 入口 conversation window 已支持 token-aware 估算裁剪和字符硬上限；当前 user message 始终保留。
+- 新增 `conversation_summaries`，latest summary 可作为 tagged trusted context block 进入入口上下文。
+- 自动 summary generator 已接入 `ConversationMemoryEventObserver.flushCompleted()`。
+- 生产 runtime 已注入 Mastra `Agent.generate()` summarizer；生成失败时降级 deterministic fallback。
+- replacement 策略已生效：latest summary 覆盖范围内的原始 message 不再进入入口 history 候选。
+
+详细设计：
+
+[2026-06-23-conversation-memory-design.md](./2026-06-23-conversation-memory-design.md)
+
+Phase 5 尚未做：
+
 - 不启用 observational memory。
 - 不做 semantic recall。
 - Knowledge/RAG 当前是 local-first tool，不等同于 conversation memory。
+- Mastra memory 尚未接管 history；当前仅使用 Mastra Agent 作为 summary 生成器。
 
 `ask_user` / `submit_plan` suspend-resume 已完成；native goal 已完成基础封装，仍缺独立 judge budget 和失败/耗尽
-smoke。之后进入 Phase 3 数据通道，再设计 conversation Memory 所有权。
+smoke。Conversation Memory 下一步是 LLM/Mastra summarizer 增强，然后再接 Mastra 原生 memory。
 
 ## 6. Data Gateway 设计
 
@@ -326,6 +345,7 @@ EMBEDDING_API_KEY=
 SECRET_MASTER_KEY=replace-with-a-long-random-local-key
 STORAGE_ROOT_DIR=storage
 METADATA_DB_PATH=storage/metadata/workbench.sqlite
+MEMORY_EXTRACTION_TIMEOUT_MS=2000
 SQL_DEFAULT_LIMIT=100
 SQL_MAX_LIMIT=1000
 SQL_TIMEOUT_MS=10000

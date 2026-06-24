@@ -25,7 +25,7 @@ packages/agent-runtime
   -> Data tools -> packages/data-gateway
   -> Knowledge tool -> packages/knowledge
   -> Workspace / collaboration / task tools
-  -> ToolResultAdapter context governance
+  -> ToolObservationAdapter context governance
 
 packages/metadata
   -> SQLite metadata, run_events, config resources, encrypted secrets, jobs, SQL audit, artifacts
@@ -59,7 +59,7 @@ packages/metadata
 - `npm run typecheck`
 - `npm run test:web`
 - `npm run build:web`
-- `npm run smoke:config-api`
+- `npm run smoke:config-api`（含本地 OpenAI-compatible model profile `/test`）
 - `node scripts/smoke-copilotkit.mjs`
 - `node scripts/smoke-copilotkit-context.mjs`
 - `node scripts/smoke-context-compilation.mjs`

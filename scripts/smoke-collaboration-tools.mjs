@@ -1,16 +1,11 @@
 import { askUserTool, submitPlanTool } from "@mastra/core/harness";
 import {
-  AskUserContextAdapter,
-  ContextBudgetAllocator,
-  ContextOrchestrator,
-  ContextPolicy,
-  ContextSourceRegistry,
   GovernedToolFactory,
-  SubmitPlanContextAdapter,
-  ToolResultDispatcher,
+  ToolObservationDispatcher,
   createCustomEvent,
+  createToolObservationBoundary,
   createDataAgentRunContext
-} from "../packages/agent-runtime/dist/index.js";
+} from "../packages/agent-runtime/dist/testing.js";
 import {
   extractInteractionResume,
   InteractionRuntimeAdapter
@@ -43,15 +38,20 @@ try {
     selected_datasource_id: "unused",
     enabled_datasource_ids: ["unused"]
   });
-  const registry = new ContextSourceRegistry();
-  registry.registerToolAdapter(new AskUserContextAdapter());
-  registry.registerToolAdapter(new SubmitPlanContextAdapter());
-  const orchestrator = new ContextOrchestrator(
-    new ContextBudgetAllocator(),
-    registry,
-    new ContextPolicy()
-  );
-  const factory = new GovernedToolFactory(new ToolResultDispatcher(orchestrator, runContext));
+  const runScope = {
+    modelName: runContext.model_name,
+    resourceId: runContext.user_id,
+    runId: runContext.run_id,
+    sessionId: runContext.session_id
+  };
+  const { packager } = createToolObservationBoundary({
+    identity: {
+      resourceId: runContext.user_id,
+      runId: runContext.run_id,
+      sessionId: runContext.session_id
+    }
+  });
+  const factory = new GovernedToolFactory(new ToolObservationDispatcher(packager, runScope));
   const askUser = factory.governTool("ask_user", askUserTool);
   const submitPlan = factory.governTool("submit_plan", submitPlanTool);
 

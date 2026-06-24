@@ -199,6 +199,9 @@ export type EnvConfig = {
     root_dir: string;
     secret_master_key?: string;
   };
+  memory: {
+    completed_extraction_timeout_ms: number;
+  };
   sql: {
     default_limit: number;
     max_limit: number;
@@ -227,6 +230,12 @@ export const ENV_VARIABLE_SPECS: EnvVariableSpec[] = [
   { name: "STORAGE_ROOT_DIR", required: false, default_value: "storage", description: "Local storage root." },
   { name: "METADATA_DB_PATH", required: false, description: "SQLite metadata database path." },
   { name: "SECRET_MASTER_KEY", required: false, description: "Master key for local AES-GCM credential storage." },
+  {
+    name: "MEMORY_EXTRACTION_TIMEOUT_MS",
+    required: false,
+    default_value: "2000",
+    description: "Maximum wait for post-run summary and long-term memory extraction in ms."
+  },
   { name: "SQL_DEFAULT_LIMIT", required: false, default_value: "100", description: "Default read-only SQL row limit." },
   { name: "SQL_MAX_LIMIT", required: false, default_value: "1000", description: "Maximum read-only SQL row limit." },
   { name: "SQL_TIMEOUT_MS", required: false, default_value: "10000", description: "Read-only SQL timeout in ms." }
@@ -254,6 +263,9 @@ export const createEnvConfig = (env: Record<string, string | undefined>): EnvCon
   storage: {
     root_dir: env.STORAGE_ROOT_DIR ?? "storage",
     ...(env.SECRET_MASTER_KEY ? { secret_master_key: env.SECRET_MASTER_KEY } : {})
+  },
+  memory: {
+    completed_extraction_timeout_ms: Number.parseInt(env.MEMORY_EXTRACTION_TIMEOUT_MS ?? "2000", 10)
   },
   sql: {
     default_limit: Number.parseInt(env.SQL_DEFAULT_LIMIT ?? "100", 10),

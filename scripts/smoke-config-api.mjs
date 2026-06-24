@@ -10,6 +10,7 @@ import { z } from "zod";
 
 import { createServer as createApiServer } from "../apps/api/dist/server.js";
 import { resolveEffectiveRunConfig } from "../apps/api/dist/run-input.js";
+import { createTaskStateRuntime } from "../packages/agent-runtime/dist/index.js";
 import { createMetadataStore } from "../packages/metadata/dist/index.js";
 
 const root = mkdtempSync(join(tmpdir(), "open-data-agent-config-smoke-"));
@@ -26,6 +27,38 @@ const metadataStore = createMetadataStore({
   database_path: join(root, "metadata.sqlite"),
   secret_master_key: "config-smoke-master-key"
 });
+const taskStateRuntime = await createTaskStateRuntime(join(root, "task-state.sqlite"));
+let modelProbeRequest;
+const modelProviderServer = createHttpServer(async (request, response) => {
+  const chunks = [];
+  for await (const chunk of request) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  }
+  const body = chunks.length > 0 ? JSON.parse(Buffer.concat(chunks).toString("utf8")) : {};
+  modelProbeRequest = {
+    authorization: request.headers.authorization,
+    body,
+    method: request.method,
+    path: request.url
+  };
+  response.writeHead(200, { "Connection": "close", "Content-Type": "application/json" });
+  response.end(JSON.stringify({
+    id: "chatcmpl-config-smoke",
+    object: "chat.completion",
+    created: Math.floor(Date.now() / 1000),
+    model: body.model,
+    choices: [{
+      index: 0,
+      message: { role: "assistant", content: "OK" },
+      finish_reason: "stop"
+    }],
+    usage: { prompt_tokens: 8, completion_tokens: 1, total_tokens: 9 }
+  }));
+});
+await new Promise((resolve) => modelProviderServer.listen(0, "127.0.0.1", resolve));
+const modelProviderAddress = modelProviderServer.address();
+assert(modelProviderAddress && typeof modelProviderAddress === "object");
+
 const mcpServer = createHttpServer(async (request, response) => {
   const server = new McpServer({ name: "config-smoke-mcp", version: "1.0.0" });
   server.registerTool("echo", {
@@ -44,7 +77,7 @@ await new Promise((resolve) => mcpServer.listen(0, "127.0.0.1", resolve));
 const mcpAddress = mcpServer.address();
 assert(mcpAddress && typeof mcpAddress === "object");
 
-const server = await createApiServer({ metadataStore });
+const server = await createApiServer({ metadataStore, taskStateRuntime });
 await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
 const address = server.address();
 assert(address && typeof address === "object");
@@ -54,6 +87,14 @@ const requestJson = async (path, init = {}) => {
   const response = await fetch(`${baseUrl}${path}`, init);
   const body = await response.json();
   return { body, response };
+};
+
+const closeHttpServer = async (httpServer) => {
+  await new Promise((resolve, reject) => {
+    httpServer.close((error) => error ? reject(error) : resolve());
+    setImmediate(() => httpServer.closeAllConnections?.());
+  });
+  httpServer.unref?.();
 };
 
 try {
@@ -144,6 +185,38 @@ try {
   const mcpTools = await requestJson("/api/v1/mcp-servers/smoke-mcp/tools");
   assert.equal(mcpTools.body.data[0].name, "echo");
 
+  const modelProfile = await requestJson("/api/v1/model-profiles", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      id: "smoke-openai-compatible",
+      name: "Smoke OpenAI Compatible",
+      provider: "openai-compatible",
+      modelName: "smoke-model",
+      baseUrl: `http://127.0.0.1:${modelProviderAddress.port}`,
+      credentials: { apiKey: "smoke-model-key" },
+      timeoutMs: 5000
+    })
+  });
+  assert.equal(modelProfile.response.status, 201);
+  assert.equal(modelProfile.body.data.hasSecret, true);
+  assert.equal(JSON.stringify(modelProfile.body).includes("smoke-model-key"), false);
+  const modelProfileTest = await requestJson("/api/v1/model-profiles/smoke-openai-compatible/test", {
+    method: "POST"
+  });
+  assert.equal(modelProfileTest.body.success, true);
+  assert.equal(modelProfileTest.body.data.status, "connected");
+  assert.equal(modelProfileTest.body.data.model, "smoke-model");
+  assert.equal(modelProfileTest.body.data.response, "OK");
+  assert.equal(modelProbeRequest.method, "POST");
+  assert.equal(modelProbeRequest.path, "/chat/completions");
+  assert.equal(modelProbeRequest.authorization, "Bearer smoke-model-key");
+  assert.equal(modelProbeRequest.body.model, "smoke-model");
+  assert.equal(modelProbeRequest.body.messages.some((message) => message.role === "system"), true);
+  const testedModelProfile = await requestJson("/api/v1/model-profiles/smoke-openai-compatible");
+  assert.equal(testedModelProfile.body.data.connectionStatus, "connected");
+  assert.equal(testedModelProfile.body.data.revision, modelProfileTest.body.data.revision);
+
   const effective = resolveEffectiveRunConfig({
     threadId: "effective-session",
     runId: "effective-run",
@@ -228,8 +301,14 @@ try {
     user_id: "dev-user"
   }), /SECRET_NOT_FOUND/u);
 
-  console.log("Config API smoke OK: secrets, datasource, revision, KB, MCP, skill, defaults, artifact, tombstone");
+  console.log(
+    "Config API smoke OK: secrets, datasource, revision, KB, MCP, model profile, skill, defaults, artifact, tombstone"
+  );
 } finally {
-  await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
-  await new Promise((resolve, reject) => mcpServer.close((error) => error ? reject(error) : resolve()));
+  await closeHttpServer(server);
+  await closeHttpServer(mcpServer);
+  await closeHttpServer(modelProviderServer);
+  await taskStateRuntime.close();
 }
+
+process.exit(0);
