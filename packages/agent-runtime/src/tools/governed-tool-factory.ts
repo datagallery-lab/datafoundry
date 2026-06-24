@@ -1,5 +1,6 @@
-import type { ContextPackage } from "../context/context-package.js";
-import type { ToolResultDispatcher } from "../context/tool-result-dispatcher.js";
+import type { ContextPackage } from "../context/inventory/context-package.js";
+import type { ToolObservationDispatcher } from "../context/tool-observation/tool-observation-dispatcher.js";
+import { toolObservationModelFromPackage } from "../context/tool-observation/tool-observation-projection-items.js";
 
 type ToolExecution = (...args: any[]) => unknown | Promise<unknown>;
 
@@ -7,7 +8,7 @@ type ExecutableTool = {
   execute?: ToolExecution | undefined;
 };
 
-export type GovernedToolResultHandler = (input: {
+export type GovernedToolObservationHandler = (input: {
   contextPackage: ContextPackage;
   rawResult: unknown;
   toolName: string;
@@ -21,8 +22,8 @@ export type GovernedToolErrorHandler = (input: {
 
 export class GovernedToolFactory {
   constructor(
-    private readonly dispatcher: ToolResultDispatcher,
-    private readonly onResult?: GovernedToolResultHandler,
+    private readonly dispatcher: ToolObservationDispatcher,
+    private readonly onResult?: GovernedToolObservationHandler,
     private readonly onError?: GovernedToolErrorHandler
   ) {}
 
@@ -50,7 +51,7 @@ export class GovernedToolFactory {
         try {
           const contextPackage = this.dispatcher.dispatch(toolName, rawResult);
           await this.onResult?.({ contextPackage, rawResult, toolName });
-          return contextPackage.model;
+          return toolObservationModelFromPackage(contextPackage);
         } catch (error) {
           await this.onError?.({ error, rawResult, toolName });
           throw error;

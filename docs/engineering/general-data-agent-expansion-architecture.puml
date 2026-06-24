@@ -101,7 +101,7 @@ end note
 
 note bottom of context
   processInputStep routes every tool result
-  to its dedicated ToolResultAdapter.
+  to its dedicated ToolObservationAdapter.
   Unknown tools use fail-safe fallback only.
 end note
 

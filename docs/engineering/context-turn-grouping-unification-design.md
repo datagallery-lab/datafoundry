@@ -8,13 +8,13 @@
 
 Phase 1-3 初版曾有两套 conversation turn 分组实现：
 
-- `ContextBudgetProcessor.createLiveContextItems`
-- `StepContextPlanner.createPromptGroups`
+- `MastraContextBudgetProcessor.createLiveContextItems`
+- `ContextStepPlanner.createPromptGroups`
 
 两者曾共享 `isConversationTurnStart`，但分别生成 group ID、fallback message ID 和 retention/mandatory，导致无显式
 message ID 时，`ContextPlan.selectedGroupIds` / `omittedGroupIds` 不能稳定映射回 `ContextPackage.items`。
 
-目标是在 `mastra-message-utils.ts` 中提供唯一的 conversation 分组入口 `groupMessagesByTurn`，processor 和 planner
+目标是在 `context/protocol/mastra/mastra-message-utils.ts` 中提供唯一的 conversation 分组入口 `groupMessagesByTurn`，processor 和 planner
 只消费分组结果，不再自行推导 turn 边界或当前轮。
 
 ## 2. 职责边界
@@ -28,8 +28,8 @@ message ID 时，`ContextPlan.selectedGroupIds` / `omittedGroupIds` 不能稳定
 它不处理：
 
 - system instructions：由 system source 创建 mandatory group，并作为固定成本计入预算。
-- memory summary：由未来 `MemorySourceAdapter` 创建独立 group。
-- knowledge chunks：由未来 `KnowledgeSourceAdapter` 创建 retrieval result group。
+- memory summary：由 `RuntimeContextSource` 创建独立 source group。
+- knowledge chunks：由 `ToolObservationAdapter` 或未来 Knowledge `RuntimeContextSource` 创建 retrieval result group。
 - tool-call/tool-result 合法性：由单独的 protocol validator 按 `toolCallId` 验证。
 
 通用扩展点是 `ContextItem` / `ContextGroup` / reduction strategy，不是把所有来源都转换成 conversation turn。
@@ -102,14 +102,14 @@ current orphan。算法不会创建空 group。
 
 ## 5. 消费方
 
-### 5.1 ContextBudgetProcessor
+### 5.1 MastraContextBudgetProcessor
 
 - system items 继续单独构建，不进入 `groupMessagesByTurn`。
 - conversation items 从 `ConversationTurnGroup.members` 生成。
 - `id`、`sourceId`、`groupId`、retention 和 priority 均来自统一分组结果。
 - tool observation 仍使用独立 `sourceType`，但不改变所属 turn。
 
-### 5.2 StepContextPlanner
+### 5.2 ContextStepPlanner
 
 - 使用同一分组结果构建 `PromptMessageGroup`。
 - 只追加 `tokenCost`，不再定义 group identity、mandatory 或 retention。

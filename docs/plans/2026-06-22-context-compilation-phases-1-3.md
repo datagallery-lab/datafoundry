@@ -4,20 +4,20 @@
 
 **Goal:** Implement ContextPackage v2, Mastra per-step context compilation, extensible reduction strategies, global token budgeting, and a provider-boundary prompt guard.
 
-**Architecture:** Keep deterministic source adapters at tool boundaries, but move final conversation and prompt selection into Mastra `processInputStep`. Represent normalized context as ContextPackage revisions, generate immutable ContextPlan objects per step, and keep reduction policy replaceable through strategy and candidate-selector interfaces.
+**Architecture:** Keep deterministic `ToolObservationAdapter`s at tool boundaries, but move final conversation and prompt selection into Mastra `processInputStep`. Represent normalized context as ContextPackage revisions, generate immutable ContextPlan objects per step, and keep reduction policy replaceable through strategy and candidate-selector interfaces.
 
-**Tech Stack:** TypeScript, Mastra 1.42 processors, AG-UI events, existing TokenCounter, Node smoke tests.
+**Tech Stack:** TypeScript, Mastra 1.42 processors, AG-UI events, existing ContextTokenCounter, Node smoke tests.
 
 ---
 
 ### Task 1: ContextPackage v2 contracts and run state
 
 **Files:**
-- Modify: `packages/agent-runtime/src/context/context-package.ts`
-- Modify: `packages/agent-runtime/src/context/tool-result-adapter.ts`
-- Modify: `packages/agent-runtime/src/context/context-package-builder.ts`
-- Create: `packages/agent-runtime/src/context/context-run-state.ts`
-- Modify: schema, SQL, and conversation adapters
+- Modify: `packages/agent-runtime/src/context/inventory/context-package.ts`
+- Modify: `packages/agent-runtime/src/context/inventory/context-item.ts`
+- Modify: `packages/agent-runtime/src/context/inventory/context-package-builder.ts`
+- Create: `packages/agent-runtime/src/context/inventory/context-run-state.ts`
+- Modify: schema, SQL, conversation source, and tool observation adapters
 
 **Steps:**
 1. Add package identity, revision, normalized items, atomic groups, trust, retention, and content hashes.
@@ -28,10 +28,10 @@
 ### Task 2: Extensible token-first planner
 
 **Files:**
-- Create: `packages/agent-runtime/src/context/model-context-profile.ts`
-- Create: `packages/agent-runtime/src/context/prompt-token-counter.ts`
-- Create: `packages/agent-runtime/src/context/context-reduction-strategy.ts`
-- Create: `packages/agent-runtime/src/context/step-context-planner.ts`
+- Create: `packages/agent-runtime/src/context/policy/model-context-profile.ts`
+- Create: `packages/agent-runtime/src/context/policy/prompt-token-counter.ts`
+- Create: `packages/agent-runtime/src/context/policy/context-reduction-strategy.ts`
+- Create: `packages/agent-runtime/src/context/policy/context-step-planner.ts`
 
 **Steps:**
 1. Add injectable model context profiles and token accounting for system, tools, messages, output reserve, and safety margin.
@@ -43,8 +43,8 @@
 ### Task 3: Mastra step processor and final prompt guard
 
 **Files:**
-- Create: `packages/agent-runtime/src/context/context-budget-processor.ts`
-- Create: `packages/agent-runtime/src/context/provider-prompt-guard-processor.ts`
+- Create: `packages/agent-runtime/src/context/protocol/mastra/mastra-context-budget-processor.ts`
+- Create: `packages/agent-runtime/src/context/protocol/mastra/mastra-provider-prompt-guard-processor.ts`
 - Modify: `packages/agent-runtime/src/index.ts`
 
 **Steps:**
@@ -57,7 +57,7 @@
 ### Task 4: Tool observation linkage
 
 **Files:**
-- Modify: `packages/agent-runtime/src/context/context-orchestrator.ts`
+- Modify: `packages/agent-runtime/src/context/tool-observation/tool-observation-packager.ts`
 - Modify: `packages/agent-runtime/src/tools/data-tools.ts` only if required by the run-state boundary
 
 **Steps:**

@@ -1,0 +1,144 @@
+flowchart LR
+  %% Context governance target pipeline.
+
+  subgraph EXT["External / Runtime Content"]
+    APP["apps/api<br/>Run Orchestrator"]
+    SMOKE["Smoke Tests<br/>architecture / internals"]
+    UQ["User Query<br/>AG-UI current message"]
+    CH["Conversation History<br/>metadata.conversation_messages"]
+    CM["Compact Memory Authority<br/>CompactConversationMemory"]
+    WM["WorkingMemory Projection<br/>Mastra runtime cache"]
+    LTM["Long-Term Memory<br/>metadata.long_term_memories"]
+    KG["Knowledge Evidence<br/>docs / chunks / citations"]
+    TS["Runtime State<br/>task / goal / datasource / workspace"]
+    TR["Tool Raw Results<br/>schema / sql / files / MCP"]
+  end
+
+  subgraph API["agent-runtime Package Boundary"]
+    PUBLIC["index.ts<br/>public app API"]
+    TESTING["testing.ts<br/>smoke-only internal seams"]
+    AGENT["createDataAgent<br/>tool + context boundary assembly"]
+  end
+
+  subgraph SOURCE["1. Source Layer<br/>runtime sources + tool observation subdomain"]
+    RCSR["RuntimeContextSourceRegistry<br/>run-scoped sources"]
+    TOAR["ToolObservationAdapterRegistry<br/>tool-result source subdomain"]
+    MCA["MastraConversationContextAdapter"]
+    CMS["Compact Memory RuntimeContextSource"]
+    WMS["WorkingMemoryProjectionContextSource<br/>snapshot / audit only"]
+    LTMS["LongTermMemoryContextSource"]
+    KGS["Knowledge RuntimeContextSource"]
+    RSS["Runtime State RuntimeContextSource"]
+    TOA["ToolObservationAdapter<br/>raw result -> ContextItem[]"]
+  end
+
+  subgraph INVENTORY["2. Inventory Layer"]
+    ITEM["ContextItem<br/>smallest inventory unit"]
+    GROUP["ContextGroup<br/>atomic selection unit"]
+    PKG["ContextPackage<br/>run revision snapshot"]
+    STATE["ContextRunState<br/>current package + plan records"]
+  end
+
+  subgraph POLICY["3. Policy / Decision Layer"]
+    AUTH["ContextSourceAuthorityProfile<br/>authority order"]
+    SRC["ContextSourcePolicy<br/>model-visible / shadow / audit-only"]
+    SEC["ContextPolicy<br/>redaction / boundary"]
+    BUD["ContextBudgetAllocator<br/>token / char budgets"]
+    CONFLICT["Source decisions<br/>exact duplicate / overlap flag"]
+    SELECT["ContextStepPlanner<br/>selection & reduction"]
+    PLANOBJ["ContextPlan<br/>selected + omitted groups"]
+    DECISION["ContextDecision<br/>why selected / omitted"]
+  end
+
+  subgraph PROJ["4. Projection Layer"]
+    PM["ContextPromptMaterializer"]
+    PV["ContextPromptView<br/>provider-neutral model input"]
+  end
+
+  subgraph PROTO["5. Protocol Layer"]
+    MASTRA["MastraContextProtocolAdapter<br/>MastraDBMessage[]"]
+    AGUI["AgUiContextEventSink<br/>context.compiled / prompt-verified"]
+  end
+
+  subgraph MODEL["Model-Visible Context"]
+    SYS["System messages<br/>policy / safety / tool rules"]
+    USERCTX["User-role context block<br/>memory / knowledge / runtime context"]
+    USER["Current user message"]
+    TOOLMSG["Tool messages<br/>governed observations"]
+  end
+
+  APP --> PUBLIC
+  PUBLIC --> AGENT
+  SMOKE -.-> TESTING
+  TESTING -.-> SOURCE
+  TESTING -.-> POLICY
+  TESTING -.-> PROTO
+
+  AGENT --> MCA
+  AGENT --> RCSR
+  AGENT --> TOAR
+
+  UQ --> MCA
+  CH --> MCA
+  CM --> CMS
+  WM --> WMS
+  LTM --> LTMS
+  KG --> KGS
+  TS --> RSS
+  TR --> TOA
+
+  MCA --> ITEM
+  CMS --> RCSR
+  WMS --> RCSR
+  LTMS --> RCSR
+  KGS --> RCSR
+  RSS --> RCSR
+  TOA --> TOAR
+
+  RCSR --> ITEM
+  TOAR --> ITEM
+  ITEM --> GROUP
+  GROUP --> PKG
+  PKG --> STATE
+
+  STATE --> AUTH
+  AUTH --> SRC
+  SRC --> SEC
+  SEC --> BUD
+  BUD --> CONFLICT
+
+  CONFLICT --> SELECT
+  SELECT --> PLANOBJ
+  SELECT --> DECISION
+
+  PKG --> PM
+  PLANOBJ --> PM
+  DECISION --> PM
+  PM --> PV
+
+  PV --> MASTRA
+  PLANOBJ --> AGUI
+  DECISION --> AGUI
+
+  MASTRA --> SYS
+  MASTRA --> USERCTX
+  MASTRA --> USER
+  MASTRA --> TOOLMSG
+
+  classDef external fill:#FFF5D6,stroke:#24313D,color:#24313D,stroke-width:1.5px;
+  classDef boundary fill:#F7E8FF,stroke:#24313D,color:#24313D,stroke-width:1.5px;
+  classDef source fill:#DCEEFF,stroke:#24313D,color:#24313D,stroke-width:1.5px;
+  classDef inventory fill:#E4F7E7,stroke:#24313D,color:#24313D,stroke-width:1.5px;
+  classDef policy fill:#FFE0D8,stroke:#24313D,color:#24313D,stroke-width:1.5px;
+  classDef projection fill:#D9F2ED,stroke:#24313D,color:#24313D,stroke-width:1.5px;
+  classDef protocol fill:#F2F4F8,stroke:#24313D,color:#24313D,stroke-width:1.5px;
+  classDef model fill:#FFFFFF,stroke:#24313D,color:#24313D,stroke-width:2px;
+
+  class APP,SMOKE,UQ,CH,CM,WM,LTM,KG,TS,TR external;
+  class PUBLIC,TESTING,AGENT boundary;
+  class RCSR,TOAR,CMS,WMS,LTMS,KGS,RSS,TOA source;
+  class ITEM,GROUP,PKG,STATE inventory;
+  class AUTH,SRC,SEC,BUD,CONFLICT,SELECT,PLANOBJ,DECISION policy;
+  class PM,PV projection;
+  class MASTRA,AGUI protocol;
+  class SYS,USERCTX,USER,TOOLMSG model;

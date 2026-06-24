@@ -343,124 +343,103 @@
       <div>
         <p class="kicker">Open Data Agent Workbench / R&amp;D B</p>
         <h1>Context Control Room</h1>
-        <p class="subtitle">一张图看清每个 ReAct step 如何把 conversation、system、tools 和 observation 编译成受预算约束的 PromptView。</p>
+        <p class="subtitle">一张图看清外部内容如何按五层上下文治理进入模型：Source、Inventory、Policy、Projection、Protocol。tool-observation 是 Source Layer 的工具结果子域，不是第六层。</p>
       </div>
-      <div class="stamp">PHASE 1-3<br>IMPLEMENTED</div>
+      <div class="stamp">FIVE LAYERS<br>AUTHORITATIVE</div>
     </header>
 
     <nav class="toolbar" aria-label="Architecture views">
       <button type="button" data-filter="all" aria-pressed="true">All paths</button>
-      <button type="button" data-filter="step" aria-pressed="false">Step loop</button>
-      <button type="button" data-filter="tool" aria-pressed="false">Tool path</button>
-      <button type="button" data-filter="audit" aria-pressed="false">Audit path</button>
-      <button type="button" data-filter="future" aria-pressed="false">Phase 4-5</button>
+      <button type="button" data-filter="source" aria-pressed="false">Source</button>
+      <button type="button" data-filter="inventory" aria-pressed="false">Inventory</button>
+      <button type="button" data-filter="policy" aria-pressed="false">Policy</button>
+      <button type="button" data-filter="projection" aria-pressed="false">Projection</button>
+      <button type="button" data-filter="protocol" aria-pressed="false">Protocol</button>
     </nav>
 
     <section class="board" aria-label="Context architecture diagram">
-      <article class="lane" data-lane="step" style="--lane-color: var(--blue)">
-        <header class="lane-label"><span class="lane-number">01</span><span class="lane-title">Ingress</span></header>
+      <article class="lane" data-lane="source" style="--lane-color: var(--blue)">
+        <header class="lane-label"><span class="lane-number">01</span><span class="lane-title">Source</span></header>
         <div class="track">
-          <div class="module" tabindex="0" data-zone="step" style="--module-color: var(--blue)" data-title="AG-UI Ingress" data-copy="入口只过滤 activity/reasoning 等非模型输入，不执行第二套 conversation window。">
-            <span class="tag">Northbound</span><h2>RunAgentInput</h2><p>threadId · runId · messages · datasource</p>
+          <div class="module" tabindex="0" data-zone="source protocol" style="--module-color: var(--blue)" data-title="AG-UI Ingress" data-copy="入口只过滤 activity/reasoning 等非模型输入，不执行第二套 conversation window。用户消息随后由 Mastra protocol adapter 归一化为 inventory。">
+            <span class="tag">Client</span><h2>RunAgentInput</h2><p>messages · threadId · runId</p>
           </div>
           <span class="arrow" aria-hidden="true">&rarr;</span>
-          <div class="module" tabindex="0" data-zone="step" style="--module-color: var(--white)" data-title="Mastra MessageList" data-copy="Mastra 在每一步追加 assistant tool-call 和 tool-result，并重新组装当前 trajectory。">
-            <span class="tag">Trajectory</span><h2>MessageList</h2><p>system · messages · tools · step number</p>
+          <div class="module" tabindex="0" data-zone="source" style="--module-color: var(--green)" data-title="Runtime Sources" data-copy="memory、WorkingMemory projection、long-term memory、knowledge、runtime state 都作为 run-scoped source 被拉取。">
+            <span class="tag">Pull</span><h2>RuntimeContextSource</h2><p>memory · knowledge · state</p>
           </div>
           <span class="arrow" aria-hidden="true">&rarr;</span>
-          <div class="module" tabindex="0" data-zone="step" style="--module-color: var(--yellow)" data-title="ContextBudgetProcessor" data-copy="Mastra processInputStep 生命周期中的唯一 conversation 治理入口，每个 ReAct step 都会执行。">
-            <span class="tag">Every step</span><h2>Context Budget Processor</h2><p>collect · group · merge · plan</p>
+          <div class="module" tabindex="0" data-zone="source" style="--module-color: var(--lilac)" data-title="Tool Observation Subdomain" data-copy="工具执行结果是 Source Layer 的 push-style 子域：exact adapter 先把 raw result 变成 bounded ContextItem，之后进入通用 package/policy/run-state 流程。">
+            <span class="tag">Push</span><h2>Tool Observation</h2><p>raw result · adapter · bounded item</p>
           </div>
         </div>
       </article>
 
-      <article class="lane" data-lane="step" style="--lane-color: var(--green)">
-        <header class="lane-label"><span class="lane-number">02</span><span class="lane-title">Compile</span></header>
+      <article class="lane" data-lane="inventory" style="--lane-color: var(--green)">
+        <header class="lane-label"><span class="lane-number">02</span><span class="lane-title">Inventory</span></header>
         <div class="track">
-          <div class="module" tabindex="0" data-zone="step" style="--module-color: var(--green)" data-title="Conversation Turn Grouper" data-copy="自然 user 消息开启新 turn；assistant 和 tool observation 追加到当前 turn；最后一个 turn mandatory。">
-            <span class="tag">Authority</span><h2>Turn Grouper</h2><p>stable ID · atomic turn · retention</p>
+          <div class="module" tabindex="0" data-zone="inventory" style="--module-color: var(--green)" data-title="ContextItem" data-copy="最小库存单元，保存 sourceType、sourceId、trust、retention、priority、contentHash 和 metadata。">
+            <span class="tag">Unit</span><h2>ContextItem</h2><p>content · provenance · hash</p>
           </div>
           <span class="arrow" aria-hidden="true">&rarr;</span>
-          <div class="module" tabindex="0" data-zone="step audit" style="--module-color: var(--white)" data-title="ContextPackage v2" data-copy="规范化 inventory，保存 items、groups、source snapshots、artifact/audit refs；revision 在 run 内递增。">
-            <span class="tag">Inventory</span><h2>Context Package</h2><p>items · groups · provenance · revision</p>
+          <div class="module" tabindex="0" data-zone="inventory" style="--module-color: var(--white)" data-title="ContextGroup" data-copy="planner 的原子选择单位。turn、tool exchange、source block 可以作为 atomic group 保留或整体省略。">
+            <span class="tag">Atomic</span><h2>ContextGroup</h2><p>turn · source · tool exchange</p>
           </div>
           <span class="arrow" aria-hidden="true">&rarr;</span>
-          <div class="module" tabindex="0" data-zone="step" style="--module-color: var(--yellow)" data-title="Step Context Planner" data-copy="计算 system、tools、messages、output reserve 和 safety margin 的全局预算，并维护 mandatory/atomic 不变量。">
-            <span class="tag">Token first</span><h2>Step Planner</h2><p>budget · constraints · convergence</p>
-          </div>
-          <span class="arrow" aria-hidden="true">&rarr;</span>
-          <div class="module" tabindex="0" data-zone="step" style="--module-color: var(--coral)" data-title="Reduction Strategies" data-copy="策略只提出候选；selector 决定当前动作。默认仅提供最旧 historical turn 淘汰，不固化完整压缩顺序。">
-            <span class="tag">Replaceable</span><h2>Strategies + Selector</h2><p>propose · compare · re-count</p>
-          </div>
-          <span class="loopback">over budget?<br>&larr; iterate until valid</span>
-        </div>
-      </article>
-
-      <article class="lane" data-lane="step audit" style="--lane-color: var(--coral)">
-        <header class="lane-label"><span class="lane-number">03</span><span class="lane-title">Provider</span></header>
-        <div class="track">
-          <div class="module" tabindex="0" data-zone="step audit" style="--module-color: var(--green)" data-title="PromptView" data-copy="只服务当前模型调用的瞬时投影，不替代长期 memory，也不覆盖 ContextPackage inventory。">
-            <span class="tag">Transient</span><h2>Prompt View</h2><p>selected messages · token report</p>
-          </div>
-          <span class="arrow" aria-hidden="true">&rarr;</span>
-          <div class="module" tabindex="0" data-zone="step audit" style="--module-color: var(--lilac)" data-title="Provider Prompt Guard" data-copy="processLLMRequest 统计 provider-shaped prompt。超出 contextWindow - outputReserve - safetyMargin 时调用前 abort。">
-            <span class="tag">Final gate</span><h2>Prompt Guard</h2><p>verify · emit metrics · allow / abort</p>
-          </div>
-          <span class="arrow" aria-hidden="true">&rarr;</span>
-          <div class="module" tabindex="0" data-zone="step" style="--module-color: var(--blue)" data-title="Model Provider" data-copy="只接收已经通过最终预算校验的 prompt 和活动工具定义。">
-            <span class="tag">Model call</span><h2>LLM Provider</h2><p>text response or typed tool call</p>
+          <div class="module" tabindex="0" data-zone="inventory" style="--module-color: var(--green)" data-title="ContextPackage + RunState" data-copy="ContextPackage 是 run 内一次上下文库存快照；ContextRunState 保存当前 revision、历史降级引用和 plan 记录。">
+            <span class="tag">Snapshot</span><h2>ContextPackage</h2><p>items · groups · revision</p>
           </div>
         </div>
       </article>
 
-      <article class="lane" data-lane="tool audit" style="--lane-color: var(--lilac)">
-        <header class="lane-label"><span class="lane-number">04</span><span class="lane-title">Tools</span></header>
+      <article class="lane" data-lane="policy" style="--lane-color: var(--coral)">
+        <header class="lane-label"><span class="lane-number">03</span><span class="lane-title">Policy</span></header>
         <div class="track">
-          <div class="module" tabindex="0" data-zone="tool" style="--module-color: var(--lilac)" data-title="Typed Data Tools" data-copy="当前工具为 inspect_schema 和 run_sql_readonly；强制 selected datasource、inspect-before-SQL 和 SQL 次数上限。">
-            <span class="tag">ReAct action</span><h2>Data Tools</h2><p>inspect schema · readonly SQL</p>
+          <div class="module" tabindex="0" data-zone="policy" style="--module-color: var(--coral)" data-title="Source Policy" data-copy="处理 authority、shadow、audit-only、exact duplicate 和 overlap report，防止 memory-like 内容重复注入。">
+            <span class="tag">Authority</span><h2>ContextSourcePolicy</h2><p>dedupe · shadow · overlap</p>
           </div>
           <span class="arrow" aria-hidden="true">&rarr;</span>
-          <div class="module" tabindex="0" data-zone="tool" style="--module-color: var(--coral)" data-title="Data Gateway" data-copy="执行 ownership、readonly guard、limit、timeout、SQL audit 和 artifact 创建，模型不能绕过。">
-            <span class="tag">Safety</span><h2>Data Gateway</h2><p>guard · execute · audit · artifact</p>
+          <div class="module" tabindex="0" data-zone="policy" style="--module-color: var(--yellow)" data-title="Budget + Planner" data-copy="ContextStepPlanner 用 model profile、token counter、budget allocator 和 reduction strategy 做全局选择。">
+            <span class="tag">Token</span><h2>ContextStepPlanner</h2><p>select · omit · reduce</p>
           </div>
           <span class="arrow" aria-hidden="true">&rarr;</span>
-          <div class="module" tabindex="0" data-zone="tool audit" style="--module-color: var(--white)" data-title="Tool Result Adapter" data-copy="schema/SQL 原始结果在来源边界确定性缩减，模型、activity、artifact ref、audit ref 和 truncation 分层。">
-            <span class="tag">Observation</span><h2>Result Adapter</h2><p>bounded sample · refs · truncation</p>
+          <div class="module" tabindex="0" data-zone="policy" style="--module-color: var(--coral)" data-title="ContextPolicy" data-copy="通用 redaction 和 fail-closed item budget 边界，不写死具体工具名。">
+            <span class="tag">Guard</span><h2>ContextPolicy</h2><p>redact · budget · fail closed</p>
           </div>
-          <span class="loopback">bounded tool-result<br>&larr; next ReAct step</span>
+          <span class="loopback">over budget?<br>&larr; propose and re-count</span>
         </div>
       </article>
 
-      <article class="lane" data-lane="audit" style="--lane-color: var(--yellow)">
-        <header class="lane-label"><span class="lane-number">05</span><span class="lane-title">Audit</span></header>
+      <article class="lane" data-lane="projection" style="--lane-color: var(--yellow)">
+        <header class="lane-label"><span class="lane-number">04</span><span class="lane-title">Projection</span></header>
         <div class="track">
-          <div class="module" tabindex="0" data-zone="audit" style="--module-color: var(--yellow)" data-title="Context Metrics" data-copy="context.compiled 和 context.prompt-verified 只记录 bounded decision metadata，不持久化完整 prompt 或 hidden thought。">
-            <span class="tag">CUSTOM</span><h2>Context Events</h2><p>plan · token budget · remaining tokens</p>
+          <div class="module" tabindex="0" data-zone="projection" style="--module-color: var(--yellow)" data-title="Prompt Materializer" data-copy="把 policy-filtered groups 投影成 provider-neutral ContextPromptView；不重新决定来源取舍。">
+            <span class="tag">View</span><h2>ContextPromptMaterializer</h2><p>groups -> prompt view</p>
           </div>
           <span class="arrow" aria-hidden="true">&rarr;</span>
-          <div class="module" tabindex="0" data-zone="audit" style="--module-color: var(--white)" data-title="Run Events" data-copy="与 CopilotKit 客户端收到的同一 AG-UI BaseEvent 流按 seq 持久化，用于终态重复 run 回放。">
-            <span class="tag">Replay</span><h2>run_events</h2><p>user · session · run · seq · BaseEvent</p>
+          <div class="module" tabindex="0" data-zone="projection" style="--module-color: var(--white)" data-title="ContextPromptView" data-copy="只服务当前模型调用的瞬时投影，不替代 ContextPackage inventory，也不是长期 memory。">
+            <span class="tag">Transient</span><h2>ContextPromptView</h2><p>system · user context · messages</p>
           </div>
           <span class="arrow" aria-hidden="true">&rarr;</span>
-          <div class="module" tabindex="0" data-zone="audit" style="--module-color: var(--blue)" data-title="Northbound Stream" data-copy="GUI/TUI 使用标准 AG-UI；workspace 接入前 artifact CUSTOM 仍携带 preview_json。">
-            <span class="tag">CopilotKit</span><h2>Same Event Stream</h2><p>activity · state · tool · text · custom</p>
+          <div class="module" tabindex="0" data-zone="projection" style="--module-color: var(--yellow)" data-title="Token Report" data-copy="记录 selected/omitted group、预算消耗、剩余 token 和上下文审计事件需要的 bounded metadata。">
+            <span class="tag">Audit</span><h2>PromptTokenReport</h2><p>selected · omitted · remaining</p>
           </div>
         </div>
       </article>
 
-      <article class="lane" data-lane="future" style="--lane-color: #dedede">
-        <header class="lane-label"><span class="lane-number">06</span><span class="lane-title">Next</span></header>
+      <article class="lane" data-lane="protocol" style="--lane-color: var(--lilac)">
+        <header class="lane-label"><span class="lane-number">05</span><span class="lane-title">Protocol</span></header>
         <div class="track">
-          <div class="module future" tabindex="0" data-zone="future" style="--module-color: var(--blue)" data-title="Phase 4 Memory" data-copy="Mastra Memory 以 resourceId + threadId 接入；recent、summary、working memory 仍要进入同一 ContextPackage 和 planner。">
-            <span class="tag">Phase 4</span><h2>Memory Sources</h2><p>recent · summary · working memory</p>
+          <div class="module" tabindex="0" data-zone="protocol" style="--module-color: var(--lilac)" data-title="Mastra Protocol Adapter" data-copy="把 ContextPromptView 转成 MastraDBMessage[]，并在每个 processInputStep 中作为唯一 prompt 治理入口。">
+            <span class="tag">Mastra</span><h2>Mastra Adapter</h2><p>ContextPromptView -> messages</p>
           </div>
           <span class="arrow" aria-hidden="true">&rarr;</span>
-          <div class="module future" tabindex="0" data-zone="future" style="--module-color: var(--lilac)" data-title="Phase 5 Knowledge" data-copy="retrieval chunks、citation 和 relevance 作为独立 atomic groups 进入全局预算，不因 top-k 绕过治理。">
-            <span class="tag">Phase 5</span><h2>Knowledge Sources</h2><p>retrieve · rerank · cite · reference</p>
+          <div class="module" tabindex="0" data-zone="protocol" style="--module-color: var(--blue)" data-title="AG-UI Event Sink" data-copy="context.compiled、context.prompt-verified 和 run events 以 bounded AG-UI CUSTOM/standard events 暴露给上层。">
+            <span class="tag">AG-UI</span><h2>Context Event Sink</h2><p>CUSTOM · run_events · replay</p>
           </div>
           <span class="arrow" aria-hidden="true">&rarr;</span>
-          <div class="module future" tabindex="0" data-zone="future" style="--module-color: var(--coral)" data-title="Workspace Artifact" data-copy="workspace contract 确认后，再实施北向 artifact 引用化、分页 detail API 和 preview/content 存储分层。">
-            <span class="tag">Workspace</span><h2>Artifact Reference</h2><p>reference · detail · content lifecycle</p>
+          <div class="module" tabindex="0" data-zone="protocol" style="--module-color: var(--white)" data-title="Provider Guard" data-copy="processLLMRequest 对 provider-shaped prompt 做最终硬校验；超过窗口则调用前失败。">
+            <span class="tag">Final</span><h2>Provider Prompt Guard</h2><p>verify · allow / abort</p>
           </div>
         </div>
       </article>
@@ -468,9 +447,10 @@
 
     <aside class="inspector" aria-live="polite">
       <div class="inspector-label">Selected module</div>
-      <div><h2 id="detail-title">Context Compiler</h2><p id="detail-copy">选择任一模块查看职责边界。默认视图展示当前 Phase 1-3 与未来 Memory / Knowledge 接入点。</p></div>
+      <div><h2 id="detail-title">Five-Layer Context Compiler</h2><p id="detail-copy">选择任一模块查看职责边界。默认视图展示当前权威五层模型；tool-observation 只是 Source Layer 的工具结果子域。</p></div>
       <ul class="invariants">
         <li>mandatory group 不可删除</li>
+        <li>tool-observation 不是第六层</li>
         <li>tool exchange 不拆分</li>
         <li>无合法候选时 fail closed</li>
         <li>provider 边界不静默裁剪</li>
@@ -478,12 +458,11 @@
     </aside>
 
     <div class="legend" aria-label="Legend">
-      <span><i class="swatch" style="background: var(--blue)"></i>protocol / provider</span>
+      <span><i class="swatch" style="background: var(--blue)"></i>source / protocol ingress</span>
       <span><i class="swatch" style="background: var(--green)"></i>context inventory</span>
-      <span><i class="swatch" style="background: var(--yellow)"></i>planning / metrics</span>
+      <span><i class="swatch" style="background: var(--yellow)"></i>projection / metrics</span>
       <span><i class="swatch" style="background: var(--coral)"></i>policy / safety</span>
-      <span><i class="swatch" style="background: var(--lilac)"></i>tools / persistence</span>
-      <span>dashed border = future</span>
+      <span><i class="swatch" style="background: var(--lilac)"></i>tool observation / protocol</span>
     </div>
   </main>
 

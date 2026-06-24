@@ -1,0 +1,333 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Mastra Memory 受控接入架构</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #263238;
+      --muted: #607d8b;
+      --line: #52616b;
+      --paper: #fffdf7;
+      --blue: #dff2ff;
+      --green: #e6f7d9;
+      --yellow: #fff1bd;
+      --pink: #ffe2ec;
+      --lavender: #ece5ff;
+      --mint: #dcf7ee;
+      --card: #ffffff;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      background:
+        radial-gradient(circle at 20% 15%, rgba(255, 241, 189, 0.55), transparent 26%),
+        radial-gradient(circle at 80% 10%, rgba(223, 242, 255, 0.6), transparent 24%),
+        var(--paper);
+      color: var(--ink);
+      font-family: ui-rounded, "SF Pro Rounded", "Nunito", "Avenir Next", system-ui, sans-serif;
+      letter-spacing: 0;
+    }
+
+    main {
+      max-width: 1380px;
+      margin: 0 auto;
+      padding: 28px;
+    }
+
+    header {
+      display: flex;
+      align-items: flex-end;
+      justify-content: space-between;
+      gap: 20px;
+      margin-bottom: 22px;
+    }
+
+    h1 {
+      margin: 0 0 6px;
+      font-size: 28px;
+      line-height: 1.1;
+    }
+
+    .subtitle {
+      margin: 0;
+      color: var(--muted);
+      font-size: 15px;
+    }
+
+    .legend {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      justify-content: flex-end;
+      font-size: 13px;
+      color: var(--muted);
+    }
+
+    .pill {
+      border: 2px solid var(--line);
+      border-radius: 999px;
+      background: #fff;
+      padding: 6px 10px;
+      box-shadow: 3px 3px 0 rgba(38, 50, 56, 0.12);
+      white-space: nowrap;
+    }
+
+    .board {
+      position: relative;
+      display: grid;
+      grid-template-columns: 1.05fr 1.2fr 1fr;
+      gap: 18px;
+      min-height: 780px;
+    }
+
+    .lane {
+      position: relative;
+      border: 3px solid var(--line);
+      border-radius: 26px;
+      padding: 18px;
+      background: rgba(255, 255, 255, 0.72);
+      box-shadow: 6px 6px 0 rgba(38, 50, 56, 0.1);
+    }
+
+    .lane h2 {
+      margin: 0 0 16px;
+      font-size: 18px;
+    }
+
+    .stack {
+      display: grid;
+      gap: 16px;
+    }
+
+    .card {
+      position: relative;
+      border: 3px solid var(--line);
+      border-radius: 20px;
+      padding: 14px 16px;
+      background: var(--card);
+      box-shadow: 5px 5px 0 rgba(38, 50, 56, 0.11);
+      min-height: 88px;
+    }
+
+    .card.blue { background: var(--blue); }
+    .card.green { background: var(--green); }
+    .card.yellow { background: var(--yellow); }
+    .card.pink { background: var(--pink); }
+    .card.lavender { background: var(--lavender); }
+    .card.mint { background: var(--mint); }
+
+    .card h3 {
+      margin: 0 0 8px;
+      font-size: 16px;
+      line-height: 1.25;
+    }
+
+    .card p {
+      margin: 0;
+      color: #455a64;
+      font-size: 13px;
+      line-height: 1.5;
+    }
+
+    .badge {
+      position: absolute;
+      top: -13px;
+      right: 14px;
+      min-width: 34px;
+      height: 26px;
+      border: 2px solid var(--line);
+      border-radius: 999px;
+      display: grid;
+      place-items: center;
+      background: #fff;
+      font-size: 12px;
+      font-weight: 800;
+      box-shadow: 2px 2px 0 rgba(38, 50, 56, 0.13);
+    }
+
+    .note {
+      border: 3px dashed #78909c;
+      border-radius: 18px;
+      padding: 12px 14px;
+      background: #fffef8;
+      color: #455a64;
+      font-size: 13px;
+      line-height: 1.5;
+    }
+
+    .connector {
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      z-index: 2;
+    }
+
+    .connector path {
+      fill: none;
+      stroke: #52616b;
+      stroke-width: 4;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      stroke-dasharray: 1 10;
+    }
+
+    .connector .solid {
+      stroke-dasharray: none;
+    }
+
+    .connector text {
+      fill: #455a64;
+      font-size: 13px;
+      font-weight: 700;
+    }
+
+    .footer-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 14px;
+      margin-top: 18px;
+    }
+
+    @media (max-width: 980px) {
+      header {
+        align-items: flex-start;
+        flex-direction: column;
+      }
+
+      .legend {
+        justify-content: flex-start;
+      }
+
+      .board,
+      .footer-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .connector {
+        display: none;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <div>
+        <h1>Mastra Memory 受控接入架构</h1>
+        <p class="subtitle">metadata 仍是权威历史；Mastra Memory 先做派生投影，再按门禁进入 prompt。</p>
+      </div>
+      <div class="legend">
+        <span class="pill">实线：当前/Phase 1</span>
+        <span class="pill">点线：后续阶段</span>
+        <span class="pill">浅色卡片：单一职责模块</span>
+      </div>
+    </header>
+
+    <section class="board" aria-label="Mastra Memory controlled integration diagram">
+      <svg class="connector" viewBox="0 0 1380 780" preserveAspectRatio="none" aria-hidden="true">
+        <defs>
+          <marker id="arrow" markerWidth="11" markerHeight="11" refX="9" refY="5.5" orient="auto">
+            <path d="M1,1 L10,5.5 L1,10 Z" fill="#52616b"></path>
+          </marker>
+        </defs>
+        <path class="solid" marker-end="url(#arrow)" d="M350 112 C430 112 438 110 505 110"></path>
+        <path class="solid" marker-end="url(#arrow)" d="M350 247 C430 247 438 248 505 248"></path>
+        <path class="solid" marker-end="url(#arrow)" d="M858 246 C945 246 948 245 1010 245"></path>
+        <path class="solid" marker-end="url(#arrow)" d="M858 385 C945 385 948 384 1010 384"></path>
+        <path marker-end="url(#arrow)" d="M680 565 C680 642 872 650 1010 650"></path>
+        <path marker-end="url(#arrow)" d="M1180 492 C1150 570 940 600 748 557"></path>
+        <text x="390" y="92">run 开始前注入</text>
+        <text x="900" y="225">受控 prompt 边界</text>
+        <text x="760" y="642">summary 提交后 mirror</text>
+      </svg>
+
+      <section class="lane">
+        <h2>1. 权威历史层</h2>
+        <div class="stack">
+          <article class="card blue">
+            <span class="badge">API</span>
+            <h3>AG-UI Run</h3>
+            <p>客户端只需要发送当前 user message。`threadId` 是 session，`runId` 是本次执行。</p>
+          </article>
+          <article class="card green">
+            <span class="badge">DB</span>
+            <h3>metadata.sqlite</h3>
+            <p>`conversation_messages` 保存可复用自然语言轮次，`conversation_summaries` 保存覆盖范围摘要。</p>
+          </article>
+          <article class="card yellow">
+            <span class="badge">SVC</span>
+            <h3>ConversationMemoryService</h3>
+            <p>run claim 后读取 latest summary + 未摘要历史，生成唯一的权威入口 window。</p>
+          </article>
+          <div class="note">不启用 Mastra MessageHistory 注入 raw history；否则会和这里的权威 window 重复。</div>
+        </div>
+      </section>
+
+      <section class="lane">
+        <h2>2. Agent 执行层</h2>
+        <div class="stack">
+          <article class="card lavender">
+            <span class="badge">CTX</span>
+            <h3>Budgeted Messages</h3>
+            <p>当前默认：`unsummarized recent messages + current user` 进入 DataAgent；compact summary 交给 Mastra Memory。</p>
+          </article>
+          <article class="card mint">
+            <span class="badge">MAS</span>
+            <h3>Mastra DataAgent</h3>
+            <p>`@ag-ui/mastra` 传入 `memory={thread, resource}`，但 Memory 配置为受控模式。</p>
+          </article>
+          <article class="card pink">
+            <span class="badge">GOV</span>
+            <h3>MastraContextBudgetProcessor</h3>
+            <p>每一步 ReAct prompt 仍经过 token budget、turn grouping、tool result 降级和 provider guard。</p>
+          </article>
+          <article class="card yellow">
+            <span class="badge">SUM</span>
+            <h3>LLM Summarizer</h3>
+            <p>`RUN_FINISHED` 后触发摘要生成；满足阈值才写 `conversation_summaries`。</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="lane">
+        <h2>3. Mastra Memory 派生层</h2>
+        <div class="stack">
+          <article class="card green">
+            <span class="badge">M1</span>
+            <h3>Memory Runtime</h3>
+            <p>`lastMessages=false`，不让 Mastra 自动取 raw history。先复用 LibSQL storage 形态。</p>
+          </article>
+          <article class="card blue">
+            <span class="badge">M2</span>
+            <h3>WorkingMemory Shadow</h3>
+            <p>`shadow` 模式只在 summary commit 后由后端 bridge 单向写入，不进入 prompt。</p>
+          </article>
+          <article class="card mint">
+            <span class="badge">M3</span>
+            <h3>Read-only Injection</h3>
+            <p>当前默认模式。Mastra input processor 注入只读 WorkingMemory，入口消息不再带 tagged summary。</p>
+          </article>
+          <article class="card pink">
+            <span class="badge">M4</span>
+            <h3>Recall / OM Gate</h3>
+            <p>Semantic Recall 与 Observational Memory 先 shadow 比较质量、延迟和审计性。</p>
+          </article>
+        </div>
+      </section>
+    </section>
+
+    <section class="footer-grid" aria-label="Trigger summary">
+      <div class="note"><strong>注入触发：</strong>非 resume 新 run claim 成功后，`createDataAgent` 前构造入口 messages。</div>
+      <div class="note"><strong>摘要触发：</strong>`RUN_FINISHED` 后 flush assistant 文本；未摘要消息达到阈值才生成。</div>
+      <div class="note"><strong>Memory 触发：</strong>summary commit 后 mirror；新 run 前 backfill；随后由 Mastra input processor 注入。</div>
+    </section>
+  </main>
+</body>
+</html>

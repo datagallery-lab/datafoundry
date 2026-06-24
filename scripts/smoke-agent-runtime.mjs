@@ -1,15 +1,12 @@
 import {
   createDataAgentRunContext,
   createDataAgentToolRegistry,
-  ContextBudgetAllocator,
-  ContextOrchestrator,
-  ContextPolicy,
-  ContextSourceRegistry,
+  createToolObservationBoundary,
   GovernedToolFactory,
-  SchemaContextAdapter,
-  SqlResultContextAdapter,
-  ToolResultDispatcher
-} from "../packages/agent-runtime/dist/index.js";
+  SchemaToolObservationAdapter,
+  ToolObservationDispatcher,
+  toolObservationModelFromPackage
+} from "../packages/agent-runtime/dist/testing.js";
 import { LocalDataGateway } from "../packages/data-gateway/dist/index.js";
 import { createMetadataStore } from "../packages/metadata/dist/index.js";
 import { EventType } from "@ag-ui/core";
@@ -63,14 +60,20 @@ try {
     selected_datasource_id: datasource_id,
     enabled_datasource_ids: [datasource_id]
   });
+  const runScope = {
+    modelName: runContext.model_name,
+    resourceId: runContext.user_id,
+    runId: runContext.run_id,
+    sessionId: runContext.session_id
+  };
 
-  // Create context orchestrator
-  const budgetAllocator = new ContextBudgetAllocator();
-  const sourceRegistry = new ContextSourceRegistry();
-  const policy = new ContextPolicy();
-  const orchestrator = new ContextOrchestrator(budgetAllocator, sourceRegistry, policy);
-  sourceRegistry.registerToolAdapter(new SchemaContextAdapter());
-  sourceRegistry.registerToolAdapter(new SqlResultContextAdapter());
+  const { packager } = createToolObservationBoundary({
+    identity: {
+      resourceId: runContext.user_id,
+      runId: runContext.run_id,
+      sessionId: runContext.session_id
+    }
+  });
 
   const registry = createDataAgentToolRegistry({
     dataGateway: gateway,
@@ -89,7 +92,7 @@ try {
     }
   });
   let sqlPkg;
-  const factory = new GovernedToolFactory(new ToolResultDispatcher(orchestrator, runContext), (result) => {
+  const factory = new GovernedToolFactory(new ToolObservationDispatcher(packager, runScope), (result) => {
     registry.onGovernedResult(result);
     if (result.toolName === "run_sql_readonly") {
       sqlPkg = result.contextPackage;
@@ -189,33 +192,52 @@ try {
   assert(auditLogs.some((log) => log.status === "succeeded"), "successful SQL audit log missing");
 
   assertThrows(
-    () => orchestrator.packageToolResult({ toolName: "unregistered_tool", rawResult: { secret: "value" }, runContext }),
+    () => packager.packageToolObservation({
+      toolName: "unregistered_tool",
+      rawResult: { secret: "value" },
+      runScope
+    }),
     "CONTEXT_ADAPTER_REQUIRED:unregistered_tool"
   );
   assertThrows(
-    () => sourceRegistry.registerToolAdapter(new SchemaContextAdapter()),
-    "CONTEXT_ADAPTER_ALREADY_REGISTERED:inspect_schema"
+    () =>
+      createToolObservationBoundary({
+        additionalAdapters: [new SchemaToolObservationAdapter()],
+        identity: {
+          resourceId: runContext.user_id,
+          runId: `${runContext.run_id}-duplicate-adapter`,
+          sessionId: runContext.session_id
+        }
+      }),
+    "TOOL_OBSERVATION_ADAPTER_ALREADY_REGISTERED:inspect_schema"
   );
 
-  sourceRegistry.registerToolAdapter({
-    toolName: "oversized_tool",
-    resultType: "oversized",
-    sourceType: "tool-result",
-    toContextItems: () => [{
-      id: "oversized-model",
-      sourceType: "tool-result",
-      visibility: "model",
-      priority: 1,
-      content: "x".repeat(70000),
-      metadata: {}
-    }]
+  const oversizedBoundary = createToolObservationBoundary({
+    additionalAdapters: [{
+      toolName: "oversized_tool",
+      resultType: "oversized",
+      sourceType: "tool-observation",
+      toContextItems: () => [{
+        id: "oversized-model",
+        sourceType: "tool-observation",
+        visibility: "model",
+        priority: 1,
+        content: "x".repeat(70000),
+        metadata: {}
+      }]
+    }],
+    identity: {
+      resourceId: runContext.user_id,
+      runId: `${runContext.run_id}-oversized`,
+      sessionId: runContext.session_id
+    }
   });
   assertThrows(
-    () => orchestrator.packageToolResult({ toolName: "oversized_tool", rawResult: {}, runContext }),
+    () => oversizedBoundary.packager.packageToolObservation({ toolName: "oversized_tool", rawResult: {}, runScope }),
     "CONTEXT_CHAR_BUDGET_EXCEEDED:model"
   );
 
-  const wideSqlPackage = orchestrator.packageToolResult({
+  const wideSqlPackage = packager.packageToolObservation({
     toolName: "run_sql_readonly",
     rawResult: {
       result: {
@@ -227,12 +249,13 @@ try {
       },
       sql: "SELECT * FROM wide_table"
     },
-    runContext
+    runScope
   });
-  assert(JSON.stringify(wideSqlPackage.model).length <= 32000, "wide SQL model result should fit the hard budget");
-  assert(wideSqlPackage.model.rows.length < 20, "wide SQL model result should reduce rows to fit the hard budget");
+  const wideSqlModel = toolObservationModelFromPackage(wideSqlPackage);
+  assert(JSON.stringify(wideSqlModel).length <= 32000, "wide SQL model result should fit the hard budget");
+  assert(wideSqlModel.rows.length < 20, "wide SQL model result should reduce rows to fit the hard budget");
 
-  const wideSchemaPackage = orchestrator.packageToolResult({
+  const wideSchemaPackage = packager.packageToolObservation({
     toolName: "inspect_schema",
     rawResult: {
       datasource_id,
@@ -244,9 +267,10 @@ try {
         }))
       }))
     },
-    runContext
+    runScope
   });
-  assert(JSON.stringify(wideSchemaPackage.model).length <= 32000, "wide schema should fit the hard budget");
+  const wideSchemaModel = toolObservationModelFromPackage(wideSchemaPackage);
+  assert(JSON.stringify(wideSchemaModel).length <= 32000, "wide schema should fit the hard budget");
   assert(wideSchemaPackage.truncation.length > 0, "wide schema should report truncation");
 
   console.log(

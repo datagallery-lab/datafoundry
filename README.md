@@ -4,8 +4,9 @@ TypeScript-first data-agent workbench MVP. This repository currently focuses on 
 Agent Runtime, Data Gateway, Knowledge contracts, metadata, artifacts, and provider adapters.
 
 The current implementation has completed the backend skeleton plus local-first config management, effective run
-configuration, context governance, Skill policy, MCP middleware integration, local Knowledge retrieval, and the first
-service database adapters from [R&D B Architecture Plan](docs/engineering/rd-b-agent-gateway-knowledge-architecture-plan-zh.md).
+configuration, context governance, Skill policy, MCP middleware integration, local Knowledge retrieval, the first
+service database adapters, and server-authoritative Conversation Memory with read-only Mastra WorkingMemory from
+[R&D B Architecture Plan](docs/engineering/rd-b-agent-gateway-knowledge-architecture-plan-zh.md).
 
 ## Scope
 
@@ -16,7 +17,8 @@ R&D B owns:
 - `packages/data-gateway`: datasource registry, schema inspection, preview, readonly SQL execution.
 - `packages/knowledge`: knowledge service interfaces and data model contracts.
 - `packages/artifacts`: artifact types and local artifact service.
-- `packages/metadata`: local SQLite metadata store, runs, run events, datasource registry, SQL audit logs.
+- `packages/metadata`: local SQLite metadata store, runs, run events, conversation messages and summaries,
+  datasource registry, SQL audit logs.
 - `packages/providers`: LLM provider adapter with mock fallback.
 - `apps/api`: single Agent Runtime HTTP service.
 - `apps/web`: Next.js data-task workspace frontend.
@@ -31,11 +33,11 @@ Current active workspace modules:
 
 | Module | Responsibility | Main implementation |
 | --- | --- | --- |
-| `apps/api` | Single backend runtime service. Exposes health check, CopilotKit/AG-UI agent endpoint, and `/api/v1` config management API. Creates per-request user/session/run context from AG-UI `RunAgentInput` and persists the same AG-UI event stream it returns to the frontend. | Node `http` server, `@copilotkit/runtime`, `@ag-ui/client` `AbstractAgent`, `@ag-ui/mastra`, `@ag-ui/mcp-middleware`, `@open-data-agent/agent-runtime`, `@open-data-agent/metadata`, `@open-data-agent/data-gateway`. |
+| `apps/api` | Single backend runtime service. Exposes health check, CopilotKit/AG-UI agent endpoint, and `/api/v1` config management API. Creates per-request user/session/run context from AG-UI `RunAgentInput`, persists the same AG-UI event stream it returns to the frontend, and assembles server-authoritative conversation history before Mastra runs. | Node `http` server, `@copilotkit/runtime`, `@ag-ui/client` `AbstractAgent`, `@ag-ui/mastra`, `@ag-ui/mcp-middleware`, `@open-data-agent/agent-runtime`, `@open-data-agent/metadata`, `@open-data-agent/data-gateway`. |
 | `apps/web` | Frontend data-task workspace. Connects to the backend CopilotKit/AG-UI endpoint via `NEXT_PUBLIC_AGENT_RUNTIME_URL`. Part of root npm workspaces (`@open-data-agent/web`). | Next.js 15 (App Router), React 19, `@copilotkit/react-core/v2`, Tailwind 4, Vitest. |
-| `packages/agent-runtime` | Mastra DataAgent factory, ReAct prompt, run context, tool registry, tool-level policy, context governance, collaboration/workspace tools, Knowledge tool, and Skill policy. Keeps Data Gateway behind typed tools. | `@mastra/core/agent`, `@mastra/core/tools`, Zod tool schemas, `inspect_schema`, `run_sql_readonly`, `retrieve_knowledge`, AG-UI `ACTIVITY_SNAPSHOT` / `CUSTOM`, inspect-before-SQL enforcement, selected datasource enforcement, max SQL call count, ToolResultAdapter registry. |
+| `packages/agent-runtime` | Mastra DataAgent factory, ReAct prompt, run context, tool registry, tool-level policy, context governance, collaboration/workspace tools, Knowledge tool, and Skill policy. Keeps Data Gateway behind typed tools. | `@mastra/core/agent`, `@mastra/core/tools`, Zod tool schemas, `inspect_schema`, `run_sql_readonly`, `retrieve_knowledge`, AG-UI `ACTIVITY_SNAPSHOT` / `CUSTOM`, inspect-before-SQL enforcement, selected datasource enforcement, max SQL call count, ToolObservationAdapter registry. |
 | `packages/data-gateway` | Datasource registry facade, schema inspection, preview, readonly SQL execution, SQL guard, audit log, and result artifact creation. | `LocalDataGateway`, `node:sqlite`, CSV parser, `read-excel-file`, internal datasource adapters for DuckDB demo, SQLite, CSV, XLSX, PostgreSQL, MySQL. |
-| `packages/metadata` | Local persistence for users, sessions, runs, run events, config resources, encrypted secrets, jobs, datasource registry, SQL audit logs, artifacts. | `node:sqlite` `DatabaseSync`, repository classes, migrations, `RunEventWriter`, `EncryptedSecretStore`. |
+| `packages/metadata` | Local persistence for users, sessions, runs, run events, conversation messages/summaries, config resources, encrypted secrets, jobs, datasource registry, SQL audit logs, artifacts. | `node:sqlite` `DatabaseSync`, repository classes, migrations, `RunEventWriter`, conversation repositories, `EncryptedSecretStore`. |
 | `packages/contracts` | Shared TypeScript contracts for API result, persisted AG-UI run events, tools, artifacts, env schema. | Type-only DTOs, AG-UI `BaseEvent`-backed `RunEventEnvelope`, `ENV_VARIABLE_SPECS`, `createEnvConfig`, API result helpers. |
 | `packages/providers` | Model provider selection and env-driven model adapter creation. | `@ai-sdk/openai` for OpenAI-compatible `/chat/completions`; Mastra model router object for other providers; mock marker when no `LLM_API_KEY`. |
 | `packages/artifacts` | Artifact creation service used by Data Gateway. | `LocalArtifactService`, metadata-backed artifact records and previews. |
@@ -78,14 +80,23 @@ Run the full backend verification set:
 ```bash
 npm run typecheck
 npm run smoke:metadata
+npm run smoke:run-identity
 npm run smoke:data-gateway
 npm run smoke:sql
 npm run smoke:agent
+npm run smoke:task-state
+npm run smoke:context-architecture
+npm run smoke:context-compilation
+npm run smoke:docs
+npm run smoke:conversation-memory
+npm run smoke:long-term-memory
+npm run smoke:memory-recall-shadow
 npm run smoke:config-api
 npm run smoke:collaboration
 npm run smoke:workspace
 npm run smoke:tool-state
 npm run smoke:api-context
+npm run smoke:copilotkit-run
 npm run smoke:api
 npm run test:web
 npm run build:web
@@ -94,16 +105,30 @@ npm run build:web
 Expected coverage:
 
 - `smoke:metadata`: metadata schema, repositories, run event persistence.
+- `smoke:run-identity`: AG-UI thread/run identity, idempotent replay, parent run persistence.
 - `smoke:data-gateway`: datasource registration, support types, schema inspection, preview.
 - `smoke:sql`: readonly SQL guard, limit, timeout, audit log, artifact creation.
 - `smoke:agent`: Mastra tool registry policy, inspect-before-SQL enforcement, SQL audit.
-- `smoke:config-api`: config resources, encrypted secrets, revision conflicts, KB, MCP, Skill, jobs, artifacts, tombstone delete.
+- `smoke:task-state`: Mastra task tools persist through the application-level LibSQL runtime.
+- `smoke:context-architecture`: context layer directories, removed legacy paths, and naming/import guardrails.
+- `smoke:context-compilation`: ContextPackage inventory, source policy, projection, protocol conversion, runtime source
+  refresh, and provider prompt budget enforcement.
+- `smoke:docs`: local Markdown/HTML documentation links.
+- `smoke:conversation-memory`: server-authoritative user/assistant history, spoofed client history rejection,
+  message-level idempotency, summary replacement, pluggable summarizer persistence, and read-only Mastra WorkingMemory
+  consumption without duplicate tagged summaries.
+- `smoke:long-term-memory`: durable long-term memory records, local relevance retrieval, governed context injection,
+  automatic extraction, sensitive candidate filtering, and ContextPackage source attribution.
+- `smoke:memory-recall-shadow`: compares local long-term memory retrieval with Knowledge retrieval and records the
+  Mastra Semantic Recall gate as not configured until vector/embedder policy is approved.
+- `smoke:config-api`: config resources, encrypted secrets, revision conflicts, KB, MCP, model profile test,
+  Skill, jobs, artifacts, tombstone delete.
 - `smoke:collaboration`: ask-user/submit-plan suspend-resume and plan approval.
 - `smoke:workspace`: Mastra workspace tools and local sandbox integration.
 - `smoke:tool-state`: concurrent tool state isolation.
 - `smoke:api-context`: CopilotKit/AG-UI request context extraction for datasource and user input.
-- `smoke:api`: Agent Runtime startup, `/api/copilotkit` CORS, AG-UI request validation.
-- `smoke:copilotkit`: alias-level check for the same single runtime endpoint.
+- `smoke:copilotkit-run`: `/api/copilotkit` end-to-end run, event ordering, persistence, replay, and suspended state.
+- `smoke:api` / `smoke:copilotkit`: Agent Runtime startup, `/api/copilotkit` CORS, and AG-UI request validation.
 
 ## Run Agent Runtime
 
@@ -205,9 +230,10 @@ The default local metadata store is one SQLite database per configured backend s
 METADATA_DB_PATH=storage/metadata/workbench.sqlite
 ```
 
-It is not one SQLite database per run. `users`, `sessions`, `runs`, `run_events`, `data_sources`, `sql_audit_logs`, and
-`artifacts` all share that database and are isolated by `user_id`, `session_id`, and `run_id`. Smoke tests create
-temporary SQLite files only so verification runs are disposable and do not mutate the development database.
+It is not one SQLite database per run. `users`, `sessions`, `runs`, `run_events`, `conversation_messages`,
+`conversation_summaries`, `data_sources`, `sql_audit_logs`, and `artifacts` all share that database and are isolated by
+`user_id`, `session_id`, and `run_id`. Smoke tests create temporary SQLite files only so verification runs are
+disposable and do not mutate the development database.
 
 ## Environment
 
@@ -223,10 +249,18 @@ LLM_API_KEY=
 SECRET_MASTER_KEY=replace-with-a-long-random-local-key
 STORAGE_ROOT_DIR=storage
 METADATA_DB_PATH=storage/metadata/workbench.sqlite
+MASTRA_CONVERSATION_MEMORY_MODE=working-memory-readonly
+MEMORY_EXTRACTION_TIMEOUT_MS=2000
 SQL_DEFAULT_LIMIT=100
 SQL_MAX_LIMIT=1000
 SQL_TIMEOUT_MS=10000
 ```
+
+`MASTRA_CONVERSATION_MEMORY_MODE` supports `off`, `shadow`, and `working-memory-readonly`. The backend default is
+`working-memory-readonly`: metadata remains the source of truth, while Mastra's native WorkingMemory input processor
+consumes the latest trusted conversation summary as read-only context.
+`MEMORY_EXTRACTION_TIMEOUT_MS` bounds post-run summary and long-term memory extraction before `RUN_FINISHED`; online
+context compaction remains synchronous.
 
 Provider behavior:
 
@@ -263,6 +297,7 @@ Start here:
 - [Docs Index](docs/README.md) — includes **source-of-truth priority** for AI implementation
 - [CopilotKit / AG-UI Frontend Protocol Support](docs/engineering/copilotkit-ag-ui-frontend-protocol.md)
 - [Config Management REST API](docs/engineering/config-management-api.md)
+- [Context Layering ADR](docs/engineering/adr-0003-context-layering-and-naming.md)
 - [Frontend → Backend Capability Status](docs/engineering/frontend-backend-capability-requests.md)
 - [Data Task Page Design](apps/web/src/app/data-tasks/DESIGN.md)
 - [R&D B Architecture Plan](docs/engineering/rd-b-agent-gateway-knowledge-architecture-plan-zh.md) (historical)
