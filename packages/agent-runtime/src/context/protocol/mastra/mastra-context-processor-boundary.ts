@@ -1,4 +1,4 @@
-import type { InputProcessorOrWorkflow } from "@mastra/core/processors";
+import type { InputProcessorOrWorkflow, OutputProcessorOrWorkflow } from "@mastra/core/processors";
 
 import type { ContextRunState } from "../../inventory/context-run-state.js";
 import {
@@ -22,6 +22,7 @@ import type { ContextProtocolEventSink } from "../context-protocol-event-sink.js
 import { MastraContextBudgetProcessor } from "./mastra-context-budget-processor.js";
 import { MastraContextProtocolAdapter } from "./mastra-context-protocol-adapter.js";
 import { MastraContextRuntimeSourceProcessor } from "./mastra-context-runtime-source-processor.js";
+import { MastraCustomDataPartFilterProcessor } from "./mastra-custom-data-part-filter-processor.js";
 import { MastraProviderPromptGuardProcessor } from "./mastra-provider-prompt-guard-processor.js";
 import { MastraTaskStateContextProcessor } from "./mastra-task-state-context-processor.js";
 import { MastraToolObservationRouter } from "./mastra-tool-observation-router.js";
@@ -49,6 +50,7 @@ export type CreateMastraContextProcessorBoundaryInput = {
 
 export type MastraContextProcessorBoundary = {
   inputProcessors: InputProcessorOrWorkflow[];
+  outputProcessors: OutputProcessorOrWorkflow[];
 };
 
 export const createMastraContextProcessorBoundary = (
@@ -117,6 +119,7 @@ export const createMastraContextProcessorBoundary = (
       ...(runtimeSourceProcessor ? [runtimeSourceProcessor] : []),
       contextBudgetProcessor,
       providerPromptGuard
-    ]
+    ],
+    outputProcessors: [new MastraCustomDataPartFilterProcessor()]
   };
 };

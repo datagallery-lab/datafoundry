@@ -22,10 +22,13 @@ export const isConversationTurnStart = (message: MastraDBMessage): boolean =>
   message.role === "user" && !isToolObservationMessage(message);
 
 export const isToolObservationMessage = (message: MastraDBMessage): boolean =>
-  message.content.parts.some((part) => isToolResultPart(part));
+  hasMastraMessageContentParts(message) && message.content.parts.some((part) => isToolResultPart(part));
+
+export const filterModelVisibleMastraMessages = (messages: MastraDBMessage[]): MastraDBMessage[] =>
+  messages.filter(hasMastraMessageContentParts);
 
 export const groupMessagesByTurn = (messages: MastraDBMessage[]): ConversationTurnGroup[] => {
-  const members = createGroupedMessages(messages);
+  const members = createGroupedMessages(filterModelVisibleMastraMessages(messages));
   const grouped: Array<{ id: string; order: number; members: GroupedConversationMessage[] }> = [];
   let current: { id: string; order: number; members: GroupedConversationMessage[] } | undefined;
 
@@ -87,3 +90,7 @@ const isCompletedToolState = (state: unknown): boolean =>
   state === "result" || state === "output-available" || state === "output-error" || state === "output-denied";
 
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null;
+
+const hasMastraMessageContentParts = (message: MastraDBMessage): message is MastraDBMessage & {
+  content: { parts: unknown[] };
+} => isRecord(message.content) && Array.isArray(message.content.parts);

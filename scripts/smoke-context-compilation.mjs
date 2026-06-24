@@ -205,6 +205,14 @@ if (assistantTailGroups.length !== 1 || assistantTailGroups[0]?.members.length !
   throw new Error("Expected a trailing assistant message to remain in its preceding user turn");
 }
 
+const dataOnlyGroups = groupMessagesByTurn([
+  { id: "data-workspace-metadata-message", role: "assistant", data: { toolName: "write_file" } },
+  createAnonymousMessage("user", "current question after custom data")
+]);
+if (dataOnlyGroups.length !== 1 || dataOnlyGroups[0]?.members[0]?.message.role !== "user") {
+  throw new Error("Expected data-only Mastra telemetry messages to stay out of conversation turn grouping");
+}
+
 assertThrows(
   () => groupMessagesByTurn([
     createMessage("duplicate-id", "user", "one"),
@@ -349,7 +357,7 @@ const boundaryDispatcher = new ToolObservationDispatcher(boundaryToolObservation
   runId: boundarySourceState.identity.runId,
   sessionId: identity.sessionId
 });
-const boundaryProcessors = createMastraContextProcessorBoundary({
+const boundaryProcessorBundle = createMastraContextProcessorBoundary({
   additionalRuntimeSources: [{
     sourceType: "boundary-runtime-source",
     collect: () => [
@@ -391,9 +399,38 @@ const boundaryProcessors = createMastraContextProcessorBoundary({
     userId: identity.resourceId
   },
   runState: boundarySourceState
-}).inputProcessors;
+});
+const boundaryProcessors = boundaryProcessorBundle.inputProcessors;
+const boundaryOutputProcessors = boundaryProcessorBundle.outputProcessors;
 const boundaryRuntimeSourceProcessor = boundaryProcessors.find((processor) => processor.id === "context-runtime-source");
 const boundaryBudgetProcessor = boundaryProcessors.find((processor) => processor.id === "context-budget");
+const customDataFilterProcessor = boundaryOutputProcessors.find((processor) => processor.id === "custom-data-part-filter");
+if (!customDataFilterProcessor?.processOutputStream) {
+  throw new Error("Expected Mastra protocol boundary to include the custom data part filter output processor");
+}
+const customDataFilterResult = await customDataFilterProcessor.processOutputStream({
+  part: {
+    type: "data-workspace-metadata",
+    data: { toolName: "write_file" }
+  },
+  streamParts: [],
+  state: {}
+});
+if (customDataFilterResult !== null) {
+  throw new Error("Expected Mastra custom data parts to be filtered at the protocol boundary");
+}
+const normalStreamPart = {
+  type: "text-delta",
+  payload: { text: "model-visible text" }
+};
+const normalFilterResult = await customDataFilterProcessor.processOutputStream({
+  part: normalStreamPart,
+  streamParts: [],
+  state: {}
+});
+if (normalFilterResult !== normalStreamPart) {
+  throw new Error("Expected non-data stream parts to pass through the protocol boundary filter");
+}
 await boundaryRuntimeSourceProcessor?.processInputStep({
   messages: [],
   systemMessages: [],
