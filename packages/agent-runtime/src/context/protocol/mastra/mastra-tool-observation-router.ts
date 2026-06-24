@@ -3,6 +3,7 @@ import type { MastraDBMessage } from "@mastra/core/agent";
 import type { ContextProtocolEventSink } from "../context-protocol-event-sink.js";
 import type { ToolObservationDispatcher } from "../../tool-observation/tool-observation-dispatcher.js";
 import { toolObservationModelFromPackage } from "../../tool-observation/tool-observation-projection-items.js";
+import { filterModelVisibleMastraMessages } from "./mastra-message-utils.js";
 
 export type MastraToolObservationRouterOptions = {
   dispatcher: ToolObservationDispatcher;
@@ -24,7 +25,7 @@ export class MastraToolObservationRouter {
 
   /** Route completed Mastra tool observations through their registered adapters. */
   governMessages(messages: MastraDBMessage[]): MastraDBMessage[] {
-    return messages.map((message) => ({
+    return filterModelVisibleMastraMessages(messages).map((message) => ({
       ...message,
       content: {
         ...message.content,

@@ -266,6 +266,7 @@ export const createDataAgent = async (
     // Explicitly created tools are wrapped by the same governed execution boundary as every other tool.
     workspace: runWorkspace.workspace,
     inputProcessors: mastraContextProcessors.inputProcessors,
+    outputProcessors: mastraContextProcessors.outputProcessors,
     defaultOptions: {
       maxSteps: AGENT_MAX_STEPS,
       ...(input.modelSettings ? { modelSettings: input.modelSettings } : {}),

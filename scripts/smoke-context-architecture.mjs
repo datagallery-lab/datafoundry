@@ -51,6 +51,7 @@ const requiredFiles = [
   "protocol/mastra/mastra-context-processor-boundary.ts",
   "protocol/mastra/mastra-context-protocol-adapter.ts",
   "protocol/mastra/mastra-context-runtime-source-processor.ts",
+  "protocol/mastra/mastra-custom-data-part-filter-processor.ts",
   "protocol/mastra/mastra-context-prompt-message-adapter.ts",
   "protocol/mastra/mastra-context-source-message.ts",
   "protocol/mastra/mastra-conversation-context-adapter.ts",
