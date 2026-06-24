@@ -24,6 +24,8 @@ export type DataTaskChatInputBindings = {
   activeSession: ChatSession | null;
   onToggleSessionResource: (kind: PerRunMentionKind, id: string) => void;
   chatColumnWidth: number;
+  agentId: string;
+  activeThreadId: string | null;
 };
 
 const DataTaskChatInputBindingsContext =

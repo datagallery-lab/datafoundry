@@ -3,6 +3,7 @@
 import {
   CopilotChatInput,
   type CopilotChatInputProps,
+  type UseAttachmentsReturn,
 } from "@copilotkit/react-core/v2";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
@@ -17,6 +18,8 @@ import {
   getLlmOptionSubtitle,
 } from "../../data-task-state";
 import { MentionChips, useMentionAutocomplete } from "./chat-mentions";
+import { AttachmentChips } from "./AttachmentChips";
+import { CHAT_ATTACHMENT_ACCEPT } from "./chat-attachments";
 import { SessionConfigBar } from "./SessionConfigBar";
 import { useChatTextareaAutoresize, scheduleChatTextareaResize } from "./use-chat-textarea-autoresize";
 import { resolveChatInputWidth } from "../../chat-input-layout";
@@ -36,6 +39,7 @@ type DataTaskChatInputProps = CopilotChatInputProps & {
   workspaceConfig: WorkspaceConfigStore;
   activeSession: ChatSession | null;
   onToggleSessionResource: (kind: PerRunMentionKind, id: string) => void;
+  attachmentsApi: UseAttachmentsReturn;
 };
 
 export function DataTaskChatInput({
@@ -51,6 +55,7 @@ export function DataTaskChatInput({
   workspaceConfig,
   activeSession,
   onToggleSessionResource,
+  attachmentsApi,
   textArea,
   onChange,
   ...props
@@ -96,6 +101,7 @@ export function DataTaskChatInput({
           workspaceConfig={workspaceConfig}
           activeSession={activeSession}
           onToggleSessionResource={onToggleSessionResource}
+          attachmentsApi={attachmentsApi}
         />
       )}
     </CopilotChatInput>
@@ -129,6 +135,7 @@ function DataTaskChatInputLayout({
   workspaceConfig,
   activeSession,
   onToggleSessionResource,
+  attachmentsApi,
 }: {
   textArea: ReactNode;
   sendButton: ReactNode;
@@ -156,6 +163,7 @@ function DataTaskChatInputLayout({
   workspaceConfig: WorkspaceConfigStore;
   activeSession: ChatSession | null;
   onToggleSessionResource: (kind: PerRunMentionKind, id: string) => void;
+  attachmentsApi: UseAttachmentsReturn;
 }) {
   const { chatColumnWidth } = useDataTaskChatInputBindings();
   const chatInputWidth = resolveChatInputWidth(chatColumnWidth);
@@ -170,8 +178,9 @@ function DataTaskChatInputLayout({
     (node: HTMLDivElement | null) => {
       mention.columnRef(node);
       autoresizeRef(node);
+      attachmentsApi.containerRef.current = node;
     },
-    [mention.columnRef, autoresizeRef],
+    [mention.columnRef, autoresizeRef, attachmentsApi.containerRef],
   );
 
   const focusTextArea = (textarea: HTMLTextAreaElement) => {
@@ -215,8 +224,16 @@ function DataTaskChatInputLayout({
       >
         <div
           data-testid="copilot-chat-input"
-          className="flex w-full flex-col overflow-visible rounded-2xl border border-slate-200/70 bg-white shadow-[0_8px_28px_-6px_rgba(15,23,42,0.14),0_2px_8px_-2px_rgba(15,23,42,0.06)] dark:border-slate-700/60 dark:bg-[#303030]"
+          onDragOver={attachmentsApi.handleDragOver}
+          onDragLeave={attachmentsApi.handleDragLeave}
+          onDrop={attachmentsApi.handleDrop}
+          className="relative flex w-full flex-col overflow-visible rounded-2xl border border-border bg-surface shadow-[0_8px_28px_-6px_rgba(15,23,42,0.12),0_2px_8px_-2px_rgba(15,23,42,0.05)]"
         >
+          {attachmentsApi.dragOver && (
+            <div className="pointer-events-none absolute inset-0 z-30 grid place-items-center rounded-2xl border-2 border-dashed border-primary bg-primary-light/10 text-sm font-medium text-primary">
+              拖拽文件到此处上传
+            </div>
+          )}
           <div className="w-full px-3 py-1.5">
             <div
               ref={columnRef}
@@ -227,10 +244,14 @@ function DataTaskChatInputLayout({
                 audioRecorder
               ) : mode === "processing" ? (
                 <div className="flex w-full items-center justify-center px-5 py-3">
-                  <span className="h-[26px] w-[26px] animate-spin rounded-full border-2 border-slate-300 border-t-slate-600" />
+                  <span className="h-[26px] w-[26px] animate-spin rounded-full border-2 border-border border-t-primary" />
                 </div>
               ) : (
                 <>
+                  <AttachmentChips
+                    attachments={attachmentsApi.attachments}
+                    onRemove={attachmentsApi.removeAttachment}
+                  />
                   <MentionChips
                     resources={mentionResources}
                     selection={perRunSelection}
@@ -272,8 +293,27 @@ function DataTaskChatInputLayout({
               session={activeSession}
               onToggleSessionResource={onToggleSessionResource}
               leading={
-                <div className="grid h-7 w-7 place-items-center [&_button]:flex [&_button]:h-7 [&_button]:w-7 [&_button]:items-center [&_button]:justify-center">
-                  {addMenuButton}
+                <div className="flex items-center gap-1">
+                  <input
+                    ref={attachmentsApi.fileInputRef}
+                    type="file"
+                    multiple
+                    accept={CHAT_ATTACHMENT_ACCEPT}
+                    className="hidden"
+                    onChange={attachmentsApi.handleFileUpload}
+                  />
+                  <button
+                    type="button"
+                    aria-label="上传文件"
+                    title="上传文件"
+                    onClick={() => attachmentsApi.fileInputRef.current?.click()}
+                    className="grid h-7 w-7 cursor-pointer place-items-center rounded-md text-muted hover:bg-surface-subtle hover:text-foreground"
+                  >
+                    <PaperclipIcon />
+                  </button>
+                  <div className="grid h-7 w-7 place-items-center [&_button]:flex [&_button]:h-7 [&_button]:w-7 [&_button]:items-center [&_button]:justify-center">
+                    {addMenuButton}
+                  </div>
                 </div>
               }
               trailing={
@@ -333,10 +373,10 @@ function ChatModelPicker({
         title="切换模型"
         onClick={() => setOpen((value) => !value)}
         className={[
-          "flex max-w-[168px] items-center gap-1 rounded-full border px-2.5 py-1 text-xs font-medium transition",
+          "flex max-w-[168px] cursor-pointer items-center gap-0.5 px-1 py-1 text-xs font-medium transition-colors duration-200",
           open
-            ? "border-slate-300 bg-slate-200 text-slate-900 dark:border-slate-500 dark:bg-slate-600 dark:text-slate-100"
-            : "border-slate-200 bg-slate-100 text-slate-700 hover:border-slate-300 hover:bg-slate-200 hover:text-slate-900 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-200 dark:hover:bg-slate-600",
+            ? "text-foreground"
+            : "text-muted hover:text-foreground",
         ].join(" ")}
       >
         <span className="truncate">{label}</span>
@@ -347,13 +387,13 @@ function ChatModelPicker({
         <div
           role="listbox"
           aria-label="模型列表"
-          className="absolute bottom-full right-0 z-50 mb-2 w-[min(280px,calc(100vw-2rem))] overflow-hidden rounded-xl border border-slate-200 bg-white shadow-lg"
+          className="absolute bottom-full right-0 z-50 mb-2 w-[min(280px,calc(100vw-2rem))] overflow-hidden rounded-xl border border-border bg-surface shadow-lg"
         >
-          <div className="border-b border-slate-100 px-3 py-2 text-[11px] font-medium uppercase tracking-[0.06em] text-slate-400">
+          <div className="border-b border-border px-3 py-2 text-[11px] font-medium uppercase tracking-[0.06em] text-muted-light">
             模型
           </div>
           {llmOptions.length === 0 ? (
-            <p className="px-3 py-4 text-sm text-slate-500">
+            <p className="px-3 py-4 text-sm text-muted-light">
               请先在左侧配置中启用 LLM
             </p>
           ) : (
@@ -371,22 +411,22 @@ function ChatModelPicker({
                         setOpen(false);
                       }}
                       className={[
-                        "flex w-full items-start gap-2 px-3 py-2 text-left transition",
+                        "flex w-full cursor-pointer items-start gap-2 px-3 py-2 text-left transition-colors duration-200",
                         selected
-                          ? "bg-slate-100"
-                          : "hover:bg-slate-50",
+                          ? "bg-primary-light/8"
+                          : "hover:bg-surface-subtle",
                       ].join(" ")}
                     >
                       <span className="min-w-0 flex-1">
-                        <span className="block truncate text-sm font-medium text-slate-900">
+                        <span className="block truncate text-sm font-medium text-foreground">
                           {getLlmDisplayLabel(item)}
                         </span>
-                        <span className="mt-0.5 block truncate text-xs text-slate-500">
+                        <span className="mt-0.5 block truncate text-xs text-muted-light">
                           {getLlmOptionSubtitle(item)}
                         </span>
                       </span>
                       {selected && (
-                        <span className="mt-0.5 shrink-0 text-slate-600">
+                        <span className="mt-0.5 shrink-0 text-primary">
                           <CheckIcon />
                         </span>
                       )}
@@ -397,14 +437,14 @@ function ChatModelPicker({
             </ul>
           )}
           {onOpenLlmConfig && (
-            <div className="border-t border-slate-100 p-1">
+            <div className="border-t border-border p-1">
               <button
                 type="button"
                 onClick={() => {
                   setOpen(false);
                   onOpenLlmConfig();
                 }}
-                className="w-full rounded-lg px-3 py-2 text-left text-xs font-medium text-slate-600 transition hover:bg-slate-50 hover:text-slate-900"
+                className="w-full cursor-pointer rounded-lg px-3 py-2 text-left text-xs font-medium text-muted transition-colors duration-200 hover:bg-surface-subtle hover:text-foreground"
               >
                 管理模型配置…
               </button>
@@ -421,7 +461,7 @@ function ChevronDownIcon({ open }: { open: boolean }) {
     <svg
       viewBox="0 0 20 20"
       className={[
-        "h-3.5 w-3.5 shrink-0 transition-transform",
+        "h-3.5 w-3.5 shrink-0 text-muted-light transition-transform",
         open ? "rotate-180" : "",
       ].join(" ")}
       fill="none"
@@ -449,6 +489,23 @@ function CheckIcon() {
       aria-hidden
     >
       <path d="m5 10 3 3 7-7" />
+    </svg>
+  );
+}
+
+function PaperclipIcon() {
+  return (
+    <svg
+      viewBox="0 0 20 20"
+      className="h-4 w-4"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.6}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <path d="M14.5 9.5 9 15a3 3 0 0 1-4.2-4.2l6-6a2 2 0 0 1 2.8 2.8l-6 6a1 1 0 0 1-1.4-1.4l5.3-5.3" />
     </svg>
   );
 }

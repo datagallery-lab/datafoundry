@@ -1,5 +1,9 @@
 # Data Agent Session Page — Design
 
+> **Last verified against code:** 2026-06-24  
+> **Maintenance:** When changing `TaskConsole`, layout/responsive behavior, config
+> REST integration, or design tokens, update this document in the same change.
+
 This page (`/data-tasks`) is a **data-agent workbench** built on CopilotKit v2
 (`@copilotkit/react-core/v2`). It is a **real frontend**: it talks to the live
 `dataAgent` backend over the CopilotKit / AG-UI protocol and renders only what
@@ -11,30 +15,57 @@ This document describes how the page maps that protocol to UI.
 
 ## Layout
 
-Three-column responsive grid:
+Three-column responsive grid, driven by
+[workspace-layout.ts](./workspace-layout.ts) rather than static Tailwind
+breakpoints:
 
 ```
-grid-cols-[280px_minmax(0,1fr)]
-xl:grid-cols-[300px_minmax(420px,1fr)_380px]
+expanded: 320px minmax(400px, 1fr) 400px
+collapsed-left: 56px minmax(400px, 1fr) 400px
+config-panel-open: 320px minmax(400px, 1fr)
 ```
 
 - **Left — `SessionPane`**: workspace default config rows (DB/KB/MCP/LLM/Skill,
   opening `WorkspaceConfigPanel`) + client-side session list.
 - **Middle — `ChatPane`**: a stock `CopilotChat` bound to the active session's
-  `threadId`, plus the inline tool-call trace cards.
+  `threadId`, the inline tool-call trace cards, the HITL interrupt renderer, and
+  the data-task welcome screen for an empty thread.
 - **Right — `TaskConsole`**: a tabbed data-task console with four tabs —
   Overview / Trace / Outputs / Detail — derived from the live run. The Detail
   tab is selection-driven: clicking a tool card in the middle column (or a
-  trace entry) auto-switches to it. Shown at `lg` and up; hidden below `lg` to
-  protect the middle column (a toggleable drawer for narrow screens is deferred).
+  trace entry) auto-switches to it.
+
+Layout behavior:
+
+- Left panel width is `LEFT_PANEL_WIDTH_EXPANDED = 320`; collapsed width is
+  `LEFT_PANEL_WIDTH_COLLAPSED = 56`.
+- Right panel width is persisted and draggable via `usePanelResize`; it defaults
+  to `RIGHT_PANEL_DEFAULT_WIDTH = 400` and is clamped to `320–640`.
+- The middle column reserves `CHAT_MIN_WIDTH = 400`; chat input sizing separately
+  reserves `CHAT_INPUT_PREFERRED_WIDTH = 768` plus `32` px horizontal padding.
+- `resolveResponsiveSidebars` applies viewport pressure in this order: close the
+  right console first, then collapse the left panel. User preferences are
+  restored when space returns.
+- When the viewport cannot fit a docked right panel (`canDockRightPanel` in
+  [workspace-layout.ts](./workspace-layout.ts)), `TaskConsole` opens in
+  [TaskConsoleDrawer.tsx](./components/task-console/TaskConsoleDrawer.tsx)
+  (full-screen overlay, Esc / backdrop dismiss) instead of the grid column. The
+  chat header「打开控制台」button opens the drawer on narrow viewports.
+- Opening `WorkspaceConfigPanel` makes the workspace two-column: left config
+  library + middle/config content. The right `TaskConsole` is hidden while a
+  config panel is open.
 
 ## Workspace configuration model (DB / KB / MCP / LLM / Skill)
 
 State + schema live in [data-task-state.ts](./data-task-state.ts); UI lives in
-[page.tsx](./page.tsx). The backend-side contract and the capability gap list:
+[page.tsx](./page.tsx). Backend config I/O is handled by
+[use-workspace-config-api.ts](./hooks/use-workspace-config-api.ts), which wraps
+`lib/config-api`. The backend-side contract and the capability gap list:
 
 - [config-management-api.md](../../../../../docs/engineering/config-management-api.md)
-  — REST contract for config management + `run_config` merge model.
+  — REST contract for config management and the **`run_config` merge model**
+  section (server-side merge of workspace defaults, session overrides, and per-run
+  selections).
 - [frontend-backend-capability-requests.md](../../../../../docs/engineering/frontend-backend-capability-requests.md)
   — what the frontend needs the backend to implement, prioritized.
 
@@ -50,7 +81,9 @@ effectiveRunConfig = merge(workspaceDefaults, sessionEnabled, perRunMentioned, s
 1. **Workspace defaults (left panel)** — DB / KB / MCP / LLM / Skill entries are
    *static defaults*. Every entry is **default-available**; there are **no
    per-item enable toggles**. Wording is "工作区默认配置 / 默认可用", never
-   "本轮启用/禁用". Persisted in `localStorage` (`data-tasks:workspace-config:v1`).
+   "本轮启用/禁用". The list is loaded from the config REST API
+   (`getWorkspaceConfig`) after `getCapabilities`; failed loads fall back to
+   `defaultWorkspaceConfig()` so the UI can still render a safe local shape.
 2. **Session config (chat input bottom pills)** — `SessionConfigBar` shows four
    per-kind pills (`数据源 / 知识库 / MCP / 技能`) with `启用数/总数`. Clicking a
    pill opens an upward popover with a switch list to disable specific resources
@@ -65,8 +98,9 @@ effectiveRunConfig = merge(workspaceDefaults, sessionEnabled, perRunMentioned, s
    `enabled*Ids` (other session-enabled resources remain available). Cleared after
    send. See [§Per-run `@` mentions](#per-run--mentions-layer-3).
 4. **Server policy (backend)** — the final authority; merges the above with
-   permission/policy. Today the backend only honors `datasourceId` (capability
-   request #3 wires full `run_config` consumption).
+   permission/policy. The frontend always sends the forward-compatible
+   `run_config`; backend support is discovered through runtime capabilities and
+   tracked in [frontend-backend-capability-requests.md](../../../../../docs/engineering/frontend-backend-capability-requests.md).
 
 LLM model selection stays in `ChatModelPicker` (not a session pill).
 
@@ -83,22 +117,23 @@ Earlier this page hid anything the backend could not yet consume. That rule is
 3. the data it produces is **forward-compatible** (ids/selections only, no
    secrets) so wiring the backend later is a no-op on the protocol.
 
-Concretely, the `@` picker lets a run select `@kb` / `@mcp` / `@skill` today even
-though only `@db` has runtime effect; the rest ride along in `run_config` with a
-visible 「后端未支持」 marker until capability #3 (+ each impl) lands.
+Concretely, the `@` picker lets a run select `@db` / `@kb` / `@mcp` / `@skill`.
+Each option is filtered by the session-enabled resource set and runtime
+capabilities. Unsupported kinds still ride along in `run_config` with a visible
+「后端未支持」 marker until the corresponding backend capability lands.
 
 For per-field config the visible set is still **grounded in the backend's
 verified Data Gateway capability**; speculative fields stay gated-off (see
 [§Capability gating](#capability-gating-forward-compatible-flip-a-flag)) and
 their full contract lives in `config-management-api.md`.
 
-| Config | UI exposes today | Backend reality |
+| Config | UI exposes today | Capability key → runtime behavior |
 | --- | --- | --- |
-| DB | `datasourceId` `type`(duckdb/sqlite/csv/xlsx) `mode`(readonly) `filePath` | only these 4 adapters exist |
-| KB | `indexName` `retrievalTopK` (row marked **后端未支持**) | interface only, no impl |
-| MCP | `transport` `serverUrl` (row marked **后端未支持**) | no impl at all |
-| LLM | `provider` `baseUrl` `apiKey` `modelName` | env-driven, no per-run switch |
-| Skill | 上传 `SKILL.md` / `.zip`（元数据只读） | no skill concept |
+| DB | REST-backed CRUD / test / introspect, `datasourceId`, file adapters, readonly mode | `runDefaults.defaultDatasourceId` chooses default; `datasource.server` unlocks server adapter fields; `datasource.queryPolicy` unlocks maxRows/timeoutMs |
+| KB | REST-backed CRUD, file upload, reindex job, search-facing settings | `knowledge` must be true for runtime KB retrieval; UI marks unsupported paths |
+| MCP | REST-backed CRUD + test + manifest-oriented settings | `mcp` must be true for runtime MCP mount; UI marks unsupported paths |
+| LLM | REST-backed model profiles, test, `activeLlmProfileId` in `run_config` | Per-run profile switching depends on backend honoring `activeLlmProfileId`; `llm.samplingParams` unlocks temperature/maxTokens fields |
+| Skill | REST-backed upload/replace/validate for `SKILL.md` / `.zip` packages | `skills` must be true for runtime skill strategy; UI marks unsupported paths |
 
 ### Field schema system (`data-task-state.ts`)
 
@@ -115,9 +150,10 @@ filter; the detail view and validation both use it, so they stay consistent.
 
 ### Capability gating (forward-compatible, flip-a-flag)
 
-`BACKEND_CAPABILITIES` (all `false` today) + `hasCapability()` gate fields via
+Backend capabilities are loaded at runtime via `configApi.getCapabilities()` and
+applied through `setLiveBackendCapabilities`; `hasCapability()` gates fields via
 `requiresCapability`. Deleted/aspirational fields are **kept in the schema as
-gated-off** so restoring them is a flag flip, not a re-author:
+gated-off** so restoring them is a backend capability flip, not a re-author:
 
 | capability flag | unlocks when backend ships | gated fields |
 | --- | --- | --- |
@@ -127,13 +163,45 @@ gated-off** so restoring them is a flag flip, not a re-author:
 
 ### Credentials never cross the AG-UI protocol
 
-API keys / tokens / passwords live in `localStorage` only. The embedded
-`workspaceConfig` is stripped of secret keys (`apiKey`/`token`/`secret`/
-`password`/`credentialsJson`) by `sanitizeWorkspaceConfig`; the LLM profile in
-state exposes a `hasApiKey` boolean instead of the raw value. Reserved fields
-`WorkspaceConfigItem.secretRef` and `.status` are placeholders for the backend
-secretRef model (`config-management-api.md §1.2`) — backend stores the secret
-once over HTTPS and the stream only ever carries ids.
+API keys / tokens / passwords are never embedded in AG-UI context. Config REST
+create/update calls may send credentials in HTTPS request bodies; list/detail
+responses map backend `secretRef` / `hasSecret` into `WorkspaceConfigItem` and do
+not expose plaintext secrets. The embedded `workspaceConfig` is still sanitized
+by `sanitizeWorkspaceConfig` before entering run context, so the stream only
+carries ids, flags, and non-secret settings.
+
+### Run config merge flow
+
+```mermaid
+flowchart LR
+  runDefaults["runDefaults REST"]
+  workspace["workspaceConfig REST"]
+  session["session.config.disabled"]
+  perRun["perRunSelection @mentions"]
+  buildRun["buildRunConfig()"]
+  agentCtx["useAgentContext run_config"]
+  server["Backend server policy"]
+
+  runDefaults --> buildRun
+  workspace --> buildRun
+  session --> buildRun
+  perRun --> buildRun
+  buildRun --> agentCtx
+  agentCtx --> server
+```
+
+Priority (highest wins for active selections, lowest for defaults):
+
+1. **Per-run `@` mentions** — `mentioned.*` and `activeDatasourceId` / `activeSkillId`
+   when the user explicitly `@`-picked resources for this send.
+2. **Session disabled list** — subtracts resources from the enabled sets for this
+   chat thread only (`ChatSession.config.disabled`).
+3. **Workspace defaults** — full resource library from REST (`getWorkspaceConfig`).
+4. **`runDefaults` (REST)** — server-provided `defaultDatasourceId` /
+   `activeLlmProfileId` used when the frontend has no explicit per-run choice.
+5. **Server policy** — backend may further filter or ignore unsupported keys based
+   on `getCapabilities()` flags; unsupported keys remain forward-compatible in the
+   payload.
 
 ### Run context sent today
 
@@ -141,7 +209,9 @@ Two `useAgentContext` items (+ `forwardedProps.datasourceId`):
 
 - `datasource_id` — the one field the backend currently honors (protocol §2).
 - `run_config` — single forward-compatible payload built by `buildRunConfig`
-  matching `config-management-api.md §5`; **ids / selections only, no secrets**:
+  matching the **`run_config` merge model** in
+  [config-management-api.md](../../../../../docs/engineering/config-management-api.md);
+  **ids / selections only, no secrets**:
 
 ```jsonc
 {
@@ -158,9 +228,10 @@ Two `useAgentContext` items (+ `forwardedProps.datasourceId`):
 }
 ```
 
-The backend ignores `run_config` until capability #3 lands; sending it now means
-no protocol change is needed later. (A third `当前数据任务工作区状态` item carries
-sanitized workspace state for debugging.)
+Backend consumption of `run_config` is capability-driven: unsupported keys remain
+forward-compatible payload only, while supported keys are consumed by server
+policy. A third `当前数据任务工作区状态` item carries sanitized workspace state for
+debugging.
 
 ### Session config pills (layer 2)
 
@@ -196,10 +267,29 @@ resources stay in `enabled*Ids` and remain available to the agent.
   workspace items are deleted or session-disabled.
 - **Effect**: `enabled*Ids` = session set (unchanged by `@`). `activeDatasourceId`
   / `activeSkillId` = first `@` mention for that kind, else default.
-  `mentioned` = full `@` pick list. Only `@db` has runtime effect today via
-  `datasource_id`; rest forward-compatible per
-  [§Build ahead of the backend](#build-ahead-of-the-backend--but-label-it-honestly).
+  `mentioned` = full `@` pick list. Runtime effect is capability-driven; a kind
+  that the backend cannot honor remains a labeled, forward-compatible selection
+  per [§Build ahead of the backend](#build-ahead-of-the-backend--but-label-it-honestly).
 - **Lifetime**: per-run only; cleared after send via `BoundDataTaskChatInput`.
+
+### Chat file attachments (dialog upload)
+
+The chat input supports file attachments via CopilotKit v2 `useAttachments`, wired in
+`StableDataTaskChatInput` (`page.tsx`) and rendered in `DataTaskChatInput`:
+
+- **UI**: paperclip button, drag-and-drop overlay, clipboard paste (scoped to input
+  container), and `AttachmentChips` above the textarea (filename, size, status, remove).
+- **Modality split** (`chat-attachments.ts`):
+  - Images (png/jpg/webp/gif) → default base64 inline as AG-UI `InputContent`.
+  - Data/text files (csv/tsv/xlsx/json/parquet/txt/pdf) → `onUpload` to
+    `POST /api/v1/chat/uploads` (when backend supports it).
+- **Submit path**: when attachments are present, `consumeAttachments()` →
+  `buildMessageContent()` → `agent.addMessage` + `copilotkit.runAgent`; otherwise
+  the stock `onSubmitMessage` path is unchanged.
+- **Capability gating**: `chat.imageInput` / `chat.fileUpload` from
+  `getCapabilities()`. When false, the chip shows 「后端未支持」 and the attachment
+  is **not** included in the outgoing message (text still sends). Backend requirement
+  tracked as capability #13 / backlog O-007.
 
 ## Backend wiring (the real data flow)
 
@@ -220,8 +310,8 @@ flowchart LR
   [live-run-state.ts](./live-run-state.ts).
 - Events consumed: `RUN_STARTED/FINISHED/ERROR`, `STATE_SNAPSHOT/DELTA`,
   `ACTIVITY_SNAPSHOT/DELTA` (plan + step), `TOOL_CALL_*`, and
-  `CUSTOM` (`sql_audit`, `artifact`). Text and reasoning are rendered by the
-  stock `CopilotChat`.
+  `CUSTOM` (`sql_audit`, `artifact`, `token_usage`, `workspace.metadata`,
+  `sandbox.output`). Text and reasoning are rendered by the stock `CopilotChat`.
 - Timeline events use a **tool-agnostic** `DataStepKind`
   (`inspect | query | transform | fetch | visualize | knowledge | other`),
   mapped from the tool name by `dataStepKindForTool`. Today the backend only
@@ -231,15 +321,18 @@ flowchart LR
 
 ### datasource selection
 
-The selected datasource is sent two ways for redundancy, matching the protocol
-priority order:
+The selected datasource is resolved from config API state, then sent two ways for
+redundancy, matching the protocol priority order:
 
 - `CopilotKit properties={{ datasourceId }}` → AG-UI `forwardedProps.datasourceId`
   (highest priority the protocol honors from the client).
 - `useAgentContext({ description: "datasource_id", value })` as a fallback.
 
-There is no datasource registry API, so `datasourceId` is fixed to
-`api-duckdb-demo`.
+The default comes from `useWorkspaceConfigApi().runDefaults.defaultDatasourceId`
+when available. If the config API is unavailable, the page falls back to the
+first visible datasource in `workspaceConfig.db` (ultimately the local default
+store shape), so the UI no longer hardcodes `api-duckdb-demo` as the only
+datasource.
 
 ## Sessions (client-side threads)
 
@@ -256,6 +349,24 @@ Sessions are therefore managed entirely on the client:
 `useThreads` (durable Intelligence threads) is intentionally **not** used: it
 requires the runtime in Intelligence mode, which this backend does not run.
 
+## Auxiliary UI modules
+
+Several page-level modules sit outside the three primary panes but are part of
+the `/data-tasks` product surface:
+
+- **`DataTaskWelcomeScreen`** (`components/chat/DataTaskWelcome.tsx`) — rendered
+  as the empty-thread welcome screen for `CopilotChat`. It introduces the data
+  workbench, shows example prompts, and displays the active datasource chip.
+- **`CollaborationInterruptHandler`**
+  (`components/chat/CollaborationInterruptHandler.tsx`) — registers
+  `useInterrupt` for Mastra `ask_user` and `submit_plan` suspensions. It renders
+  structured choice rows, free-text answers, and plan approval/rejection UI,
+  scoped to the active `agentId` + `threadId`.
+- **`JobProgressBanner`** (`components/JobProgressBanner.tsx`) — shown inside
+  `WorkspaceConfigPanel` for asynchronous config jobs such as datasource
+  introspection and knowledge reindexing. It polls via `useWorkspaceConfigApi`,
+  supports cancellation, and auto-dismisses terminal states.
+
 ## TaskConsole mapping
 
 Organized around the data-task lifecycle (not around tools): what was asked →
@@ -267,18 +378,22 @@ tab clears the selection. Artifact clicks stay on **产出** and expand in-place
 
 - **Overview tab** —
   - `ConclusionZone`: run status, current question (the latest user message via
-    `useDataAgentRun().latestQuestion`), and **tool-agnostic** roll-up metrics —
-    步骤数 / 工具成功比 / 运行耗时 / 产出数 (from `deriveRunUsage().toolCalls`),
-    plus a single muted **run-level** token line lit only when the backend emits
-    `token_usage`. No SQL-specific headline numbers (those are per-step, shown in
-    Trace/Detail).
+    `useDataAgentRun().latestQuestion`), and **tool-agnostic** KPI cards:
+    步骤数 / 成功率 / 产出 / Token·成本. Runtime duration moved to the console
+    header so it stays visible across tabs. The Token/成本 KPI is only lit when
+    the backend emits `CUSTOM(name="token_usage")`; otherwise it keeps a
+    「待上报 / 后端未支持」 hint. No SQL-specific headline numbers are shown here
+    (those are per-step, shown in Trace/Detail).
   - `DynamicStepsList`: the progress checklist is derived from the **real**
     executed `liveRun.toolCalls` (not the hardcoded backend `ACTIVITY` plan), so
-    new backend tools appear automatically. Each step shows `dataStepLabel`,
-    a status dot (running/success/failed), and single-step duration; clicking a
-    step opens its Detail. The reducer still keeps `liveRun.plan`, but the UI no
-    longer renders it.
-  - `ToolDistributionZone`: per-tool call counts (`byTool`) — whoever ran shows.
+    new backend tools appear automatically. Each step shows `dataStepLabel`, a
+    step-kind color rail (`stepKindTone`), a status dot (running/success/failed),
+    and single-step duration; running rows use the existing `.step-streaming`
+    pulse. Clicking a step opens its Detail. The reducer still keeps
+    `liveRun.plan`, but the UI no longer renders it.
+  - `ToolDistributionZone`: per-tool call counts (`byTool`) plus a CSS mini bar
+    showing each tool's share of all calls. Failed counts use the `step-error`
+    tone.
 - **Trace tab (`EvidenceZone`)** — the chronological evidence chain rendered by
   the shared `TraceList` from `buildTraceTimeline`; each card carries that step's
   duration/rows inline (per-step granularity). A `放大全屏` button opens the same
@@ -291,47 +406,83 @@ tab clears the selection. Artifact clicks stay on **产出** and expand in-place
   is gated behind `artifact.export` (#9) as a labeled placeholder.
 - **Detail tab** — selection-driven for **steps/actions only**. For an action it
   shows single-step duration + status (from the matching `toolCall`), reasoning,
-  action detail (inspect/query/generic), a per-step usage placeholder (按步骤 Token
-  待后端支持), and produced-artifact lineage (expand inline); for an artifact it
-  shows the artifact view only when navigated from trace lineage. With no
-  selection it shows an empty prompt to pick a step.
+  action detail (inspect/query/generic), per-step usage, and produced-artifact
+  lineage (expand inline). Per-step usage is resolved by
+  `resolveTokenUsageForEvent`: it matches `token_usage` by `tool_call_id`,
+  `step_id`, or 1-based `step_number`, then renders input/output Token bars,
+  model chips, and optional `cost_usd`. If no matching event exists, the panel
+  explicitly shows 「后端未支持」 instead of fabricating numbers. With no selection
+  it shows an empty prompt to pick a step.
 - **Full trace (`TraceOverlay`)** — the same evidence chain as a full-screen
   overlay for focused triage when the chat result is missing.
 
 The middle→right linkage for steps is via the right console itself: click a step
 in **概览** progress list or **追溯** timeline to open the Detail tab.
 
+## Design tokens and visual semantics
+
+The workbench uses Tailwind v4 CSS variables from [globals.css](../globals.css)
+and shared class bundles from [ui-tokens.ts](./ui-tokens.ts). New UI should prefer
+semantic tokens over hardcoded `slate-*` / `blue-*` colors so the dense dashboard
+can evolve consistently.
+
+- **Base palette:** `--primary`, `--primary-light`, `--accent`, `--surface`,
+  `--surface-subtle`, `--border`, `--foreground`, `--muted`, `--muted-light`,
+  and `--code-bg`.
+- **Step tones:** `--step-inspect`, `--step-query`, `--step-transform`,
+  `--step-fetch`, `--step-visualize`, `--step-knowledge`, plus success/warning/
+  error. `stepKindTone(kind)` maps `DataStepKind` to `bg` / `border` / `text` /
+  `bar` / `ring` classes and is used by the progress list, trace entries, and
+  tool distribution mini bars.
+- **Artifact tones:** `artifactToneForType(type)` maps
+  `dataset | sql | chart | report | file` to the closest step tone and a compact
+  visual label/icon. Outputs and trace artifact chips should use this helper
+  instead of ad hoc colors.
+- **KPI typography:** `kpiValueClass` is reserved for right-console headline
+  numbers; normal metric cards keep `metricValueClass`.
+- **HITL choices:** `choiceOptionClass`, `choiceOptionIconClass`, and
+  `choiceOptionChevronClass` style `ask_user` / `submit_plan` options rendered by
+  `CollaborationInterruptHandler`.
+- **Status tones:** `statusTone(success|error|info|warning|muted)` for banners,
+  job progress, trace overlay status pills, and tool-result status badges.
+  `overlayBackdropClass` / `overlayPanelClass` standardize drawer and modal shells
+  (`TaskConsoleDrawer`, `TraceOverlay`).
+- **Token usage contract:** [frontend-backend-capability-requests.md #11](../../../../../docs/engineering/frontend-backend-capability-requests.md)
+  defines `CUSTOM(name="token_usage")`. Besides `input_tokens` /
+  `output_tokens`, the frontend consumes `tool_call_id`, `step_id`, `model`, and
+  optional `cost_usd` for the Overview KPI and Detail usage panel. `step_number`
+  is a **last-resort fallback** only when ids are absent; matches are labeled
+  「近似」 in the Detail panel.
+
 ## Backend-unsupported affordances (kept as labeled placeholders)
 
 These exist in the UI for shape/affordance but are explicitly marked
-**后端未支持** (the `ConfigRow` `unsupported` badge) or are local-only:
+**后端未支持** (the `ConfigRow` `unsupported` badge, `@` menu/chip badge, or
+console usage hint) when runtime capabilities say the backend cannot honor them:
 
-- **KB** and **MCP** config rows — editable + persisted locally, but backend has
-  no RAG / MCP implementation, so they never affect a run yet.
-- **Session pills for kb/mcp/skill** — toggle session enablement and ship in
-  `enabled*Ids`, but carry a 「未支持」 badge; only db pills have runtime effect
-  today.
-- **`@kb` / `@mcp` / `@skill` per-run mentions** — selectable from session-enabled
-  resources and shipped in `mentioned` / `active*`, but carry a 「后端未支持」 badge;
-  only `@db` has runtime effect today.
+- **KB / MCP / Skill runtime use** — resources are REST-backed in the config UI,
+  but agent runtime behavior still depends on the corresponding backend
+  capability. Unsupported rows and mentions remain visible, labeled, and
+  forward-compatible through `run_config`.
 - **LLM model picker** (`ChatModelPicker`) — selects an `activeLlmProfileId`
-  client-side and ships it in `run_config`, but the backend still uses its
-  server `LLM_*` env until capability #4 lands. Selection has no runtime effect
-  yet.
-- **Skill** — the 4 builtin skills are mode placeholders; backend has no skill
-  concept, so the choice is inert.
+  client-side and ships it in `run_config`; actual per-run switching depends on
+  backend model-profile support (#4).
+- **Step-level Token / model / cost** — the right console can render
+  `token_usage` details when the backend emits them. Without those events, the
+  Detail usage panel shows 「后端未支持」 and the Overview KPI stays in `待上报`.
 - **Artifact export/download** — the Deliverables zone reserves the affordance
-  behind the `artifact.export` flag; backend exposes only `CUSTOM(artifact)`
-  summaries today (#9).
+  behind the `artifact.export` flag; backend support is tracked by #9.
+- **Chat file attachments** — UI is complete (select/drag/paste/chips). Image inline
+  and data-file upload require `chat.imageInput` / `chat.fileUpload` (#13 / O-007).
+  Until then, unsupported attachments are labeled and excluded from the run payload.
 
 ## Deferred (not in this delivery)
 
 - `/` slash commands for run-level **actions** (e.g. `/clear`, `/export`); the
   `@` mention picker (layer 2 resource selection) has shipped.
-- Backend-gated config fields/capabilities — see `BACKEND_CAPABILITIES` and
-  `frontend-backend-capability-requests.md`; restored to the UI by flipping a
-  flag when each backend capability ships.
-- secretRef migration (credentials posted once to the backend, never held in
-  `localStorage`) once the config-management API exists.
-- Responsive TaskConsole as a toggleable drawer below `lg`.
-- Artifact preview/download once the backend exposes an API.
+- Backend-gated runtime behaviors — see runtime capabilities and
+  `frontend-backend-capability-requests.md`; the UI can expose forward-compatible
+  controls, but must label anything the backend cannot honor yet.
+- secretRef hardening and multi-user workspace isolation as the backend
+  production path matures.
+- Artifact preview/download once #9 is fully enabled by the backend capability.

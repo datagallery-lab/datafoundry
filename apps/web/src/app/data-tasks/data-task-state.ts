@@ -538,13 +538,17 @@ export type BackendCapability =
   | "datasource.server" // PostgreSQL / MySQL adapters (#2)
   | "datasource.queryPolicy" // per-datasource maxRows/timeout wired (#5)
   | "llm.samplingParams" // temperature/maxTokens consumed (#4)
-  | "artifact.export"; // artifact preview/download API (#9)
+  | "artifact.export" // artifact preview/download API (#9)
+  | "chat.imageInput" // chat multimodal image parts consumed (#13a)
+  | "chat.fileUpload"; // chat file upload endpoint to session workspace (#13b)
 
 export const BACKEND_CAPABILITIES: Record<BackendCapability, boolean> = {
   "datasource.server": false,
   "datasource.queryPolicy": false,
   "llm.samplingParams": false,
   "artifact.export": false,
+  "chat.imageInput": false,
+  "chat.fileUpload": false,
 };
 
 export function hasCapability(capability: BackendCapability): boolean {
