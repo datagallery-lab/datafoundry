@@ -8,12 +8,17 @@ import {
   taskWriteTool
 } from "@mastra/core/harness";
 import { Mastra } from "@mastra/core/mastra";
-import { createWorkspaceTools } from "@mastra/core/workspace";
+import { createSkillTools, createWorkspaceTools } from "@mastra/core/workspace";
 import type { Message } from "@ag-ui/core";
 import type { ArtifactService } from "@open-data-agent/artifacts";
 import type { DataGateway } from "@open-data-agent/data-gateway";
 import { type FileAssetService, fileAssetRefDto, mimeTypeForFilename } from "@open-data-agent/files";
 import type { KnowledgeService } from "@open-data-agent/knowledge";
+import {
+  materializeSkillPackages,
+  type SkillRecord,
+  type SkillSelectionResult
+} from "@open-data-agent/skills";
 import { copyFileSync, linkSync, mkdirSync } from "node:fs";
 import { basename, dirname, join, resolve, sep } from "node:path";
 import {
@@ -37,7 +42,7 @@ import {
 import { GoalRuntimeAdapter, type GoalRequest } from "./memory/goal-runtime-adapter.js";
 import { createDataAgentToolRegistry } from "./tools/data-tools.js";
 import { GovernedToolFactory } from "./tools/governed-tool-factory.js";
-import { createRunWorkspace } from "./tools/workspace-factory.js";
+import { createRunWorkspace, resolveRunWorkspaceDir } from "./tools/workspace-factory.js";
 import type { AgentRunContext, AgentRunContextInput, AgUiEventEmitter } from "./types.js";
 import { createCustomEvent } from "./events.js";
 import { createTool } from "@mastra/core/tools";
@@ -60,6 +65,9 @@ export const STATIC_AGENT_TOOL_NAMES = [
   "read_file",
   "retrieve_knowledge",
   "run_sql_readonly",
+  "skill",
+  "skill_read",
+  "skill_search",
   "submit_plan",
   "task_check",
   "task_complete",
@@ -114,10 +122,8 @@ export type CreateDataAgentInput = {
   modelProvider: Exclude<ModelProvider, { kind: "mock" }>;
   runContext: AgentRunContext;
   mcpToolNames?: string[];
-  skillPolicy?: {
-    instructions: string;
-    allowedTools?: string[];
-  };
+  selectedSkills?: SkillRecord[];
+  skillSelection?: SkillSelectionResult;
   taskStateRuntime?: TaskStateRuntime;
   longTermMemory?: {
     records: AgentLongTermMemoryRecord[];
@@ -168,10 +174,24 @@ export const createDataAgent = async (
   });
   const contextRunState = toolObservationBoundary.contextRunState;
 
+  const runDir = resolveRunWorkspaceDir({
+    runContext: input.runContext,
+    workspaceRoot: input.workspaceRoot
+  });
+  const materializedSkills = input.selectedSkills?.length
+    ? await materializeSkillPackages({
+        fileAssetService: requireFileAssetService(input.fileAssetService),
+        runDir,
+        skills: input.selectedSkills,
+        userId: input.runContext.user_id,
+        workspaceId: "default"
+      })
+    : [];
   // 绑定到本次 run 的工作区：LocalFilesystem + LocalSandbox（macOS seatbelt / Linux bubblewrap 隔离）。
   // createDataAgent 每次 run 都调用，直接闭包捕获 runContext，不依赖下游 requestContext 注入。
   const runWorkspace = createRunWorkspace({
     runContext: input.runContext,
+    ...(materializedSkills.length > 0 ? { skillPaths: materializedSkills.map((skill) => skill.path) } : {}),
     workspaceRoot: input.workspaceRoot
   });
   const workspaceAttachments = materializeWorkspaceAttachments(runWorkspace.runDir, input.workspaceAttachments ?? []);
@@ -268,6 +288,7 @@ export const createDataAgent = async (
     requestContext: {},
     workspace: runWorkspace.workspace
   });
+  const skillTools = runWorkspace.workspace.skills ? createSkillTools(runWorkspace.workspace.skills) : {};
   runWorkspace.workspace.setToolsConfig({ enabled: false });
   const availableTools = {
     ...registry.mastraTools,
@@ -276,11 +297,10 @@ export const createDataAgent = async (
     ...knowledgeTools,
     ...taskTools,
     ...collaborationTools,
-    ...workspaceTools
+    ...workspaceTools,
+    ...skillTools
   };
-  const selectedTools = input.skillPolicy?.allowedTools
-    ? Object.fromEntries(Object.entries(availableTools).filter(([name]) => input.skillPolicy?.allowedTools?.includes(name)))
-    : availableTools;
+  const selectedTools = selectToolsByPolicy(availableTools, input.skillSelection);
   const tools = governedToolFactory.governTools(selectedTools);
   const agent = new Agent({
     id: "data-agent",
@@ -289,7 +309,7 @@ export const createDataAgent = async (
       runContext: input.runContext,
       commandExecutionEnabled: runWorkspace.commandExecutionEnabled,
       collaborationToolsEnabled: Boolean(input.taskStateRuntime),
-      ...(input.skillPolicy?.instructions ? { skillInstructions: input.skillPolicy.instructions } : {}),
+      selectedSkills: input.selectedSkills ?? [],
       taskToolsEnabled: Boolean(input.taskStateRuntime),
       toolNames: Object.keys(selectedTools),
       workspaceAttachments
@@ -382,7 +402,7 @@ type AgentInstructionsInput = {
   /** execute_command 工具是否启用（由沙箱隔离可用性与 env 决定）。 */
   commandExecutionEnabled: boolean;
   collaborationToolsEnabled: boolean;
-  skillInstructions?: string;
+  selectedSkills: SkillRecord[];
   /** builtin task_* 工具是否启用（取决于是否注入 taskStateRuntime）。 */
   taskToolsEnabled: boolean;
   toolNames: string[];
@@ -442,6 +462,10 @@ const buildAgentInstructions = (input: AgentInstructionsInput): string => {
   if (collaborationToolsEnabled && collaborationTools.length > 0) {
     toolGroups.push(`Collaboration tools: ${collaborationTools.join(", ")}.`);
   }
+  const skillTools = ["skill", "skill_search", "skill_read"].filter(enabled);
+  if (skillTools.length > 0) {
+    toolGroups.push(`Skill tools: ${skillTools.join(", ")}.`);
+  }
 
   const policies: string[] = [];
   if (taskToolsEnabled && taskTools.length === 4) {
@@ -457,6 +481,14 @@ const buildAgentInstructions = (input: AgentInstructionsInput): string => {
     policies.push(
       "Use ask_user only when progress requires information or a decision that cannot be inferred safely. "
         + "Use submit_plan when explicit user approval is required before implementation; both tools suspend the run."
+    );
+  }
+  if (input.selectedSkills.length > 0 && skillTools.length > 0) {
+    policies.push(
+      "Use skills as task guidance, not as executable tools. When the task matches an available skill, call "
+        + "skill_search or skill to load its instructions, then use normal approved tools to act. "
+        + "Use skill_read for references, scripts, or assets that belong to a selected skill. "
+        + "Scripts from skills may be executed only through approved workspace tools such as execute_command."
     );
   }
   if (enabled("inspect_schema") && (enabled("run_sql_readonly") || enabled("preview_table"))) {
@@ -496,9 +528,9 @@ const buildAgentInstructions = (input: AgentInstructionsInput): string => {
     "Confidentiality. Never reveal credentials, datasource config, internal environment values, or workspace "
       + "absolute paths in your responses."
   );
-  if (input.skillInstructions) {
-    policies.push(`Active skill policy: ${input.skillInstructions}`);
-  }
+  const selectedSkillSummary = input.selectedSkills.length > 0
+    ? input.selectedSkills.map((skill) => `${skill.name} (${skill.id}): ${skill.description}`).join("\n")
+    : "None";
 
   return `
 You are a general-purpose data agent. Analyze data by calling tools. Never invent schema, rows, SQL results,
@@ -508,6 +540,8 @@ Datasources available this run: [${(context.enabled_datasource_ids ?? []).join("
 Default datasource: "${context.selected_datasource_id}".
 You may query any datasource in the list above by passing its id to a data tool's datasource_id argument.
 Never reference a datasource id outside this list; the tool rejects it with DATASOURCE_NOT_SELECTED.
+Available skills this run:
+${selectedSkillSummary}
 
 Tool groups:
 - ${toolGroups.join("\n- ")}
@@ -515,6 +549,26 @@ Tool groups:
 Operating policy:
 ${policies.map((policy, index) => `${index + 1}. ${policy}`).join("\n")}
 `;
+};
+
+const selectToolsByPolicy = <TTool>(
+  availableTools: Record<string, TTool>,
+  skillSelection: SkillSelectionResult | undefined
+): Record<string, TTool> => {
+  const policy = skillSelection?.effectiveToolPolicy;
+  const deniedTools = new Set(policy?.deniedTools ?? []);
+  const allowedTools = policy?.allowedTools ? new Set(policy.allowedTools) : undefined;
+  const skillMetaTools = new Set(["skill", "skill_search", "skill_read"]);
+  return Object.fromEntries(Object.entries(availableTools).filter(([name]) =>
+    !deniedTools.has(name) && (!allowedTools || allowedTools.has(name) || skillMetaTools.has(name))
+  ));
+};
+
+const requireFileAssetService = (service: FileAssetService | undefined): FileAssetService => {
+  if (!service) {
+    throw new Error("SKILL_FILE_ASSET_SERVICE_REQUIRED");
+  }
+  return service;
 };
 
 const materializeWorkspaceAttachments = (

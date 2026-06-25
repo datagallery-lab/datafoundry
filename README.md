@@ -4,7 +4,7 @@ TypeScript-first data-agent workbench MVP. This repository currently focuses on 
 Agent Runtime, Data Gateway, Knowledge contracts, metadata, artifacts, and provider adapters.
 
 The current implementation has completed the backend skeleton plus local-first config management, effective run
-configuration, context governance, Skill policy, MCP middleware integration, local Knowledge retrieval, the first
+configuration, context governance, Mastra workspace Skill system, MCP middleware integration, local Knowledge retrieval, the first
 service database adapters, and server-authoritative Conversation Memory with read-only Mastra WorkingMemory from
 [R&D B Architecture Plan](docs/engineering/rd-b-agent-gateway-knowledge-architecture-plan-zh.md).
 
@@ -17,6 +17,7 @@ R&D B owns:
 - `packages/data-gateway`: datasource registry, schema inspection, preview, readonly SQL execution.
 - `packages/knowledge`: knowledge service interfaces and data model contracts.
 - `packages/files`: unified file asset storage and file reference lifecycle.
+- `packages/skills`: skill package parsing, registry payloads, run-time selection, and workspace materialization.
 - `packages/artifacts`: artifact types and local artifact service.
 - `packages/metadata`: local SQLite metadata store, runs, run events, conversation messages and summaries,
   datasource registry, SQL audit logs.
@@ -36,12 +37,13 @@ Current active workspace modules:
 | --- | --- | --- |
 | `apps/api` | Single backend runtime service. Exposes health check, CopilotKit/AG-UI agent endpoint, and `/api/v1` config management API. Creates per-request user/session/run context from AG-UI `RunAgentInput`, persists the same AG-UI event stream it returns to the frontend, and assembles server-authoritative conversation history before Mastra runs. | Node `http` server, `@copilotkit/runtime`, `@ag-ui/client` `AbstractAgent`, `@ag-ui/mastra`, `@ag-ui/mcp-middleware`, `@open-data-agent/agent-runtime`, `@open-data-agent/metadata`, `@open-data-agent/data-gateway`. |
 | `apps/web` | Frontend data-task workspace. Connects to the backend CopilotKit/AG-UI endpoint via `NEXT_PUBLIC_AGENT_RUNTIME_URL`. Part of root npm workspaces (`@open-data-agent/web`). | Next.js 15 (App Router), React 19, `@copilotkit/react-core/v2`, Tailwind 4, Vitest. |
-| `packages/agent-runtime` | Mastra DataAgent factory, ReAct prompt, run context, tool registry, tool-level policy, context governance, collaboration/workspace tools, Knowledge tool, and Skill policy. Keeps Data Gateway behind typed tools. | `@mastra/core/agent`, `@mastra/core/tools`, Zod tool schemas, `inspect_schema`, `run_sql_readonly`, `retrieve_knowledge`, AG-UI `ACTIVITY_SNAPSHOT` / `CUSTOM`, inspect-before-SQL enforcement, selected datasource enforcement, max SQL call count, ToolObservationAdapter registry. |
+| `packages/agent-runtime` | Mastra DataAgent factory, ReAct prompt, run context, tool registry, tool-level policy, context governance, collaboration/workspace tools, Knowledge tool, and Mastra Skill tools. Keeps Data Gateway behind typed tools. | `@mastra/core/agent`, `@mastra/core/tools`, `@mastra/core/workspace` skills, Zod tool schemas, `inspect_schema`, `run_sql_readonly`, `retrieve_knowledge`, `skill` / `skill_search` / `skill_read`, AG-UI `ACTIVITY_SNAPSHOT` / `CUSTOM`, inspect-before-SQL enforcement, selected datasource enforcement, max SQL call count, ToolObservationAdapter registry. |
 | `packages/data-gateway` | Datasource registry facade, schema inspection, preview, readonly SQL execution, SQL guard, audit log, and result artifact creation. | `LocalDataGateway`, `node:sqlite`, CSV parser, `read-excel-file`, internal datasource adapters for DuckDB demo, SQLite, CSV, XLSX, PostgreSQL, MySQL. |
 | `packages/metadata` | Local persistence for users, sessions, runs, run events, conversation messages/summaries, config resources, encrypted secrets, jobs, datasource registry, SQL audit logs, file assets, file refs, artifacts. | `node:sqlite` `DatabaseSync`, repository classes, migrations, `RunEventWriter`, conversation repositories, `EncryptedSecretStore`. |
 | `packages/contracts` | Shared TypeScript contracts for API result, persisted AG-UI run events, tools, artifacts, env schema. | Type-only DTOs, AG-UI `BaseEvent`-backed `RunEventEnvelope`, `ENV_VARIABLE_SPECS`, `createEnvConfig`, API result helpers. |
 | `packages/providers` | Model provider selection and env-driven model adapter creation. | `@ai-sdk/openai` for OpenAI-compatible `/chat/completions`; Mastra model router object for other providers; mock marker when no `LLM_API_KEY`. |
 | `packages/files` | Unified file asset service. Stores physical content once by sha256 and exposes user/workspace/run scoped FileAssetRef records. | `LocalFileAssetService`, `file_assets`, `file_asset_refs`, batch upload/download support, workspace materialization helpers. |
+| `packages/skills` | Backend skill system. Parses `SKILL.md` / zip packages, stores package content through FileAssetRef, selects skills for each run, and materializes selected packages into the run workspace. | `parseSkillPackage`, `selectSkillsForRun`, `materializeSkillPackages`, deterministic auto selector, tool policy merge. |
 | `packages/artifacts` | Artifact creation service used by Data Gateway and agent workspace publishing. | `LocalArtifactService`, preview artifacts, file-backed artifacts via FileAssetRef. |
 | `packages/knowledge` | Local-first Knowledge service and RAG boundary. | SQLite document/chunk storage, FTS5 fallback retrieval, optional embedding vector index, `retrieve`/`reindex`, FileAssetRef-backed imports. |
 | `scripts` | Backend verification scripts. | Smoke tests for metadata, gateway, readonly SQL, tool policy, CopilotKit endpoint, context governance, config API, collaboration tools, workspace tools, and tool isolation. |
@@ -83,6 +85,7 @@ Run the full backend verification set:
 npm run typecheck
 npm run smoke:metadata
 npm run smoke:files
+npm run smoke:skills
 npm run smoke:run-identity
 npm run smoke:data-gateway
 npm run smoke:sql
@@ -110,6 +113,8 @@ Expected coverage:
 - `smoke:metadata`: metadata schema, repositories, run event persistence.
 - `smoke:files`: FileAsset sha256 dedupe, FileAssetRef download/materialization, artifact file publishing,
   and KB document import attribution.
+- `smoke:skills`: Skill package parsing, FileAssetRef-backed storage, auto selection, workspace materialization,
+  and skill ToolObservationAdapter coverage.
 - `smoke:run-identity`: AG-UI thread/run identity, idempotent replay, parent run persistence.
 - `smoke:data-gateway`: datasource registration, support types, schema inspection, preview.
 - `smoke:sql`: readonly SQL guard, limit, timeout, audit log, artifact creation.
@@ -198,6 +203,16 @@ File lifecycle:
   `promote_workspace_file`.
 - Download user-visible files through `/api/v1/files/:id/download` or artifact deliverables through
   `/api/v1/artifacts/:id/download`.
+
+Skill lifecycle:
+
+- Upload skill packages with `POST /api/v1/skills` using multipart `file=SKILL.md` or `file=skill.zip`.
+- The package body is stored once through FileAssetRef; Skill metadata stores `packageFileRefId`.
+- Preview run-time selection with `POST /api/v1/skills/select`.
+- Agent runs use `run_config.skill_mode`, `skill_ids`, `skill_tags`, and `skill_policy`; legacy
+  `activeSkillId` / `enabledSkillIds` are still accepted.
+- Each run materializes only selected skills into its isolated workspace and exposes Mastra
+  `skill`, `skill_search`, and `skill_read` tools through context governance.
 
 ## CopilotKit Runtime
 

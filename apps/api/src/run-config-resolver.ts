@@ -4,6 +4,11 @@ import {
   createModelProviderFromProfile
 } from "@open-data-agent/agent-runtime";
 import type { MetadataStore } from "@open-data-agent/metadata";
+import {
+  selectSkillsForRun,
+  type SkillRecord,
+  type SkillSelectionResult
+} from "@open-data-agent/skills";
 import type { MCPClientConfig } from "@ag-ui/mcp-middleware";
 
 import { resolveEffectiveRunConfig, type EffectiveRunConfig } from "./run-input.js";
@@ -16,10 +21,8 @@ export type ResolvedRunConfig = {
     maxOutputTokens?: number;
     temperature?: number;
   };
-  skillPolicy?: {
-    allowedTools?: string[];
-    instructions: string;
-  };
+  skillSelection: SkillSelectionResult;
+  selectedSkills: SkillRecord[];
 };
 
 export type McpRuntime = {
@@ -32,6 +35,7 @@ type ResolveRunConfigInput = {
   metadataStore: MetadataStore;
   runInput: RunAgentInput;
   userId: string;
+  userInput: string;
 };
 
 /** Resolve one run's config, model, skill policy, MCP runtime, and enabled resources. */
@@ -48,17 +52,28 @@ export const resolveRunConfig = (input: ResolveRunConfigInput): ResolvedRunConfi
     input.metadataStore,
     input.userId
   );
-  const skillPolicy = resolveSkillPolicy(effectiveRunConfig.activeSkillId, input.metadataStore, input.userId);
+  const skillSelection = selectSkillsForRun({
+    metadataStore: input.metadataStore,
+    runConfig: effectiveRunConfig,
+    userId: input.userId,
+    userInput: input.userInput,
+    workspaceId: "default"
+  });
+  effectiveRunConfig.resourceRevisions = {
+    ...(effectiveRunConfig.resourceRevisions ?? {}),
+    ...Object.fromEntries(skillSelection.selectedSkills.map((skill) => [`skill:${skill.id}`, skill.revision]))
+  };
   const modelSettings = resolveModelSettings(effectiveRunConfig.activeLlmProfileId, input.metadataStore, input.userId);
   const mcpRuntime = resolveMcpRuntime(effectiveRunConfig.enabledMcpServerIds, input.metadataStore, input.userId);
-  enforceSkillMcpPolicy(skillPolicy, mcpRuntime.toolNames);
+  enforceSkillMcpPolicy(skillSelection.effectiveToolPolicy.allowedTools, mcpRuntime.toolNames);
 
   return {
     effectiveRunConfig,
     mcpRuntime,
     modelProvider,
     ...(modelSettings ? { modelSettings } : {}),
-    ...(skillPolicy ? { skillPolicy } : {})
+    selectedSkills: skillSelection.selectedSkills,
+    skillSelection
   };
 };
 
@@ -138,42 +153,13 @@ const validateEffectiveResources = (
   });
   validateConfigIds(metadataStore, userId, "knowledge-base", config.enabledKnowledgeIds);
   validateConfigIds(metadataStore, userId, "mcp-server", config.enabledMcpServerIds);
-  validateConfigIds(metadataStore, userId, "skill", config.enabledSkillIds);
+  validateConfigIds(metadataStore, userId, "skill", [...config.enabledSkillIds, ...config.skillIds]);
   if (config.activeSkillId) {
     validateConfigIds(metadataStore, userId, "skill", [config.activeSkillId]);
   }
   if (config.activeLlmProfileId && config.activeLlmProfileId !== "server-default") {
     validateConfigIds(metadataStore, userId, "model-profile", [config.activeLlmProfileId]);
   }
-};
-
-const resolveSkillPolicy = (
-  skillId: string | undefined,
-  metadataStore: MetadataStore,
-  userId: string
-): { instructions: string; allowedTools?: string[] } | undefined => {
-  if (!skillId) {
-    return undefined;
-  }
-  const skill = metadataStore.configResources.get({
-    id: skillId,
-    workspace_id: "default",
-    user_id: userId,
-    kind: "skill"
-  });
-  const instructions = stringRecordValue(skill.payload, "instructions")
-    ?? stringRecordValue(skill.payload, "packageContent")
-    ?? "Follow the standard data-agent policy.";
-  const rawAllowedTools = skill.payload.allowedTools;
-  const allowedTools = Array.isArray(rawAllowedTools)
-    ? rawAllowedTools.filter((value): value is string => typeof value === "string" && value.length > 0)
-    : typeof rawAllowedTools === "string"
-      ? rawAllowedTools.split(",").map((value) => value.trim()).filter(Boolean)
-      : undefined;
-  return {
-    instructions,
-    ...(allowedTools && allowedTools.length > 0 ? { allowedTools } : {})
-  };
 };
 
 const resolveModelSettings = (
@@ -273,13 +259,13 @@ const resolveMcpHeaders = (
 };
 
 const enforceSkillMcpPolicy = (
-  skillPolicy: { instructions: string; allowedTools?: string[] } | undefined,
+  allowedTools: string[] | undefined,
   mcpToolNames: string[]
 ): void => {
-  if (!skillPolicy?.allowedTools || mcpToolNames.length === 0) {
+  if (!allowedTools || mcpToolNames.length === 0) {
     return;
   }
-  const disallowed = mcpToolNames.filter((name) => !skillPolicy.allowedTools?.includes(name));
+  const disallowed = mcpToolNames.filter((name) => !allowedTools.includes(name));
   if (disallowed.length > 0) {
     throw new Error(`SKILL_MCP_TOOL_POLICY_UNSUPPORTED:${disallowed.join(",")}`);
   }
@@ -300,7 +286,10 @@ const validateConfigIds = (
       user_id: userId,
       kind
     });
-    if (!resource.default_enabled) {
+    if (kind === "skill" && (resource.status === "disabled" || resource.status === "archived")) {
+      throw new Error(`CONFIG_RESOURCE_NOT_ENABLED:${kind}:${id}`);
+    }
+    if (kind !== "skill" && !resource.default_enabled) {
       throw new Error(`CONFIG_RESOURCE_NOT_ENABLED:${kind}:${id}`);
     }
   });

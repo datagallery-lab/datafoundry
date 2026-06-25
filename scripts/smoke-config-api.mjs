@@ -190,6 +190,26 @@ try {
   assert.equal(skill.response.status, 201);
   assert.equal(skill.body.data.validationStatus, "valid");
   assert.equal("packageContent" in skill.body.data, false);
+  assert.equal(typeof skill.body.data.packageFileRefId, "string");
+  assert.deepEqual(skill.body.data.allowedTools, ["inspect_schema"]);
+  const skillDownload = await requestRaw(`/api/v1/skills/${skill.body.data.id}/download`);
+  assert.equal(skillDownload.status, 200);
+  assert.equal((await skillDownload.text()).includes("Inspect schema first."), true);
+  const skillSelection = await requestJson("/api/v1/skills/select", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      user_input: "use smoke skill to inspect schema",
+      run_config: {
+        activeDatasourceId: "local-sqlite",
+        enabledDatasourceIds: ["local-sqlite"],
+        skill_mode: "auto"
+      }
+    })
+  });
+  assert.equal(skillSelection.response.status, 200);
+  assert.equal(skillSelection.body.data.skills.some((item) => item.id === skill.body.data.id), true);
+  assert.equal(skillSelection.body.data.effectivePolicy.allowedTools.includes("inspect_schema"), true);
 
   const mcpConfig = await requestJson("/api/v1/mcp-servers", {
     method: "POST",

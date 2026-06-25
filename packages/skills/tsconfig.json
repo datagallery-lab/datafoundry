@@ -6,22 +6,10 @@
   },
   "references": [
     {
-      "path": "../contracts"
-    },
-    {
-      "path": "../artifacts"
-    },
-    {
-      "path": "../data-gateway"
-    },
-    {
       "path": "../files"
     },
     {
-      "path": "../skills"
-    },
-    {
-      "path": "../providers"
+      "path": "../metadata"
     }
   ],
   "include": [

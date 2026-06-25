@@ -11,7 +11,7 @@
   },
   "dependencies": {
     "@ag-ui/core": "^0.0.57",
-    "@mastra/core": "^1.42.0",
+    "@mastra/core": "^1.46.0",
     "@mastra/libsql": "^1.14.0",
     "@mastra/memory": "^1.21.0",
     "@open-data-agent/artifacts": "0.1.0",
@@ -20,6 +20,7 @@
     "@open-data-agent/files": "0.1.0",
     "@open-data-agent/knowledge": "0.1.0",
     "@open-data-agent/providers": "0.1.0",
+    "@open-data-agent/skills": "0.1.0",
     "zod": "^4.2.1"
   }
 }

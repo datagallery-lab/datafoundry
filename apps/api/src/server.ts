@@ -271,19 +271,21 @@ class DataAgentAgUiAgent extends AbstractAgent {
         const sessionId = runInput.threadId;
         const runId = runInput.runId;
         const interactionResume = extractInteractionResume(runInput);
+        const userInput = extractLastUserText(runInput) ?? "CopilotKit AG-UI run";
         const {
           effectiveRunConfig,
           mcpRuntime,
           modelProvider,
           modelSettings,
-          skillPolicy
+          selectedSkills,
+          skillSelection
         } = resolveRunConfig({
           defaultDatasourceId: this.input.defaultDatasourceId,
           metadataStore: this.input.metadataStore,
           runInput,
-          userId: this.input.user.id
+          userId: this.input.user.id,
+          userInput
         });
-        const userInput = extractLastUserText(runInput) ?? "CopilotKit AG-UI run";
         const runEventWriter = new RunEventWriter(this.input.metadataStore.runEvents);
         const identity = resolveRunIdentity({
           effectiveRunConfig,
@@ -367,7 +369,8 @@ class DataAgentAgUiAgent extends AbstractAgent {
           modelProvider,
           ...(modelSettings ? { modelSettings } : {}),
           runContext,
-          ...(skillPolicy ? { skillPolicy } : {}),
+          selectedSkills,
+          skillSelection,
           taskStateRuntime: this.input.taskStateRuntime,
           userId: this.input.user.id,
           workspaceRoot: this.input.workspaceRoot
@@ -434,8 +437,21 @@ class DataAgentAgUiAgent extends AbstractAgent {
                 file_ids: effectiveRunConfig.fileIds,
                 enabled_knowledge_ids: effectiveRunConfig.enabledKnowledgeIds,
                 enabled_mcp_server_ids: effectiveRunConfig.enabledMcpServerIds,
+                selected_skill_ids: selectedSkills.map((skill) => skill.id),
+                skill_mode: effectiveRunConfig.skillMode,
                 requested_llm_profile_id: effectiveRunConfig.activeLlmProfileId,
                 workspace: agentAssembly.workspace
+              }));
+              emit(createCustomEvent("skill.selection", {
+                audit: skillSelection.audit,
+                effective_tool_policy: skillSelection.effectiveToolPolicy,
+                mode: effectiveRunConfig.skillMode,
+                selected: selectedSkills.map((skill) => ({
+                  id: skill.id,
+                  name: skill.name,
+                  revision: skill.revision,
+                  tags: skill.tags
+                }))
               }));
               emit({
                 type: EventType.STATE_SNAPSHOT,
@@ -590,6 +606,7 @@ const ensureBuiltinConfigResources = (metadataStore: MetadataStore): void => {
         version: "1.0.0"
       },
       builtin: true,
+      default_enabled: false,
       status: "valid"
     });
   });

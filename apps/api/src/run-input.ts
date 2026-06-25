@@ -1,5 +1,6 @@
 import type { RunAgentInput } from "@ag-ui/client";
 import type { ConfigResourceKind, MetadataStore } from "@open-data-agent/metadata";
+import type { SkillMode, SkillPolicyConfig } from "@open-data-agent/skills";
 
 export type RunConfigDefaults = {
   activeDatasourceId?: string;
@@ -20,6 +21,10 @@ export type EffectiveRunConfig = {
   enabledKnowledgeIds: string[];
   enabledMcpServerIds: string[];
   enabledSkillIds: string[];
+  skillIds: string[];
+  skillMode: SkillMode;
+  skillPolicy: SkillPolicyConfig;
+  skillTags: string[];
   resourceRevisions?: Record<string, number>;
   goal?: {
     maxRuns?: number;
@@ -46,12 +51,16 @@ export const extractEffectiveRunConfig = (
   const activeLlmProfileId = stringFromAliases(runConfig, ["activeLlmProfileId", "active_llm_profile_id"])
     ?? defaults?.activeLlmProfileId;
   const skillOverride = stringArrayOptionFromAliases(runConfig, ["enabledSkillIds", "enabled_skill_ids"]);
+  const skillIdsOverride = stringArrayOptionFromAliases(runConfig, ["skillIds", "skill_ids"]);
   const configuredSkillId = stringFromAliases(runConfig, ["activeSkillId", "active_skill_id"]);
   const activeSkillId = configuredSkillId
-    ?? (skillOverride ? skillOverride[0] : defaults?.activeSkillId);
+    ?? (skillIdsOverride ? skillIdsOverride[0] : skillOverride ? skillOverride[0] : defaults?.activeSkillId);
   const enabledSkillIds = unique(
     skillOverride ?? defaults?.enabledSkillIds ?? (configuredSkillId ? [configuredSkillId] : [])
   );
+  const skillMode = skillModeFromValue(runConfig.skillMode ?? runConfig.skill_mode, skillIdsOverride);
+  const skillPolicy = extractSkillPolicy(runConfig);
+  const skillTags = unique(stringArrayOptionFromAliases(runConfig, ["skillTags", "skill_tags"]) ?? []);
   const goal = extractGoal(runConfig);
 
   if (!effectiveDatasourceIds.includes(activeDatasourceId)) {
@@ -76,6 +85,10 @@ export const extractEffectiveRunConfig = (
       ["enabledMcpServerIds", "enabled_mcp_server_ids"]
     ) ?? defaults?.enabledMcpServerIds ?? []),
     enabledSkillIds,
+    skillIds: unique(skillIdsOverride ?? (configuredSkillId ? [configuredSkillId] : [])),
+    skillMode,
+    skillPolicy,
+    skillTags,
     ...(goal ? { goal } : {})
   };
 };
@@ -147,7 +160,11 @@ const resolveResourceRevisions = (
   };
   addResources("knowledge-base", config.enabledKnowledgeIds);
   addResources("mcp-server", config.enabledMcpServerIds);
-  addResources("skill", [...config.enabledSkillIds, ...(config.activeSkillId ? [config.activeSkillId] : [])]);
+  addResources("skill", [
+    ...config.enabledSkillIds,
+    ...config.skillIds,
+    ...(config.activeSkillId ? [config.activeSkillId] : [])
+  ]);
   if (config.activeLlmProfileId) {
     const visited = new Set<string>();
     let profileId: string | undefined = config.activeLlmProfileId;
@@ -188,6 +205,42 @@ const extractGoal = (runConfig: Record<string, unknown>): EffectiveRunConfig["go
     ...(rawMaxRuns !== undefined ? { maxRuns: Number(rawMaxRuns) } : {})
   };
 };
+
+const extractSkillPolicy = (runConfig: Record<string, unknown>): SkillPolicyConfig => {
+  const policy = recordFromUnknown(runConfig.skillPolicy ?? runConfig.skill_policy) ?? {};
+  const maxSkills = integerInRange(policy.maxSkills ?? policy.max_skills, 1, 20) ?? 5;
+  const allowedToolNames = unique(stringArrayOptionFromAliases(policy, ["allowedToolNames", "allowed_tool_names"]) ?? []);
+  return {
+    ...(allowedToolNames.length > 0 ? { allowedToolNames } : {}),
+    deniedToolNames: unique(stringArrayOptionFromAliases(
+      policy,
+      ["deniedToolNames", "denyToolNames", "denied_tool_names", "deny_tool_names"]
+    ) ?? []),
+    maxSkills,
+    requireUserInvocable: booleanFromAliases(policy, ["requireUserInvocable", "require_user_invocable"], true),
+    strictSkillTools: booleanFromAliases(policy, ["strictSkillTools", "strict_skill_tools"], false)
+  };
+};
+
+const skillModeFromValue = (value: unknown, explicitSkillIds: string[] | undefined): SkillMode => {
+  if (value === "none" || value === "selected" || value === "auto" || value === "all") {
+    return value;
+  }
+  return explicitSkillIds && explicitSkillIds.length > 0 ? "selected" : "auto";
+};
+
+const booleanFromAliases = (record: Record<string, unknown>, keys: string[], fallback: boolean): boolean => {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "boolean") {
+      return value;
+    }
+  }
+  return fallback;
+};
+
+const integerInRange = (value: unknown, min: number, max: number): number | undefined =>
+  Number.isInteger(value) && Number(value) >= min && Number(value) <= max ? Number(value) : undefined;
 
 export const extractDatasourceId = (input: RunAgentInput): string | undefined => {
   const forwardedProps = isRecord(input.forwardedProps) ? input.forwardedProps : {};
