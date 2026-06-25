@@ -16,6 +16,9 @@
     },
     {
       "path": "../../packages/data-gateway"
+    },
+    {
+      "path": "../../packages/files"
     }
   ],
   "include": [

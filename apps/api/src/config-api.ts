@@ -11,6 +11,7 @@ import {
   STATIC_AGENT_TOOL_NAMES
 } from "@open-data-agent/agent-runtime";
 import type { LocalDataGateway } from "@open-data-agent/data-gateway";
+import { fileAssetRefDto, type FileAssetService, mimeTypeForFilename } from "@open-data-agent/files";
 import type { LocalKnowledgeService } from "@open-data-agent/knowledge";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
@@ -28,13 +29,14 @@ import { readFileSync } from "node:fs";
 import type { IncomingMessage } from "node:http";
 import { basename, resolve, sep } from "node:path";
 
-import { parseSkillUpload, readMultipartUpload } from "./upload-parser.js";
+import { parseSkillUpload, readMultipartFiles, readMultipartUpload } from "./upload-parser.js";
 
 const MAX_JSON_BODY_BYTES = 1024 * 1024;
 const DEFAULT_WORKSPACE_ID = "default";
 
 export type ConfigApiContext = {
   dataGateway: LocalDataGateway;
+  fileAssetService: FileAssetService;
   knowledgeService: LocalKnowledgeService;
   metadataStore: MetadataStore;
   userId: string;
@@ -101,6 +103,7 @@ const routeConfigRequest = async (
       "artifact.export": true,
       "datasource.queryPolicy": true,
       "datasource.server": true,
+      files: true,
       "llm.samplingParams": true,
       knowledge: true,
       mcp: true,
@@ -112,6 +115,9 @@ const routeConfigRequest = async (
   }
   if (root === "artifacts") {
     return handleArtifactRequest(request, segments.slice(1), context);
+  }
+  if (root === "files") {
+    return handleFileRequest(request, segments.slice(1), context);
   }
   const kind = RESOURCE_PATHS[root];
   if (kind) {
@@ -332,6 +338,56 @@ const handleGenericResourceRequest = async (
     user_id: context.userId,
     kind
   });
+  if (kind === "knowledge-base" && action === "files" && segments[2] === "import" && request.method === "POST") {
+    const body = await readJsonBody(request);
+    const fileIds = stringArrayValue(body.fileIds ?? body.file_ids);
+    if (fileIds.length === 0) {
+      throw new Error("KNOWLEDGE_FILE_IDS_REQUIRED");
+    }
+    const results = await Promise.all(fileIds.map(async (fileId) => {
+      try {
+        const resolved = context.fileAssetService.getRef({
+          user_id: context.userId,
+          workspace_id: context.workspaceId,
+          id: fileId
+        });
+        const file = context.fileAssetService.readRef({
+          user_id: context.userId,
+          workspace_id: context.workspaceId,
+          id: fileId
+        });
+        const content = textContentFromFile(resolved.ref.filename, file.mimeType, file.body);
+        const document = await context.knowledgeService.ingestText({
+          user_id: context.userId,
+          collection_id: id,
+          filename: resolved.ref.filename,
+          content,
+          file_asset_ref_id: resolved.ref.id,
+          mime_type: file.mimeType
+        });
+        return { fileId, document, status: "ready" };
+      } catch (error) {
+        return { fileId, error: messageOf(error), status: "failed" };
+      }
+    }));
+    if (results.some((result) => result.status === "ready")) {
+      context.metadataStore.configResources.upsert({
+        id,
+        workspace_id: context.workspaceId,
+        user_id: context.userId,
+        kind,
+        name: targetResource.name,
+        ...(targetResource.description ? { description: targetResource.description } : {}),
+        payload: targetResource.payload,
+        ...(targetResource.secret_ref ? { secret_ref: targetResource.secret_ref } : {}),
+        default_enabled: targetResource.default_enabled,
+        builtin: targetResource.builtin,
+        status: "ready",
+        expected_revision: targetResource.revision
+      });
+    }
+    return ok({ results }, 207);
+  }
   if (kind === "knowledge-base" && action === "files" && request.method === "POST") {
     const upload = isMultipart(request) ? await readMultipartUpload(request) : undefined;
     const body = upload ? upload.fields : await readJsonBody(request);
@@ -681,6 +737,81 @@ const handleJobRequest = (
   return methodNotAllowed();
 };
 
+const handleFileRequest = async (
+  request: IncomingMessage,
+  segments: string[],
+  context: Required<ConfigApiContext>
+): Promise<ConfigApiResponse> => {
+  const id = segments[0];
+  if (!id && request.method === "GET") {
+    return ok({
+      files: context.fileAssetService.listRefs({
+        user_id: context.userId,
+        workspace_id: context.workspaceId
+      }).map(fileAssetRefDto)
+    });
+  }
+  if (!id && request.method === "POST") {
+    if (!isMultipart(request)) {
+      throw new Error("FILE_MULTIPART_REQUIRED");
+    }
+    const upload = await readMultipartFiles(request, {
+      maxFiles: numberFromEnv("FILE_UPLOAD_MAX_FILES", 20),
+      maxFileBytes: numberFromEnv("FILE_UPLOAD_MAX_BYTES", 25 * 1024 * 1024),
+      maxTotalBytes: numberFromEnv("FILE_UPLOAD_MAX_TOTAL_BYTES", 100 * 1024 * 1024)
+    });
+    const files = upload.files.map((file) => context.fileAssetService.createRef({
+      user_id: context.userId,
+      workspace_id: context.workspaceId,
+      filename: file.filename,
+      content: file.content,
+      declared_mime_type: file.mimeType || mimeTypeForFilename(file.filename),
+      source: "upload",
+      metadata: { fields: upload.fields }
+    })).map(fileAssetRefDto);
+    return ok({ files }, 201);
+  }
+  if (!id) {
+    return methodNotAllowed();
+  }
+  if (request.method === "GET" && segments[1] === "download") {
+    const resolved = context.fileAssetService.getRef({
+      user_id: context.userId,
+      workspace_id: context.workspaceId,
+      id
+    });
+    const file = context.fileAssetService.readRef({
+      user_id: context.userId,
+      workspace_id: context.workspaceId,
+      id
+    });
+    return {
+      body: file.body,
+      headers: {
+        "Content-Disposition": `attachment; filename="${safeDownloadName(resolved.ref.filename, file.mimeType)}"`,
+        "Content-Type": file.mimeType
+      },
+      status: 200
+    };
+  }
+  if (request.method === "GET") {
+    return ok(fileAssetRefDto(context.fileAssetService.getRef({
+      user_id: context.userId,
+      workspace_id: context.workspaceId,
+      id
+    })));
+  }
+  if (request.method === "DELETE") {
+    const deleted = context.fileAssetService.deleteRef({
+      user_id: context.userId,
+      workspace_id: context.workspaceId,
+      id
+    });
+    return ok({ deleted: true, id: deleted.id });
+  }
+  return methodNotAllowed();
+};
+
 const handleArtifactRequest = (
   request: IncomingMessage,
   segments: string[],
@@ -695,7 +826,13 @@ const handleArtifactRequest = (
     return ok(artifact.preview_json ? JSON.parse(artifact.preview_json) as unknown : null);
   }
   if (segments[1] === "content" || segments[1] === "download") {
-    const file = artifactFileContent(artifact.storage_path);
+    const file = artifact.file_asset_ref_id
+      ? context.fileAssetService.readRef({
+          user_id: context.userId,
+          workspace_id: context.workspaceId,
+          id: artifact.file_asset_ref_id
+        })
+      : artifactFileContent(artifact.storage_path);
     const preview = artifact.preview_json ? JSON.parse(artifact.preview_json) as unknown : null;
     const content = file ?? serializeArtifactPreview(preview, segments[1] === "download");
     const filename = safeDownloadName(artifact.name, content.mimeType);
@@ -771,6 +908,25 @@ const safeDownloadName = (name: string, mimeType: string): string => {
     return safe;
   }
   return `${safe}.${mimeType.startsWith("text/csv") ? "csv" : "json"}`;
+};
+
+const textContentFromFile = (filename: string, mimeType: string, body: Buffer): string => {
+  const lower = filename.toLowerCase();
+  const textual = mimeType.startsWith("text/")
+    || mimeType.includes("json")
+    || lower.endsWith(".csv")
+    || lower.endsWith(".json")
+    || lower.endsWith(".md")
+    || lower.endsWith(".txt");
+  if (!textual) {
+    throw new Error(`KNOWLEDGE_FILE_TYPE_UNSUPPORTED:${filename}`);
+  }
+  return body.toString("utf8");
+};
+
+const numberFromEnv = (name: string, fallback: number): number => {
+  const parsed = Number.parseInt(process.env[name] ?? "", 10);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
 };
 
 const mimeTypeForPath = (path: string): string => {
@@ -989,6 +1145,8 @@ const recordValue = (value: unknown): Record<string, unknown> | undefined => isR
 const stringValue = (value: unknown): string | undefined => typeof value === "string" && value.trim() ? value.trim() : undefined;
 const numberValue = (value: unknown): number | undefined => typeof value === "number" && Number.isFinite(value) ? value : undefined;
 const booleanValue = (value: unknown, fallback: boolean): boolean => typeof value === "boolean" ? value : fallback;
+const stringArrayValue = (value: unknown): string[] =>
+  Array.isArray(value) ? value.filter((item): item is string => typeof item === "string" && item.trim().length > 0) : [];
 const parseRecord = (value: string): Record<string, unknown> => {
   const parsed: unknown = JSON.parse(value);
   return isRecord(parsed) ? parsed : {};

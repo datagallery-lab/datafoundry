@@ -89,6 +89,8 @@ const requestJson = async (path, init = {}) => {
   return { body, response };
 };
 
+const requestRaw = async (path, init = {}) => fetch(`${baseUrl}${path}`, init);
+
 const closeHttpServer = async (httpServer) => {
   await new Promise((resolve, reject) => {
     httpServer.close((error) => error ? reject(error) : resolve());
@@ -146,6 +148,26 @@ try {
     body: JSON.stringify({ id: "metrics-docs", name: "Metrics Docs", retrievalTopK: 3 })
   });
   assert.equal(knowledgeBase.response.status, 201);
+  const fileForm = new FormData();
+  fileForm.append("files", new Blob(["Revenue metric can be imported from file assets."], {
+    type: "text/markdown"
+  }), "file-metrics.md");
+  const fileUploadResponse = await requestRaw("/api/v1/files", { method: "POST", body: fileForm });
+  assert.equal(fileUploadResponse.status, 201);
+  const fileUpload = await fileUploadResponse.json();
+  assert.equal(fileUpload.body?.success ?? fileUpload.success, true);
+  const uploadedFile = fileUpload.body?.data?.files?.[0] ?? fileUpload.data.files[0];
+  assert.equal(uploadedFile.filename, "file-metrics.md");
+  const fileDownload = await requestRaw(`/api/v1/files/${uploadedFile.id}/download`);
+  assert.equal(fileDownload.status, 200);
+  assert.equal(await fileDownload.text(), "Revenue metric can be imported from file assets.");
+  const fileImport = await requestJson("/api/v1/knowledge-bases/metrics-docs/files/import", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ fileIds: [uploadedFile.id] })
+  });
+  assert.equal(fileImport.response.status, 207);
+  assert.equal(fileImport.body.data.results[0].status, "ready");
   const upload = await requestJson("/api/v1/knowledge-bases/metrics-docs/files", {
     method: "POST",
     headers: { "Content-Type": "application/json" },

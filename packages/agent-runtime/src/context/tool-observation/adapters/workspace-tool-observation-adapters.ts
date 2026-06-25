@@ -71,3 +71,21 @@ export class ExecuteCommandToolObservationAdapter extends BaseToolObservationAda
     return pickFields(raw, ["command", "stdout", "stderr", "exitCode", "success", "timedOut"]);
   }
 }
+
+export class PublishArtifactToolObservationAdapter extends BaseToolObservationAdapter {
+  readonly toolName = "publish_artifact";
+  readonly resultType = "artifact-publish";
+
+  protected project(raw: unknown): unknown {
+    return pickFields(raw, ["id", "type", "name", "file_id", "download_url"]);
+  }
+}
+
+export class PromoteWorkspaceFileToolObservationAdapter extends BaseToolObservationAdapter {
+  readonly toolName = "promote_workspace_file";
+  readonly resultType = "workspace-file-promote";
+
+  protected project(raw: unknown): unknown {
+    return pickFields(raw, ["id", "assetId", "filename", "mimeType", "sizeBytes", "sha256", "download_url"]);
+  }
+}

@@ -1,6 +1,6 @@
 # 工作区配置管理 API 方案
 
-日期：2026-06-22
+日期：2026-06-25
 受众：后端 / BFF 同学、前端（`apps/web`）同学
 状态：已实现基础版（local-first REST API + run_config 生效链路）
 关联：
@@ -16,6 +16,10 @@
 核心边界：**配置管理不走 AG-UI event stream，走独立 BFF REST API。**
 `POST /api/copilotkit` 只负责 agent run；配置的创建/测试/启用/删除是
 普通资源 CRUD，二者必须分离。
+
+文件上传也走 REST：`POST /api/v1/files`。上传接口只创建 FileAssetRef；真正拉起
+agent run 仍走 `/api/copilotkit`，并通过 AG-UI `RunAgentInput.forwardedProps.run_config.fileIds`
+把文件引用传给本次 run。当前没有单独的 `/api/v1/runs`。
 
 ### 1.1 三层配置模型
 
@@ -65,6 +69,7 @@ Knowledge 与 MCP middleware。
 - Model profile CRUD / test；run 内按 profile 切换 provider，并支持 fallback profile chain。
 - Skill multipart 上传 / validate / replace / package 下载；按 active skill 注入指令并用 `allowedTools` 收窄工具集。
 - Workspace config、run defaults、job 查询/取消、artifact detail / preview / content / download。
+- FileAssetRef 批量上传 / 下载；run_config `fileIds` 注入 workspace `input/`。
 
 仍未完成：
 
@@ -82,6 +87,7 @@ Knowledge 与 MCP middleware。
 /api/v1/mcp-servers
 /api/v1/model-profiles
 /api/v1/skills
+/api/v1/files
 /api/v1/workspace-config
 /api/v1/run-defaults
 ```
@@ -237,6 +243,7 @@ Knowledge 与 MCP middleware。
 | PATCH | `/api/v1/knowledge-bases/:id` | 更新 |
 | DELETE | `/api/v1/knowledge-bases/:id` | 删除 |
 | POST | `/api/v1/knowledge-bases/:id/files` | 上传文档（multipart） |
+| POST | `/api/v1/knowledge-bases/:id/files/import` | 从 FileAssetRef 导入文档 |
 | POST | `/api/v1/knowledge-bases/:id/reindex` | 触发重建索引 |
 | POST | `/api/v1/knowledge-bases/:id/search` | 检索调试 |
 
@@ -504,6 +511,7 @@ GET 响应：五类数组（结构同各资源列表，**不含明文凭据**）
         "enabledKnowledgeIds": [],
         "enabledMcpServerIds": ["notion"],
         "enabledSkillIds": ["data-agent-default", "schema-explore"],
+        "fileIds": ["file-ref-1"],
         "activeDatasourceId": "sales-prod-readonly",
         "activeLlmProfileId": "qwen-plus-default",
         "activeSkillId": "report-draft"
@@ -516,6 +524,7 @@ GET 响应：五类数组（结构同各资源列表，**不含明文凭据**）
 > **当前实现**：后端已解析 `context.run_config` 并合并 workspace defaults、per-run
 > override 与 server policy，形成 `effectiveRunConfig`。datasource、model profile、
 > knowledge、MCP server、skill 和 fallback model chain 都会解析为带 revision 的资源快照。
+> `fileIds` 会解析为本次 run 的 FileAssetRef 输入并物化到 workspace `input/` 目录。
 > 凭据不在其中——只有 id 与选择。
 >
 > **能力开关联动**：前端字段按 `BACKEND_CAPABILITIES` 开关渐进暴露
@@ -525,16 +534,16 @@ GET 响应：五类数组（结构同各资源列表，**不含明文凭据**）
 
 后端在 run 入口：
 
-1. 读取 `forwardedProps` / `context.run_config`（per-run override）。
+1. 读取 `forwardedProps` / `state` / `context.run_config`（per-run override）。
 2. 加载 workspace defaults 与 server policy。
 3. 对 enabled 集合执行 `override/default ∩ serverAllowed`；active id 必须存在、已启用、
    属于对应 enabled 集合且通过 policy，否则返回结构化错误，不静默忽略或回退。
 4. 解析资源 revision 与 secretRef，生成不可变 `effectiveRunConfig` snapshot。
 5. 将 snapshot hash、资源 revision 和 skill package revision 纳入 run fingerprint，再认领 run。
-6. 把解析后的配置交给 provider、工具、MCP middleware 与知识服务。
+6. 把解析后的配置交给 provider、工具、MCP middleware、知识服务与 workspace file injection。
 
-> 注意：`run_config` 里只有**资源 id 与选择**，没有任何凭据。这是与协议文档
-> 一致的硬约束。
+> 注意：`run_config` 里只有**资源 id 与选择**，没有任何凭据。`fileIds` 是
+> `/api/v1/files` 返回的 FileAssetRef id，不是文件内容。这是与协议文档一致的硬约束。
 
 ## 6. 异步任务与上传边界
 

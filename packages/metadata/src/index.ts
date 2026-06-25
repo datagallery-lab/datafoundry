@@ -145,7 +145,36 @@ export type ArtifactRecord = {
   name: string;
   mime_type?: string;
   storage_path?: string;
+  file_asset_ref_id?: string;
   preview_json?: string;
+  metadata_json?: string;
+  created_at: string;
+};
+
+export type FileAssetRecord = {
+  id: string;
+  sha256: string;
+  size_bytes: number;
+  storage_path: string;
+  detected_mime_type?: string;
+  created_at: string;
+};
+
+export type FileAssetRefSource = "artifact" | "knowledge" | "run-attachment" | "upload" | "workspace";
+
+export type FileAssetRefStatus = "ready" | "deleted";
+
+export type FileAssetRefRecord = {
+  id: string;
+  file_asset_id: string;
+  user_id: string;
+  workspace_id: string;
+  filename: string;
+  declared_mime_type?: string;
+  source: FileAssetRefSource;
+  status: FileAssetRefStatus;
+  session_id?: string;
+  run_id?: string;
   metadata_json?: string;
   created_at: string;
 };
@@ -276,7 +305,29 @@ export type CreateArtifactInput = {
   name: string;
   mime_type?: string;
   storage_path?: string;
+  file_asset_ref_id?: string;
   preview_json?: unknown;
+  metadata_json?: unknown;
+};
+
+export type CreateFileAssetInput = {
+  id: string;
+  sha256: string;
+  size_bytes: number;
+  storage_path: string;
+  detected_mime_type?: string;
+};
+
+export type CreateFileAssetRefInput = {
+  id: string;
+  file_asset_id: string;
+  user_id: string;
+  workspace_id: string;
+  filename: string;
+  declared_mime_type?: string;
+  source: FileAssetRefSource;
+  session_id?: string;
+  run_id?: string;
   metadata_json?: unknown;
 };
 
@@ -318,6 +369,8 @@ export class MetadataStore {
   readonly conversationMessages: ConversationMessageRepository;
   readonly conversationSummaries: ConversationSummaryRepository;
   readonly dataSources: DataSourceRepository;
+  readonly fileAssetRefs: FileAssetRefRepository;
+  readonly fileAssets: FileAssetRepository;
   readonly interactions: InteractionRepository;
   readonly longTermMemories: LongTermMemoryRepository;
   readonly runEvents: RunEventRepository;
@@ -338,6 +391,8 @@ export class MetadataStore {
     this.configJobs = new ConfigJobRepository(db);
     this.configResources = new ConfigResourceRepository(db);
     this.dataSources = new DataSourceRepository(db);
+    this.fileAssets = new FileAssetRepository(db);
+    this.fileAssetRefs = new FileAssetRefRepository(db);
     this.interactions = new InteractionRepository(db);
     this.longTermMemories = new LongTermMemoryRepository(db);
     this.secrets = new EncryptedSecretStore(db, secretMasterKey);
@@ -1191,9 +1246,9 @@ export class ArtifactRepository {
         `
         INSERT INTO artifacts (
           id, user_id, session_id, run_id, type, name, mime_type,
-          storage_path, preview_json, metadata_json, created_at
+          storage_path, file_asset_ref_id, preview_json, metadata_json, created_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `
       )
       .run(
@@ -1205,6 +1260,7 @@ export class ArtifactRepository {
         input.name,
         input.mime_type ?? null,
         input.storage_path ?? null,
+        input.file_asset_ref_id ?? null,
         input.preview_json === undefined ? null : JSON.stringify(input.preview_json),
         input.metadata_json === undefined ? null : JSON.stringify(input.metadata_json),
         createdAt
@@ -1230,6 +1286,128 @@ export class ArtifactRepository {
       .prepare("SELECT * FROM artifacts WHERE user_id = ? AND run_id = ? ORDER BY created_at ASC")
       .all(input.user_id, input.run_id)
       .map(mapRequiredArtifactRow);
+  }
+}
+
+export class FileAssetRepository {
+  constructor(private readonly db: DatabaseSync) {}
+
+  create(input: CreateFileAssetInput): FileAssetRecord {
+    const createdAt = new Date().toISOString();
+    this.db.prepare(`
+      INSERT INTO file_assets (id, sha256, size_bytes, storage_path, detected_mime_type, created_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+      ON CONFLICT(sha256) DO NOTHING
+    `).run(
+      input.id,
+      input.sha256,
+      input.size_bytes,
+      input.storage_path,
+      input.detected_mime_type ?? null,
+      createdAt
+    );
+    return this.getBySha256(input.sha256);
+  }
+
+  get(input: { id: string }): FileAssetRecord {
+    const asset = mapFileAssetRow(this.db.prepare("SELECT * FROM file_assets WHERE id = ?").get(input.id));
+    if (!asset) {
+      throw new Error(`FILE_ASSET_NOT_FOUND:${input.id}`);
+    }
+    return asset;
+  }
+
+  getBySha256(sha256: string): FileAssetRecord {
+    const asset = mapFileAssetRow(this.db.prepare("SELECT * FROM file_assets WHERE sha256 = ?").get(sha256));
+    if (!asset) {
+      throw new Error(`FILE_ASSET_NOT_FOUND_BY_SHA256:${sha256}`);
+    }
+    return asset;
+  }
+
+  findBySha256(sha256: string): Optional<FileAssetRecord> {
+    return mapFileAssetRow(this.db.prepare("SELECT * FROM file_assets WHERE sha256 = ?").get(sha256));
+  }
+
+  refCount(input: { id: string }): number {
+    const row = this.db.prepare(`
+      SELECT COUNT(*) AS count FROM file_asset_refs WHERE file_asset_id = ? AND status != 'deleted'
+    `).get(input.id);
+    return isRecord(row) && typeof row.count === "number" ? row.count : 0;
+  }
+}
+
+export class FileAssetRefRepository {
+  constructor(private readonly db: DatabaseSync) {}
+
+  create(input: CreateFileAssetRefInput): FileAssetRefRecord {
+    const createdAt = new Date().toISOString();
+    this.db.prepare(`
+      INSERT INTO file_asset_refs (
+        id, file_asset_id, user_id, workspace_id, filename, declared_mime_type, source, status,
+        session_id, run_id, metadata_json, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, 'ready', ?, ?, ?, ?)
+    `).run(
+      input.id,
+      input.file_asset_id,
+      input.user_id,
+      input.workspace_id,
+      input.filename,
+      input.declared_mime_type ?? null,
+      input.source,
+      input.session_id ?? null,
+      input.run_id ?? null,
+      input.metadata_json === undefined ? null : JSON.stringify(input.metadata_json),
+      createdAt
+    );
+    return this.get({ user_id: input.user_id, workspace_id: input.workspace_id, id: input.id });
+  }
+
+  get(input: { user_id: string; workspace_id: string; id: string }): FileAssetRefRecord {
+    const ref = mapFileAssetRefRow(this.db.prepare(`
+      SELECT * FROM file_asset_refs WHERE user_id = ? AND workspace_id = ? AND id = ?
+    `).get(input.user_id, input.workspace_id, input.id));
+    if (!ref || ref.status === "deleted") {
+      throw new Error(`FILE_ASSET_REF_NOT_FOUND:${input.id}`);
+    }
+    return ref;
+  }
+
+  list(input: {
+    user_id: string;
+    workspace_id: string;
+    limit?: number;
+    source?: FileAssetRefSource;
+  }): FileAssetRefRecord[] {
+    const limit = Math.max(1, Math.min(input.limit ?? 100, 500));
+    const rows = input.source
+      ? this.db.prepare(`
+          SELECT * FROM file_asset_refs
+          WHERE user_id = ? AND workspace_id = ? AND source = ? AND status != 'deleted'
+          ORDER BY created_at DESC
+          LIMIT ?
+        `).all(input.user_id, input.workspace_id, input.source, limit)
+      : this.db.prepare(`
+          SELECT * FROM file_asset_refs
+          WHERE user_id = ? AND workspace_id = ? AND status != 'deleted'
+          ORDER BY created_at DESC
+          LIMIT ?
+        `).all(input.user_id, input.workspace_id, limit);
+    return rows.map(mapRequiredFileAssetRefRow);
+  }
+
+  softDelete(input: { user_id: string; workspace_id: string; id: string }): FileAssetRefRecord {
+    this.db.prepare(`
+      UPDATE file_asset_refs SET status = 'deleted'
+      WHERE user_id = ? AND workspace_id = ? AND id = ?
+    `).run(input.user_id, input.workspace_id, input.id);
+    const ref = mapFileAssetRefRow(this.db.prepare(`
+      SELECT * FROM file_asset_refs WHERE user_id = ? AND workspace_id = ? AND id = ?
+    `).get(input.user_id, input.workspace_id, input.id));
+    if (!ref) {
+      throw new Error(`FILE_ASSET_REF_NOT_FOUND:${input.id}`);
+    }
+    return ref;
   }
 }
 
@@ -1491,6 +1669,37 @@ const runMigrations = (db: DatabaseSync): void => {
     CREATE INDEX IF NOT EXISTS idx_long_term_memories_user_datasource
       ON long_term_memories(user_id, datasource_id, status, updated_at);
 
+    CREATE TABLE IF NOT EXISTS file_assets (
+      id TEXT PRIMARY KEY,
+      sha256 TEXT NOT NULL UNIQUE,
+      size_bytes INTEGER NOT NULL,
+      storage_path TEXT NOT NULL,
+      detected_mime_type TEXT,
+      created_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_file_assets_sha256 ON file_assets(sha256);
+
+    CREATE TABLE IF NOT EXISTS file_asset_refs (
+      id TEXT PRIMARY KEY,
+      file_asset_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      workspace_id TEXT NOT NULL,
+      filename TEXT NOT NULL,
+      declared_mime_type TEXT,
+      source TEXT NOT NULL,
+      status TEXT NOT NULL,
+      session_id TEXT,
+      run_id TEXT,
+      metadata_json TEXT,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (file_asset_id) REFERENCES file_assets(id),
+      FOREIGN KEY (user_id) REFERENCES users(id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_file_asset_refs_scope
+      ON file_asset_refs(user_id, workspace_id, status, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_file_asset_refs_asset
+      ON file_asset_refs(file_asset_id, status);
+
     CREATE TABLE IF NOT EXISTS artifacts (
       id TEXT PRIMARY KEY,
       user_id TEXT NOT NULL,
@@ -1500,12 +1709,14 @@ const runMigrations = (db: DatabaseSync): void => {
       name TEXT NOT NULL,
       mime_type TEXT,
       storage_path TEXT,
+      file_asset_ref_id TEXT,
       preview_json TEXT,
       metadata_json TEXT,
       created_at TEXT NOT NULL,
       FOREIGN KEY (user_id) REFERENCES users(id),
       FOREIGN KEY (user_id, session_id) REFERENCES sessions(user_id, id),
-      FOREIGN KEY (user_id, run_id) REFERENCES runs(user_id, id)
+      FOREIGN KEY (user_id, run_id) REFERENCES runs(user_id, id),
+      FOREIGN KEY (file_asset_ref_id) REFERENCES file_asset_refs(id)
     );
     CREATE INDEX IF NOT EXISTS idx_artifacts_user_run ON artifacts(user_id, run_id);
 
@@ -1549,6 +1760,7 @@ const runMigrations = (db: DatabaseSync): void => {
   `);
 
   ensureDataSourceRevision(db);
+  ensureArtifactFileAssetRefColumn(db);
 
   if (requiresUserScopedIdentityMigration(db)) {
     migrateUserScopedIdentity(db);
@@ -1574,6 +1786,14 @@ const ensureDataSourceRevision = (db: DatabaseSync): void => {
     .some((row) => isRecord(row) && row.name === "revision");
   if (!hasRevision) {
     db.exec("ALTER TABLE data_sources ADD COLUMN revision INTEGER NOT NULL DEFAULT 1");
+  }
+};
+
+const ensureArtifactFileAssetRefColumn = (db: DatabaseSync): void => {
+  const hasColumn = db.prepare("PRAGMA table_info(artifacts)").all()
+    .some((row) => isRecord(row) && row.name === "file_asset_ref_id");
+  if (!hasColumn) {
+    db.exec("ALTER TABLE artifacts ADD COLUMN file_asset_ref_id TEXT");
   }
 };
 
@@ -1641,6 +1861,7 @@ const migrateUserScopedIdentity = (db: DatabaseSync): void => {
         name TEXT NOT NULL,
         mime_type TEXT,
         storage_path TEXT,
+        file_asset_ref_id TEXT,
         preview_json TEXT,
         metadata_json TEXT,
         created_at TEXT NOT NULL,
@@ -1675,7 +1896,14 @@ const migrateUserScopedIdentity = (db: DatabaseSync): void => {
         datasource_id, collection_id, started_at, finished_at, error_message
       FROM runs;
       INSERT INTO run_events_user_scoped SELECT * FROM run_events;
-      INSERT INTO artifacts_user_scoped SELECT * FROM artifacts;
+      INSERT INTO artifacts_user_scoped (
+        id, user_id, session_id, run_id, type, name, mime_type, storage_path,
+        file_asset_ref_id, preview_json, metadata_json, created_at
+      )
+      SELECT
+        id, user_id, session_id, run_id, type, name, mime_type, storage_path,
+        NULL, preview_json, metadata_json, created_at
+      FROM artifacts;
       INSERT INTO sql_audit_logs_user_scoped SELECT * FROM sql_audit_logs;
 
       DROP TABLE run_events;
@@ -1731,6 +1959,11 @@ const createMetadataIndexes = (db: DatabaseSync): void => {
       ON long_term_memories(user_id, session_id, status, updated_at);
     CREATE INDEX IF NOT EXISTS idx_long_term_memories_user_datasource
       ON long_term_memories(user_id, datasource_id, status, updated_at);
+    CREATE INDEX IF NOT EXISTS idx_file_assets_sha256 ON file_assets(sha256);
+    CREATE INDEX IF NOT EXISTS idx_file_asset_refs_scope
+      ON file_asset_refs(user_id, workspace_id, status, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_file_asset_refs_asset
+      ON file_asset_refs(file_asset_id, status);
     CREATE INDEX IF NOT EXISTS idx_artifacts_user_run ON artifacts(user_id, run_id);
     CREATE INDEX IF NOT EXISTS idx_sql_audit_logs_user_run ON sql_audit_logs(user_id, run_id);
     CREATE INDEX IF NOT EXISTS idx_sql_audit_logs_user_datasource ON sql_audit_logs(user_id, datasource_id);
@@ -2065,6 +2298,7 @@ const mapArtifactRow = (row: unknown): Optional<ArtifactRecord> => {
 
   const mimeType = optionalString(row.mime_type);
   const storagePath = optionalString(row.storage_path);
+  const fileAssetRefId = optionalString(row.file_asset_ref_id);
   const previewJson = optionalString(row.preview_json);
   const metadataJson = optionalString(row.metadata_json);
 
@@ -2077,10 +2311,58 @@ const mapArtifactRow = (row: unknown): Optional<ArtifactRecord> => {
     name: requiredString(row, "name"),
     ...(mimeType ? { mime_type: mimeType } : {}),
     ...(storagePath ? { storage_path: storagePath } : {}),
+    ...(fileAssetRefId ? { file_asset_ref_id: fileAssetRefId } : {}),
     ...(previewJson ? { preview_json: previewJson } : {}),
     ...(metadataJson ? { metadata_json: metadataJson } : {}),
     created_at: requiredString(row, "created_at")
   };
+};
+
+const mapFileAssetRow = (row: unknown): Optional<FileAssetRecord> => {
+  if (!isRecord(row)) {
+    return undefined;
+  }
+  const detectedMimeType = optionalString(row.detected_mime_type);
+  return {
+    id: requiredString(row, "id"),
+    sha256: requiredString(row, "sha256"),
+    size_bytes: requiredNumber(row, "size_bytes"),
+    storage_path: requiredString(row, "storage_path"),
+    ...(detectedMimeType ? { detected_mime_type: detectedMimeType } : {}),
+    created_at: requiredString(row, "created_at")
+  };
+};
+
+const mapFileAssetRefRow = (row: unknown): Optional<FileAssetRefRecord> => {
+  if (!isRecord(row)) {
+    return undefined;
+  }
+  const declaredMimeType = optionalString(row.declared_mime_type);
+  const sessionId = optionalString(row.session_id);
+  const runId = optionalString(row.run_id);
+  const metadataJson = optionalString(row.metadata_json);
+  return {
+    id: requiredString(row, "id"),
+    file_asset_id: requiredString(row, "file_asset_id"),
+    user_id: requiredString(row, "user_id"),
+    workspace_id: requiredString(row, "workspace_id"),
+    filename: requiredString(row, "filename"),
+    ...(declaredMimeType ? { declared_mime_type: declaredMimeType } : {}),
+    source: requiredString(row, "source") as FileAssetRefSource,
+    status: requiredString(row, "status") as FileAssetRefStatus,
+    ...(sessionId ? { session_id: sessionId } : {}),
+    ...(runId ? { run_id: runId } : {}),
+    ...(metadataJson ? { metadata_json: metadataJson } : {}),
+    created_at: requiredString(row, "created_at")
+  };
+};
+
+const mapRequiredFileAssetRefRow = (row: unknown): FileAssetRefRecord => {
+  const ref = mapFileAssetRefRow(row);
+  if (!ref) {
+    throw new Error("Invalid file asset ref row");
+  }
+  return ref;
 };
 
 const mapSqlAuditLogRow = (row: unknown): Optional<SqlAuditLogRecord> => {

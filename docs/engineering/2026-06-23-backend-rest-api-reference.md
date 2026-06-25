@@ -1,6 +1,6 @@
 # Backend REST API Reference
 
-日期：2026-06-23
+日期：2026-06-24
 范围：`apps/api` 当前实现的 HTTP JSON REST API
 实现入口：`apps/api/src/server.ts`、`apps/api/src/config-api.ts`
 
@@ -27,7 +27,7 @@ agent runtime 入口，不属于配置 REST API；协议见
 
 ### 1.1 响应 envelope
 
-除 artifact `content` / `download` 这类文件响应外，REST API 都使用统一 envelope。
+除 file / artifact `download`、artifact `content` 这类文件响应外，REST API 都使用统一 envelope。
 
 成功：
 
@@ -89,8 +89,12 @@ SQL_BLOCKED, SQL_TIMEOUT, PROVIDER_CONFIG_MISSING, PROVIDER_RATE_LIMITED
 | GET/PATCH/DELETE | `/api/v1/knowledge-bases/:id` | Knowledge Base 详情 / 更新 / 删除 |
 | POST | `/api/v1/knowledge-bases/:id/test` | Knowledge Base 通用验证 |
 | POST | `/api/v1/knowledge-bases/:id/files` | 上传或写入文档 |
+| POST | `/api/v1/knowledge-bases/:id/files/import` | 从 FileAssetRef 导入文档 |
 | POST | `/api/v1/knowledge-bases/:id/search` | 检索调试 |
 | POST | `/api/v1/knowledge-bases/:id/reindex` | 重建索引 |
+| GET/POST | `/api/v1/files` | 文件引用列表 / 批量上传 |
+| GET/DELETE | `/api/v1/files/:id` | 文件引用详情 / 删除引用 |
+| GET | `/api/v1/files/:id/download` | 下载文件资产内容 |
 | GET/POST | `/api/v1/mcp-servers` | MCP Server 列表 / 创建 |
 | GET/PATCH/DELETE | `/api/v1/mcp-servers/:id` | MCP Server 详情 / 更新 / 删除 |
 | POST | `/api/v1/mcp-servers/:id/test` | MCP Server 连通性与 tools manifest |
@@ -133,6 +137,7 @@ SQL_BLOCKED, SQL_TIMEOUT, PROVIDER_CONFIG_MISSING, PROVIDER_RATE_LIMITED
   "success": true,
   "data": {
     "artifact.export": true,
+    "files": true,
     "datasource.queryPolicy": true,
     "datasource.server": true,
     "llm.samplingParams": true,
@@ -510,6 +515,100 @@ Datasource DTO：
 }
 ```
 
+## 6. File Assets
+
+文件接口暴露的是 `FileAssetRef`，即“当前用户/工作区可见的文件引用”。物理内容由
+`FileAsset` 按 `sha256` 去重保存，前端通常只需要使用 `id` 作为 `file_id`。
+
+### GET `/api/v1/files`
+
+响应：
+
+```json
+{
+  "success": true,
+  "data": {
+    "files": [
+      {
+        "id": "file-ref-1",
+        "assetId": "file-asset-1",
+        "filename": "orders.csv",
+        "mimeType": "text/csv; charset=utf-8",
+        "sizeBytes": 12345,
+        "sha256": "2cf24dba5...",
+        "source": "upload",
+        "status": "ready",
+        "createdAt": "2026-06-24T00:00:00.000Z"
+      }
+    ]
+  }
+}
+```
+
+### POST `/api/v1/files`
+
+批量上传文件。请求必须是 `multipart/form-data`，文件字段名可为 `files` 或任意 file
+field，后端按 multipart 中所有 file parts 处理。
+
+限制由环境变量控制：
+
+```text
+FILE_UPLOAD_MAX_FILES        默认 20
+FILE_UPLOAD_MAX_BYTES        默认 25 MiB
+FILE_UPLOAD_MAX_TOTAL_BYTES  默认 100 MiB
+FILE_ASSET_STORAGE_ROOT      默认 storage/files
+```
+
+请求示例：
+
+```bash
+curl -F "files=@orders.csv" -F "files=@metrics.md" \
+  http://127.0.0.1:8787/api/v1/files
+```
+
+响应：
+
+```json
+{
+  "success": true,
+  "data": {
+    "files": [
+      {
+        "id": "file-ref-1",
+        "assetId": "file-asset-1",
+        "filename": "orders.csv",
+        "mimeType": "text/csv",
+        "sizeBytes": 12345,
+        "sha256": "2cf24dba5...",
+        "source": "upload",
+        "status": "ready"
+      }
+    ]
+  }
+}
+```
+
+同一内容重复上传会复用同一个 `assetId`，但会创建不同的 `id` 引用。
+
+### GET `/api/v1/files/:id`
+
+读取一个文件引用的 metadata。
+
+### GET `/api/v1/files/:id/download`
+
+下载真实文件内容，不使用 `ApiResult` envelope。
+
+示例响应 header：
+
+```text
+Content-Type: text/csv; charset=utf-8
+Content-Disposition: attachment; filename="orders.csv"
+```
+
+### DELETE `/api/v1/files/:id`
+
+软删除当前文件引用，不会直接删除仍被其他 ref、artifact 或 KB document 引用的物理文件。
+
 ## 7. Knowledge Bases
 
 Knowledge Base 是通用 config resource，读响应会展开 payload，并用 `indexStatus` 表示状态。
@@ -621,6 +720,48 @@ field file=<metrics.md>
     "filename": "metrics.md",
     "mime_type": "text/markdown",
     "created_at": "2026-06-23T00:00:00.000Z"
+  }
+}
+```
+
+### POST `/api/v1/knowledge-bases/:id/files/import`
+
+从已上传的 FileAssetRef 导入 KB。KB 只保存 document/chunks/embeddings 投影，不重复保存原始文件。
+第一版支持文本类文件：`txt`、`md`、`csv`、`json` 以及 `text/*` mime。
+
+请求：
+
+```json
+{
+  "fileIds": ["file-ref-1", "file-ref-2"]
+}
+```
+
+响应使用 `207`，每个文件独立返回结果：
+
+```json
+{
+  "success": true,
+  "data": {
+    "results": [
+      {
+        "fileId": "file-ref-1",
+        "status": "ready",
+        "document": {
+          "id": "doc-1",
+          "collection_id": "metrics-docs",
+          "filename": "metrics.md",
+          "file_asset_ref_id": "file-ref-1",
+          "mime_type": "text/markdown",
+          "status": "ready"
+        }
+      },
+      {
+        "fileId": "file-ref-2",
+        "status": "failed",
+        "error": "KNOWLEDGE_FILE_TYPE_UNSUPPORTED:scan.pdf"
+      }
+    ]
   }
 }
 ```
@@ -997,8 +1138,9 @@ Multipart 请求同 `POST /api/v1/skills`，但写入已有 `:id`。
 
 ## 11. Artifacts
 
-Artifact 由 agent tools 生成，当前 REST API 提供详情、preview 和下载。北向 AG-UI 事件
-暂时仍携带 preview JSON，workspace artifact 北向模型后续再收敛。
+Artifact 由 agent tools 生成，当前 REST API 提供详情、preview 和下载。新文件型 artifact
+通过 `file_asset_ref_id` 引用统一文件资产；旧 `storage_path` artifact 仍兼容读取。北向 AG-UI
+`artifact` custom event 会携带 artifact summary 和下载入口。
 
 ### GET `/api/v1/artifacts/:id`
 
@@ -1075,7 +1217,8 @@ Content-Disposition: inline; filename="orders-preview.json"
 }
 ```
 
-如果 artifact 有真实 `storage_path`，返回文件内容；否则从 `preview_json` 序列化。
+如果 artifact 有 `file_asset_ref_id`，优先读取统一 FileAsset 内容；否则兼容读取旧
+`storage_path`；再否则从 `preview_json` 序列化。
 
 ### GET `/api/v1/artifacts/:id/download`
 
@@ -1103,6 +1246,10 @@ id,amount
 这是 CopilotKit runtime endpoint，不是 `/api/v1` REST 配置接口。GUI/TUI 应按 AG-UI
 `RunAgentInput` 和 AG-UI event stream 消费，不要自定义 SSE/chat 协议。
 
+当前没有单独的 `/api/v1/runs`。前端上传文件后，如果要让 agent 感知文件，需要把
+`POST /api/v1/files` 返回的 `data.files[].id` 放进 AG-UI run input 的
+`forwardedProps.run_config.fileIds`。
+
 最小请求形态：
 
 ```json
@@ -1120,12 +1267,27 @@ id,amount
     "run_config": {
       "activeDatasourceId": "api-duckdb-demo",
       "enabledDatasourceIds": ["api-duckdb-demo"],
+      "fileIds": ["file-ref-1"],
       "enabledKnowledgeIds": [],
       "enabledMcpServerIds": [],
       "enabledSkillIds": []
     }
   }
 }
+```
+
+`fileIds` 是 `/api/v1/files` 返回的 FileAssetRef `id`。后端会在 run 开始时把这些文件
+物化到当前 run workspace 的 `input/` 目录，并在模型上下文中注入文件清单。模型需要通过
+workspace 工具读取文件内容，不会把大文件全文直接塞入 prompt。
+
+后端也支持 `state.run_config.fileIds`、`context[].description === "run_config"`，以及
+snake_case 的 `file_ids`。推荐前端优先使用 `forwardedProps.run_config.fileIds`，因为它优先级最高。
+
+agent 生成结果文件后，可调用：
+
+```text
+publish_artifact         发布可下载交付物
+promote_workspace_file   将 workspace 文件提升为后续 run 可复用的 file_id
 ```
 
 详细字段、事件类型、幂等和 human-in-the-loop 见：
