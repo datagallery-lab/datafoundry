@@ -1,6 +1,6 @@
 # CopilotKit / AG-UI Frontend Protocol Support
 
-日期：2026-06-23
+日期：2026-06-25
 受众：GUI / TUI 前端同学
 状态：当前后端实际支持面
 
@@ -21,6 +21,8 @@ GET  /api/v1/capabilities
 GET  /api/v1/workspace-config
 PATCH /api/v1/workspace-config
 GET/POST/PATCH/DELETE /api/v1/{datasources|knowledge-bases|mcp-servers|model-profiles|skills}
+GET/POST/DELETE /api/v1/files
+GET  /api/v1/files/:id/download
 GET  /api/v1/artifacts/:id[/preview|/content|/download]
 POST /api/copilotkit
 ```
@@ -42,6 +44,9 @@ dataAgent
 TUI 如果不使用 CopilotKit React 组件，也应按 AG-UI `RunAgentInput` / event stream 语义接入
 `POST /api/copilotkit`，不要自定义一套 SSE/chat 协议。
 
+注意：当前没有单独的 `/api/v1/runs` 或 `/api/v1/chat/*` 启动接口。创建 agent run
+只通过 `/api/copilotkit` 的 AG-UI `RunAgentInput`。
+
 ## 2. 请求上下文
 
 后端从 AG-UI `RunAgentInput` 中提取运行上下文。
@@ -52,7 +57,7 @@ TUI 如果不使用 CopilotKit React 组件，也应按 AG-UI `RunAgentInput` / 
 | `runId` | 支持 | `run_id` | 单次运行维度。 |
 | `parentRunId` | 支持 | `parent_run_id` | 必须属于同一 user/session；用于 retry、branch、派生 run。 |
 | `messages` | 支持 | 提取最后一条 user text 作为 `user_input` | 支持 string content 和 text part array。 |
-| `forwardedProps.run_config` / `runConfig` | 支持 | effective run config | 优先级最高；控制 datasource、KB、MCP、model、skill、goal。 |
+| `forwardedProps.run_config` / `runConfig` | 支持 | effective run config | 优先级最高；控制 datasource、KB、MCP、model、skill、goal、fileIds。 |
 | `state.run_config` / `runConfig` | 支持 | effective run config | 低于 `forwardedProps.run_config`。 |
 | `context[].description === "run_config"` | 支持 | effective run config | 可传 JSON object 或 JSON string。 |
 | `forwardedProps.datasourceId` | 支持 | legacy selected datasource | 低于 `run_config.activeDatasourceId`。 |
@@ -91,7 +96,25 @@ run_config.activeDatasourceId
       "enabledMcpServerIds": ["local-mcp"],
       "activeLlmProfileId": "server-default",
       "activeSkillId": "data-analysis",
-      "enabledSkillIds": ["data-analysis"]
+      "enabledSkillIds": ["data-analysis"],
+      "fileIds": ["file-ref-1"]
+    }
+  }
+}
+```
+
+`fileIds` 来自 `POST /api/v1/files` 返回的 `data.files[].id`，它是 FileAssetRef id。
+后端会在 run 开始时校验这些 id，物化到当前 run workspace 的 `input/` 目录，并把文件清单注入
+agent 上下文。模型不会自动看到文件全文；需要通过 `list_files` / `read_file` / `grep` /
+`execute_command` 等 workspace 工具读取。
+
+等价 snake_case 字段也支持：
+
+```json
+{
+  "forwardedProps": {
+    "run_config": {
+      "file_ids": ["file-ref-1"]
     }
   }
 }
@@ -156,6 +179,8 @@ user_id=dev-user
 | `mcp__{server}__{tool}` | 外部 MCP 工具 | 由启用的 MCP server 动态提供，仍走标准 `TOOL_CALL_*`。 |
 | `read_file` / `write_file` / `edit_file` / `list_files` / `grep` / `file_stat` / `mkdir` | Workspace | run 目录内文件能力。 |
 | `execute_command` | 本地变换 | 仅 Mastra `LocalSandbox` 原生隔离可用时暴露，无网络，不能绕过 Data Gateway。 |
+| `publish_artifact` | Artifact | 将 workspace 文件发布为前端可下载 artifact。 |
+| `promote_workspace_file` | FileAssetRef | 将 workspace 文件提升为后续 run 可复用的 file id。 |
 | `task_write` / `task_update` / `task_complete` / `task_check` | 任务状态 | 结果同时投影 PLAN。 |
 | `ask_user` / `submit_plan` | 用户协作 | 会挂起 run，按 3.8 恢复。 |
 

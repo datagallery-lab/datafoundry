@@ -11,8 +11,10 @@ import {
   type AgentMemoryMode,
   type TaskStateRuntime
 } from "@open-data-agent/agent-runtime";
+import { LocalArtifactService } from "@open-data-agent/artifacts";
 import { type MeResponse, createEnvConfig, createErrorResult, createSuccessResult } from "@open-data-agent/contracts";
 import { LocalDataGateway } from "@open-data-agent/data-gateway";
+import { LocalFileAssetService } from "@open-data-agent/files";
 import { LocalKnowledgeService } from "@open-data-agent/knowledge";
 import {
   RunEventWriter,
@@ -73,6 +75,10 @@ export const createServer = async (options: CreateServerOptions = {}): Promise<S
     maxLimit: envConfig.sql.max_limit,
     timeoutMs: envConfig.sql.timeout_ms
   });
+  const fileAssetService = new LocalFileAssetService(metadataStore, {
+    storageRoot: process.env.FILE_ASSET_STORAGE_ROOT ?? join(envConfig.storage.root_dir, "files")
+  });
+  const artifactService = new LocalArtifactService(metadataStore, fileAssetService);
   const knowledgeService = new LocalKnowledgeService(metadataStore, {
     embedding: {
       provider: envConfig.embedding.provider,
@@ -107,6 +113,7 @@ export const createServer = async (options: CreateServerOptions = {}): Promise<S
 
       const configResponse = await handleConfigApiRequest(request, requestUrl.pathname, {
         dataGateway,
+        fileAssetService,
         knowledgeService,
         metadataStore,
         userId: DEV_USER.id
@@ -135,6 +142,8 @@ export const createServer = async (options: CreateServerOptions = {}): Promise<S
           response,
           metadataStore,
           dataGateway,
+          artifactService,
+          fileAssetService,
           knowledgeService,
           taskStateRuntime,
           conversationMemoryMode,
@@ -168,11 +177,13 @@ export const createServer = async (options: CreateServerOptions = {}): Promise<S
 };
 
 type HandleCopilotKitRequestInput = {
+  artifactService: LocalArtifactService;
   conversationMemoryMode: AgentMemoryMode;
   request: IncomingMessage;
   response: ServerResponse;
   metadataStore: MetadataStore;
   dataGateway: LocalDataGateway;
+  fileAssetService: LocalFileAssetService;
   knowledgeService: LocalKnowledgeService;
   memoryExtractionTimeoutMs: number;
   taskStateRuntime: TaskStateRuntime;
@@ -183,6 +194,8 @@ const handleCopilotKitRequest = async ({
   response,
   metadataStore,
   dataGateway,
+  artifactService,
+  fileAssetService,
   conversationMemoryMode,
   knowledgeService,
   memoryExtractionTimeoutMs,
@@ -192,6 +205,8 @@ const handleCopilotKitRequest = async ({
     agents: {
       dataAgent: new DataAgentAgUiAgent({
         dataGateway,
+        artifactService,
+        fileAssetService,
         conversationMemoryMode,
         knowledgeService,
         memoryExtractionTimeoutMs,
@@ -220,9 +235,11 @@ const handleCopilotKitRequest = async ({
 };
 
 type DataAgentAgUiAgentInput = {
+  artifactService: LocalArtifactService;
   conversationMemoryMode: AgentMemoryMode;
   dataGateway: LocalDataGateway;
   defaultDatasourceId: string;
+  fileAssetService: LocalFileAssetService;
   metadataStore: MetadataStore;
   knowledgeService: LocalKnowledgeService;
   memoryExtractionTimeoutMs: number;
@@ -337,6 +354,9 @@ class DataAgentAgUiAgent extends AbstractAgent {
         };
         const agentAssembly = await createRunAgentAssembly({
           dataGateway: this.input.dataGateway,
+          artifactService: this.input.artifactService,
+          effectiveRunConfig,
+          fileAssetService: this.input.fileAssetService,
           emitter: { emit },
           ...(effectiveRunConfig.goal ? { goal: effectiveRunConfig.goal } : {}),
           ...(interactionResume ? { interactionResume } : {}),
@@ -411,6 +431,7 @@ class DataAgentAgUiAgent extends AbstractAgent {
                 active_datasource_id: effectiveRunConfig.activeDatasourceId,
                 active_skill_id: effectiveRunConfig.activeSkillId,
                 enabled_datasource_ids: effectiveRunConfig.enabledDatasourceIds,
+                file_ids: effectiveRunConfig.fileIds,
                 enabled_knowledge_ids: effectiveRunConfig.enabledKnowledgeIds,
                 enabled_mcp_server_ids: effectiveRunConfig.enabledMcpServerIds,
                 requested_llm_profile_id: effectiveRunConfig.activeLlmProfileId,

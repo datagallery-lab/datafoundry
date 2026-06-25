@@ -18,6 +18,7 @@
     "@open-data-agent/agent-runtime": "0.1.0",
     "@open-data-agent/contracts": "0.1.0",
     "@open-data-agent/data-gateway": "0.1.0",
+    "@open-data-agent/files": "0.1.0",
     "@open-data-agent/knowledge": "0.1.0",
     "@open-data-agent/metadata": "0.1.0",
     "busboy": "^1.6.0",

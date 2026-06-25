@@ -9,7 +9,13 @@
       "path": "../contracts"
     },
     {
+      "path": "../artifacts"
+    },
+    {
       "path": "../data-gateway"
+    },
+    {
+      "path": "../files"
     },
     {
       "path": "../providers"

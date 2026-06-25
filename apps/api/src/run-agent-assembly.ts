@@ -1,15 +1,18 @@
 import { MastraAgent } from "@ag-ui/mastra";
 import { MCPMiddleware } from "@ag-ui/mcp-middleware";
 import type { RunAgentInput } from "@ag-ui/client";
+import type { ArtifactService } from "@open-data-agent/artifacts";
 import {
   createDataAgent,
   createDataAgentRunContext,
   type AgentRunContext,
   type AgUiEventEmitter,
   type GoalRuntimeAdapter,
-  type TaskStateRuntime
+  type TaskStateRuntime,
+  type WorkspaceAttachment
 } from "@open-data-agent/agent-runtime";
 import type { DataGateway } from "@open-data-agent/data-gateway";
+import type { FileAssetService } from "@open-data-agent/files";
 import type { KnowledgeService } from "@open-data-agent/knowledge";
 import type { LongTermMemoryRecord } from "@open-data-agent/metadata";
 
@@ -39,8 +42,11 @@ type CreateRunAgentContextInput = {
 };
 
 type CreateRunAgentAssemblyInput = {
+  artifactService: ArtifactService;
   dataGateway: DataGateway;
+  effectiveRunConfig: EffectiveRunConfig;
   emitter: AgUiEventEmitter;
+  fileAssetService: FileAssetService;
   goal?: EffectiveRunConfig["goal"] | undefined;
   interactionResume?: InteractionResume | undefined;
   knowledgeService: KnowledgeService;
@@ -91,7 +97,9 @@ export const createRunAgentAssembly = async (
     governedMessages,
     isolation
   } = await createDataAgent({
+    artifactService: input.artifactService,
     dataGateway: input.dataGateway,
+    fileAssetService: input.fileAssetService,
     knowledgeService: input.knowledgeService,
     ...(input.mcpRuntime.toolNames.length > 0 ? { mcpToolNames: input.mcpRuntime.toolNames } : {}),
     emitter: input.emitter,
@@ -103,6 +111,9 @@ export const createRunAgentAssembly = async (
     ...(input.skillPolicy ? { skillPolicy: input.skillPolicy } : {}),
     taskStateRuntime: input.taskStateRuntime,
     ...(!input.interactionResume && input.goal ? { goal: input.goal } : {}),
+    ...(input.effectiveRunConfig.fileIds.length > 0
+      ? { workspaceAttachments: resolveWorkspaceAttachments(input) }
+      : {}),
     workspaceRoot: input.workspaceRoot
   });
   const mastraAgent = new MastraAgent({
@@ -124,3 +135,21 @@ export const createRunAgentAssembly = async (
     }
   };
 };
+
+const resolveWorkspaceAttachments = (input: CreateRunAgentAssemblyInput): WorkspaceAttachment[] =>
+  input.effectiveRunConfig.fileIds.map((fileId) => {
+    const resolved = input.fileAssetService.getRef({
+      user_id: input.userId,
+      workspace_id: "default",
+      id: fileId
+    });
+    return {
+      file_id: resolved.ref.id,
+      filename: resolved.ref.filename,
+      ...(resolved.ref.declared_mime_type ?? resolved.asset.detected_mime_type
+        ? { mime_type: resolved.ref.declared_mime_type ?? resolved.asset.detected_mime_type }
+        : {}),
+      size_bytes: resolved.asset.size_bytes,
+      source_path: resolved.asset.storage_path
+    };
+  });

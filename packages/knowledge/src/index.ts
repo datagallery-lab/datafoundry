@@ -17,6 +17,7 @@ export type DocumentRecord = {
   user_id: string;
   collection_id: string;
   filename: string;
+  file_asset_ref_id?: string;
   mime_type: string;
   status: "uploaded" | "parsing" | "indexing" | "ready" | "failed" | "deleted";
 };
@@ -53,6 +54,7 @@ export class LocalKnowledgeService implements KnowledgeService {
     private readonly options: LocalKnowledgeServiceOptions = {}
   ) {
     this.initializeSchema();
+    this.ensureDocumentFileAssetRefColumn();
   }
 
   /** Store one text document as bounded searchable chunks. */
@@ -61,6 +63,7 @@ export class LocalKnowledgeService implements KnowledgeService {
     collection_id: string;
     filename: string;
     content: string;
+    file_asset_ref_id?: string;
     mime_type?: string;
   }): Promise<DocumentRecord> {
     if (!input.content.trim()) {
@@ -80,6 +83,11 @@ export class LocalKnowledgeService implements KnowledgeService {
       now,
       now
     );
+    if (input.file_asset_ref_id) {
+      this.metadataStore.db.prepare(`
+        UPDATE knowledge_documents SET file_asset_ref_id = ? WHERE user_id = ? AND id = ?
+      `).run(input.file_asset_ref_id, input.user_id, documentId);
+    }
     const chunks = splitText(input.content);
     chunks.forEach((content, index) => {
       this.metadataStore.db.prepare(`
@@ -299,6 +307,7 @@ export class LocalKnowledgeService implements KnowledgeService {
         user_id TEXT NOT NULL,
         collection_id TEXT NOT NULL,
         filename TEXT NOT NULL,
+        file_asset_ref_id TEXT,
         mime_type TEXT NOT NULL,
         status TEXT NOT NULL,
         created_at TEXT NOT NULL,
@@ -332,6 +341,14 @@ export class LocalKnowledgeService implements KnowledgeService {
         ON knowledge_embeddings(user_id, collection_id);
     `);
   }
+
+  private ensureDocumentFileAssetRefColumn(): void {
+    const hasColumn = this.metadataStore.db.prepare("PRAGMA table_info(knowledge_documents)").all()
+      .some((row) => isRecord(row) && row.name === "file_asset_ref_id");
+    if (!hasColumn) {
+      this.metadataStore.db.exec("ALTER TABLE knowledge_documents ADD COLUMN file_asset_ref_id TEXT");
+    }
+  }
 }
 
 const splitText = (content: string): string[] => {
@@ -361,14 +378,18 @@ const tokenizeQuery = (query: string): string => query
   .map((value) => `"${value.replaceAll('"', '""')}"`)
   .join(" OR ");
 
-const mapDocument = (row: Record<string, unknown>): DocumentRecord => ({
-  id: requiredString(row, "id"),
-  user_id: requiredString(row, "user_id"),
-  collection_id: requiredString(row, "collection_id"),
-  filename: requiredString(row, "filename"),
-  mime_type: requiredString(row, "mime_type"),
-  status: requiredString(row, "status") as DocumentRecord["status"]
-});
+const mapDocument = (row: Record<string, unknown>): DocumentRecord => {
+  const fileAssetRefId = optionalString(row.file_asset_ref_id);
+  return {
+    id: requiredString(row, "id"),
+    user_id: requiredString(row, "user_id"),
+    collection_id: requiredString(row, "collection_id"),
+    filename: requiredString(row, "filename"),
+    ...(fileAssetRefId ? { file_asset_ref_id: fileAssetRefId } : {}),
+    mime_type: requiredString(row, "mime_type"),
+    status: requiredString(row, "status") as DocumentRecord["status"]
+  };
+};
 
 const rankToScore = (value: unknown): number => typeof value === "number" ? 1 / (1 + Math.abs(value)) : 0;
 const optionalString = (value: unknown): string | undefined =>

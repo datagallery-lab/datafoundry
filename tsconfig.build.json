@@ -5,7 +5,13 @@
       "path": "packages/contracts"
     },
     {
-      "path": "packages/agent-runtime"
+      "path": "packages/metadata"
+    },
+    {
+      "path": "packages/files"
+    },
+    {
+      "path": "packages/artifacts"
     },
     {
       "path": "packages/data-gateway"
@@ -14,13 +20,10 @@
       "path": "packages/knowledge"
     },
     {
-      "path": "packages/artifacts"
-    },
-    {
       "path": "packages/providers"
     },
     {
-      "path": "packages/metadata"
+      "path": "packages/agent-runtime"
     },
     {
       "path": "apps/api"

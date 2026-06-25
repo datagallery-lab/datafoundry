@@ -70,6 +70,68 @@ export const readMultipartUpload = (request: IncomingMessage): Promise<{ fields:
     request.pipe(parser);
   });
 
+/** Parse one bounded multipart request with multiple file fields. */
+export const readMultipartFiles = (
+  request: IncomingMessage,
+  options: { maxFiles?: number; maxFileBytes?: number; maxTotalBytes?: number } = {}
+): Promise<{ fields: Record<string, string>; files: UploadedFile[] }> =>
+  new Promise((resolve, reject) => {
+    const fields: Record<string, string> = {};
+    const files: UploadedFile[] = [];
+    let failed = false;
+    let totalBytes = 0;
+    const maxFiles = options.maxFiles ?? 20;
+    const maxFileBytes = options.maxFileBytes ?? MAX_UPLOAD_BYTES;
+    const maxTotalBytes = options.maxTotalBytes ?? maxFileBytes * maxFiles;
+    const parser = Busboy({
+      headers: request.headers,
+      limits: { fileSize: maxFileBytes, files: maxFiles, fields: 50, fieldSize: 64 * 1024 }
+    });
+    parser.on("field", (name, value) => {
+      fields[name] = value;
+    });
+    parser.on("filesLimit", () => {
+      failed = true;
+      reject(new Error("UPLOAD_FILE_COUNT_EXCEEDED"));
+    });
+    parser.on("file", (_name, stream, info) => {
+      const chunks: Buffer[] = [];
+      let size = 0;
+      stream.on("limit", () => {
+        failed = true;
+        reject(new Error("UPLOAD_FILE_TOO_LARGE"));
+      });
+      stream.on("data", (chunk: Buffer) => {
+        size += chunk.length;
+        totalBytes += chunk.length;
+        if (totalBytes > maxTotalBytes && !failed) {
+          failed = true;
+          reject(new Error("UPLOAD_TOTAL_TOO_LARGE"));
+          stream.resume();
+          return;
+        }
+        chunks.push(chunk);
+      });
+      stream.on("end", () => {
+        if (!failed && size > 0) {
+          files.push({ content: Buffer.concat(chunks), filename: info.filename, mimeType: info.mimeType });
+        }
+      });
+    });
+    parser.on("error", reject);
+    parser.on("finish", () => {
+      if (failed) {
+        return;
+      }
+      if (files.length === 0) {
+        reject(new Error("UPLOAD_FILE_REQUIRED"));
+        return;
+      }
+      resolve({ fields, files });
+    });
+    request.pipe(parser);
+  });
+
 /** Validate and parse a SKILL.md or zip skill package without extracting it to disk. */
 export const parseSkillUpload = async (file: UploadedFile): Promise<ParsedSkillUpload> => {
   const lowerName = file.filename.toLowerCase();

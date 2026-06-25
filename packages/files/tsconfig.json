@@ -6,12 +6,6 @@
   },
   "references": [
     {
-      "path": "../contracts"
-    },
-    {
-      "path": "../files"
-    },
-    {
       "path": "../metadata"
     }
   ],

@@ -52,7 +52,9 @@ export type ToolName =
   | "profile_dataset"
   | "create_chart"
   | "generate_report"
-  | "export_artifact";
+  | "export_artifact"
+  | "publish_artifact"
+  | "promote_workspace_file";
 
 export type RetrieveKnowledgeToolInput = {
   collection_id: string;
@@ -110,6 +112,19 @@ export type ExportArtifactToolInput = {
   format?: "json" | "csv" | "html" | "md" | "png";
 };
 
+export type PublishArtifactToolInput = {
+  path: string;
+  name?: string;
+  type?: ArtifactType;
+  preview?: unknown;
+};
+
+export type PromoteWorkspaceFileToolInput = {
+  path: string;
+  filename?: string;
+  description?: string;
+};
+
 export type ToolInputMap = {
   retrieve_knowledge: RetrieveKnowledgeToolInput;
   list_data_sources: ListDataSourcesToolInput;
@@ -120,6 +135,8 @@ export type ToolInputMap = {
   create_chart: CreateChartToolInput;
   generate_report: GenerateReportToolInput;
   export_artifact: ExportArtifactToolInput;
+  publish_artifact: PublishArtifactToolInput;
+  promote_workspace_file: PromoteWorkspaceFileToolInput;
 };
 
 export type ArtifactType = "table" | "chart" | "markdown" | "html" | "file" | "image" | "citation_bundle";

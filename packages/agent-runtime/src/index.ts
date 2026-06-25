@@ -10,8 +10,12 @@ import {
 import { Mastra } from "@mastra/core/mastra";
 import { createWorkspaceTools } from "@mastra/core/workspace";
 import type { Message } from "@ag-ui/core";
+import type { ArtifactService } from "@open-data-agent/artifacts";
 import type { DataGateway } from "@open-data-agent/data-gateway";
+import { type FileAssetService, fileAssetRefDto, mimeTypeForFilename } from "@open-data-agent/files";
 import type { KnowledgeService } from "@open-data-agent/knowledge";
+import { copyFileSync, linkSync, mkdirSync } from "node:fs";
+import { basename, dirname, join, resolve, sep } from "node:path";
 import {
   createModelProvider,
   createModelProviderFromConfig,
@@ -51,6 +55,8 @@ export const STATIC_AGENT_TOOL_NAMES = [
   "list_files",
   "mkdir",
   "preview_table",
+  "publish_artifact",
+  "promote_workspace_file",
   "read_file",
   "retrieve_knowledge",
   "run_sql_readonly",
@@ -100,8 +106,10 @@ export type AgentLongTermMemoryRecord = {
 };
 
 export type CreateDataAgentInput = {
+  artifactService?: ArtifactService;
   dataGateway: DataGateway;
   emitter: AgUiEventEmitter;
+  fileAssetService?: FileAssetService;
   knowledgeService?: KnowledgeService;
   modelProvider: Exclude<ModelProvider, { kind: "mock" }>;
   runContext: AgentRunContext;
@@ -120,6 +128,7 @@ export type CreateDataAgentInput = {
     maxOutputTokens?: number;
     temperature?: number;
   };
+  workspaceAttachments?: WorkspaceAttachment[];
   goal?: GoalRequest;
   /**
    * 工作区根目录（调用方注入）。未提供时回落到 WORKSPACE_ROOT，再回落到系统 temp。
@@ -127,6 +136,14 @@ export type CreateDataAgentInput = {
    * 留空即按默认策略隔离，不影响 workspace 工具的可用性。
    */
   workspaceRoot?: string | undefined;
+};
+
+export type WorkspaceAttachment = {
+  file_id: string;
+  filename: string;
+  mime_type?: string;
+  size_bytes: number;
+  source_path: string;
 };
 
 export const createDataAgent = async (
@@ -157,6 +174,7 @@ export const createDataAgent = async (
     runContext: input.runContext,
     workspaceRoot: input.workspaceRoot
   });
+  const workspaceAttachments = materializeWorkspaceAttachments(runWorkspace.runDir, input.workspaceAttachments ?? []);
 
   const governedMessages = sanitizeIngressMessages(input.messages);
 
@@ -231,6 +249,21 @@ export const createDataAgent = async (
         })
       }
     : {};
+  const artifactTools = input.artifactService
+    ? createArtifactTools({
+        artifactService: input.artifactService,
+        emitter: input.emitter,
+        runContext: input.runContext,
+        workspaceDir: runWorkspace.runDir
+      })
+    : {};
+  const fileAssetTools = input.fileAssetService
+    ? createFileAssetTools({
+        fileAssetService: input.fileAssetService,
+        runContext: input.runContext,
+        workspaceDir: runWorkspace.runDir
+      })
+    : {};
   const workspaceTools = await createWorkspaceTools(runWorkspace.workspace, {
     requestContext: {},
     workspace: runWorkspace.workspace
@@ -238,6 +271,8 @@ export const createDataAgent = async (
   runWorkspace.workspace.setToolsConfig({ enabled: false });
   const availableTools = {
     ...registry.mastraTools,
+    ...artifactTools,
+    ...fileAssetTools,
     ...knowledgeTools,
     ...taskTools,
     ...collaborationTools,
@@ -256,7 +291,8 @@ export const createDataAgent = async (
       collaborationToolsEnabled: Boolean(input.taskStateRuntime),
       ...(input.skillPolicy?.instructions ? { skillInstructions: input.skillPolicy.instructions } : {}),
       taskToolsEnabled: Boolean(input.taskStateRuntime),
-      toolNames: Object.keys(selectedTools)
+      toolNames: Object.keys(selectedTools),
+      workspaceAttachments
     }),
     model: input.modelProvider.model as never,
     tools,
@@ -350,6 +386,15 @@ type AgentInstructionsInput = {
   /** builtin task_* 工具是否启用（取决于是否注入 taskStateRuntime）。 */
   taskToolsEnabled: boolean;
   toolNames: string[];
+  workspaceAttachments: MaterializedWorkspaceAttachment[];
+};
+
+type MaterializedWorkspaceAttachment = {
+  file_id: string;
+  filename: string;
+  mime_type?: string;
+  path: string;
+  size_bytes: number;
 };
 
 const buildAgentInstructions = (input: AgentInstructionsInput): string => {
@@ -359,6 +404,12 @@ const buildAgentInstructions = (input: AgentInstructionsInput): string => {
   const toolGroups: string[] = dataTools.length > 0 ? [`Data tools: ${dataTools.join(", ")}.`] : [];
   if ((context.enabled_knowledge_ids?.length ?? 0) > 0 && enabled("retrieve_knowledge")) {
     toolGroups.push("Knowledge tools: retrieve_knowledge.");
+  }
+  if (enabled("publish_artifact")) {
+    toolGroups.push("Artifact tools: publish_artifact.");
+  }
+  if (enabled("promote_workspace_file")) {
+    toolGroups.push("File asset tools: promote_workspace_file.");
   }
   const workspaceTools = [
     "read_file",
@@ -377,6 +428,11 @@ const buildAgentInstructions = (input: AgentInstructionsInput): string => {
         ? "execute_command runs in a sandbox without network access. Use it only for local transforms, charts, "
           + "or exports; never use it to access external services."
         : "execute_command is disabled this run; rely on the available data and file tools only."));
+  }
+  if (input.workspaceAttachments.length > 0) {
+    toolGroups.push(`Uploaded workspace input files: ${input.workspaceAttachments
+      .map((file) => `${file.path} (file_id=${file.file_id}, mime=${file.mime_type ?? "unknown"}, size=${file.size_bytes})`)
+      .join("; ")}.`);
   }
   const taskTools = ["task_write", "task_update", "task_complete", "task_check"].filter(enabled);
   if (taskToolsEnabled && taskTools.length > 0) {
@@ -427,7 +483,8 @@ const buildAgentInstructions = (input: AgentInstructionsInput): string => {
     policies.push(
       "Persist derived artifacts in the workspace. When analysis produces exports, charts, or transformed datasets, "
         + "write them as files via write_file so they are retained with the run, rather than only echoing them in "
-        + "the final message."
+        + "the final message. Call publish_artifact for files that should be visible and downloadable by the user. "
+        + "Call promote_workspace_file only for files that should be reused in later runs but are not final deliverables."
     );
   }
   policies.push(
@@ -458,6 +515,134 @@ Tool groups:
 Operating policy:
 ${policies.map((policy, index) => `${index + 1}. ${policy}`).join("\n")}
 `;
+};
+
+const materializeWorkspaceAttachments = (
+  runDir: string,
+  attachments: WorkspaceAttachment[]
+): MaterializedWorkspaceAttachment[] => {
+  const inputDir = join(runDir, "input");
+  mkdirSync(inputDir, { recursive: true });
+  const usedNames = new Set<string>();
+  return attachments.map((attachment) => {
+    const filename = uniqueWorkspaceInputFilename(attachment.filename, usedNames);
+    const targetPath = resolve(inputDir, filename);
+    if (!targetPath.startsWith(`${inputDir}${sep}`)) {
+      throw new Error("WORKSPACE_ATTACHMENT_PATH_ESCAPE");
+    }
+    mkdirSync(dirname(targetPath), { recursive: true });
+    try {
+      linkSync(attachment.source_path, targetPath);
+    } catch {
+      copyFileSync(attachment.source_path, targetPath);
+    }
+    return {
+      file_id: attachment.file_id,
+      filename,
+      ...(attachment.mime_type ? { mime_type: attachment.mime_type } : {}),
+      path: `input/${filename}`,
+      size_bytes: attachment.size_bytes
+    };
+  });
+};
+
+const createArtifactTools = (input: {
+  artifactService: ArtifactService;
+  emitter: AgUiEventEmitter;
+  runContext: AgentRunContext;
+  workspaceDir: string;
+}): Record<string, ReturnType<typeof createTool>> => ({
+  publish_artifact: createTool({
+    id: "publish_artifact",
+    description: "Publish a file from the current run workspace as a downloadable artifact.",
+    inputSchema: z.object({
+      path: z.string().min(1),
+      name: z.string().min(1).optional(),
+      type: z.enum(["table", "chart", "markdown", "html", "file", "image", "citation_bundle"]).default("file"),
+      preview: z.unknown().optional()
+    }),
+    execute: async (toolInput) => {
+      const sourcePath = resolveWorkspaceRelativePath(input.workspaceDir, toolInput.path);
+      const name = toolInput.name ?? basename(sourcePath);
+      const artifact = await input.artifactService.createArtifactFromFile({
+        user_id: input.runContext.user_id,
+        session_id: input.runContext.session_id,
+        run_id: input.runContext.run_id,
+        workspace_id: "default",
+        type: toolInput.type ?? "file",
+        name,
+        source_path: sourcePath,
+        ...(toolInput.preview !== undefined ? { preview_json: toolInput.preview } : {})
+      });
+      input.emitter.emit(createCustomEvent("artifact", artifact));
+      return artifact;
+    }
+  })
+});
+
+const createFileAssetTools = (input: {
+  fileAssetService: FileAssetService;
+  runContext: AgentRunContext;
+  workspaceDir: string;
+}): Record<string, ReturnType<typeof createTool>> => ({
+  promote_workspace_file: createTool({
+    id: "promote_workspace_file",
+    description: "Promote a file from the current run workspace into a reusable file asset.",
+    inputSchema: z.object({
+      path: z.string().min(1),
+      filename: z.string().min(1).optional(),
+      description: z.string().optional()
+    }),
+    execute: async (toolInput) => {
+      const sourcePath = resolveWorkspaceRelativePath(input.workspaceDir, toolInput.path);
+      const filename = toolInput.filename ?? basename(sourcePath);
+      const resolved = input.fileAssetService.createRefFromPath({
+        user_id: input.runContext.user_id,
+        workspace_id: "default",
+        session_id: input.runContext.session_id,
+        run_id: input.runContext.run_id,
+        filename,
+        declared_mime_type: mimeTypeForFilename(filename),
+        source: "workspace",
+        path: sourcePath,
+        ...(toolInput.description ? { metadata: { description: toolInput.description } } : {})
+      });
+      return {
+        ...fileAssetRefDto(resolved),
+        download_url: `/api/v1/files/${resolved.ref.id}/download`
+      };
+    }
+  })
+});
+
+const resolveWorkspaceRelativePath = (workspaceDir: string, relativePath: string): string => {
+  if (relativePath.startsWith("/") || relativePath.includes("\0")) {
+    throw new Error("WORKSPACE_PATH_INVALID");
+  }
+  const path = resolve(workspaceDir, relativePath);
+  if (path !== workspaceDir && !path.startsWith(`${workspaceDir}${sep}`)) {
+    throw new Error("WORKSPACE_PATH_ESCAPE");
+  }
+  return path;
+};
+
+const uniqueWorkspaceInputFilename = (filename: string, usedNames: Set<string>): string => {
+  const safe = basename(filename).replace(/[^a-zA-Z0-9._ -]+/gu, "-").trim() || "file";
+  if (!usedNames.has(safe)) {
+    usedNames.add(safe);
+    return safe;
+  }
+  const dot = safe.lastIndexOf(".");
+  const stem = dot > 0 ? safe.slice(0, dot) : safe;
+  const extension = dot > 0 ? safe.slice(dot) : "";
+  for (let index = 2; index < 1000; index += 1) {
+    const candidate = `${stem}-${index}${extension}`;
+    if (!usedNames.has(candidate)) {
+      usedNames.add(candidate);
+      return candidate;
+    }
+  }
+  throw new Error("WORKSPACE_ATTACHMENT_NAME_EXHAUSTED");
 };
 
 const sanitizeIngressMessages = (messages: Message[]): Message[] =>

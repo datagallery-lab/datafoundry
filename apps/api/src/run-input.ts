@@ -16,6 +16,7 @@ export type EffectiveRunConfig = {
   activeLlmProfileId?: string;
   activeSkillId?: string;
   enabledDatasourceIds: string[];
+  fileIds: string[];
   enabledKnowledgeIds: string[];
   enabledMcpServerIds: string[];
   enabledSkillIds: string[];
@@ -65,6 +66,7 @@ export const extractEffectiveRunConfig = (
     ...(activeLlmProfileId ? { activeLlmProfileId } : {}),
     ...(activeSkillId ? { activeSkillId } : {}),
     enabledDatasourceIds: effectiveDatasourceIds,
+    fileIds: unique(stringArrayOptionFromAliases(runConfig, ["fileIds", "file_ids"]) ?? []),
     enabledKnowledgeIds: unique(stringArrayOptionFromAliases(
       runConfig,
       ["enabledKnowledgeIds", "enabled_knowledge_ids"]

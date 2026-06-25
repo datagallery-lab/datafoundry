@@ -22,6 +22,8 @@ import {
   GrepToolObservationAdapter,
   ListFilesToolObservationAdapter,
   MkdirToolObservationAdapter,
+  PublishArtifactToolObservationAdapter,
+  PromoteWorkspaceFileToolObservationAdapter,
   ReadFileToolObservationAdapter,
   WriteFileToolObservationAdapter
 } from "./adapters/workspace-tool-observation-adapters.js";
@@ -58,6 +60,8 @@ const defaultToolObservationAdapters = (
   new FileStatToolObservationAdapter(),
   new MkdirToolObservationAdapter(),
   new ExecuteCommandToolObservationAdapter(),
+  new PublishArtifactToolObservationAdapter(),
+  new PromoteWorkspaceFileToolObservationAdapter(),
   new TaskWriteToolObservationAdapter(),
   new TaskUpdateToolObservationAdapter(),
   new TaskCompleteToolObservationAdapter(),
