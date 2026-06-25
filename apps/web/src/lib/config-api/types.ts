@@ -38,8 +38,20 @@ export type BackendCapabilitiesResponse = {
   "artifact.export"?: boolean;
   "chat.fileUpload"?: boolean;
   "chat.imageInput"?: boolean;
+  "conversation.memory"?: boolean;
+  "datasource.fieldMasking"?: boolean;
+  "datasource.extendedTypes"?: boolean;
+  "datasource.introspectionPolicy"?: boolean;
   "datasource.queryPolicy"?: boolean;
+  "datasource.samplePolicy"?: boolean;
   "datasource.server"?: boolean;
+  "kb.chunking"?: boolean;
+  "kb.citationPolicy"?: boolean;
+  "kb.scope"?: boolean;
+  "llm.advancedSampling"?: boolean;
+  "mcp.stdio"?: boolean;
+  "mcp.toolPolicy"?: boolean;
+  "skill.resourceBinding"?: boolean;
   "llm.samplingParams"?: boolean;
   knowledge?: boolean;
   mcp?: boolean;
@@ -63,6 +75,23 @@ export type DatasourceDto = {
   updatedAt?: string;
 };
 
+export type DatasourceTypeParamDto = {
+  name: string;
+  label: string;
+  type: "string" | "password" | "select" | "number" | "boolean" | "file";
+  required: boolean;
+  default_value?: string | number | boolean;
+  options?: string[];
+};
+
+export type DatasourceTypeDto = {
+  name: string;
+  label: string;
+  enabled: boolean;
+  description?: string;
+  parameters: DatasourceTypeParamDto[];
+};
+
 export type KnowledgeBaseDto = {
   id: string;
   name: string;
@@ -72,6 +101,14 @@ export type KnowledgeBaseDto = {
   embeddingProvider?: string;
   embeddingModel?: string;
   embeddingBaseUrl?: string;
+  citationRequired?: boolean;
+  chunkOverlap?: number;
+  chunkSize?: number;
+  graphRagEnabled?: boolean;
+  rerankEnabled?: boolean;
+  rerankModel?: string;
+  scope?: string;
+  vectorStore?: string;
   secretRef?: string | null;
   hasSecret?: boolean;
   defaultEnabled?: boolean;
@@ -90,6 +127,8 @@ export type McpServerDto = {
   serverUrl?: string;
   authType?: string;
   toolManifest?: unknown[];
+  toolAllowlist?: string[] | string;
+  timeoutMs?: number;
   secretRef?: string | null;
   hasSecret?: boolean;
   defaultEnabled?: boolean;
@@ -108,8 +147,13 @@ export type ModelProfileDto = {
   modelName?: string;
   baseUrl?: string;
   fallbackProfileId?: string;
-  temperature?: number;
+  frequencyPenalty?: number;
   maxTokens?: number;
+  presencePenalty?: number;
+  contextLength?: number;
+  reasoningModel?: boolean;
+  temperature?: number;
+  topP?: number;
   timeoutMs?: number;
   secretRef?: string | null;
   hasSecret?: boolean;
@@ -158,6 +202,53 @@ export type RunDefaultsDto = {
   activeDatasourceId: string;
   activeLlmProfileId: string | null;
   activeSkillId: string;
+};
+
+export type ConversationMessageDto = {
+  id: string;
+  runId: string;
+  role: "assistant" | "user";
+  source: "agent" | "client";
+  messageId?: string;
+  contentText: string;
+  position: number;
+  createdAt: string;
+};
+
+export type ConversationSummaryDto = {
+  id: string;
+  sourceRunId?: string;
+  fromPosition: number;
+  toPosition: number;
+  summaryText: string;
+  createdAt: string;
+};
+
+export type ConversationRunEventRefDto = {
+  runId: string;
+  eventCount: number;
+  firstSeq?: number;
+  lastSeq?: number;
+};
+
+export type ConversationToolCallDto = {
+  runId: string;
+  toolCallId: string;
+  status: "completed" | "failed" | "pending";
+  toolName?: string;
+  callEventSeq?: number;
+  endEventSeq?: number;
+  resultEventSeq?: number;
+  resultMessageId?: string;
+  resultPreview?: string;
+};
+
+export type SessionConversationDto = {
+  sessionId: string;
+  messages: ConversationMessageDto[];
+  summary?: ConversationSummaryDto;
+  runEventRefs: ConversationRunEventRefDto[];
+  toolCalls: ConversationToolCallDto[];
 };
 
 export type JobDto = {

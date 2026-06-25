@@ -24,9 +24,20 @@ export type DocumentRecord = {
 
 export type RetrieveKnowledgeInput = {
   user_id: string;
+  workspace_id?: string;
   collection_id: string;
   query: string;
   top_k?: number;
+};
+
+type KnowledgeRetrievalPolicy = {
+  scoreThreshold?: number;
+  topK: number;
+};
+
+type KnowledgeChunkPolicy = {
+  chunkOverlap: number;
+  chunkSize: number;
 };
 
 export type RetrievedChunk = Citation & {
@@ -60,6 +71,7 @@ export class LocalKnowledgeService implements KnowledgeService {
   /** Store one text document as bounded searchable chunks. */
   async ingestText(input: {
     user_id: string;
+    workspace_id?: string;
     collection_id: string;
     filename: string;
     content: string;
@@ -88,7 +100,11 @@ export class LocalKnowledgeService implements KnowledgeService {
         UPDATE knowledge_documents SET file_asset_ref_id = ? WHERE user_id = ? AND id = ?
       `).run(input.file_asset_ref_id, input.user_id, documentId);
     }
-    const chunks = splitText(input.content);
+    const chunks = splitText(input.content, this.resolveChunkPolicy(
+      input.user_id,
+      input.collection_id,
+      input.workspace_id ?? "default"
+    ));
     chunks.forEach((content, index) => {
       this.metadataStore.db.prepare(`
         INSERT INTO knowledge_chunks (
@@ -96,7 +112,7 @@ export class LocalKnowledgeService implements KnowledgeService {
         ) VALUES (?, ?, ?, ?, ?, ?, ?)
       `).run(randomUUID(), input.user_id, input.collection_id, documentId, input.filename, index, content);
     });
-    const embedding = this.resolveEmbeddingConfig(input.user_id, input.collection_id);
+    const embedding = this.resolveEmbeddingConfig(input.user_id, input.collection_id, input.workspace_id ?? "default");
     try {
       if (embedding?.api_key) {
         await this.indexDocumentChunks({
@@ -125,16 +141,24 @@ export class LocalKnowledgeService implements KnowledgeService {
 
   /** Retrieve the most relevant local full-text chunks with citations. */
   async retrieve(input: RetrieveKnowledgeInput): Promise<RetrievedChunk[]> {
-    const embedding = this.resolveEmbeddingConfig(input.user_id, input.collection_id);
-    if (embedding?.api_key && this.hasVectorIndex(input.user_id, input.collection_id)) {
-      return this.retrieveByVector(input, embedding);
-    }
-    return this.retrieveByFullText(input);
+    const embedding = this.resolveEmbeddingConfig(input.user_id, input.collection_id, input.workspace_id ?? "default");
+    const policy = this.resolveRetrievalPolicy(input);
+    const chunks = embedding?.api_key && this.hasVectorIndex(input.user_id, input.collection_id)
+      ? await this.retrieveByVector(input, embedding, policy)
+      : this.retrieveByFullText(input, policy);
+    const scoreThreshold = policy.scoreThreshold;
+    return scoreThreshold === undefined
+      ? chunks
+      : chunks.filter((chunk) => typeof chunk.score === "number" && chunk.score >= scoreThreshold);
   }
 
   /** Rebuild vector entries for every current document in one collection. */
-  async reindex(input: { user_id: string; collection_id: string }): Promise<{ chunks: number; mode: string }> {
-    const embedding = this.resolveEmbeddingConfig(input.user_id, input.collection_id);
+  async reindex(input: {
+    user_id: string;
+    workspace_id?: string;
+    collection_id: string;
+  }): Promise<{ chunks: number; mode: string }> {
+    const embedding = this.resolveEmbeddingConfig(input.user_id, input.collection_id, input.workspace_id ?? "default");
     this.metadataStore.db.prepare(
       "DELETE FROM knowledge_embeddings WHERE user_id = ? AND collection_id = ?"
     ).run(input.user_id, input.collection_id);
@@ -149,19 +173,18 @@ export class LocalKnowledgeService implements KnowledgeService {
     return { chunks: rows.length, mode: "vector" };
   }
 
-  private retrieveByFullText(input: RetrieveKnowledgeInput): RetrievedChunk[] {
+  private retrieveByFullText(input: RetrieveKnowledgeInput, policy: KnowledgeRetrievalPolicy): RetrievedChunk[] {
     const terms = tokenizeQuery(input.query);
     if (!terms) {
       return [];
     }
-    const topK = Math.max(1, Math.min(input.top_k ?? 5, 20));
     const rows = this.metadataStore.db.prepare(`
       SELECT id, document_id, filename, content, bm25(knowledge_chunks) AS rank
       FROM knowledge_chunks
       WHERE knowledge_chunks MATCH ? AND user_id = ? AND collection_id = ?
       ORDER BY rank ASC
       LIMIT ?
-    `).all(terms, input.user_id, input.collection_id, topK);
+    `).all(terms, input.user_id, input.collection_id, policy.topK);
     return rows.filter(isRecord).map((row) => ({
       document_id: requiredString(row, "document_id"),
       chunk_id: requiredString(row, "id"),
@@ -174,13 +197,13 @@ export class LocalKnowledgeService implements KnowledgeService {
 
   private async retrieveByVector(
     input: RetrieveKnowledgeInput,
-    embedding: EmbeddingConfig
+    embedding: EmbeddingConfig,
+    policy: KnowledgeRetrievalPolicy
   ): Promise<RetrievedChunk[]> {
     const [queryVector] = await requestEmbeddings([input.query], embedding);
     if (!queryVector) {
       return [];
     }
-    const topK = Math.max(1, Math.min(input.top_k ?? 5, 20));
     const rows = this.metadataStore.db.prepare(`
       SELECT chunk_id, document_id, filename, content, vector_json FROM knowledge_embeddings
       WHERE user_id = ? AND collection_id = ?
@@ -192,7 +215,7 @@ export class LocalKnowledgeService implements KnowledgeService {
       quote: requiredString(row, "content").slice(0, 500),
       content: requiredString(row, "content"),
       score: cosineSimilarity(queryVector, parseVector(row.vector_json))
-    })).sort((left, right) => right.score - left.score).slice(0, topK);
+    })).sort((left, right) => right.score - left.score).slice(0, policy.topK);
   }
 
   private hasVectorIndex(userId: string, collectionId: string): boolean {
@@ -202,16 +225,16 @@ export class LocalKnowledgeService implements KnowledgeService {
     return isRecord(row);
   }
 
-  private resolveEmbeddingConfig(userId: string, collectionId: string): EmbeddingConfig | undefined {
+  private resolveEmbeddingConfig(userId: string, collectionId: string, workspaceId: string): EmbeddingConfig | undefined {
     const resource = this.metadataStore.configResources.find({
       id: collectionId,
-      workspace_id: "default",
+      workspace_id: workspaceId,
       user_id: userId,
       kind: "knowledge-base"
     });
     const payload = resource?.payload ?? {};
     const secret = resource?.secret_ref
-      ? this.metadataStore.secrets.get({ ref: resource.secret_ref, workspace_id: "default", user_id: userId })
+      ? this.metadataStore.secrets.get({ ref: resource.secret_ref, workspace_id: workspaceId, user_id: userId })
       : {};
     const fallback = this.options.embedding;
     const apiKey = optionalString(secret.apiKey) ?? optionalString(secret.api_key) ?? fallback?.api_key;
@@ -222,6 +245,38 @@ export class LocalKnowledgeService implements KnowledgeService {
       return undefined;
     }
     return { ...(apiKey ? { api_key: apiKey } : {}), base_url: baseUrl, model, provider };
+  }
+
+  private resolveRetrievalPolicy(input: RetrieveKnowledgeInput): KnowledgeRetrievalPolicy {
+    const resource = this.metadataStore.configResources.find({
+      id: input.collection_id,
+      workspace_id: input.workspace_id ?? "default",
+      user_id: input.user_id,
+      kind: "knowledge-base"
+    });
+    const payload = resource?.payload ?? {};
+    const configuredTopK = optionalNumber(payload.retrievalTopK) ?? optionalNumber(payload.retrieval_top_k);
+    const scoreThreshold = optionalNumber(payload.scoreThreshold) ?? optionalNumber(payload.score_threshold);
+    return {
+      ...(scoreThreshold !== undefined ? { scoreThreshold: Math.max(0, Math.min(1, scoreThreshold)) } : {}),
+      topK: Math.max(1, Math.min(input.top_k ?? configuredTopK ?? 5, 20))
+    };
+  }
+
+  private resolveChunkPolicy(userId: string, collectionId: string, workspaceId: string): KnowledgeChunkPolicy {
+    const resource = this.metadataStore.configResources.find({
+      id: collectionId,
+      workspace_id: workspaceId,
+      user_id: userId,
+      kind: "knowledge-base"
+    });
+    const payload = resource?.payload ?? {};
+    const chunkSize = optionalNumber(payload.chunkSize) ?? optionalNumber(payload.chunk_size);
+    const chunkOverlap = optionalNumber(payload.chunkOverlap) ?? optionalNumber(payload.chunk_overlap);
+    return {
+      chunkOverlap: Math.max(0, Math.min(chunkOverlap ?? 200, 1000)),
+      chunkSize: Math.max(200, Math.min(chunkSize ?? 1600, 8000))
+    };
   }
 
   private async indexDocumentChunks(input: {
@@ -351,12 +406,14 @@ export class LocalKnowledgeService implements KnowledgeService {
   }
 }
 
-const splitText = (content: string): string[] => {
+const splitText = (content: string, policy: KnowledgeChunkPolicy): string[] => {
+  const chunkSize = Math.max(200, Math.floor(policy.chunkSize));
+  const overlap = Math.min(Math.max(0, Math.floor(policy.chunkOverlap)), Math.max(0, chunkSize - 1));
   const paragraphs = content.split(/\n\s*\n/gu).map((value) => value.trim()).filter(Boolean);
   const chunks: string[] = [];
   let current = "";
   paragraphs.forEach((paragraph) => {
-    if (current && current.length + paragraph.length + 2 > 1600) {
+    if (current && current.length + paragraph.length + 2 > chunkSize) {
       chunks.push(current);
       current = "";
     }
@@ -365,9 +422,19 @@ const splitText = (content: string): string[] => {
   if (current) {
     chunks.push(current);
   }
-  return chunks.flatMap((chunk) => chunk.length <= 2000
-    ? [chunk]
-    : Array.from({ length: Math.ceil(chunk.length / 1800) }, (_, index) => chunk.slice(index * 1800, (index + 1) * 1800)));
+  return chunks.flatMap((chunk) => splitLongChunk(chunk, chunkSize, overlap));
+};
+
+const splitLongChunk = (chunk: string, chunkSize: number, overlap: number): string[] => {
+  if (chunk.length <= chunkSize) {
+    return [chunk];
+  }
+  const result: string[] = [];
+  const step = Math.max(1, chunkSize - overlap);
+  for (let start = 0; start < chunk.length; start += step) {
+    result.push(chunk.slice(start, start + chunkSize));
+  }
+  return result;
 };
 
 const tokenizeQuery = (query: string): string => query
@@ -392,6 +459,8 @@ const mapDocument = (row: Record<string, unknown>): DocumentRecord => {
 };
 
 const rankToScore = (value: unknown): number => typeof value === "number" ? 1 / (1 + Math.abs(value)) : 0;
+const optionalNumber = (value: unknown): number | undefined =>
+  typeof value === "number" && Number.isFinite(value) ? value : undefined;
 const optionalString = (value: unknown): string | undefined =>
   typeof value === "string" && value.trim() ? value.trim() : undefined;
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null;

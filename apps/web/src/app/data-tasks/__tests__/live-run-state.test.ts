@@ -76,6 +76,30 @@ describe("live run state reducer", () => {
     });
   });
 
+  it("parses slim artifact references without inline preview data", () => {
+    let run = createInitialLiveRun();
+    run = reduceLiveRunEvent(run, {
+      type: "CUSTOM",
+      name: "artifact",
+      value: {
+        id: "artifact-slim-1",
+        type: "table",
+        name: "SQL result audit-1",
+        title: "SQL result audit-1",
+        summary: "数据集，100 行",
+        preview_available: true,
+      },
+    });
+
+    expect(run.artifacts[0]).toMatchObject({
+      id: "artifact-slim-1",
+      title: "SQL result audit-1",
+      type: "dataset",
+      summary: "数据集，100 行",
+    });
+    expect(run.artifacts[0]?.detail).toBeUndefined();
+  });
+
   it("parses table preview_json and links artifact to sql tool call", () => {
     let run = createInitialLiveRun();
     run = reduceLiveRunEvent(run, { type: "RUN_STARTED" });

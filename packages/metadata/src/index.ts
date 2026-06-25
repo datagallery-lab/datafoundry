@@ -608,7 +608,7 @@ export class DataSourceRepository {
           id, user_id, name, type, config_json, credential_ref, description, status, revision, created_at, updated_at
         )
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(id) DO UPDATE SET
+        ON CONFLICT(user_id, id) DO UPDATE SET
           name = excluded.name,
           type = excluded.type,
           config_json = excluded.config_json,
@@ -617,7 +617,6 @@ export class DataSourceRepository {
           status = excluded.status,
           revision = excluded.revision,
           updated_at = excluded.updated_at
-        WHERE data_sources.user_id = excluded.user_id
       `
       )
       .run(
@@ -748,6 +747,25 @@ export class RunRepository {
     return mapRunRow(
       this.db.prepare("SELECT * FROM runs WHERE user_id = ? AND id = ?").get(input.user_id, input.run_id)
     );
+  }
+
+  findActiveBySession(input: { exclude_run_id?: string; session_id: string; user_id: string }): Optional<RunRecord> {
+    const params: Array<string> = [input.user_id, input.session_id];
+    let sql = `
+      SELECT *
+      FROM runs
+      WHERE user_id = ?
+        AND session_id = ?
+        AND status IN ('queued', 'running')
+    `;
+
+    if (input.exclude_run_id) {
+      sql += " AND id <> ?";
+      params.push(input.exclude_run_id);
+    }
+
+    sql += " ORDER BY started_at DESC LIMIT 1";
+    return mapRunRow(this.db.prepare(sql).get(...params));
   }
 
   get(input: { user_id: string; run_id: string }): RunRecord {
@@ -1542,7 +1560,7 @@ const runMigrations = (db: DatabaseSync): void => {
     CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
 
     CREATE TABLE IF NOT EXISTS data_sources (
-      id TEXT PRIMARY KEY,
+      id TEXT NOT NULL,
       user_id TEXT NOT NULL,
       name TEXT NOT NULL,
       type TEXT NOT NULL,
@@ -1554,6 +1572,7 @@ const runMigrations = (db: DatabaseSync): void => {
       revision INTEGER NOT NULL DEFAULT 1,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
+      PRIMARY KEY (user_id, id),
       FOREIGN KEY (user_id) REFERENCES users(id)
     );
     CREATE INDEX IF NOT EXISTS idx_data_sources_user ON data_sources(user_id);
@@ -1733,7 +1752,7 @@ const runMigrations = (db: DatabaseSync): void => {
       created_at TEXT NOT NULL,
       FOREIGN KEY (user_id) REFERENCES users(id),
       FOREIGN KEY (user_id, run_id) REFERENCES runs(user_id, id),
-      FOREIGN KEY (datasource_id) REFERENCES data_sources(id)
+      FOREIGN KEY (user_id, datasource_id) REFERENCES data_sources(user_id, id)
     );
     CREATE INDEX IF NOT EXISTS idx_sql_audit_logs_user_run ON sql_audit_logs(user_id, run_id);
     CREATE INDEX IF NOT EXISTS idx_sql_audit_logs_user_datasource ON sql_audit_logs(user_id, datasource_id);
@@ -1765,6 +1784,9 @@ const runMigrations = (db: DatabaseSync): void => {
   if (requiresUserScopedIdentityMigration(db)) {
     migrateUserScopedIdentity(db);
   }
+  if (requiresUserScopedDataSourcesMigration(db)) {
+    migrateUserScopedDataSources(db);
+  }
 
   createMetadataIndexes(db);
   initializeConfigSchema(db);
@@ -1773,6 +1795,17 @@ const runMigrations = (db: DatabaseSync): void => {
 const requiresUserScopedIdentityMigration = (db: DatabaseSync): boolean => {
   const primaryKeyColumns = db
     .prepare("PRAGMA table_info(sessions)")
+    .all()
+    .filter((row) => isRecord(row) && typeof row.pk === "number" && row.pk > 0)
+    .sort((left, right) => Number((left as Record<string, unknown>).pk) - Number((right as Record<string, unknown>).pk))
+    .map((row) => (row as Record<string, unknown>).name);
+
+  return primaryKeyColumns.join(",") !== "user_id,id";
+};
+
+const requiresUserScopedDataSourcesMigration = (db: DatabaseSync): boolean => {
+  const primaryKeyColumns = db
+    .prepare("PRAGMA table_info(data_sources)")
     .all()
     .filter((row) => isRecord(row) && typeof row.pk === "number" && row.pk > 0)
     .sort((left, right) => Number((left as Record<string, unknown>).pk) - Number((right as Record<string, unknown>).pk))
@@ -1935,6 +1968,83 @@ const migrateUserScopedIdentity = (db: DatabaseSync): void => {
 
   if (violations.length > 0) {
     throw new Error(`Metadata identity migration produced ${violations.length} foreign key violation(s)`);
+  }
+};
+
+const migrateUserScopedDataSources = (db: DatabaseSync): void => {
+  db.exec("PRAGMA foreign_keys = OFF");
+
+  try {
+    db.exec(`
+      BEGIN IMMEDIATE;
+
+      CREATE TABLE data_sources_user_scoped (
+        id TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        name TEXT NOT NULL,
+        type TEXT NOT NULL,
+        config_json TEXT NOT NULL,
+        credential_ref TEXT,
+        description TEXT,
+        status TEXT NOT NULL,
+        last_test_at TEXT,
+        revision INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (user_id, id),
+        FOREIGN KEY (user_id) REFERENCES users(id)
+      );
+
+      CREATE TABLE sql_audit_logs_datasource_scoped (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        run_id TEXT,
+        datasource_id TEXT NOT NULL,
+        sql_text TEXT NOT NULL,
+        status TEXT NOT NULL,
+        blocked_reason TEXT,
+        row_count INTEGER,
+        elapsed_ms INTEGER,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (user_id) REFERENCES users(id),
+        FOREIGN KEY (user_id, run_id) REFERENCES runs(user_id, id),
+        FOREIGN KEY (user_id, datasource_id) REFERENCES data_sources_user_scoped(user_id, id)
+      );
+
+      INSERT INTO data_sources_user_scoped (
+        id, user_id, name, type, config_json, credential_ref, description, status,
+        last_test_at, revision, created_at, updated_at
+      )
+      SELECT
+        id, user_id, name, type, config_json, credential_ref, description, status,
+        last_test_at, revision, created_at, updated_at
+      FROM data_sources;
+
+      INSERT INTO sql_audit_logs_datasource_scoped SELECT * FROM sql_audit_logs;
+
+      DROP TABLE sql_audit_logs;
+      DROP TABLE data_sources;
+
+      ALTER TABLE data_sources_user_scoped RENAME TO data_sources;
+      ALTER TABLE sql_audit_logs_datasource_scoped RENAME TO sql_audit_logs;
+
+      COMMIT;
+    `);
+  } catch (error) {
+    try {
+      db.exec("ROLLBACK");
+    } catch {
+      // The migration may have failed before opening the transaction.
+    }
+    throw error;
+  } finally {
+    db.exec("PRAGMA foreign_keys = ON");
+  }
+
+  const violations = db.prepare("PRAGMA foreign_key_check").all();
+
+  if (violations.length > 0) {
+    throw new Error(`Metadata datasource migration produced ${violations.length} foreign key violation(s)`);
   }
 };
 

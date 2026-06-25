@@ -3,11 +3,13 @@ import type {
   ArtifactDto,
   BackendCapabilitiesResponse,
   DatasourceDto,
+  DatasourceTypeDto,
   JobDto,
   KnowledgeBaseDto,
   McpServerDto,
   ModelProfileDto,
   RunDefaultsDto,
+  SessionConversationDto,
   SkillDto,
   WorkspaceConfigDto,
 } from "./types";
@@ -100,8 +102,23 @@ export const configApi = {
     return requestEnvelope<RunDefaultsDto>("/api/v1/run-defaults");
   },
 
+  getSessionConversation(sessionId: string, limit?: number): Promise<SessionConversationDto> {
+    const params = new URLSearchParams();
+    if (limit !== undefined) {
+      params.set("limit", String(limit));
+    }
+    const query = params.toString();
+    return requestEnvelope<SessionConversationDto>(
+      `/api/v1/sessions/${encodeURIComponent(sessionId)}/conversation${query ? `?${query}` : ""}`,
+    );
+  },
+
   listDatasources(): Promise<DatasourceDto[]> {
     return requestEnvelope<DatasourceDto[]>("/api/v1/datasources");
+  },
+
+  listDatasourceTypes(): Promise<DatasourceTypeDto[]> {
+    return requestEnvelope<DatasourceTypeDto[]>("/api/v1/datasource-types");
   },
 
   createDatasource(body: Record<string, unknown>): Promise<DatasourceDto> {

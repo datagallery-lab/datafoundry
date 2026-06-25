@@ -1,10 +1,16 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   datasourceDtoToItem,
   itemToCreateBody,
   itemToPatchBody,
   workspaceConfigDtoToStore,
 } from "../../../lib/config-api/adapter";
+import { configApi } from "../../../lib/config-api/client";
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+  delete process.env.NEXT_PUBLIC_CONFIG_API_URL;
+});
 
 describe("config api adapter", () => {
   it("maps datasource dto into workspace item settings", () => {
@@ -45,6 +51,7 @@ describe("config api adapter", () => {
         database: "sales",
         username: "readonly",
         password: "secret",
+        secure: "true",
       },
     });
 
@@ -52,6 +59,7 @@ describe("config api adapter", () => {
     expect(body.config).toMatchObject({
       host: "127.0.0.1",
       database: "sales",
+      secure: true,
     });
     expect(JSON.stringify(body.config)).not.toContain("secret");
   });
@@ -69,6 +77,25 @@ describe("config api adapter", () => {
     expect(body.revision).toBe(4);
   });
 
+  it("builds llm advanced sampling body", () => {
+    const body = itemToCreateBody("llm", {
+      id: "qwen-long",
+      name: "Qwen Long",
+      description: "",
+      enabled: true,
+      settings: {
+        provider: "openai-compatible",
+        modelName: "qwen-long",
+        baseUrl: "https://example.com/v1",
+        contextLength: "128000",
+        reasoningModel: "true",
+      },
+    });
+
+    expect(body.contextLength).toBe(128000);
+    expect(body.reasoningModel).toBe(true);
+  });
+
   it("maps workspace config dto to store buckets", () => {
     const store = workspaceConfigDtoToStore({
       datasources: [],
@@ -76,8 +103,12 @@ describe("config api adapter", () => {
         {
           id: "metrics-docs",
           name: "Metrics",
+          chunkOverlap: 64,
+          chunkSize: 1200,
+          citationRequired: false,
           retrievalTopK: 8,
           scoreThreshold: 0.2,
+          scope: "project",
           defaultEnabled: true,
           indexStatus: "ready",
         },
@@ -89,6 +120,10 @@ describe("config api adapter", () => {
 
     expect(store.kb).toHaveLength(1);
     expect(store.kb[0]?.settings?.retrievalTopK).toBe("8");
+    expect(store.kb[0]?.settings?.chunkSize).toBe("1200");
+    expect(store.kb[0]?.settings?.chunkOverlap).toBe("64");
+    expect(store.kb[0]?.settings?.citationRequired).toBe("false");
+    expect(store.kb[0]?.settings?.scope).toBe("project");
   });
 
   it("builds kb create body with embedding fields", () => {
@@ -101,6 +136,10 @@ describe("config api adapter", () => {
         indexName: "metrics-docs",
         retrievalTopK: "8",
         scoreThreshold: "0.2",
+        chunkSize: "1200",
+        chunkOverlap: "64",
+        citationRequired: "true",
+        scope: "workspace",
         embeddingProvider: "bailian",
         embeddingModel: "text-embedding-v4",
         embeddingBaseUrl: "https://example.com/v1",
@@ -110,6 +149,10 @@ describe("config api adapter", () => {
 
     expect(body.embeddingProvider).toBe("bailian");
     expect(body.embeddingModel).toBe("text-embedding-v4");
+    expect(body.chunkSize).toBe(1200);
+    expect(body.chunkOverlap).toBe(64);
+    expect(body.citationRequired).toBe(true);
+    expect(body.scope).toBe("workspace");
     expect(body.credentials).toEqual({ apiKey: "emb-secret" });
   });
 
@@ -124,10 +167,68 @@ describe("config api adapter", () => {
         serverUrl: "https://example.com/mcp/sse",
         authType: "bearer",
         apiKey: "token-value",
+        toolAllowlist: "search, fetch_page",
+        timeoutMs: "45000",
       },
     });
 
     expect(body.authType).toBe("bearer");
+    expect(body.toolAllowlist).toEqual(["search", "fetch_page"]);
+    expect(body.timeoutMs).toBe(45000);
     expect(body.credentials).toEqual({ token: "token-value" });
+  });
+
+  it("builds skill resource binding bodies", () => {
+    const item = {
+      id: "sales-skill",
+      name: "Sales Skill",
+      description: "",
+      enabled: true,
+      revision: 3,
+      settings: {
+        defaultDbIds: "sales-pg, finance-pg",
+        defaultKbIds: "sales-docs",
+        defaultMcpIds: "notion",
+        modelProfileId: "qwen-plus",
+      },
+    };
+
+    expect(itemToCreateBody("skill", item)).toMatchObject({
+      defaultDbIds: ["sales-pg", "finance-pg"],
+      defaultKbIds: ["sales-docs"],
+      defaultMcpIds: ["notion"],
+      modelProfileId: "qwen-plus",
+    });
+    expect(itemToPatchBody("skill", item)).toMatchObject({
+      defaultDbIds: ["sales-pg", "finance-pg"],
+      defaultKbIds: ["sales-docs"],
+      defaultMcpIds: ["notion"],
+      modelProfileId: "qwen-plus",
+      revision: 3,
+    });
+  });
+
+  it("loads server authoritative session conversation through the config client", async () => {
+    process.env.NEXT_PUBLIC_CONFIG_API_URL = "http://config.test";
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
+      success: true,
+      data: {
+        sessionId: "thread-1",
+        messages: [{ id: "run-1:user", runId: "run-1", role: "user", source: "client", contentText: "hi", position: 1, createdAt: "now" }],
+        runEventRefs: [{ runId: "run-1", eventCount: 3 }],
+        toolCalls: [{ runId: "run-1", toolCallId: "call-1", status: "completed", toolName: "inspect_schema" }],
+      },
+    }), { headers: { "Content-Type": "application/json" }, status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const conversation = await configApi.getSessionConversation("thread-1", 25);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://config.test/api/v1/sessions/thread-1/conversation?limit=25",
+      expect.objectContaining({ headers: expect.objectContaining({ Accept: "application/json" }) }),
+    );
+    expect(conversation.sessionId).toBe("thread-1");
+    expect(conversation.messages[0]?.contentText).toBe("hi");
+    expect(conversation.toolCalls[0]?.toolName).toBe("inspect_schema");
   });
 });

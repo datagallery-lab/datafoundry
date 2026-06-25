@@ -6,6 +6,7 @@ import { createRunWorkspace } from "../packages/agent-runtime/dist/tools/workspa
 
 const runContext = {
   user_id: "workspace-smoke-user",
+  workspace_id: "workspace-smoke-workspace",
   session_id: "workspace-smoke-session",
   run_id: "workspace-smoke-run-001",
   selected_datasource_id: "smoke-source",
@@ -83,9 +84,57 @@ try {
     console.log("execute_command disabled by environment; skipping sandbox execution assertions");
   }
 
+  await runWorkspace.workspace.destroy();
+  assert(runWorkspace.workspace.status === "destroyed", "workspace should reach destroyed status after destroy");
+
+  const nextRunWorkspace = createRunWorkspace({
+    runContext: {
+      ...runContext,
+      run_id: "workspace-smoke-run-002"
+    },
+    workspaceRoot
+  });
+  assert(nextRunWorkspace.runDir === runDir, "same user/session should reuse the session workspace directory");
+  await nextRunWorkspace.workspace.init();
+  const nextTools = await createWorkspaceTools(nextRunWorkspace.workspace, {
+    requestContext: {},
+    workspace: nextRunWorkspace.workspace
+  });
+  const nextRead = await nextTools.read_file.execute({ path: "greeting.txt" }, {
+    ...execCtx,
+    context: { requestContext: new Map() }
+  });
+  assert(
+    String(nextRead).includes("hello-from-sandbox"),
+    "same-session later runs should read files written by earlier runs"
+  );
+  await nextRunWorkspace.workspace.destroy();
+
+  const isolatedWorkspace = createRunWorkspace({
+    runContext: {
+      ...runContext,
+      session_id: "workspace-smoke-other-session",
+      run_id: "workspace-smoke-run-003"
+    },
+    workspaceRoot
+  });
+  assert(isolatedWorkspace.runDir !== runDir, "different sessions should not share a workspace directory");
+  await isolatedWorkspace.workspace.destroy().catch(() => undefined);
+
+  const otherTenantWorkspace = createRunWorkspace({
+    runContext: {
+      ...runContext,
+      workspace_id: "workspace-smoke-other-workspace",
+      run_id: "workspace-smoke-run-004"
+    },
+    workspaceRoot
+  });
+  assert(otherTenantWorkspace.runDir !== runDir, "different workspace ids should not share a workspace directory");
+  await otherTenantWorkspace.workspace.destroy().catch(() => undefined);
+
   let escaped = false;
   try {
-    await createRunWorkspace({
+    createRunWorkspace({
       runContext: {
         ...runContext,
         user_id: "../escape-attempt"
@@ -100,9 +149,6 @@ try {
     );
   }
   assert(!escaped, "workspace factory must not accept path-traversing run identifiers");
-
-  await runWorkspace.workspace.destroy();
-  assert(runWorkspace.workspace.status === "destroyed", "workspace should reach destroyed status after destroy");
 
   console.log(
     `Workspace tools smoke OK: tools=${expectedTools.length}, isolation=${runWorkspace.isolation}, `

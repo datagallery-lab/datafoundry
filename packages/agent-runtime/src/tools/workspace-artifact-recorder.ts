@@ -3,7 +3,7 @@ import type { CreateArtifactInput } from "@open-data-agent/artifacts";
 import fs from "node:fs";
 import path from "node:path";
 
-import { createCustomEvent } from "../events.js";
+import { createArtifactEvent } from "../events.js";
 import type { AgentRunContext, AgUiEventEmitter } from "../types.js";
 
 type ExecutableTool = {
@@ -147,7 +147,7 @@ const recordFileArtifact = async (input: {
     preview_json,
   });
 
-  input.emitter.emit(createCustomEvent("artifact", artifact));
+  input.emitter.emit(createArtifactEvent(artifact));
 };
 
 const snapshotDirectory = async (

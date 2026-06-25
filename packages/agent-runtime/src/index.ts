@@ -34,6 +34,10 @@ import { createToolObservationBoundary } from "./context/tool-observation/tool-o
 import {
   createMastraContextProcessorBoundary
 } from "./context/protocol/mastra/mastra-context-processor-boundary.js";
+import {
+  ModelContextProfileRegistry,
+  type ModelContextProfile
+} from "./context/policy/model-context-profile.js";
 import { ToolObservationDispatcher } from "./context/tool-observation/tool-observation-dispatcher.js";
 import { createAgUiContextEventSink } from "./context/protocol/ag-ui/ag-ui-context-event-sink.js";
 import {
@@ -46,12 +50,12 @@ import {
 import { GoalRuntimeAdapter, type GoalRequest } from "./memory/goal-runtime-adapter.js";
 import { createDataAgentToolRegistry } from "./tools/data-tools.js";
 import { GovernedToolFactory } from "./tools/governed-tool-factory.js";
-import { createRunWorkspace, resolveRunWorkspaceDir } from "./tools/workspace-factory.js";
+import { createRunWorkspace, resolveSessionWorkspaceDir } from "./tools/workspace-factory.js";
 import { wrapWorkspaceToolsWithArtifactRecording } from "./tools/workspace-artifact-recorder.js";
 import { createMastraStreamNormalizerHooks } from "./stream/mastra-stream-hooks.js";
 import { wrapAgentForAgUi } from "./stream/mastra-stream-normalizer.js";
 import type { AgentRunContext, AgentRunContextInput, AgUiEventEmitter } from "./types.js";
-import { createCustomEvent } from "./events.js";
+import { createArtifactEvent, createCustomEvent } from "./events.js";
 import { createTool } from "@mastra/core/tools";
 import { z } from "zod";
 
@@ -104,9 +108,15 @@ export {
   type MastraStreamNormalizerHooks
 } from "./stream/mastra-stream-normalizer.js";
 export { createMastraStreamNormalizerHooks } from "./stream/mastra-stream-hooks.js";
+export {
+  resolveRunWorkspaceDir,
+  resolveSessionWorkspaceDir,
+  resolveWorkspaceRoot
+} from "./tools/workspace-factory.js";
 export { projectWorkspaceObservation } from "./context/tool-observation/adapters/workspace-tool-observation-adapters.js";
 export { createDataAgentToolRegistry, type ToolRegistry } from "./tools/data-tools.js";
 export { GoalRuntimeAdapter, type GoalRequest, type GoalSnapshot } from "./memory/goal-runtime-adapter.js";
+export { type ModelContextProfile } from "./context/policy/model-context-profile.js";
 export {
   CONVERSATION_WORKING_MEMORY_CONFIG,
   CONVERSATION_WORKING_MEMORY_TEMPLATE,
@@ -147,14 +157,18 @@ export type CreateDataAgentInput = {
   };
   messages: Message[];
   modelSettings?: {
+    frequencyPenalty?: number;
     maxOutputTokens?: number;
+    presencePenalty?: number;
     temperature?: number;
+    topP?: number;
   };
+  modelContextProfile?: ModelContextProfile;
   workspaceAttachments?: WorkspaceAttachment[];
   goal?: GoalRequest;
   /**
    * 工作区根目录（调用方注入）。未提供时回落到 WORKSPACE_ROOT，再回落到系统 temp。
-   * 每个 run 在该目录下按 {user_id}/{session_id}/{run_id} 建立隔离子目录。
+   * 每个 session 在该目录下按 {user_id}/{session_id} 建立隔离子目录，跨 run 保留文件。
    * 留空即按默认策略隔离，不影响 workspace 工具的可用性。
    */
   workspaceRoot?: string | undefined;
@@ -190,7 +204,7 @@ export const createDataAgent = async (
   });
   const contextRunState = toolObservationBoundary.contextRunState;
 
-  const runDir = resolveRunWorkspaceDir({
+  const runDir = resolveSessionWorkspaceDir({
     runContext: input.runContext,
     workspaceRoot: input.workspaceRoot
   });
@@ -200,10 +214,10 @@ export const createDataAgent = async (
         runDir,
         skills: input.selectedSkills,
         userId: input.runContext.user_id,
-        workspaceId: "default"
+        workspaceId: input.runContext.workspace_id ?? "default"
       })
     : [];
-  // 绑定到本次 run 的工作区：LocalFilesystem + LocalSandbox（macOS seatbelt / Linux bubblewrap 隔离）。
+  // 绑定到本次 session 的工作区：LocalFilesystem + LocalSandbox（macOS seatbelt / Linux bubblewrap 隔离）。
   // createDataAgent 每次 run 都调用，直接闭包捕获 runContext，不依赖下游 requestContext 注入。
   const runWorkspace = createRunWorkspace({
     runContext: input.runContext,
@@ -212,7 +226,7 @@ export const createDataAgent = async (
   });
   const workspaceAttachments = materializeWorkspaceAttachments(runWorkspace.runDir, input.workspaceAttachments ?? []);
 
-  const governedMessages = sanitizeIngressMessages(input.messages);
+  const governedMessages = normalizeIngressMessages(input.messages);
 
   const registry = createDataAgentToolRegistry({
     dataGateway: input.dataGateway,
@@ -232,6 +246,15 @@ export const createDataAgent = async (
   );
   const contextEventSink = createAgUiContextEventSink(input.emitter);
   const mastraContextProcessors = createMastraContextProcessorBoundary({
+    ...(input.modelContextProfile
+      ? {
+          contextCompilation: {
+            profileRegistry: new ModelContextProfileRegistry({
+              defaultProfile: input.modelContextProfile
+            })
+          }
+        }
+      : {}),
     dispatcher,
     eventSink: contextEventSink,
     ...(input.longTermMemory ? { longTermMemory: input.longTermMemory } : {}),
@@ -279,6 +302,7 @@ export const createDataAgent = async (
               collection_id: toolInput.collection_id,
               chunks: await input.knowledgeService?.retrieve({
                 user_id: input.runContext.user_id,
+                workspace_id: input.runContext.workspace_id ?? "default",
                 collection_id: toolInput.collection_id,
                 query: toolInput.query,
                 ...(toolInput.top_k ? { top_k: toolInput.top_k } : {})
@@ -469,8 +493,8 @@ const buildAgentInstructions = (input: AgentInstructionsInput): string => {
     ...(commandExecutionEnabled ? ["execute_command"] : [])
   ].filter(enabled);
   if (workspaceTools.length > 0) {
-    toolGroups.push(`Workspace tools (per-run isolated directory): ${workspaceTools.join(", ")}. `
-      + "Files you write stay within this run's directory. "
+    toolGroups.push(`Workspace tools (session-isolated directory): ${workspaceTools.join(", ")}. `
+      + "Files you write stay within this session's workspace and can be reused by later runs in the same session. "
       + (enabled("execute_command")
         ? "execute_command runs in a sandbox without network access. Use it only for local transforms, charts, "
           + "or exports; never use it to access external services."
@@ -541,7 +565,7 @@ const buildAgentInstructions = (input: AgentInstructionsInput): string => {
   if (commandExecutionEnabled) {
     policies.push(
       "Persist derived artifacts in the workspace. When analysis produces exports, charts, or transformed datasets, "
-        + "write them as files via write_file so they are retained with the run, rather than only echoing them in "
+        + "write them as files via write_file so they are retained with the session, rather than only echoing them in "
         + "the final message. Call publish_artifact for files that should be visible and downloadable by the user. "
         + "Call promote_workspace_file only for files that should be reused in later runs but are not final deliverables."
     );
@@ -649,13 +673,13 @@ const createArtifactTools = (input: {
         user_id: input.runContext.user_id,
         session_id: input.runContext.session_id,
         run_id: input.runContext.run_id,
-        workspace_id: "default",
+        workspace_id: input.runContext.workspace_id ?? "default",
         type: toolInput.type ?? "file",
         name,
         source_path: sourcePath,
         ...(toolInput.preview !== undefined ? { preview_json: toolInput.preview } : {})
       });
-      input.emitter.emit(createCustomEvent("artifact", artifact));
+      input.emitter.emit(createArtifactEvent(artifact));
       return artifact;
     }
   })
@@ -679,7 +703,7 @@ const createFileAssetTools = (input: {
       const filename = toolInput.filename ?? basename(sourcePath);
       const resolved = input.fileAssetService.createRefFromPath({
         user_id: input.runContext.user_id,
-        workspace_id: "default",
+        workspace_id: input.runContext.workspace_id ?? "default",
         session_id: input.runContext.session_id,
         run_id: input.runContext.run_id,
         filename,
@@ -726,5 +750,69 @@ const uniqueWorkspaceInputFilename = (filename: string, usedNames: Set<string>):
   throw new Error("WORKSPACE_ATTACHMENT_NAME_EXHAUSTED");
 };
 
-const sanitizeIngressMessages = (messages: Message[]): Message[] =>
-  messages.filter((message) => message.role !== "activity" && message.role !== "reasoning");
+export const normalizeIngressMessages = (messages: Message[]): Message[] =>
+  messages
+    .filter((message) => message.role !== "activity" && message.role !== "reasoning")
+    .map(normalizeWorkspaceUploadMessage);
+
+const normalizeWorkspaceUploadMessage = (message: Message): Message => {
+  if (message.role !== "user" || !Array.isArray(message.content)) {
+    return message;
+  }
+  const existingText = message.content
+    .filter((part): part is { text: string; type: "text" } =>
+      isRecord(part) && part.type === "text" && typeof part.text === "string")
+    .map((part) => part.text)
+    .join("\n");
+  const content: unknown[] = [];
+  let changed = false;
+
+  for (const part of message.content) {
+    content.push(part);
+    const uploadText = workspaceUploadPartText(part, existingText);
+    if (uploadText) {
+      content.push({ type: "text", text: uploadText });
+      changed = true;
+    }
+  }
+
+  return changed ? { ...message, content } as Message : message;
+};
+
+const workspaceUploadPartText = (part: unknown, existingText: string): string | undefined => {
+  if (!isRecord(part)) {
+    return undefined;
+  }
+  const source = isRecord(part.source) ? part.source : undefined;
+  const rawPath = source?.type === "url" && typeof source.value === "string" ? source.value.trim() : undefined;
+  if (
+    !rawPath
+    || !isWorkspaceUploadPath(rawPath)
+    || (existingText.includes("Uploaded workspace file:") && existingText.includes(rawPath))
+  ) {
+    return undefined;
+  }
+  const metadata = isRecord(part.metadata) ? part.metadata : {};
+  const filename = typeof metadata.filename === "string" && metadata.filename.trim()
+    ? metadata.filename.trim()
+    : basename(rawPath);
+  const mimeType = typeof source?.mimeType === "string" && source.mimeType.trim()
+    ? source.mimeType.trim()
+    : "unknown";
+  return [
+    "Uploaded workspace file:",
+    `- path: ${rawPath}`,
+    `- filename: ${filename}`,
+    `- mime_type: ${mimeType}`,
+    "Use the workspace read_file tool with this path when you need the file contents."
+  ].join("\n");
+};
+
+const isWorkspaceUploadPath = (value: string): boolean =>
+  value.startsWith("uploads/")
+  && !value.startsWith("/")
+  && !value.includes("\0")
+  && value.split("/").every((segment) => segment.length > 0 && segment !== "." && segment !== "..");
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);

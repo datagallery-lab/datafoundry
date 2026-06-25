@@ -5,6 +5,7 @@ import {
   resolveExistingRun,
   validateParentRun
 } from "../apps/api/dist/run-identity.js";
+import { resolveRunIdentity } from "../apps/api/dist/run-identity-orchestrator.js";
 import { RunEventWriter, createMetadataStore } from "../packages/metadata/dist/index.js";
 
 const databasePath = `storage/metadata/run-identity-smoke-${Date.now()}.sqlite`;
@@ -46,10 +47,18 @@ try {
     tools: [],
     context: []
   };
-  const fingerprint = createRunRequestFingerprint(requestInput, "api-duckdb-demo");
-  const reorderedFingerprint = createRunRequestFingerprint(reorderedRequestInput, "api-duckdb-demo");
-  const changedHistoryFingerprint = createRunRequestFingerprint(changedHistoryRequestInput, "api-duckdb-demo");
-  const changedCurrentUserFingerprint = createRunRequestFingerprint(changedCurrentUserRequestInput, "api-duckdb-demo");
+  const effectiveRunConfig = {
+    activeDatasourceId: "api-duckdb-demo",
+    enabledDatasourceIds: ["api-duckdb-demo"],
+    enabledKnowledgeBaseIds: [],
+    enabledMcpServerIds: [],
+    enabledSkillIds: [],
+    workspaceAttachments: []
+  };
+  const fingerprint = createRunRequestFingerprint(requestInput, effectiveRunConfig);
+  const reorderedFingerprint = createRunRequestFingerprint(reorderedRequestInput, effectiveRunConfig);
+  const changedHistoryFingerprint = createRunRequestFingerprint(changedHistoryRequestInput, effectiveRunConfig);
+  const changedCurrentUserFingerprint = createRunRequestFingerprint(changedCurrentUserRequestInput, effectiveRunConfig);
 
   if (fingerprint !== reorderedFingerprint) {
     throw new Error("Expected semantically identical request objects to have the same fingerprint");
@@ -62,6 +71,14 @@ try {
   }
 
   store.sessions.create({ user_id: userId, id: sessionId, title: "identity smoke" });
+  store.dataSources.create({
+    user_id: userId,
+    id: "api-duckdb-demo",
+    name: "Identity Smoke DuckDB",
+    type: "duckdb",
+    config: { database: ":memory:" },
+    status: "ready"
+  });
   store.runs.create({
     user_id: userId,
     id: runId,
@@ -133,6 +150,59 @@ try {
   assertThrows(
     () => validateParentRun({ metadataStore: store, parentRunId: runId, sessionId: "different-session", userId }),
     "PARENT_RUN_SESSION_MISMATCH"
+  );
+
+  store.runs.create({
+    user_id: userId,
+    id: "identity-background-active-run",
+    session_id: sessionId,
+    request_fingerprint: "background-active-fingerprint",
+    user_input: "background active query",
+    status: "running"
+  });
+  const replayWhileSessionActive = resolveRunIdentity({
+    effectiveRunConfig,
+    metadataStore: store,
+    modelName: "identity-smoke-model",
+    runEventWriter: writer,
+    runInput: requestInput,
+    userId,
+    userInput: "inspect orders"
+  });
+  if (replayWhileSessionActive.kind !== "replay" || replayWhileSessionActive.events.length !== 2) {
+    throw new Error("Expected completed duplicate run to replay even when another run is active in the session");
+  }
+
+  const activeSessionId = "identity-active-session";
+  const activeRunId = "identity-active-run";
+  store.sessions.create({ user_id: userId, id: activeSessionId, title: "active identity smoke" });
+  store.runs.create({
+    user_id: userId,
+    id: activeRunId,
+    session_id: activeSessionId,
+    request_fingerprint: "active-fingerprint",
+    user_input: "active query",
+    status: "running"
+  });
+
+  assertThrows(
+    () =>
+      resolveRunIdentity({
+        effectiveRunConfig,
+        metadataStore: store,
+        modelName: "identity-smoke-model",
+        runEventWriter: writer,
+        runInput: {
+          threadId: activeSessionId,
+          runId: "identity-active-run-2",
+          messages: [{ id: "message-active-2", role: "user", content: "second active query" }],
+          tools: [],
+          context: []
+        },
+        userId,
+        userInput: "second active query"
+      }),
+    "RUN_ALREADY_ACTIVE"
   );
 
   console.log(`Run identity smoke OK: fingerprint=${fingerprint.slice(0, 12)}, replayed=${replayedEvents.length}`);

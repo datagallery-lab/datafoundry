@@ -14,6 +14,7 @@ export type WorkspaceFactoryInput = {
 export type RunWorkspace = {
   commandExecutionEnabled: boolean;
   isolation: "bwrap" | "none" | "seatbelt";
+  /** Session-scoped workspace directory. Kept as runDir for compatibility with existing tool wiring. */
   runDir: string;
   workspace: Workspace;
 };
@@ -22,9 +23,9 @@ export type RunWorkspace = {
 export const resolveWorkspaceRoot = (injectedRoot?: string): string =>
   path.resolve(injectedRoot ?? process.env.WORKSPACE_ROOT ?? path.join(os.tmpdir(), "open-data-agent-workspace"));
 
-/** Create a filesystem-confined Workspace bound to one trusted run identity. */
+/** Create a filesystem-confined Workspace bound to one trusted session identity. */
 export const createRunWorkspace = (input: WorkspaceFactoryInput): RunWorkspace => {
-  const runDir = resolveRunWorkspaceDir(input);
+  const runDir = resolveSessionWorkspaceDir(input);
   const detection = LocalSandbox.detectIsolation();
   const commandExecutionEnabled = detection.available && process.env.WORKSPACE_COMMAND_ENABLED !== "false";
   const sandbox = commandExecutionEnabled
@@ -75,12 +76,12 @@ export const createRunWorkspace = (input: WorkspaceFactoryInput): RunWorkspace =
   };
 };
 
-export const resolveRunWorkspaceDir = (input: WorkspaceFactoryInput): string => {
+export const resolveSessionWorkspaceDir = (input: WorkspaceFactoryInput): string => {
   const root = resolveWorkspaceRoot(input.workspaceRoot);
   const segments = [
     safePathSegment(input.runContext.user_id, "user_id"),
-    safePathSegment(input.runContext.session_id, "session_id"),
-    safePathSegment(input.runContext.run_id, "run_id")
+    safePathSegment(input.runContext.workspace_id ?? "default", "workspace_id"),
+    safePathSegment(input.runContext.session_id, "session_id")
   ];
   const runDir = path.resolve(root, ...segments);
 
@@ -90,6 +91,9 @@ export const resolveRunWorkspaceDir = (input: WorkspaceFactoryInput): string => 
 
   return runDir;
 };
+
+/** Backward-compatible name for callers that still treat the workspace as run-attached. */
+export const resolveRunWorkspaceDir = resolveSessionWorkspaceDir;
 
 const safePathSegment = (value: string, field: string): string => {
   if (!value || value === "." || value === ".." || !/^[A-Za-z0-9._-]+$/.test(value)) {

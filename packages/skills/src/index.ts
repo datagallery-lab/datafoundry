@@ -42,10 +42,14 @@ export type ParsedSkillPackage = {
 export type SkillRecord = {
   allowedTools: string[];
   builtin: boolean;
+  defaultDbIds: string[];
   defaultEnabled: boolean;
+  defaultKbIds: string[];
+  defaultMcpIds: string[];
   deniedTools: string[];
   description: string;
   id: string;
+  modelProfileId?: string;
   name: string;
   packageEntry: string;
   packageFileRefId?: string;
@@ -152,13 +156,18 @@ export const parseSkillPackage = async (file: UploadedSkillFile): Promise<Parsed
 export const configResourceToSkillRecord = (resource: ConfigResourceRecord): SkillRecord => {
   const payload = resource.payload;
   const packageFileRefId = stringValue(payload.packageFileRefId ?? payload.package_file_ref_id);
+  const modelProfileId = stringValue(payload.modelProfileId ?? payload.model_profile_id);
   return {
     allowedTools: stringList(payload.allowedTools ?? payload.allowed_tools),
     builtin: resource.builtin,
+    defaultDbIds: stringList(payload.defaultDbIds ?? payload.default_db_ids),
     defaultEnabled: resource.default_enabled,
+    defaultKbIds: stringList(payload.defaultKbIds ?? payload.default_kb_ids),
+    defaultMcpIds: stringList(payload.defaultMcpIds ?? payload.default_mcp_ids),
     deniedTools: stringList(payload.deniedTools ?? payload.denied_tools),
     description: resource.description ?? stringValue(payload.description) ?? "",
     id: resource.id,
+    ...(modelProfileId ? { modelProfileId } : {}),
     name: stringValue(payload.name) ?? resource.name,
     packageEntry: stringValue(payload.packageEntry ?? payload.package_entry) ?? "SKILL.md",
     ...(packageFileRefId ? { packageFileRefId } : {}),
@@ -182,8 +191,12 @@ export const buildSkillResourcePayload = (input: {
   const fields = input.fields ?? {};
   const scope = parseScope(fields.scope, false);
   const extraTags = stringList(fields.tags);
+  const modelProfileId = stringValue(fields.modelProfileId ?? fields.model_profile_id);
   return {
     allowedTools: input.parsed.allowedTools,
+    defaultDbIds: stringList(fields.defaultDbIds ?? fields.default_db_ids),
+    defaultKbIds: stringList(fields.defaultKbIds ?? fields.default_kb_ids),
+    defaultMcpIds: stringList(fields.defaultMcpIds ?? fields.default_mcp_ids),
     deniedTools: input.parsed.deniedTools,
     description: input.parsed.description,
     manifest: input.parsed.manifest,
@@ -196,7 +209,8 @@ export const buildSkillResourcePayload = (input: {
     scope,
     tags: unique([...input.parsed.tags, ...extraTags]),
     userInvocable: input.parsed.userInvocable,
-    version: input.parsed.version
+    version: input.parsed.version,
+    ...(modelProfileId ? { modelProfileId } : {})
   };
 };
 

@@ -8,6 +8,7 @@ export type MastraStreamChunk = {
 };
 
 export type MastraStreamNormalizerHooks = {
+  onChunk?: (chunk: MastraStreamChunk) => void;
   onDataChunk?: (chunk: MastraStreamChunk) => void;
   onQuarantine?: (chunk: MastraStreamChunk) => void;
 };
@@ -23,6 +24,7 @@ export async function* normalizeMastraFullStream(
     if (!chunk || typeof chunk !== "object") {
       continue;
     }
+    hooks.onChunk?.(chunk);
 
     const type = typeof chunk.type === "string" ? chunk.type : undefined;
 
@@ -31,6 +33,10 @@ export async function* normalizeMastraFullStream(
     // chunks without payload, so route all data-* chunks out-of-band before AG-UI.
     if (type?.startsWith("data-")) {
       hooks.onDataChunk?.(chunk);
+      continue;
+    }
+
+    if (type === "finish-step") {
       continue;
     }
 

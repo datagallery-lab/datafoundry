@@ -1,6 +1,6 @@
 # Documentation Map
 
-更新时间：2026-06-24
+更新时间：2026-06-25
 
 ## 实现依据（Source of Truth）
 
@@ -70,7 +70,6 @@ App 级约束见 [`apps/api/AGENTS.md`](../apps/api/AGENTS.md)、[`apps/web/AGEN
 - [Memory Context Source 统一计划](plans/2026-06-23-memory-context-source-unification.md)
 - [Tokenizer Cache Implementation Note](../TOKENIZER_CACHING.md)
 - [Turn Grouping 统一设计](engineering/context-turn-grouping-unification-design.md)
-- [Artifact 北向临时决策](engineering/artifact-event-reference-design.md)
 
 ### 活契约与对接（优先读）
 

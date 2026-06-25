@@ -3,6 +3,7 @@ import type { BaseEvent } from "@ag-ui/core";
 export type AgentRunContext = {
   active_skill_id?: string;
   user_id: string;
+  workspace_id?: string;
   session_id: string;
   run_id: string;
   user_input: string;

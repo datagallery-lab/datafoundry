@@ -148,12 +148,16 @@ try {
   assert(Boolean(sqlAudit), "SQL audit custom event was not emitted");
   assert(Boolean(artifactEvent), "artifact custom event was not emitted");
   assert(
-    "preview_json" in artifactEvent.event.value,
-    "artifact event should expose preview data until workspace integration"
+    !("preview_json" in artifactEvent.event.value),
+    "artifact event must be a slim reference; preview data should stay behind REST"
   );
   assert(
-    artifactEvent.event.value.preview_json.row_count === 100,
-    "artifact event preview should preserve the stored SQL row count"
+    artifactEvent.event.value.preview_available === true,
+    "artifact event should advertise preview availability"
+  );
+  assert(
+    artifactEvent.event.value.summary.includes("100"),
+    "artifact event summary should preserve the stored SQL row count"
   );
   assert(sqlResult.rows.length === 20, `model-visible SQL rows should be 20, got ${sqlResult.rows.length}`);
   assert(sqlResult.row_count === 100, `SQL row_count should preserve original count, got ${sqlResult.row_count}`);

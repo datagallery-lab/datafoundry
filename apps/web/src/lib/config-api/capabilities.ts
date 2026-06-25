@@ -4,7 +4,7 @@ import type {
   PerRunMentionKind,
 } from "../../app/data-tasks/data-task-state";
 
-export type RuntimeCapability = "knowledge" | "mcp" | "skills";
+export type RuntimeCapability = "conversationMemory" | "knowledge" | "mcp" | "skills";
 
 const DEFAULT_BACKEND_CAPABILITIES: Record<BackendCapability, boolean> = {
   "datasource.server": false,
@@ -16,6 +16,7 @@ const DEFAULT_BACKEND_CAPABILITIES: Record<BackendCapability, boolean> = {
 };
 
 const DEFAULT_RUNTIME_CAPABILITIES: Record<RuntimeCapability, boolean> = {
+  conversationMemory: false,
   knowledge: false,
   mcp: false,
   skills: false,
@@ -41,6 +42,7 @@ export function applyBackendCapabilities(
     "chat.fileUpload": response["chat.fileUpload"] ?? false,
   };
   runtimeCapabilities = {
+    conversationMemory: response["conversation.memory"] ?? false,
     knowledge: response.knowledge ?? false,
     mcp: response.mcp ?? false,
     skills: response.skills ?? false,

@@ -111,6 +111,15 @@ export type DataGatewayPolicy = {
   workspaceId?: string;
 };
 
+type DataSourceRuntimePolicy = {
+  allowSample?: boolean;
+  maskFields: string[];
+  maxRows?: number;
+  maxSampleRows?: number;
+  tableAllowlist: string[];
+  timeoutMs?: number;
+};
+
 const DEFAULT_DATA_GATEWAY_POLICY: DataGatewayPolicy = {
   defaultLimit: 100,
   maxLimit: 1000,
@@ -164,8 +173,9 @@ export class LocalDataGateway implements DataGateway {
   async inspectSchema(input: InspectSchemaInput): Promise<SchemaSummary> {
     const dataSource = this.metadataStore.dataSources.get(input);
     const adapter = this.createAdapter(dataSource);
+    const resourcePolicy = dataSourcePolicy(dataSource);
     const schema = await adapter.inspectSchema();
-    const tableNames = new Set(input.table_names ?? []);
+    const tableNames = allowedTableSet(input.table_names, resourcePolicy.tableAllowlist);
 
     return {
       datasource_id: input.datasource_id,
@@ -177,14 +187,20 @@ export class LocalDataGateway implements DataGateway {
     const dataSource = this.metadataStore.dataSources.get(input);
     const adapter = this.createAdapter(dataSource);
     const resourcePolicy = dataSourcePolicy(dataSource);
-    return adapter.previewTable({
+    assertTableAllowed(input.table, resourcePolicy);
+    if (resourcePolicy.allowSample === false) {
+      throw new Error(`SAMPLE_BLOCKED:${input.datasource_id}:${input.table}`);
+    }
+    const result = await adapter.previewTable({
       table: input.table,
       limit: Math.min(
         input.limit ?? Math.min(20, this.policy.defaultLimit),
         this.policy.maxLimit,
-        resourcePolicy.maxRows ?? this.policy.maxLimit
+        resourcePolicy.maxRows ?? this.policy.maxLimit,
+        resourcePolicy.maxSampleRows ?? this.policy.maxLimit
       )
     });
+    return maskTableResult(result, resourcePolicy.maskFields);
   }
 
   async runSqlReadonly(input: RunSqlReadonlyInput): Promise<SqlExecutionResult> {
@@ -208,6 +224,7 @@ export class LocalDataGateway implements DataGateway {
     }
 
     const resourcePolicy = dataSourcePolicy(dataSource);
+    assertSqlTablesAllowed(guard.normalized_sql, resourcePolicy);
     const limit = Math.min(
       input.limit ?? this.policy.defaultLimit,
       this.policy.maxLimit,
@@ -228,6 +245,7 @@ export class LocalDataGateway implements DataGateway {
         }),
         timeoutMs
       );
+      const maskedResult = maskTableResult(result, resourcePolicy.maskFields);
       const elapsedMs = Date.now() - startedAt;
       const audit = this.metadataStore.sqlAuditLogs.create({
         user_id: input.user_id,
@@ -235,7 +253,7 @@ export class LocalDataGateway implements DataGateway {
         datasource_id: input.datasource_id,
         sql_text: guard.normalized_sql,
         status: "succeeded",
-        row_count: result.row_count,
+        row_count: maskedResult.row_count,
         elapsed_ms: elapsedMs,
         ...(input.run_id ? { run_id: input.run_id } : {})
       });
@@ -249,12 +267,12 @@ export class LocalDataGateway implements DataGateway {
             run_id: run.id,
             type: "table",
             name: `SQL result ${audit.id}`,
-            preview_json: result
+            preview_json: maskedResult
           })
         : undefined;
 
       return {
-        ...result,
+        ...maskedResult,
         audit_log_id: audit.id,
         elapsed_ms: elapsedMs,
         ...(artifact ? { artifact_id: artifact.id, artifact } : {})
@@ -343,6 +361,20 @@ const SUPPORTED_DATA_SOURCE_TYPES: SupportedDataSourceType[] = [
     label: "MySQL",
     description: "MySQL read-only datasource.",
     parameters: serverDatabaseParameters(3306)
+  },
+  {
+    name: "clickhouse",
+    enabled: true,
+    label: "ClickHouse",
+    description: "ClickHouse read-only datasource over the HTTP JSON interface.",
+    parameters: [
+      { name: "host", label: "Host", type: "string", required: true },
+      { name: "port", label: "Port", type: "number", required: true, default_value: 8123 },
+      { name: "database", label: "Database", type: "string", required: true },
+      { name: "username", label: "Username", type: "string", required: false, default_value: "default" },
+      { name: "password", label: "Password", type: "password", required: false },
+      { name: "secure", label: "Use HTTPS", type: "boolean", required: false, default_value: false }
+    ]
   }
 ];
 
@@ -375,6 +407,10 @@ const createAdapter = (
 
   if (dataSource.type === "mysql") {
     return new MySqlAdapter(config);
+  }
+
+  if (dataSource.type === "clickhouse") {
+    return new ClickHouseAdapter(config);
   }
 
   throw new Error(`Unsupported data source type: ${dataSource.type}`);
@@ -477,6 +513,79 @@ class MySqlAdapter implements DataSourceAdapter {
     } finally {
       await connection?.end();
     }
+  }
+}
+
+class ClickHouseAdapter implements DataSourceAdapter {
+  constructor(private readonly config: Record<string, unknown>) {}
+
+  async inspectSchema(): Promise<Omit<SchemaSummary, "datasource_id">> {
+    const database = stringConfig(this.config, "database");
+    const rows = await this.query(`
+      SELECT
+        table AS table_name,
+        name AS column_name,
+        type AS data_type,
+        if(startsWith(type, 'Nullable('), 'YES', 'NO') AS is_nullable
+      FROM system.columns
+      WHERE database = ${clickHouseLiteral(database)}
+      ORDER BY table, position
+    `);
+    return schemaRowsToSummary(rows, "table_name", "column_name", "data_type", "is_nullable");
+  }
+
+  async previewTable(input: { table: string; limit: number }): Promise<TableResult> {
+    const database = stringConfig(this.config, "database");
+    return rowsToTableResult(await this.query(
+      `SELECT * FROM ${quoteClickHouseIdentifier(database)}.${quoteClickHouseIdentifier(input.table)} LIMIT ${input.limit}`
+    ));
+  }
+
+  async runSqlReadonly(input: { sql: string }): Promise<TableResult> {
+    return rowsToTableResult(await this.query(input.sql));
+  }
+
+  private async query(sql: string): Promise<Record<string, unknown>[]> {
+    const response = await fetch(this.endpointUrl(), {
+      method: "POST",
+      headers: this.headers(),
+      body: `${withClickHouseJsonFormat(sql)}\n`,
+      signal: AbortSignal.timeout(numberConfig(this.config, "timeoutMs", 30000))
+    });
+    const body = await response.text();
+    if (!response.ok) {
+      throw new Error(`CLICKHOUSE_QUERY_FAILED:${response.status}:${body.slice(0, 500)}`);
+    }
+    const parsed: unknown = body ? JSON.parse(body) : {};
+    if (!isRecord(parsed) || !Array.isArray(parsed.data)) {
+      throw new Error("CLICKHOUSE_JSON_RESULT_INVALID");
+    }
+    return parsed.data.filter(isRecord);
+  }
+
+  private endpointUrl(): string {
+    const configuredUrl = optionalStringConfig(this.config, "url");
+    const url = configuredUrl
+      ? new URL(configuredUrl)
+      : new URL(
+          `${booleanConfig(this.config, "secure", false) ? "https" : "http"}://`
+          + `${stringConfig(this.config, "host")}:${numberConfig(this.config, "port", 8123)}`
+        );
+    url.searchParams.set("database", stringConfig(this.config, "database"));
+    url.searchParams.set("default_format", "JSON");
+    url.searchParams.set("readonly", "1");
+    url.searchParams.set("max_execution_time", String(Math.ceil(numberConfig(this.config, "timeoutMs", 30000) / 1000)));
+    return url.toString();
+  }
+
+  private headers(): Record<string, string> {
+    const username = optionalStringConfig(this.config, "username") ?? "default";
+    const password = optionalStringConfig(this.config, "password");
+    return {
+      "Content-Type": "text/plain; charset=utf-8",
+      "X-ClickHouse-User": username,
+      ...(password ? { "X-ClickHouse-Key": password } : {})
+    };
   }
 }
 
@@ -689,18 +798,95 @@ const dataSourceRecordToSummary = (record: DataSourceRecord): DataSourceSummary 
 const parseConfig = (dataSource: DataSourceRecord): Record<string, unknown> =>
   JSON.parse(dataSource.config_json) as Record<string, unknown>;
 
-const dataSourcePolicy = (dataSource: DataSourceRecord): { maxRows?: number; timeoutMs?: number } => {
-  const policy = parseConfig(dataSource).queryPolicy;
-  if (!isRecord(policy)) {
-    return {};
-  }
-  const maxRows = typeof policy.maxRows === "number" && policy.maxRows > 0 ? policy.maxRows : undefined;
-  const timeoutMs = typeof policy.timeoutMs === "number" && policy.timeoutMs > 0 ? policy.timeoutMs : undefined;
+const dataSourcePolicy = (dataSource: DataSourceRecord): DataSourceRuntimePolicy => {
+  const config = parseConfig(dataSource);
+  const queryPolicy = isRecord(config.queryPolicy) ? config.queryPolicy : {};
+  const introspectionPolicy = isRecord(config.introspection) ? config.introspection : {};
+  const samplePolicy = isRecord(config.samplePolicy) ? config.samplePolicy : {};
+  const maxRows = positiveNumber(queryPolicy.maxRows);
+  const timeoutMs = positiveNumber(queryPolicy.timeoutMs);
+  const maxSampleRows = positiveNumber(samplePolicy.maxSampleRows);
   return {
+    ...(typeof samplePolicy.allowSample === "boolean" ? { allowSample: samplePolicy.allowSample } : {}),
     ...(maxRows !== undefined ? { maxRows } : {}),
+    ...(maxSampleRows !== undefined ? { maxSampleRows } : {}),
+    maskFields: stringArray(config.maskFields),
+    tableAllowlist: stringArray(introspectionPolicy.tableAllowlist),
     ...(timeoutMs !== undefined ? { timeoutMs } : {})
   };
 };
+
+const allowedTableSet = (requestedTables: string[] | undefined, policyTables: string[]): Set<string> => {
+  const requested = requestedTables ?? [];
+  if (requested.length > 0 && policyTables.length > 0) {
+    return new Set(requested.filter((table) => policyTables.includes(table)));
+  }
+  return new Set(requested.length > 0 ? requested : policyTables);
+};
+
+const assertTableAllowed = (table: string, policy: DataSourceRuntimePolicy): void => {
+  if (policy.tableAllowlist.length > 0 && !policy.tableAllowlist.includes(table)) {
+    throw new Error(`TABLE_NOT_ALLOWED:${table}`);
+  }
+};
+
+const assertSqlTablesAllowed = (sql: string, policy: DataSourceRuntimePolicy): void => {
+  if (policy.tableAllowlist.length === 0) {
+    return;
+  }
+  const tableNames = extractSqlTableNames(sql);
+  const blocked = tableNames.filter((table) => !policy.tableAllowlist.includes(table));
+  if (blocked.length > 0) {
+    throw new Error(`TABLE_NOT_ALLOWED:${blocked.join(",")}`);
+  }
+};
+
+const extractSqlTableNames = (sql: string): string[] => {
+  const stripped = stripQuotedSql(sql);
+  const names = new Set<string>();
+  const pattern = /\b(?:FROM|JOIN)\s+((?:"[^"]+"|`[^`]+`|[\w-]+)(?:\s*\.\s*(?:"[^"]+"|`[^`]+`|[\w-]+))?)/giu;
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(stripped)) !== null) {
+    const rawName = match[1];
+    if (rawName) {
+      names.add(unqualifiedTableName(rawName));
+    }
+  }
+  return [...names];
+};
+
+const unqualifiedTableName = (value: string): string => {
+  const segment = value.split(".").at(-1) ?? value;
+  return unquoteIdentifier(segment.trim().replace(/^`|`$/gu, ""));
+};
+
+const maskTableResult = (result: TableResult, maskFields: string[]): TableResult => {
+  if (maskFields.length === 0) {
+    return result;
+  }
+  const maskedColumnNames = new Set(maskFields.map((field) => field.toLowerCase()));
+  const maskedIndexes = result.columns
+    .map((column, index) => ({ column, index }))
+    .filter(({ column }) => maskedColumnNames.has(column.toLowerCase()))
+    .map(({ index }) => index);
+  if (maskedIndexes.length === 0) {
+    return result;
+  }
+  return {
+    ...result,
+    rows: result.rows.map((row) =>
+      row.map((value, index) => maskedIndexes.includes(index) && value !== null ? "[MASKED]" : value))
+  };
+};
+
+const stringArray = (value: unknown): string[] =>
+  Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+      .map((item) => item.trim())
+    : [];
+
+const positiveNumber = (value: unknown): number | undefined =>
+  typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
 
 function serverDatabaseParameters(defaultPort: number): ConfigurableParam[] {
   return [
@@ -727,6 +913,11 @@ const stringConfig = (config: Record<string, unknown>, key: string, defaultValue
   throw new Error(`Missing string config: ${key}`);
 };
 
+const optionalStringConfig = (config: Record<string, unknown>, key: string): string | undefined => {
+  const value = config[key];
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+};
+
 const numberConfig = (config: Record<string, unknown>, key: string, defaultValue: number): number => {
   const value = config[key];
   if (typeof value === "number" && Number.isFinite(value)) {
@@ -736,6 +927,11 @@ const numberConfig = (config: Record<string, unknown>, key: string, defaultValue
     return Number(value);
   }
   return defaultValue;
+};
+
+const booleanConfig = (config: Record<string, unknown>, key: string, defaultValue: boolean): boolean => {
+  const value = config[key];
+  return typeof value === "boolean" ? value : defaultValue;
 };
 
 const requiredRecordString = (row: unknown, key: string): string => {
@@ -770,6 +966,15 @@ const objectRowsToTableResult = (rows: Record<string, unknown>[], columns: strin
 const quoteIdentifier = (identifier: string): string => `"${identifier.replaceAll('"', '""')}"`;
 
 const quoteMysqlIdentifier = (identifier: string): string => `\`${identifier.replaceAll("`", "``")}\``;
+
+const quoteClickHouseIdentifier = (identifier: string): string => `\`${identifier.replaceAll("`", "``")}\``;
+
+const clickHouseLiteral = (value: string): string => `'${value.replaceAll("\\", "\\\\").replaceAll("'", "\\'")}'`;
+
+const withClickHouseJsonFormat = (sql: string): string =>
+  /\bFORMAT\s+\w+\s*$/iu.test(sql)
+    ? sql.replace(/\bFORMAT\s+\w+\s*$/iu, "FORMAT JSON")
+    : `${sql} FORMAT JSON`;
 
 const schemaRowsToSummary = (
   rows: Record<string, unknown>[],

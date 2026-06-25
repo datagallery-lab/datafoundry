@@ -133,13 +133,17 @@ agent 上下文。模型不会自动看到文件全文；需要通过 `list_file
 }
 ```
 
-当前用户身份是后端固定 dev user：
+当前 local-first 用户身份由 HTTP header 解析；无 header 时使用 dev 默认身份：
 
 ```text
-user_id=dev-user
+Authorization: Bearer <dev_token>
+X-Dev-Token: <dev_token>
+X-Workspace-Id: <workspace_id>
 ```
 
-前端现在不需要，也不能通过协议传入 credential。
+无认证头时默认为 `user_id=dev-user`、`workspace_id=default`。无效 dev token 返回 401。
+前端不能通过 AG-UI body 伪造 `user_id` / `workspace_id`，也不能把 credential 放入 AG-UI
+messages/context。
 
 ### 2.1 Run 幂等语义
 
@@ -305,7 +309,7 @@ run 失败 delta：
 | `name` | 支持 | `value` 内容 | 前端建议 |
 | --- | --- | --- | --- |
 | `sql_audit` | 支持 | `audit_log_id`、`datasource_id`、`status`、`row_count`、`elapsed_ms` | 可展示审计摘要。 |
-| `artifact` | 支持 | `id`、`type`、`name`、可选 `preview_json` | workspace 集成前直接使用事件内 preview。 |
+| `artifact` | 支持 | `id`、`type`、`name`、`title`、`summary`、`preview_available`、可选 `download_url` / `file_id` | 实时事件只给瘦身引用；完整 preview/download 走 `/api/v1/artifacts/:id/*` REST。 |
 | `context.compiled` | 支持 | step、package revision、group decisions、token report、budget | 内部可观测性；GUI/TUI 可忽略。 |
 | `context.prompt-verified` | 支持 | step、model profile、prompt/input/remaining tokens | 内部可观测性；GUI/TUI 可忽略。 |
 | `run.config.resolved` | 支持 | active datasource、enabled KB/MCP/files、selected skills、workspace config | 调试用；GUI/TUI 可忽略。 |
@@ -391,8 +395,8 @@ run 失败 delta：
 | 自定义事件名如 `plan.update`、`step.start`、`final`、`done` | 不支持 | 统一使用 AG-UI `EventType`。 |
 | 前端直连 Data Gateway REST API | 不支持 | Data Gateway 是 agent tool 边界。 |
 | 前端直连 Metadata / run_events 查询 API | 不支持 | 当前没有对外 replay/query endpoint。 |
-| 多用户认证 | 不支持 | 当前固定 `dev-user`。 |
-| HTTP header 注入 session/datasource | 不支持 | 不使用 `X-Session-ID` / `X-Datasource-ID`，改用 AG-UI body。 |
+| 产品化认证网关 | 暂未接入 | 当前是 local-first dev token；正式 auth 可在网关层映射到同一 `user_id` / `workspace_id`。 |
+| HTTP header 注入 session/datasource | 不支持 | 不使用 `X-Session-ID` / `X-Datasource-ID`，session/datasource 改用 AG-UI body；HTTP header 只承载认证身份和 workspace。 |
 | 前端传 datasource credential | 不支持 | credential 不进入模型和前端协议。 |
 | SQL 写操作 | 不支持 | `run_sql_readonly` + SQL guard 只允许只读查询。 |
 | 模型绕过工具直接拿数据 | 不支持 | 数据访问必须经过 Data Gateway tools。 |

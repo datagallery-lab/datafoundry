@@ -51,6 +51,7 @@ import {
   resolveConfigFieldOptions,
   isFieldPending,
   isFieldDisabled,
+  isSelectOptionPending,
   normalizeKbSettings,
   normalizeLlmSettingsExtended,
   visibleConfigFields,
@@ -169,9 +170,14 @@ const NEW_CONFIG_ITEM_ID = "__new__";
 
 async function uploadChatDataFile(
   file: File,
+  sessionId?: string | null,
 ): Promise<{ path: string; mimeType: string; size: number }> {
   const form = new FormData();
   form.append("file", file);
+  if (sessionId) {
+    form.append("sessionId", sessionId);
+    form.append("threadId", sessionId);
+  }
   const res = await fetch(`${getConfigApiBaseUrl()}/api/v1/chat/uploads`, {
     method: "POST",
     body: form,
@@ -201,9 +207,9 @@ function StableDataTaskChatInput({
       createChatOnUpload({
         capabilities,
         readBase64: (file) => readFileAsBase64(file),
-        uploadDataFile: uploadChatDataFile,
+        uploadDataFile: (file) => uploadChatDataFile(file, bindings.activeThreadId),
       }),
-    [capabilities],
+    [bindings.activeThreadId, capabilities],
   );
 
   const attachmentsApi = useAttachments({
@@ -3002,7 +3008,7 @@ function ConfigItemDetailView({
                 helpText={field.helpText}
                 inputType={field.inputType}
                 options={options}
-                pendingOptionValues={field.pendingOptionValues}
+                isOptionPending={(value) => isSelectOptionPending(field, value)}
                 fullWidth={field.fullWidth}
                 required={field.required && !pending}
                 readOnly={field.readOnly?.(item) ?? false}
@@ -3327,7 +3333,7 @@ function EditableField({
   multiline,
   inputType = "text",
   options,
-  pendingOptionValues,
+  isOptionPending,
   fullWidth,
   onChange,
 }: {
@@ -3342,7 +3348,7 @@ function EditableField({
   multiline?: boolean;
   inputType?: "text" | "password" | "url" | "select" | "number" | "boolean";
   options?: Array<{ value: string; label: string }>;
-  pendingOptionValues?: string[];
+  isOptionPending?: (value: string) => boolean;
   fullWidth?: boolean;
   onChange: (value: string) => void;
 }) {
@@ -3383,7 +3389,7 @@ function EditableField({
         >
           <option value="">请选择…</option>
           {options.map((option) => {
-            const optionPending = pendingOptionValues?.includes(option.value) ?? false;
+            const optionPending = isOptionPending?.(option.value) ?? false;
             return (
               <option
                 key={option.value}

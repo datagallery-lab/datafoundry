@@ -19,6 +19,7 @@ import { LocalKnowledgeService } from "@open-data-agent/knowledge";
 import {
   RunEventWriter,
   createMetadataStore,
+  type UserRecord,
   type MetadataStore
 } from "@open-data-agent/metadata";
 import { randomUUID } from "node:crypto";
@@ -45,6 +46,7 @@ const DEV_USER: MeResponse = {
 };
 
 const COPILOTKIT_PATH = "/api/copilotkit";
+const DEFAULT_WORKSPACE_ID = "default";
 
 export type CreateServerOptions = {
   conversationMemoryMode?: AgentMemoryMode | undefined;
@@ -94,8 +96,9 @@ export const createServer = async (options: CreateServerOptions = {}): Promise<S
       process.env.MASTRA_STORAGE_PATH ?? join(envConfig.storage.root_dir, "mastra", "agent-state.sqlite"),
       { conversationMemoryMode }
     );
-  ensureDemoDataSource(metadataStore, "api-duckdb-demo");
-  ensureBuiltinConfigResources(metadataStore);
+  ensureDevUser(metadataStore);
+  ensureDemoDataSource(metadataStore, DEV_USER.id, "api-duckdb-demo");
+  ensureBuiltinConfigResources(metadataStore, DEV_USER.id, DEFAULT_WORKSPACE_ID);
 
   const server = createHttpServer(async (request, response) => {
     try {
@@ -111,12 +114,19 @@ export const createServer = async (options: CreateServerOptions = {}): Promise<S
         return;
       }
 
+      const authContext = resolveRequestAuth(request, metadataStore);
+      if (authContext.user.id === DEV_USER.id) {
+        ensureDemoDataSource(metadataStore, authContext.user.id, "api-duckdb-demo");
+      }
+      ensureBuiltinConfigResources(metadataStore, authContext.user.id, authContext.workspaceId);
+
       const configResponse = await handleConfigApiRequest(request, requestUrl.pathname, {
         dataGateway,
         fileAssetService,
         knowledgeService,
         metadataStore,
-        userId: DEV_USER.id
+        userId: authContext.user.id,
+        workspaceId: authContext.workspaceId
       });
       if (configResponse) {
         if (Buffer.isBuffer(configResponse.body)) {
@@ -148,7 +158,9 @@ export const createServer = async (options: CreateServerOptions = {}): Promise<S
           taskStateRuntime,
           conversationMemoryMode,
           memoryExtractionTimeoutMs: options.memoryExtractionTimeoutMs
-            ?? envConfig.memory.completed_extraction_timeout_ms
+            ?? envConfig.memory.completed_extraction_timeout_ms,
+          user: authContext.user,
+          workspaceId: authContext.workspaceId
         });
         return;
       }
@@ -158,6 +170,10 @@ export const createServer = async (options: CreateServerOptions = {}): Promise<S
       const message = error instanceof Error ? error.message : "Unknown server error";
 
       if (!response.headersSent) {
+        if (message.startsWith("UNAUTHORIZED:")) {
+          sendJson(response, 401, createErrorResult("UNAUTHORIZED", message.slice("UNAUTHORIZED:".length)));
+          return;
+        }
         sendJson(response, 500, createErrorResult("NOT_ENABLED", message));
         return;
       }
@@ -187,6 +203,8 @@ type HandleCopilotKitRequestInput = {
   knowledgeService: LocalKnowledgeService;
   memoryExtractionTimeoutMs: number;
   taskStateRuntime: TaskStateRuntime;
+  user: MeResponse;
+  workspaceId: string;
 };
 
 const handleCopilotKitRequest = async ({
@@ -199,7 +217,9 @@ const handleCopilotKitRequest = async ({
   conversationMemoryMode,
   knowledgeService,
   memoryExtractionTimeoutMs,
-  taskStateRuntime
+  taskStateRuntime,
+  user,
+  workspaceId
 }: HandleCopilotKitRequestInput): Promise<void> => {
   const runtime = new CopilotRuntime({
     agents: {
@@ -213,7 +233,8 @@ const handleCopilotKitRequest = async ({
         defaultDatasourceId: "api-duckdb-demo",
         metadataStore,
         taskStateRuntime,
-        user: DEV_USER,
+        user,
+        workspaceId,
         workspaceRoot: process.env.WORKSPACE_ROOT ?? join(process.env.STORAGE_ROOT_DIR ?? "storage", "workspaces")
       })
     }
@@ -245,6 +266,7 @@ type DataAgentAgUiAgentInput = {
   memoryExtractionTimeoutMs: number;
   taskStateRuntime: TaskStateRuntime;
   user: MeResponse;
+  workspaceId: string;
   workspaceRoot: string;
 };
 
@@ -279,8 +301,11 @@ class DataAgentAgUiAgent extends AbstractAgent {
         const {
           effectiveRunConfig,
           mcpRuntime,
+          modelContextProfile,
           modelProvider,
           modelSettings,
+          reasoningModel,
+          runTimeoutMs,
           selectedSkills,
           skillSelection
         } = resolveRunConfig({
@@ -288,7 +313,8 @@ class DataAgentAgUiAgent extends AbstractAgent {
           metadataStore: this.input.metadataStore,
           runInput: normalizedRunInput,
           userId: this.input.user.id,
-          userInput
+          userInput,
+          workspaceId: this.input.workspaceId
         });
         const runEventWriter = new RunEventWriter(this.input.metadataStore.runEvents);
         const identity = resolveRunIdentity({
@@ -335,7 +361,8 @@ class DataAgentAgUiAgent extends AbstractAgent {
           selectedDatasourceId,
           sessionId,
           userId: this.input.user.id,
-          userInput
+          userInput,
+          workspaceId: this.input.workspaceId
         });
         const taskPlanProjector = new TaskPlanProjector(runContext);
         const toolCallResultBridge = new ToolCallResultBridge();
@@ -370,6 +397,7 @@ class DataAgentAgUiAgent extends AbstractAgent {
           longTermMemories,
           mcpRuntime,
           messages: conversationMessages,
+          ...(modelContextProfile ? { modelContextProfile } : {}),
           modelProvider,
           ...(modelSettings ? { modelSettings } : {}),
           runContext,
@@ -377,6 +405,7 @@ class DataAgentAgUiAgent extends AbstractAgent {
           skillSelection,
           taskStateRuntime: this.input.taskStateRuntime,
           userId: this.input.user.id,
+          workspaceId: this.input.workspaceId,
           workspaceRoot: this.input.workspaceRoot
         });
         const finalizer = new RunFinalizer({
@@ -391,14 +420,42 @@ class DataAgentAgUiAgent extends AbstractAgent {
         let suspended = false;
         let resumeResolved = false;
         let finalization: Promise<void> | undefined;
+        let runTimeout: ReturnType<typeof setTimeout> | undefined;
+        let terminalStarted = false;
+        const clearRunTimeout = (): void => {
+          if (runTimeout) {
+            clearTimeout(runTimeout);
+            runTimeout = undefined;
+          }
+        };
+        const failRun = (message: string, terminalEvent?: BaseEvent): void => {
+          if (terminalStarted) {
+            return;
+          }
+          terminalStarted = true;
+          clearRunTimeout();
+          finalizer.fail({
+            errorMessage: message,
+            terminalEvent: terminalEvent ?? {
+              type: EventType.RUN_ERROR,
+              message,
+              timestamp: Date.now()
+            }
+          });
+        };
         const subscription = agentAssembly.mastraAgent.run({
           ...normalizedRunInput,
           runId,
           messages: agentAssembly.governedMessages
         }).subscribe({
           next: (event) => {
+            if (terminalStarted) {
+              return;
+            }
             const interactionRequested = interactionRuntime.capture(event);
             if (interactionRequested) {
+              terminalStarted = true;
+              clearRunTimeout();
               suspended = true;
               emit(interactionRequested);
               finalizer.suspend();
@@ -407,7 +464,8 @@ class DataAgentAgUiAgent extends AbstractAgent {
                 emit(event);
               }
               // Stream must finalize so CopilotKit can surface the interrupt UI via onRunFinalized.
-              emit({
+              // This synthetic terminal event is transport-only; suspended runs must not replay as finished.
+              subscriber.next({
                 type: EventType.RUN_FINISHED,
                 timestamp: Date.now()
               });
@@ -417,6 +475,8 @@ class DataAgentAgUiAgent extends AbstractAgent {
               return;
             }
             if (event.type === EventType.RUN_FINISHED && interactionResume?.response === false) {
+              terminalStarted = true;
+              clearRunTimeout();
               finalization = finalizer.cancel({
                 interactionResolvedEvent: interactionRuntime.cancel(interactionResume),
                 terminalEvent: event
@@ -424,11 +484,13 @@ class DataAgentAgUiAgent extends AbstractAgent {
               return;
             }
             if (event.type === EventType.RUN_FINISHED) {
+              terminalStarted = true;
+              clearRunTimeout();
               finalization = finalizer.complete({ goalRuntime: agentAssembly.goalRuntime, terminalEvent: event });
               return;
             }
             if (event.type === EventType.RUN_ERROR) {
-              finalizer.fail({ errorMessage: "AG-UI run error", terminalEvent: event });
+              failRun("AG-UI run error", event);
               return;
             }
             emit(event);
@@ -463,7 +525,21 @@ class DataAgentAgUiAgent extends AbstractAgent {
                 selected_skill_ids: selectedSkills.map((skill) => skill.id),
                 skill_mode: effectiveRunConfig.skillMode,
                 requested_llm_profile_id: effectiveRunConfig.activeLlmProfileId,
-                workspace: agentAssembly.workspace
+                workspace_id: this.input.workspaceId,
+                workspace: agentAssembly.workspace,
+                ...(modelContextProfile
+                  ? {
+                      context_window: modelContextProfile.contextWindow,
+                      input_budget: Math.max(
+                        modelContextProfile.contextWindow
+                          - modelContextProfile.outputReserve
+                          - modelContextProfile.safetyMargin,
+                        0
+                      )
+                    }
+                  : {}),
+                ...(reasoningModel !== undefined ? { reasoning_model: reasoningModel } : {}),
+                ...(runTimeoutMs !== undefined ? { run_timeout_ms: runTimeoutMs } : {})
               }));
               emit(createCustomEvent("skill.selection", {
                 audit: skillSelection.audit,
@@ -496,10 +572,11 @@ class DataAgentAgUiAgent extends AbstractAgent {
               message,
               timestamp: Date.now()
             };
-            finalizer.fail({ errorMessage: message, terminalEvent: event });
+            failRun(message, event);
             subscriber.error(error);
           },
           complete: () => {
+            clearRunTimeout();
             if (finalization) {
               void finalization.then(() => subscriber.complete(), (error: unknown) => subscriber.error(error));
               return;
@@ -508,7 +585,16 @@ class DataAgentAgUiAgent extends AbstractAgent {
           }
         });
 
+        if (runTimeoutMs !== undefined) {
+          runTimeout = setTimeout(() => {
+            subscription.unsubscribe();
+            failRun(`RUN_TIMEOUT:${runTimeoutMs}`);
+            subscriber.complete();
+          }, runTimeoutMs);
+        }
+
         subscriber.add(() => {
+          clearRunTimeout();
           subscription.unsubscribe();
         });
       };
@@ -527,10 +613,62 @@ const sendCorsPreflight = (response: ServerResponse): void => {
   response.writeHead(204, {
     "Access-Control-Allow-Origin": "*",
     "Access-Control-Allow-Methods": "GET, POST, PATCH, DELETE, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type, Authorization, Idempotency-Key, If-Match",
+    "Access-Control-Allow-Headers": "Content-Type, Authorization, Idempotency-Key, If-Match, X-Dev-Token, X-Workspace-Id",
     "Access-Control-Max-Age": "86400"
   });
   response.end();
+};
+
+type RequestAuthContext = {
+  user: MeResponse;
+  workspaceId: string;
+};
+
+const resolveRequestAuth = (request: IncomingMessage, metadataStore: MetadataStore): RequestAuthContext => {
+  const token = extractAuthToken(request);
+  const workspaceId = sanitizeWorkspaceId(headerString(request.headers["x-workspace-id"]));
+  if (!token) {
+    return { user: DEV_USER, workspaceId };
+  }
+  const user = metadataStore.users.getByDevToken({ dev_token: token });
+  if (!user) {
+    throw new Error("UNAUTHORIZED:Invalid local auth token.");
+  }
+  return { user: userRecordToMeResponse(user), workspaceId };
+};
+
+const extractAuthToken = (request: IncomingMessage): string | undefined => {
+  const authorization = headerString(request.headers.authorization);
+  if (authorization?.startsWith("Bearer ")) {
+    return authorization.slice("Bearer ".length).trim() || undefined;
+  }
+  return headerString(request.headers["x-dev-token"]);
+};
+
+const sanitizeWorkspaceId = (value: string | undefined): string => {
+  const candidate = value?.trim() || DEFAULT_WORKSPACE_ID;
+  if (!/^[a-zA-Z0-9._-]{1,128}$/u.test(candidate)) {
+    throw new Error("UNAUTHORIZED:Invalid workspace id.");
+  }
+  return candidate;
+};
+
+const headerString = (value: string | string[] | undefined): string | undefined =>
+  Array.isArray(value) ? value[0] : value;
+
+const userRecordToMeResponse = (user: UserRecord): MeResponse => ({
+  id: user.id,
+  ...(user.email ? { email: user.email } : {}),
+  ...(user.display_name ? { display_name: user.display_name } : {})
+});
+
+const ensureDevUser = (metadataStore: MetadataStore): void => {
+  metadataStore.users.upsertDevUser({
+    id: DEV_USER.id,
+    email: DEV_USER.email ?? "dev@example.com",
+    display_name: DEV_USER.display_name ?? "Dev User",
+    dev_token: "dev-token"
+  });
 };
 
 const sendJson = (response: ServerResponse, statusCode: number, body: unknown): void => {
@@ -541,16 +679,16 @@ const sendJson = (response: ServerResponse, statusCode: number, body: unknown): 
   response.end(JSON.stringify(body));
 };
 
-const ensureDemoDataSource = (metadataStore: MetadataStore, datasourceId: string): void => {
+const ensureDemoDataSource = (metadataStore: MetadataStore, userId: string, datasourceId: string): void => {
   try {
     const current = metadataStore.dataSources.get({
-      user_id: DEV_USER.id,
+      user_id: userId,
       datasource_id: datasourceId
     });
     const config = JSON.parse(current.config_json) as Record<string, unknown>;
     if (config.builtin !== true || config.defaultEnabled !== true) {
       metadataStore.dataSources.create({
-        user_id: DEV_USER.id,
+        user_id: userId,
         id: current.id,
         name: current.name,
         type: current.type,
@@ -561,7 +699,7 @@ const ensureDemoDataSource = (metadataStore: MetadataStore, datasourceId: string
     }
   } catch {
     metadataStore.dataSources.create({
-      user_id: DEV_USER.id,
+      user_id: userId,
       id: datasourceId,
       name: "API DuckDB Demo",
       type: "duckdb",
@@ -598,8 +736,8 @@ const BUILTIN_SKILLS = [
   }
 ] as const;
 
-const ensureBuiltinConfigResources = (metadataStore: MetadataStore): void => {
-  const common = { workspace_id: "default", user_id: DEV_USER.id };
+const ensureBuiltinConfigResources = (metadataStore: MetadataStore, userId: string, workspaceId: string): void => {
+  const common = { workspace_id: workspaceId, user_id: userId };
   if (!metadataStore.configResources.find({ ...common, kind: "model-profile", id: "server-default" })) {
     metadataStore.configResources.upsert({
       ...common,

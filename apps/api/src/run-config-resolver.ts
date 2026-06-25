@@ -1,7 +1,8 @@
 import type { RunAgentInput } from "@ag-ui/client";
 import {
   createModelProviderFromEnv,
-  createModelProviderFromProfile
+  createModelProviderFromProfile,
+  type ModelContextProfile
 } from "@open-data-agent/agent-runtime";
 import type { MetadataStore } from "@open-data-agent/metadata";
 import {
@@ -9,7 +10,8 @@ import {
   type SkillRecord,
   type SkillSelectionResult
 } from "@open-data-agent/skills";
-import type { MCPClientConfig } from "@ag-ui/mcp-middleware";
+
+import type { PolicyMcpClientConfig } from "./policy-mcp-middleware.js";
 
 import { resolveEffectiveRunConfig, type EffectiveRunConfig } from "./run-input.js";
 
@@ -18,15 +20,21 @@ export type ResolvedRunConfig = {
   mcpRuntime: McpRuntime;
   modelProvider: Exclude<ReturnType<typeof createModelProviderFromEnv>, { kind: "mock" }>;
   modelSettings?: {
+    frequencyPenalty?: number;
     maxOutputTokens?: number;
+    presencePenalty?: number;
     temperature?: number;
+    topP?: number;
   };
+  modelContextProfile?: ModelContextProfile;
+  reasoningModel?: boolean;
+  runTimeoutMs?: number;
   skillSelection: SkillSelectionResult;
   selectedSkills: SkillRecord[];
 };
 
 export type McpRuntime = {
-  servers: MCPClientConfig[];
+  servers: PolicyMcpClientConfig[];
   toolNames: string[];
 };
 
@@ -36,6 +44,7 @@ type ResolveRunConfigInput = {
   runInput: RunAgentInput;
   userId: string;
   userInput: string;
+  workspaceId: string;
 };
 
 /** Resolve one run's config, model, skill policy, MCP runtime, and enabled resources. */
@@ -44,43 +53,174 @@ export const resolveRunConfig = (input: ResolveRunConfigInput): ResolvedRunConfi
     input.runInput,
     input.metadataStore,
     input.userId,
-    input.defaultDatasourceId
-  );
-  validateEffectiveResources(effectiveRunConfig, input.metadataStore, input.userId);
-  const modelProvider = resolveRunModelProvider(
-    effectiveRunConfig.activeLlmProfileId,
-    input.metadataStore,
-    input.userId
+    input.defaultDatasourceId,
+    input.workspaceId
   );
   const skillSelection = selectSkillsForRun({
     metadataStore: input.metadataStore,
     runConfig: effectiveRunConfig,
     userId: input.userId,
     userInput: input.userInput,
-    workspaceId: "default"
+    workspaceId: input.workspaceId
   });
+  applySkillResourceBindings({
+    config: effectiveRunConfig,
+    explicitRunConfig: explicitRunConfigKeys(input.runInput),
+    selectedSkills: skillSelection.selectedSkills
+  });
+  validateEffectiveResources(effectiveRunConfig, input.metadataStore, input.userId, input.workspaceId);
   effectiveRunConfig.resourceRevisions = {
-    ...(effectiveRunConfig.resourceRevisions ?? {}),
+    ...resolveEffectiveResourceRevisions(effectiveRunConfig, input.metadataStore, input.userId, input.workspaceId),
     ...Object.fromEntries(skillSelection.selectedSkills.map((skill) => [`skill:${skill.id}`, skill.revision]))
   };
-  const modelSettings = resolveModelSettings(effectiveRunConfig.activeLlmProfileId, input.metadataStore, input.userId);
-  const mcpRuntime = resolveMcpRuntime(effectiveRunConfig.enabledMcpServerIds, input.metadataStore, input.userId);
+  const modelProvider = resolveRunModelProvider(
+    effectiveRunConfig.activeLlmProfileId,
+    input.metadataStore,
+    input.userId,
+    input.workspaceId
+  );
+  const modelSettings = resolveModelSettings(
+    effectiveRunConfig.activeLlmProfileId,
+    input.metadataStore,
+    input.userId,
+    input.workspaceId
+  );
+  const modelContextProfile = resolveModelContextProfile(
+    effectiveRunConfig.activeLlmProfileId,
+    modelProvider.model_name,
+    input.metadataStore,
+    input.userId,
+    input.workspaceId
+  );
+  const reasoningModel = resolveReasoningModel(
+    effectiveRunConfig.activeLlmProfileId,
+    input.metadataStore,
+    input.userId,
+    input.workspaceId
+  );
+  const runTimeoutMs = resolveRunTimeoutMs(
+    effectiveRunConfig.activeLlmProfileId,
+    input.metadataStore,
+    input.userId,
+    input.workspaceId
+  );
+  const mcpRuntime = resolveMcpRuntime(
+    effectiveRunConfig.enabledMcpServerIds,
+    input.metadataStore,
+    input.userId,
+    input.workspaceId
+  );
   enforceSkillMcpPolicy(skillSelection.effectiveToolPolicy.allowedTools, mcpRuntime.toolNames);
 
   return {
     effectiveRunConfig,
     mcpRuntime,
     modelProvider,
+    ...(modelContextProfile ? { modelContextProfile } : {}),
     ...(modelSettings ? { modelSettings } : {}),
+    ...(reasoningModel !== undefined ? { reasoningModel } : {}),
+    ...(runTimeoutMs !== undefined ? { runTimeoutMs } : {}),
     selectedSkills: skillSelection.selectedSkills,
     skillSelection
   };
 };
 
+type ExplicitRunConfigKeys = {
+  activeDatasource: boolean;
+  activeLlmProfile: boolean;
+};
+
+const applySkillResourceBindings = (input: {
+  config: EffectiveRunConfig;
+  explicitRunConfig: ExplicitRunConfigKeys;
+  selectedSkills: SkillRecord[];
+}): void => {
+  const defaultDbIds = unique(input.selectedSkills.flatMap((skill) => skill.defaultDbIds));
+  const defaultKbIds = unique(input.selectedSkills.flatMap((skill) => skill.defaultKbIds));
+  const defaultMcpIds = unique(input.selectedSkills.flatMap((skill) => skill.defaultMcpIds));
+  const modelProfileId = input.selectedSkills.find((skill) => skill.modelProfileId)?.modelProfileId;
+
+  if (defaultDbIds.length > 0) {
+    input.config.enabledDatasourceIds = unique([...input.config.enabledDatasourceIds, ...defaultDbIds]);
+    if (!input.explicitRunConfig.activeDatasource) {
+      input.config.activeDatasourceId = defaultDbIds[0] as string;
+    }
+  }
+  if (defaultKbIds.length > 0) {
+    input.config.enabledKnowledgeIds = unique([...input.config.enabledKnowledgeIds, ...defaultKbIds]);
+  }
+  if (defaultMcpIds.length > 0) {
+    input.config.enabledMcpServerIds = unique([...input.config.enabledMcpServerIds, ...defaultMcpIds]);
+  }
+  if (modelProfileId && !input.explicitRunConfig.activeLlmProfile) {
+    input.config.activeLlmProfileId = modelProfileId;
+  }
+};
+
+const explicitRunConfigKeys = (runInput: RunAgentInput): ExplicitRunConfigKeys => {
+  const forwardedProps = isRecord(runInput.forwardedProps) ? runInput.forwardedProps : {};
+  const runConfig = isRecord(forwardedProps.run_config) ? forwardedProps.run_config : {};
+  const contextRunConfig = runInput.context.find((item) => item.description === "run_config")?.value;
+  const contextConfig = isRecord(contextRunConfig) ? contextRunConfig : {};
+  return {
+    activeDatasource: hasAnyKey(runConfig, ["activeDatasourceId", "active_datasource_id"])
+      || hasAnyKey(contextConfig, ["activeDatasourceId", "active_datasource_id"])
+      || hasAnyKey(forwardedProps, ["datasourceId", "datasource_id"]),
+    activeLlmProfile: hasAnyKey(runConfig, ["activeLlmProfileId", "active_llm_profile_id"])
+      || hasAnyKey(contextConfig, ["activeLlmProfileId", "active_llm_profile_id"])
+  };
+};
+
+const resolveEffectiveResourceRevisions = (
+  config: EffectiveRunConfig,
+  metadataStore: MetadataStore,
+  userId: string,
+  workspaceId: string
+): Record<string, number> => {
+  const revisions: Record<string, number> = {};
+  unique(config.enabledDatasourceIds).forEach((id) => {
+    revisions[`datasource:${id}`] = metadataStore.dataSources.get({ user_id: userId, datasource_id: id }).revision;
+  });
+  const addResources = (kind: "knowledge-base" | "mcp-server" | "skill", ids: string[]): void => {
+    unique(ids).forEach((id) => {
+      revisions[`${kind}:${id}`] = metadataStore.configResources.get({
+        id,
+        workspace_id: workspaceId,
+        user_id: userId,
+        kind
+      }).revision;
+    });
+  };
+  addResources("knowledge-base", config.enabledKnowledgeIds);
+  addResources("mcp-server", config.enabledMcpServerIds);
+  addResources("skill", [
+    ...config.enabledSkillIds,
+    ...config.skillIds,
+    ...(config.activeSkillId ? [config.activeSkillId] : [])
+  ]);
+  if (config.activeLlmProfileId) {
+    let profileId: string | undefined = config.activeLlmProfileId;
+    const visited = new Set<string>();
+    while (profileId && !visited.has(profileId)) {
+      visited.add(profileId);
+      const profile = metadataStore.configResources.get({
+        id: profileId,
+        workspace_id: workspaceId,
+        user_id: userId,
+        kind: "model-profile"
+      });
+      revisions[`model-profile:${profileId}`] = profile.revision;
+      profileId = stringRecordValue(profile.payload, "fallbackProfileId");
+    }
+  }
+  return revisions;
+};
+
 const resolveRunModelProvider = (
   profileId: string | undefined,
   metadataStore: MetadataStore,
-  userId: string
+  userId: string,
+  workspaceId: string
 ): Exclude<ReturnType<typeof createModelProviderFromEnv>, { kind: "mock" }> => {
   if (!profileId || profileId === "server-default") {
     const provider = createModelProviderFromEnv(process.env);
@@ -100,12 +240,12 @@ const resolveRunModelProvider = (
     visited.add(currentId);
     const profile = metadataStore.configResources.get({
       id: currentId,
-      workspace_id: "default",
+      workspace_id: workspaceId,
       user_id: userId,
       kind: "model-profile"
     });
     const credentials = profile.secret_ref
-      ? metadataStore.secrets.get({ ref: profile.secret_ref, workspace_id: "default", user_id: userId })
+      ? metadataStore.secrets.get({ ref: profile.secret_ref, workspace_id: workspaceId, user_id: userId })
       : {};
     const apiKey = stringRecordValue(credentials, "apiKey") ?? stringRecordValue(credentials, "api_key");
     const provider = createModelProviderFromProfile({
@@ -143,7 +283,8 @@ const resolveRunModelProvider = (
 const validateEffectiveResources = (
   config: EffectiveRunConfig,
   metadataStore: MetadataStore,
-  userId: string
+  userId: string,
+  workspaceId: string
 ): void => {
   config.enabledDatasourceIds.forEach((id) => {
     const datasource = metadataStore.dataSources.get({ user_id: userId, datasource_id: id });
@@ -151,71 +292,165 @@ const validateEffectiveResources = (
       throw new Error(`DATASOURCE_NOT_ENABLED:${id}`);
     }
   });
-  validateConfigIds(metadataStore, userId, "knowledge-base", config.enabledKnowledgeIds);
-  validateConfigIds(metadataStore, userId, "mcp-server", config.enabledMcpServerIds);
-  validateConfigIds(metadataStore, userId, "skill", [...config.enabledSkillIds, ...config.skillIds]);
+  validateConfigIds(metadataStore, userId, workspaceId, "knowledge-base", config.enabledKnowledgeIds);
+  validateConfigIds(metadataStore, userId, workspaceId, "mcp-server", config.enabledMcpServerIds);
+  validateConfigIds(metadataStore, userId, workspaceId, "skill", [...config.enabledSkillIds, ...config.skillIds]);
   if (config.activeSkillId) {
-    validateConfigIds(metadataStore, userId, "skill", [config.activeSkillId]);
+    validateConfigIds(metadataStore, userId, workspaceId, "skill", [config.activeSkillId]);
   }
   if (config.activeLlmProfileId && config.activeLlmProfileId !== "server-default") {
-    validateConfigIds(metadataStore, userId, "model-profile", [config.activeLlmProfileId]);
+    validateConfigIds(metadataStore, userId, workspaceId, "model-profile", [config.activeLlmProfileId]);
   }
 };
 
 const resolveModelSettings = (
   profileId: string | undefined,
   metadataStore: MetadataStore,
-  userId: string
-): { maxOutputTokens?: number; temperature?: number } | undefined => {
+  userId: string,
+  workspaceId: string
+): ResolvedRunConfig["modelSettings"] | undefined => {
   if (!profileId || profileId === "server-default") {
     return undefined;
   }
   const profile = metadataStore.configResources.get({
     id: profileId,
-    workspace_id: "default",
+    workspace_id: workspaceId,
     user_id: userId,
     kind: "model-profile"
   });
   const temperature = numericRecordValue(profile.payload, "temperature");
+  const topP = numericRecordValue(profile.payload, "topP") ?? numericRecordValue(profile.payload, "top_p");
+  const frequencyPenalty =
+    numericRecordValue(profile.payload, "frequencyPenalty") ?? numericRecordValue(profile.payload, "frequency_penalty");
+  const presencePenalty =
+    numericRecordValue(profile.payload, "presencePenalty") ?? numericRecordValue(profile.payload, "presence_penalty");
   const maxOutputTokens = numericRecordValue(profile.payload, "maxTokens")
     ?? numericRecordValue(profile.payload, "maxOutputTokens");
   return {
     ...(temperature !== undefined ? { temperature: Math.max(0, Math.min(2, temperature)) } : {}),
+    ...(topP !== undefined ? { topP: Math.max(0, Math.min(1, topP)) } : {}),
+    ...(frequencyPenalty !== undefined
+      ? { frequencyPenalty: Math.max(-2, Math.min(2, frequencyPenalty)) }
+      : {}),
+    ...(presencePenalty !== undefined ? { presencePenalty: Math.max(-2, Math.min(2, presencePenalty)) } : {}),
     ...(maxOutputTokens !== undefined
       ? { maxOutputTokens: Math.max(1, Math.min(100000, Math.floor(maxOutputTokens))) }
       : {})
   };
 };
 
+const resolveModelContextProfile = (
+  profileId: string | undefined,
+  modelName: string,
+  metadataStore: MetadataStore,
+  userId: string,
+  workspaceId: string
+): ModelContextProfile | undefined => {
+  if (!profileId || profileId === "server-default") {
+    return undefined;
+  }
+  const profile = metadataStore.configResources.get({
+    id: profileId,
+    workspace_id: workspaceId,
+    user_id: userId,
+    kind: "model-profile"
+  });
+  const contextLength = numericRecordValue(profile.payload, "contextLength")
+    ?? numericRecordValue(profile.payload, "context_length");
+  if (contextLength === undefined) {
+    return undefined;
+  }
+  const contextWindow = Math.max(8192, Math.min(2_000_000, Math.floor(contextLength)));
+  const maxOutputTokens = numericRecordValue(profile.payload, "maxTokens")
+    ?? numericRecordValue(profile.payload, "maxOutputTokens");
+  const outputReserve = Math.max(
+    256,
+    Math.min(Math.floor(contextWindow * 0.4), Math.floor(maxOutputTokens ?? 4096))
+  );
+  const safetyMargin = Math.max(512, Math.min(4096, Math.floor(contextWindow * 0.05)));
+  return {
+    id: `profile:${profileId}`,
+    modelPattern: modelName || "*",
+    contextWindow,
+    outputReserve,
+    safetyMargin,
+    messageOverhead: 4,
+    toolSchemaOverhead: 32
+  };
+};
+
+const resolveReasoningModel = (
+  profileId: string | undefined,
+  metadataStore: MetadataStore,
+  userId: string,
+  workspaceId: string
+): boolean | undefined => {
+  if (!profileId || profileId === "server-default") {
+    return undefined;
+  }
+  const profile = metadataStore.configResources.get({
+    id: profileId,
+    workspace_id: workspaceId,
+    user_id: userId,
+    kind: "model-profile"
+  });
+  return booleanRecordValue(profile.payload, "reasoningModel") ?? booleanRecordValue(profile.payload, "reasoning_model");
+};
+
+const resolveRunTimeoutMs = (
+  profileId: string | undefined,
+  metadataStore: MetadataStore,
+  userId: string,
+  workspaceId: string
+): number | undefined => {
+  if (!profileId || profileId === "server-default") {
+    return undefined;
+  }
+  const profile = metadataStore.configResources.get({
+    id: profileId,
+    workspace_id: workspaceId,
+    user_id: userId,
+    kind: "model-profile"
+  });
+  const timeoutMs = numericRecordValue(profile.payload, "timeoutMs") ?? numericRecordValue(profile.payload, "timeout_ms");
+  return timeoutMs !== undefined ? Math.max(1000, Math.min(10 * 60 * 1000, Math.floor(timeoutMs))) : undefined;
+};
+
 const resolveMcpRuntime = (
   serverIds: string[],
   metadataStore: MetadataStore,
-  userId: string
+  userId: string,
+  workspaceId: string
 ): McpRuntime => {
   const usedNames = new Set<string>();
   const toolNames: string[] = [];
-  const servers = serverIds.map((id): MCPClientConfig => {
+  const servers = serverIds.map((id): PolicyMcpClientConfig => {
     const resource = metadataStore.configResources.get({
       id,
-      workspace_id: "default",
+      workspace_id: workspaceId,
       user_id: userId,
       kind: "mcp-server"
     });
     const transport = stringRecordValue(resource.payload, "transport") ?? "streamable-http";
-    if (transport !== "streamable-http" && transport !== "sse") {
+    if (transport !== "streamable-http" && transport !== "sse" && transport !== "stdio") {
       throw new Error(`MCP_TRANSPORT_UNSUPPORTED:${id}:${transport}`);
     }
-    const url = stringRecordValue(resource.payload, "serverUrl") ?? stringRecordValue(resource.payload, "url");
-    if (!url) {
+    const urlOrCommand = stringRecordValue(resource.payload, "serverUrl") ?? stringRecordValue(resource.payload, "url");
+    if (!urlOrCommand) {
       throw new Error(`MCP_SERVER_URL_REQUIRED:${id}`);
     }
     const manifest = resource.payload.toolManifest;
     if (!Array.isArray(manifest)) {
       throw new Error(`MCP_TOOL_MANIFEST_REQUIRED:${id}`);
     }
+    const toolAllowlist = stringArrayRecordValue(resource.payload, "toolAllowlist")
+      ?? csvRecordValue(resource.payload, "toolAllowlist");
     manifest.forEach((tool) => {
       if (!isRecord(tool) || typeof tool.name !== "string") {
         throw new Error(`MCP_TOOL_MANIFEST_INVALID:${id}`);
+      }
+      if (!matchesMcpToolAllowlist(id, tool.name, toolAllowlist)) {
+        return;
       }
       const baseName = `mcp__${sanitizeMcpName(id)}__${sanitizeMcpName(tool.name)}`;
       let resolved = baseName.slice(0, 64);
@@ -229,13 +464,34 @@ const resolveMcpRuntime = (
       toolNames.push(resolved);
     });
     const secret = resource.secret_ref
-      ? metadataStore.secrets.get({ ref: resource.secret_ref, workspace_id: "default", user_id: userId })
+      ? metadataStore.secrets.get({ ref: resource.secret_ref, workspace_id: workspaceId, user_id: userId })
       : {};
     const headers = resolveMcpHeaders(resource.payload, secret);
+    const timeoutMs = numericRecordValue(resource.payload, "timeoutMs") ?? numericRecordValue(resource.payload, "timeout_ms");
+    const common = {
+      serverId: id,
+      ...(toolAllowlist && toolAllowlist.length > 0 ? { toolAllowlist } : {}),
+      ...(timeoutMs !== undefined ? { timeoutMs: Math.max(1000, Math.min(10 * 60 * 1000, Math.floor(timeoutMs))) } : {})
+    };
+    if (transport === "stdio") {
+      const stdio = resolveStdioCommand(resource.payload, urlOrCommand);
+      const cwd = stringRecordValue(resource.payload, "cwd");
+      const env = recordStringMapValue(resource.payload.env);
+      return {
+        ...common,
+        type: "stdio",
+        command: stdio.command,
+        ...(stdio.args.length > 0 ? { args: stdio.args } : {}),
+        ...(cwd ? { cwd } : {}),
+        ...(env ? { env } : {})
+      };
+    }
     return {
       type: transport === "streamable-http" ? "http" : "sse",
-      url,
+      url: urlOrCommand,
       serverId: id,
+      ...(toolAllowlist && toolAllowlist.length > 0 ? { toolAllowlist } : {}),
+      ...(timeoutMs !== undefined ? { timeoutMs: Math.max(1000, Math.min(10 * 60 * 1000, Math.floor(timeoutMs))) } : {}),
       ...(Object.keys(headers).length > 0 ? { headers } : {})
     };
   });
@@ -273,16 +529,51 @@ const enforceSkillMcpPolicy = (
 
 const sanitizeMcpName = (value: string): string => value.replace(/[^a-zA-Z0-9_-]/gu, "_");
 
+const matchesMcpToolAllowlist = (
+  serverId: string,
+  toolName: string,
+  toolAllowlist: string[] | undefined
+): boolean => {
+  if (!toolAllowlist || toolAllowlist.length === 0) {
+    return true;
+  }
+  const baseName = `mcp__${sanitizeMcpName(serverId)}__${sanitizeMcpName(toolName)}`;
+  return toolAllowlist.includes(toolName) || toolAllowlist.includes(baseName);
+};
+
+const resolveStdioCommand = (
+  payload: Record<string, unknown>,
+  fallbackCommand: string
+): { args: string[]; command: string } => {
+  const command = stringRecordValue(payload, "command");
+  const args = stringArrayRecordValue(payload, "args");
+  if (command) {
+    return { command, args: args ?? [] };
+  }
+  const parts = splitCommandLine(fallbackCommand);
+  const head = parts[0];
+  if (!head) {
+    throw new Error("MCP_STDIO_COMMAND_REQUIRED");
+  }
+  return { command: head, args: parts.slice(1) };
+};
+
+const hasAnyKey = (record: Record<string, unknown>, keys: string[]): boolean =>
+  keys.some((key) => record[key] !== undefined);
+
+const unique = <T>(values: T[]): T[] => [...new Set(values)];
+
 const validateConfigIds = (
   metadataStore: MetadataStore,
   userId: string,
+  workspaceId: string,
   kind: "knowledge-base" | "mcp-server" | "model-profile" | "skill",
   ids: string[]
 ): void => {
   ids.forEach((id) => {
     const resource = metadataStore.configResources.get({
       id,
-      workspace_id: "default",
+      workspace_id: workspaceId,
       user_id: userId,
       kind
     });
@@ -300,9 +591,66 @@ const stringRecordValue = (record: Record<string, unknown>, key: string): string
   return typeof value === "string" && value.trim() ? value : undefined;
 };
 
+const csvRecordValue = (record: Record<string, unknown>, key: string): string[] | undefined => {
+  const value = stringRecordValue(record, key);
+  const items = value?.split(",").map((item) => item.trim()).filter(Boolean);
+  return items && items.length > 0 ? items : undefined;
+};
+
+const stringArrayRecordValue = (record: Record<string, unknown>, key: string): string[] | undefined => {
+  const value = record[key];
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const items = value.filter((item): item is string => typeof item === "string" && item.trim().length > 0);
+  return items.length > 0 ? items : undefined;
+};
+
+const recordStringMapValue = (value: unknown): Record<string, string> | undefined => {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const entries = Object.entries(value).filter((entry): entry is [string, string] => typeof entry[1] === "string");
+  return entries.length > 0 ? Object.fromEntries(entries) : undefined;
+};
+
 const numericRecordValue = (record: Record<string, unknown>, key: string): number | undefined => {
   const value = record[key];
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 };
 
+const booleanRecordValue = (record: Record<string, unknown>, key: string): boolean | undefined => {
+  const value = record[key];
+  return typeof value === "boolean" ? value : undefined;
+};
+
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null;
+
+const splitCommandLine = (value: string): string[] => {
+  const parts: string[] = [];
+  let current = "";
+  let quote: "\"" | "'" | undefined;
+  for (let index = 0; index < value.length; index += 1) {
+    const char = value[index];
+    if ((char === "\"" || char === "'") && !quote) {
+      quote = char;
+      continue;
+    }
+    if (char === quote) {
+      quote = undefined;
+      continue;
+    }
+    if (/\s/u.test(char ?? "") && !quote) {
+      if (current) {
+        parts.push(current);
+        current = "";
+      }
+      continue;
+    }
+    current += char;
+  }
+  if (current) {
+    parts.push(current);
+  }
+  return parts;
+};
