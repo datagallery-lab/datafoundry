@@ -64,6 +64,22 @@ const modelProviderServer = createHttpServer(async (request, response) => {
       writeStreamDone(response, body.model, "tool_calls");
       return;
     }
+    if (String(latestUserText).includes("使用 copilotkit smoke skill") && !hasToolResult) {
+      writeStreamChunk(response, body.model, { role: "assistant" });
+      writeStreamChunk(response, body.model, {
+        tool_calls: [{
+          index: 0,
+          id: "call_skill",
+          type: "function",
+          function: {
+            name: "skill",
+            arguments: JSON.stringify({ name: "copilotkit-smoke-skill" })
+          }
+        }]
+      });
+      writeStreamDone(response, body.model, "tool_calls");
+      return;
+    }
     if (!hasToolResult) {
       writeStreamChunk(response, body.model, { role: "assistant" });
       writeStreamChunk(response, body.model, {
@@ -119,6 +135,22 @@ assert(address && typeof address === "object");
 const baseUrl = `http://127.0.0.1:${address.port}`;
 
 try {
+  const skillForm = new FormData();
+  skillForm.set("file", new Blob([
+    "---\n",
+    "name: copilotkit-smoke-skill\n",
+    "description: Use for CopilotKit smoke skill runs.\n",
+    "version: 1.0.0\n",
+    "tags: [copilotkit, smoke]\n",
+    "allowed-tools: [inspect_schema]\n",
+    "---\n",
+    "Use this skill to prove Mastra skill tool loading works in the AG-UI runtime.\n"
+  ], { type: "text/markdown" }), "SKILL.md");
+  const skillUploadResponse = await fetch(`${baseUrl}/api/v1/skills`, { method: "POST", body: skillForm });
+  assert.equal(skillUploadResponse.status, 201);
+  const skillUpload = await skillUploadResponse.json();
+  assert.equal(skillUpload.data.validationStatus, "valid");
+
   const runId = `copilotkit-run-smoke-${Date.now()}`;
   const threadId = `copilotkit-thread-smoke-${Date.now()}`;
   const events = await runCopilotKitAgent(baseUrl, {
@@ -161,6 +193,45 @@ try {
   assert.equal(llmRequests[0]?.path, "/chat/completions");
   assert.equal(llmRequests[0]?.authorization, "Bearer copilotkit-smoke-key");
   assert(llmRequests.length >= 2, "The fake model should be called once for tool call and once for final answer");
+
+  const skillRunId = `copilotkit-skill-run-smoke-${Date.now()}`;
+  const skillThreadId = `copilotkit-skill-thread-smoke-${Date.now()}`;
+  const skillEvents = await runCopilotKitAgent(baseUrl, {
+    threadId: skillThreadId,
+    runId: skillRunId,
+    parentRunId: undefined,
+    state: {},
+    messages: [{
+      id: "user-message-skill",
+      role: "user",
+      content: "请使用 copilotkit smoke skill，然后说明它已经加载。"
+    }],
+    tools: [],
+    context: [],
+    forwardedProps: {
+      run_config: {
+        activeDatasourceId: "api-duckdb-demo",
+        enabledDatasourceIds: ["api-duckdb-demo"],
+        enabledKnowledgeIds: [],
+        enabledMcpServerIds: [],
+        skill_mode: "auto",
+        skill_tags: ["copilotkit"]
+      }
+    }
+  });
+  assert.equal(skillEvents[skillEvents.length - 1]?.type, EventType.RUN_FINISHED);
+  assert(
+    skillEvents.some((event) => event.type === EventType.CUSTOM && event.name === "skill.selection"),
+    "Skill run should emit skill.selection"
+  );
+  assert(
+    skillEvents.some((event) => event.type === EventType.TOOL_CALL_END && event.toolCallId === "call_skill"),
+    "Skill run should call the Mastra skill tool"
+  );
+  assert(
+    skillEvents.some((event) => event.type === EventType.TOOL_CALL_RESULT && event.toolCallId === "call_skill"),
+    "Skill run should emit a skill tool result"
+  );
 
   const store = createMetadataStore({ database_path: metadataPath });
   try {

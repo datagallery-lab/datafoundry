@@ -1,6 +1,6 @@
 # Backend REST API Reference
 
-日期：2026-06-24
+日期：2026-06-25
 范围：`apps/api` 当前实现的 HTTP JSON REST API
 实现入口：`apps/api/src/server.ts`、`apps/api/src/config-api.ts`
 
@@ -103,11 +103,13 @@ SQL_BLOCKED, SQL_TIMEOUT, PROVIDER_CONFIG_MISSING, PROVIDER_RATE_LIMITED
 | GET/PATCH/DELETE | `/api/v1/model-profiles/:id` | Model Profile 详情 / 更新 / 删除 |
 | POST | `/api/v1/model-profiles/:id/test` | Model Provider 探测 |
 | GET/POST | `/api/v1/skills` | Skill 列表 / 上传创建 |
+| POST | `/api/v1/skills/select` | 预览本次 run 的 Skill 筛选结果 |
 | GET/PATCH/DELETE | `/api/v1/skills/:id` | Skill 详情 / 更新 / 删除 |
 | POST | `/api/v1/skills/:id/test` | Skill 通用验证 |
 | POST | `/api/v1/skills/:id/validate` | Skill 语义验证 |
 | POST | `/api/v1/skills/:id/replace` | 替换 Skill package |
-| GET | `/api/v1/skills/:id/package` | 读取 Skill package |
+| GET | `/api/v1/skills/:id/package` | 读取 Skill package file ref 元数据 |
+| GET | `/api/v1/skills/:id/download` | 下载 Skill package |
 | GET | `/api/v1/artifacts/:id` | Artifact 详情 |
 | GET | `/api/v1/artifacts/:id/preview` | Artifact preview JSON |
 | GET | `/api/v1/artifacts/:id/content` | Artifact inline 内容 |
@@ -1018,8 +1020,10 @@ fallback chain 不能形成环，环会返回 `PROVIDER_TEST_FAILED`。
 
 ## 10. Skills
 
-Skill DTO 使用 `validationStatus` 表示状态。读接口不会返回 `packageBase64` 或
-`packageContent`，需要通过 `/package` 单独读取。
+Skill DTO 使用 `validationStatus` 表示状态。读接口不会返回包正文。上传的 `SKILL.md`
+或 zip package 会作为 FileAssetRef 保存，Skill metadata 只引用 `packageFileRefId`。
+run 时后端根据 `skill_mode` 筛选 skill，并只把 selected skill package 物化到 Mastra
+Workspace 的 `skills/` 目录。
 
 ### GET `/api/v1/skills`
 
@@ -1034,6 +1038,8 @@ Skill DTO 使用 `validationStatus` 表示状态。读接口不会返回 `packag
       "name": "Data Analysis",
       "description": "Analyze tabular data",
       "allowedTools": ["inspect_schema", "run_sql_readonly"],
+      "packageFileRefId": "file_ref_skill_package",
+      "packageFormat": "skill-md",
       "version": "1.0.0",
       "manifest": {
         "entry": "SKILL.md",
@@ -1064,9 +1070,62 @@ Content-Type: multipart/form-data
 field file=<SKILL.md or skill.zip>
 field id=data-analysis
 field defaultEnabled=true
+field tags=data-analysis,sql
 ```
 
 响应：`201 Created`，data 为 Skill DTO。
+
+### POST `/api/v1/skills/select`
+
+预览本次 run 的 skill 筛选结果。请求体中的 `run_config` 使用和 AG-UI run 相同的
+skill 字段。
+
+请求：
+
+```json
+{
+  "user_input": "分析 orders 表并生成报告",
+  "run_config": {
+    "skill_mode": "auto",
+    "skill_tags": ["data-analysis"],
+    "skill_policy": {
+      "max_skills": 5
+    }
+  }
+}
+```
+
+响应：
+
+```json
+{
+  "success": true,
+  "data": {
+    "skills": [
+      {
+        "id": "data-analysis",
+        "name": "Data Analysis",
+        "description": "Analyze tabular data",
+        "revision": 1,
+        "tags": ["data-analysis", "sql"]
+      }
+    ],
+    "effectivePolicy": {
+      "allowedTools": ["inspect_schema", "run_sql_readonly"],
+      "deniedTools": [],
+      "mergeStrategy": "union"
+    },
+    "audit": [
+      {
+        "skillId": "data-analysis",
+        "decision": "selected",
+        "reasons": ["workspace:default-enabled", "query:analysis"],
+        "score": 20
+      }
+    ]
+  }
+}
+```
 
 ### GET/PATCH/DELETE `/api/v1/skills/:id`
 
@@ -1128,13 +1187,42 @@ Multipart 请求同 `POST /api/v1/skills`，但写入已有 `:id`。
 {
   "success": true,
   "data": {
-    "packageBase64": "LS0tCm5hbWU6IERhdGEgQW5hbHlzaXMK...",
-    "packageContent": "Follow these data analysis instructions...",
+    "packageFileRefId": "file_ref_skill_package",
     "packageFileName": "SKILL.md",
     "packageFormat": "skill-md"
   }
 }
 ```
+
+### GET `/api/v1/skills/:id/download`
+
+下载原始 `SKILL.md` 或 zip package，响应是文件流，不使用 JSON envelope。
+
+## 10.1 Run Config Skill 字段
+
+AG-UI run 仍走 `/api/copilotkit`。推荐通过 `forwardedProps.run_config` 传入：
+
+```json
+{
+  "skill_mode": "auto",
+  "skill_ids": ["data-analysis"],
+  "skill_tags": ["sql"],
+  "skill_policy": {
+    "max_skills": 5,
+    "allowed_tool_names": ["inspect_schema", "run_sql_readonly"],
+    "deny_tool_names": ["execute_command"],
+    "strict_skill_tools": false
+  }
+}
+```
+
+兼容旧字段：
+
+- `activeSkillId`
+- `enabledSkillIds`
+
+默认 `skill_mode=auto`。workspace `defaultEnabled=true` 的 skill 会进入候选集合；
+最终 selected skill 会通过 `skill.selection` custom event 持久化到 run events。
 
 ## 11. Artifacts
 

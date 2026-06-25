@@ -21,6 +21,8 @@ GET  /api/v1/capabilities
 GET  /api/v1/workspace-config
 PATCH /api/v1/workspace-config
 GET/POST/PATCH/DELETE /api/v1/{datasources|knowledge-bases|mcp-servers|model-profiles|skills}
+POST /api/v1/skills/select
+GET  /api/v1/skills/:id/download
 GET/POST/DELETE /api/v1/files
 GET  /api/v1/files/:id/download
 GET  /api/v1/artifacts/:id[/preview|/content|/download]
@@ -95,13 +97,24 @@ run_config.activeDatasourceId
       "enabledKnowledgeIds": ["metrics-docs"],
       "enabledMcpServerIds": ["local-mcp"],
       "activeLlmProfileId": "server-default",
-      "activeSkillId": "data-analysis",
-      "enabledSkillIds": ["data-analysis"],
+      "skill_mode": "auto",
+      "skill_ids": ["data-analysis"],
+      "skill_tags": ["sql"],
+      "skill_policy": {
+        "max_skills": 5,
+        "deny_tool_names": ["execute_command"],
+        "strict_skill_tools": false
+      },
       "fileIds": ["file-ref-1"]
     }
   }
 }
 ```
+
+`activeSkillId` / `enabledSkillIds` 仍兼容，但新链路推荐使用 `skill_mode`、
+`skill_ids`、`skill_tags`、`skill_policy`。默认 `skill_mode=auto`，后端会从当前
+workspace enabled skills 中筛选本次 run 可见的 skill，并只把 selected skills 挂到
+Mastra workspace；`skill / skill_search / skill_read` 的结果会进入统一 context governance。
 
 `fileIds` 来自 `POST /api/v1/files` 返回的 `data.files[].id`，它是 FileAssetRef id。
 后端会在 run 开始时校验这些 id，物化到当前 run workspace 的 `input/` 目录，并把文件清单注入
@@ -181,6 +194,7 @@ user_id=dev-user
 | `execute_command` | 本地变换 | 仅 Mastra `LocalSandbox` 原生隔离可用时暴露，无网络，不能绕过 Data Gateway。 |
 | `publish_artifact` | Artifact | 将 workspace 文件发布为前端可下载 artifact。 |
 | `promote_workspace_file` | FileAssetRef | 将 workspace 文件提升为后续 run 可复用的 file id。 |
+| `skill` / `skill_search` / `skill_read` | Mastra Skill | 只在本次 run selected skills 范围内读取 skill 指令、引用和资产。 |
 | `task_write` / `task_update` / `task_complete` / `task_check` | 任务状态 | 结果同时投影 PLAN。 |
 | `ask_user` / `submit_plan` | 用户协作 | 会挂起 run，按 3.8 恢复。 |
 
@@ -294,10 +308,44 @@ run 失败 delta：
 | `artifact` | 支持 | `id`、`type`、`name`、可选 `preview_json` | workspace 集成前直接使用事件内 preview。 |
 | `context.compiled` | 支持 | step、package revision、group decisions、token report、budget | 内部可观测性；GUI/TUI 可忽略。 |
 | `context.prompt-verified` | 支持 | step、model profile、prompt/input/remaining tokens | 内部可观测性；GUI/TUI 可忽略。 |
-| `run.config.resolved` | 支持 | active datasource/model/skill、enabled KB/MCP、resource revisions | 调试用；GUI/TUI 可忽略。 |
+| `run.config.resolved` | 支持 | active datasource、enabled KB/MCP/files、selected skills、workspace config | 调试用；GUI/TUI 可忽略。 |
+| `skill.selection` | 支持 | mode、selected skills、audit reasons、effective tool policy | 可展示本轮启用 skill；不影响聊天主流程。 |
 | `interaction.requested` | 支持 | interaction id、tool、payload、resume schema、`interrupt_event` | 渲染问题/计划审批并保存恢复参数。 |
 | `interaction.resolved` | 支持 | interaction id、tool call id、response | 清除挂起交互。 |
 | `goal.updated` | 支持 | 稳定 goal snapshot、来源 | 展示 objective 状态；可忽略。 |
+
+`skill.selection` 示例：
+
+```json
+{
+  "type": "CUSTOM",
+  "name": "skill.selection",
+  "value": {
+    "mode": "auto",
+    "selected": [
+      {
+        "id": "data-analysis",
+        "name": "Data Analysis",
+        "revision": 1,
+        "tags": ["sql"]
+      }
+    ],
+    "effective_tool_policy": {
+      "allowedTools": ["inspect_schema", "run_sql_readonly"],
+      "deniedTools": [],
+      "mergeStrategy": "union"
+    },
+    "audit": [
+      {
+        "skillId": "data-analysis",
+        "decision": "selected",
+        "reasons": ["workspace:default-enabled", "query:analysis"],
+        "score": 20
+      }
+    ]
+  }
+}
+```
 
 ### 3.8 ask_user / submit_plan 恢复
 

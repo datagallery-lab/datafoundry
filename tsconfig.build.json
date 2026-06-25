@@ -11,6 +11,9 @@
       "path": "packages/files"
     },
     {
+      "path": "packages/skills"
+    },
+    {
       "path": "packages/artifacts"
     },
     {

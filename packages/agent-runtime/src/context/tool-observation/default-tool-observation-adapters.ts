@@ -8,6 +8,11 @@ import {
   RetrieveKnowledgeToolObservationAdapter
 } from "./adapters/data-tool-observation-adapters.js";
 import { SchemaToolObservationAdapter } from "./adapters/schema-tool-observation-adapter.js";
+import {
+  SkillActivationToolObservationAdapter,
+  SkillReadToolObservationAdapter,
+  SkillSearchToolObservationAdapter
+} from "./adapters/skill-tool-observation-adapters.js";
 import { SqlResultToolObservationAdapter } from "./adapters/sql-result-tool-observation-adapter.js";
 import {
   TaskCheckToolObservationAdapter,
@@ -62,6 +67,9 @@ const defaultToolObservationAdapters = (
   new ExecuteCommandToolObservationAdapter(),
   new PublishArtifactToolObservationAdapter(),
   new PromoteWorkspaceFileToolObservationAdapter(),
+  new SkillActivationToolObservationAdapter(),
+  new SkillSearchToolObservationAdapter(),
+  new SkillReadToolObservationAdapter(),
   new TaskWriteToolObservationAdapter(),
   new TaskUpdateToolObservationAdapter(),
   new TaskCompleteToolObservationAdapter(),

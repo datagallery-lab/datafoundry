@@ -13,6 +13,11 @@ import {
 import type { LocalDataGateway } from "@open-data-agent/data-gateway";
 import { fileAssetRefDto, type FileAssetService, mimeTypeForFilename } from "@open-data-agent/files";
 import type { LocalKnowledgeService } from "@open-data-agent/knowledge";
+import {
+  buildSkillResourcePayload,
+  parseSkillPackage,
+  selectSkillsForRun
+} from "@open-data-agent/skills";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
@@ -29,7 +34,8 @@ import { readFileSync } from "node:fs";
 import type { IncomingMessage } from "node:http";
 import { basename, resolve, sep } from "node:path";
 
-import { parseSkillUpload, readMultipartFiles, readMultipartUpload } from "./upload-parser.js";
+import { resolveEffectiveRunConfig } from "./run-input.js";
+import { readMultipartFiles, readMultipartUpload } from "./upload-parser.js";
 
 const MAX_JSON_BODY_BYTES = 1024 * 1024;
 const DEFAULT_WORKSPACE_ID = "default";
@@ -118,6 +124,9 @@ const routeConfigRequest = async (
   }
   if (root === "files") {
     return handleFileRequest(request, segments.slice(1), context);
+  }
+  if (root === "skills" && segments[1] === "select" && request.method === "POST") {
+    return handleSkillSelectionPreview(request, context);
   }
   const kind = RESOURCE_PATHS[root];
   if (kind) {
@@ -498,11 +507,40 @@ const handleGenericResourceRequest = async (
       kind
     });
     return ok({
-      packageBase64: current.payload.packageBase64,
-      packageContent: current.payload.packageContent,
+      packageFileRefId: current.payload.packageFileRefId,
       packageFileName: current.payload.packageFileName,
       packageFormat: current.payload.packageFormat
     });
+  }
+  if (kind === "skill" && action === "download" && request.method === "GET") {
+    const current = context.metadataStore.configResources.get({
+      id,
+      workspace_id: context.workspaceId,
+      user_id: context.userId,
+      kind
+    });
+    const packageFileRefId = stringValue(current.payload.packageFileRefId);
+    if (!packageFileRefId) {
+      throw new Error(`SKILL_PACKAGE_FILE_REF_REQUIRED:${id}`);
+    }
+    const resolved = context.fileAssetService.getRef({
+      user_id: context.userId,
+      workspace_id: context.workspaceId,
+      id: packageFileRefId
+    });
+    const file = context.fileAssetService.readRef({
+      user_id: context.userId,
+      workspace_id: context.workspaceId,
+      id: packageFileRefId
+    });
+    return {
+      body: file.body,
+      headers: {
+        "Content-Disposition": `attachment; filename="${safeDownloadName(resolved.ref.filename, file.mimeType)}"`,
+        "Content-Type": file.mimeType
+      },
+      status: 200
+    };
   }
   if (action === "test" && request.method === "POST") {
     const startedAt = Date.now();
@@ -1087,24 +1125,78 @@ const readJsonBody = async (request: IncomingMessage): Promise<Record<string, un
 
 const skillUploadBody = async (
   request: IncomingMessage,
-  _context: Required<ConfigApiContext>
+  context: Required<ConfigApiContext>
 ): Promise<Record<string, unknown>> => {
   if (!isMultipart(request)) {
     throw new Error("SKILL_MULTIPART_REQUIRED");
   }
   const upload = await readMultipartUpload(request);
-  const parsed = await parseSkillUpload(upload.file);
+  const parsed = await parseSkillPackage(upload.file);
   const knownTools = new Set<string>(STATIC_AGENT_TOOL_NAMES);
   const unknownTools = parsed.allowedTools.filter((tool) => !knownTools.has(tool) && !tool.startsWith("mcp__"));
   if (unknownTools.length > 0) {
     throw new Error(`SKILL_ALLOWED_TOOL_UNKNOWN:${unknownTools.join(",")}`);
   }
+  const packageRef = context.fileAssetService.createRef({
+    user_id: context.userId,
+    workspace_id: context.workspaceId,
+    filename: parsed.packageFileName,
+    content: upload.file.content,
+    declared_mime_type: upload.file.mimeType || mimeTypeForFilename(parsed.packageFileName),
+    source: "upload",
+    metadata: { kind: "skill-package", skill: parsed.name, version: parsed.version }
+  });
   return {
     ...upload.fields,
-    ...parsed,
-    packageContent: parsed.instructions,
+    ...buildSkillResourcePayload({
+      fields: upload.fields,
+      packageFileRefId: packageRef.ref.id,
+      parsed
+    }),
+    description: parsed.description,
+    name: parsed.name,
     status: "valid"
   };
+};
+
+const handleSkillSelectionPreview = async (
+  request: IncomingMessage,
+  context: Required<ConfigApiContext>
+): Promise<ConfigApiResponse> => {
+  const body = await readJsonBody(request);
+  const userInput = stringValue(body.user_input) ?? stringValue(body.userInput) ?? "";
+  const runConfig = recordValue(body.run_config) ?? recordValue(body.runConfig) ?? {};
+  const effectiveRunConfig = resolveEffectiveRunConfig(
+    {
+      context: [],
+      forwardedProps: { run_config: runConfig },
+      messages: [{ id: "skill-selection-preview", role: "user", content: userInput }],
+      runId: "skill-selection-preview",
+      threadId: "skill-selection-preview"
+    } as never,
+    context.metadataStore,
+    context.userId,
+    "api-duckdb-demo",
+    context.workspaceId
+  );
+  const selection = selectSkillsForRun({
+    metadataStore: context.metadataStore,
+    runConfig: effectiveRunConfig,
+    userId: context.userId,
+    userInput,
+    workspaceId: context.workspaceId
+  });
+  return ok({
+    audit: selection.audit,
+    effectivePolicy: selection.effectiveToolPolicy,
+    skills: selection.selectedSkills.map((skill) => ({
+      id: skill.id,
+      name: skill.name,
+      description: skill.description,
+      revision: skill.revision,
+      tags: skill.tags
+    }))
+  });
 };
 
 const errorResponse = (error: unknown): ConfigApiResponse => {

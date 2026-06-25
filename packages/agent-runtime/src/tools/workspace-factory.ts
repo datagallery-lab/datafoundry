@@ -7,6 +7,7 @@ import type { AgentRunContext } from "../types.js";
 
 export type WorkspaceFactoryInput = {
   runContext: AgentRunContext;
+  skillPaths?: string[];
   workspaceRoot?: string | undefined;
 };
 
@@ -42,6 +43,7 @@ export const createRunWorkspace = (input: WorkspaceFactoryInput): RunWorkspace =
   const workspace = new Workspace({
     filesystem: new LocalFilesystem({ basePath: runDir, contained: true }),
     ...(sandbox ? { sandbox } : {}),
+    ...(input.skillPaths?.length ? { bm25: true, skills: input.skillPaths } : {}),
     tools: {
       enabled: false,
       [WORKSPACE_TOOLS.FILESYSTEM.READ_FILE]: { enabled: true, name: "read_file", maxOutputTokens },
@@ -73,7 +75,7 @@ export const createRunWorkspace = (input: WorkspaceFactoryInput): RunWorkspace =
   };
 };
 
-const resolveRunWorkspaceDir = (input: WorkspaceFactoryInput): string => {
+export const resolveRunWorkspaceDir = (input: WorkspaceFactoryInput): string => {
   const root = resolveWorkspaceRoot(input.workspaceRoot);
   const segments = [
     safePathSegment(input.runContext.user_id, "user_id"),

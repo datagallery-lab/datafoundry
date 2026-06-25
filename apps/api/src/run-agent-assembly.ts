@@ -15,6 +15,7 @@ import type { DataGateway } from "@open-data-agent/data-gateway";
 import type { FileAssetService } from "@open-data-agent/files";
 import type { KnowledgeService } from "@open-data-agent/knowledge";
 import type { LongTermMemoryRecord } from "@open-data-agent/metadata";
+import type { SkillRecord, SkillSelectionResult } from "@open-data-agent/skills";
 
 import type { InteractionResume } from "./interaction-runtime-adapter.js";
 import type { McpRuntime, ResolvedRunConfig } from "./run-config-resolver.js";
@@ -56,7 +57,8 @@ type CreateRunAgentAssemblyInput = {
   modelProvider: ResolvedRunConfig["modelProvider"];
   modelSettings?: ResolvedRunConfig["modelSettings"] | undefined;
   runContext: AgentRunContext;
-  skillPolicy?: ResolvedRunConfig["skillPolicy"] | undefined;
+  selectedSkills: SkillRecord[];
+  skillSelection: SkillSelectionResult;
   taskStateRuntime: TaskStateRuntime;
   userId: string;
   workspaceRoot: string;
@@ -108,7 +110,8 @@ export const createRunAgentAssembly = async (
     ...(input.modelSettings ? { modelSettings: input.modelSettings } : {}),
     ...(input.longTermMemories.length > 0 ? { longTermMemory: { records: input.longTermMemories } } : {}),
     runContext: input.runContext,
-    ...(input.skillPolicy ? { skillPolicy: input.skillPolicy } : {}),
+    selectedSkills: input.selectedSkills,
+    skillSelection: input.skillSelection,
     taskStateRuntime: input.taskStateRuntime,
     ...(!input.interactionResume && input.goal ? { goal: input.goal } : {}),
     ...(input.effectiveRunConfig.fileIds.length > 0
