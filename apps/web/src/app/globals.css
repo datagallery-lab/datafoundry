@@ -1,34 +1,72 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
-  --font-geist-sans: ui-sans-serif, system-ui, sans-serif, "Apple Color Emoji", "Segoe UI Emoji";
-  --font-geist-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  /* Data-dense dashboard palette */
+  --primary: #1e40af;
+  --primary-light: #3b82f6;
+  --accent: #f59e0b;
+  --surface: #ffffff;
+  --surface-subtle: #f8fafc;
+  --border: #e2e8f0;
+  --foreground: #0f172a;
+  --muted: #475569;
+  --muted-light: #64748b;
+  --code-bg: #0f172a;
+
+  /* Semantic step tones */
+  --step-inspect: #3b82f6;
+  --step-query: #8b5cf6;
+  --step-transform: #06b6d4;
+  --step-fetch: #0ea5e9;
+  --step-visualize: #7c3aed;
+  --step-knowledge: #0891b2;
+  --step-success: #059669;
+  --step-warning: #d97706;
+  --step-error: #dc2626;
+  --step-glow: rgb(59 130 246 / 0.18);
+
+  --radius-card: 0.75rem;
+  --shadow-card: 0 1px 2px rgb(15 23 42 / 0.04);
+  --shadow-card-hover: 0 4px 14px rgb(15 23 42 / 0.06);
 }
 
 @theme inline {
-  --color-background: var(--background);
+  --color-background: var(--surface-subtle);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+  --color-primary: var(--primary);
+  --color-primary-light: var(--primary-light);
+  --color-accent: var(--accent);
+  --color-surface: var(--surface);
+  --color-surface-subtle: var(--surface-subtle);
+  --color-border: var(--border);
+  --color-muted: var(--muted);
+  --color-muted-light: var(--muted-light);
+  --color-code-bg: var(--code-bg);
+  --color-step-inspect: var(--step-inspect);
+  --color-step-query: var(--step-query);
+  --color-step-transform: var(--step-transform);
+  --color-step-fetch: var(--step-fetch);
+  --color-step-visualize: var(--step-visualize);
+  --color-step-knowledge: var(--step-knowledge);
+  --color-step-success: var(--step-success);
+  --color-step-warning: var(--step-warning);
+  --color-step-error: var(--step-error);
+  --font-sans: var(--font-fira-sans);
+  --font-mono: var(--font-fira-code);
 }
 
 body {
-  background: var(--background);
+  background: var(--surface-subtle);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-fira-sans), ui-sans-serif, system-ui, sans-serif;
 }
 
 nextjs-portal {
   display: none;
+}
+
+.tabular {
+  font-variant-numeric: tabular-nums;
 }
 
 @keyframes step-in {
@@ -55,12 +93,12 @@ nextjs-portal {
 @keyframes step-border-pulse {
   0%,
   100% {
-    box-shadow: 0 1px 2px rgb(15 23 42 / 0.04);
+    box-shadow: var(--shadow-card);
   }
   50% {
     box-shadow:
-      0 0 0 3px var(--step-glow, rgb(14 165 233 / 0.18)),
-      0 4px 14px rgb(15 23 42 / 0.06);
+      0 0 0 3px var(--step-glow),
+      var(--shadow-card-hover);
   }
 }
 
@@ -84,4 +122,37 @@ nextjs-portal {
 
 .step-chevron[data-expanded="true"] {
   transform: rotate(180deg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .step-enter,
+  .step-streaming,
+  .caret-blink {
+    animation: none;
+  }
+
+  .step-chevron {
+    transition: none;
+  }
+}
+
+/* CopilotKit preflight resets [data-copilotkit] button — restore HITL choice styling */
+[data-copilotkit] button.hitl-choice-option {
+  appearance: none;
+  box-sizing: border-box;
+  margin: 0;
+  border: 1px solid var(--border);
+  background-color: var(--surface-subtle);
+  color: var(--foreground);
+}
+
+[data-copilotkit] button.hitl-choice-option:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--primary) 35%, var(--border));
+  background-color: color-mix(in srgb, var(--primary-light) 8%, var(--surface-subtle));
+  box-shadow: var(--shadow-card-hover);
+}
+
+[data-copilotkit] button.hitl-choice-option:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--primary-light) 45%, transparent);
 }

@@ -11,7 +11,7 @@ export type DataArtifactType = "dataset" | "chart" | "sql" | "report";
  * lifecycle, not around specific SQL tools, so any backend data operation maps
  * to one of these. Today the backend only emits `inspect` (inspect_schema) and
  * `query` (run_sql_readonly); the remaining kinds light up as the backend ships
- * more data tools (see frontend-backend-capability-requests.md #5/#6). Unknown
+ * more data tools (see docs/engineering/2026-06-25-backend-requirements.md). Unknown
  * tools degrade to `other` instead of masquerading as a schema inspection.
  */
 export type DataStepKind =
@@ -397,6 +397,10 @@ export function normalizeSkillSettings(
     packageSource: settings?.packageSource ?? "",
     allowedTools: settings?.allowedTools ?? "",
     packageContent: settings?.packageContent ?? "",
+    defaultDbIds: settings?.defaultDbIds ?? "",
+    defaultKbIds: settings?.defaultKbIds ?? "",
+    defaultMcpIds: settings?.defaultMcpIds ?? "",
+    modelProfileId: settings?.modelProfileId ?? "",
   };
 }
 
@@ -499,13 +503,10 @@ export interface WorkspaceConfigItem {
   enabled: boolean;
   builtin?: boolean;
   settings?: Record<string, string>;
-  /**
-   * Reserved for the backend secretRef model: once a config-management API
-   * stores credentials, this points at the server-side secret. Frontend never
-   * holds the plaintext after that. Unused until backend lands.
-   */
   secretRef?: string;
-  /** Reserved: connectivity result from backend `test`. Defaults to untested. */
+  hasSecret?: boolean;
+  revision?: number;
+  /** Connectivity result from backend `test`. Defaults to untested. */
   status?: ConfigItemStatus;
 }
 
@@ -514,8 +515,10 @@ export type ConfigFieldDef = {
   label: string;
   placeholder?: string;
   helpText?: string;
-  inputType?: "text" | "password" | "url" | "select" | "number";
+  inputType?: "text" | "password" | "url" | "select" | "number" | "boolean";
   options?: Array<{ value: string; label: string }>;
+  /** Select option values rendered disabled until pendingCapability activates. */
+  pendingOptionValues?: string[];
   fullWidth?: boolean;
   required?: boolean;
   /** Field is only rendered/validated when this predicate passes (conditional fields). */
@@ -526,12 +529,26 @@ export type ConfigFieldDef = {
    * once the backend supports it — no field re-authoring needed.
    */
   requiresCapability?: BackendCapability;
+  /**
+   * Placeholder capability: field stays visible but disabled with a badge until
+   * the backend ships. Flip matching entry in PENDING_CAPABILITIES to true.
+   */
+  pendingCapability?: PendingCapability;
+  /** When set, pending state applies only if this predicate is true. */
+  pendingWhen?: (settings: Record<string, string>) => boolean;
+  /** Dynamic select options (e.g. fallback profile list). */
+  getOptions?: (context: ConfigFieldOptionsContext) => Array<{ value: string; label: string }>;
   readOnly?: (item: WorkspaceConfigItem) => boolean;
+};
+
+export type ConfigFieldOptionsContext = {
+  workspaceConfig?: WorkspaceConfigStore;
+  currentItemId?: string;
 };
 
 /**
  * Backend capability flags. All false today (see
- * frontend-backend-capability-requests.md). Flip to true when the matching
+ * docs/engineering/2026-06-25-backend-requirements.md). Flip to true when the matching
  * backend capability ships; gated fields/options then appear automatically.
  */
 export type BackendCapability =
@@ -555,11 +572,96 @@ export function hasCapability(capability: BackendCapability): boolean {
   return BACKEND_CAPABILITIES[capability];
 }
 
+/** Applies runtime capability flags from `GET /api/v1/capabilities`. */
+export function setLiveBackendCapabilities(
+  mapped: Record<BackendCapability, boolean>,
+): void {
+  for (const capability of Object.keys(mapped) as BackendCapability[]) {
+    BACKEND_CAPABILITIES[capability] = mapped[capability];
+  }
+}
+
 /**
- * Datasource engine types. Only types the backend Data Gateway can actually
- * adapt are exposed: duckdb(demo) / sqlite / csv / xlsx. postgresql/mysql are
- * disabled placeholders and bigquery/snowflake have no backend code, so they
- * are intentionally NOT offered here (kept only in the backend roadmap doc).
+ * Placeholder capabilities for DB-GPT parity fields not yet implemented on the
+ * backend. Flip to true when the matching backend feature ships.
+ */
+export type PendingCapability =
+  | "datasource.extendedTypes"
+  | "datasource.introspectionPolicy"
+  | "datasource.samplePolicy"
+  | "datasource.fieldMasking"
+  | "kb.vectorStore"
+  | "kb.rerank"
+  | "kb.citationPolicy"
+  | "kb.chunking"
+  | "kb.graphRag"
+  | "kb.scope"
+  | "mcp.stdio"
+  | "mcp.toolPolicy"
+  | "llm.advancedSampling"
+  | "skill.resourceBinding";
+
+export const PENDING_CAPABILITIES: Record<PendingCapability, boolean> = {
+  "datasource.extendedTypes": false,
+  "datasource.introspectionPolicy": false,
+  "datasource.samplePolicy": false,
+  "datasource.fieldMasking": false,
+  "kb.vectorStore": false,
+  "kb.rerank": false,
+  "kb.citationPolicy": false,
+  "kb.chunking": false,
+  "kb.graphRag": false,
+  "kb.scope": false,
+  "mcp.stdio": false,
+  "mcp.toolPolicy": false,
+  "llm.advancedSampling": false,
+  "skill.resourceBinding": false,
+};
+
+export function hasPendingCapability(capability: PendingCapability): boolean {
+  return PENDING_CAPABILITIES[capability];
+}
+
+/** Applies runtime pending flags (future API hook; defaults stay false). */
+export function setLivePendingCapabilities(
+  mapped: Partial<Record<PendingCapability, boolean>>,
+): void {
+  for (const capability of Object.keys(mapped) as PendingCapability[]) {
+    const value = mapped[capability];
+    if (typeof value === "boolean") {
+      PENDING_CAPABILITIES[capability] = value;
+    }
+  }
+}
+
+export function isFieldHiddenByCapability(field: ConfigFieldDef): boolean {
+  return Boolean(field.requiresCapability && !hasCapability(field.requiresCapability));
+}
+
+export function isFieldPending(
+  field: ConfigFieldDef,
+  settings: Record<string, string> = {},
+): boolean {
+  if (field.pendingWhen && !field.pendingWhen(settings)) {
+    return false;
+  }
+  if (!field.pendingCapability) {
+    return false;
+  }
+  return !hasPendingCapability(field.pendingCapability);
+}
+
+export function isFieldDisabled(
+  field: ConfigFieldDef,
+  item: WorkspaceConfigItem,
+  settings: Record<string, string>,
+): boolean {
+  return Boolean(field.readOnly?.(item) || isFieldPending(field, settings));
+}
+
+/**
+ * Datasource engine types supported by the backend today plus DB-GPT roadmap
+ * types shown as disabled placeholders until adapters land.
  */
 export const DB_TYPE_OPTIONS = [
   { value: "duckdb", label: "DuckDB（内置 demo）" },
@@ -574,28 +676,91 @@ export const DB_SERVER_TYPE_OPTIONS = [
   { value: "mysql", label: "MySQL" },
 ] as const;
 
+/** DB-GPT extended types — visible in UI, pending backend adapters. */
+export const DB_PENDING_TYPE_OPTIONS = [
+  { value: "clickhouse", label: "ClickHouse" },
+  { value: "oracle", label: "Oracle" },
+  { value: "mssql", label: "SQL Server" },
+  { value: "hive", label: "Hive" },
+  { value: "spark", label: "Spark" },
+  { value: "vertica", label: "Vertica" },
+  { value: "bigquery", label: "BigQuery" },
+  { value: "snowflake", label: "Snowflake" },
+] as const;
+
 export const DB_MODE_OPTIONS = [
   { value: "readonly", label: "只读（当前唯一支持）" },
 ] as const;
 
 const DB_SERVER_TYPES = DB_SERVER_TYPE_OPTIONS.map((option) => option.value);
+const DB_PENDING_TYPES = DB_PENDING_TYPE_OPTIONS.map((option) => option.value);
 
 function dbTypeOf(settings: Record<string, string>): string {
   return settings.type ?? "duckdb";
 }
 
+function isDbExtendedPendingType(settings: Record<string, string>): boolean {
+  return DB_PENDING_TYPES.includes(
+    dbTypeOf(settings) as (typeof DB_PENDING_TYPES)[number],
+  );
+}
+
+function isDbBigQueryType(settings: Record<string, string>): boolean {
+  return dbTypeOf(settings) === "bigquery";
+}
+
+function isDbSnowflakeType(settings: Record<string, string>): boolean {
+  return dbTypeOf(settings) === "snowflake";
+}
+
 function isDbServerType(settings: Record<string, string>): boolean {
-  return DB_SERVER_TYPES.includes(
-    dbTypeOf(settings) as (typeof DB_SERVER_TYPES)[number],
+  const type = dbTypeOf(settings);
+  return (
+    DB_SERVER_TYPES.includes(type as (typeof DB_SERVER_TYPES)[number]) ||
+    isDbExtendedPendingType(settings)
   );
 }
 
 /** DB type list grows with backend capability (server types appear when on). */
 function dbTypeOptions(): Array<{ value: string; label: string }> {
-  return hasCapability("datasource.server")
-    ? [...DB_TYPE_OPTIONS, ...DB_SERVER_TYPE_OPTIONS]
-    : [...DB_TYPE_OPTIONS];
+  const extendedLabel = hasPendingCapability("datasource.extendedTypes")
+    ? (option: (typeof DB_PENDING_TYPE_OPTIONS)[number]) => option.label
+    : (option: (typeof DB_PENDING_TYPE_OPTIONS)[number]) => `${option.label}（待后端）`;
+  return [
+    ...DB_TYPE_OPTIONS,
+    ...(hasCapability("datasource.server") ? DB_SERVER_TYPE_OPTIONS : []),
+    ...DB_PENDING_TYPE_OPTIONS.map((option) => ({
+      value: option.value,
+      label: extendedLabel(option),
+    })),
+  ];
 }
+
+export const EMBEDDING_PROVIDER_OPTIONS = [
+  { value: "bailian", label: "百炼 DashScope (bailian)" },
+  { value: "openai-compatible", label: "OpenAI 兼容" },
+  { value: "openai", label: "OpenAI" },
+] as const;
+
+export const KB_VECTOR_STORE_OPTIONS = [
+  { value: "local-sqlite", label: "本地 SQLite（当前默认）" },
+  { value: "chroma", label: "Chroma" },
+  { value: "milvus", label: "Milvus" },
+  { value: "pgvector", label: "pgvector" },
+  { value: "elasticsearch", label: "Elasticsearch" },
+] as const;
+
+export const KB_SCOPE_OPTIONS = [
+  { value: "personal", label: "个人" },
+  { value: "workspace", label: "工作区" },
+  { value: "project", label: "项目" },
+] as const;
+
+export const MCP_AUTH_TYPE_OPTIONS = [
+  { value: "none", label: "无认证" },
+  { value: "bearer", label: "Bearer Token" },
+  { value: "custom-header", label: "自定义 Header（待后端）" },
+] as const;
 
 /** Aligns with dataAgent `LLM_PROVIDER` env and Mastra router provider ids. */
 export const LLM_PROVIDER_OPTIONS = [
@@ -674,6 +839,18 @@ export function persistActiveLlmId(llmId: string): void {
   }
 }
 
+/** Keeps a valid dialog selection; otherwise falls back to server/local default. */
+export function resolveActiveLlmProfileId(
+  enabledProfiles: WorkspaceConfigItem[],
+  activeLlmId: string | null,
+  fallback: string,
+): string {
+  const enabledIds = new Set(enabledProfiles.map((profile) => profile.id));
+  if (activeLlmId && enabledIds.has(activeLlmId)) return activeLlmId;
+  if (enabledIds.has(fallback)) return fallback;
+  return enabledProfiles[0]?.id ?? fallback;
+}
+
 /** MCP transport types aligned with common MCP client configs. */
 export const MCP_TRANSPORT_OPTIONS = [
   { value: "sse", label: "SSE (Server-Sent Events)" },
@@ -687,11 +864,61 @@ export function normalizeMcpSettings(
   transport: string;
   serverUrl: string;
   apiKey: string;
+  authType: string;
+  toolAllowlist: string;
+  timeoutMs: string;
 } {
   return {
     transport: settings?.transport ?? "sse",
     serverUrl: settings?.serverUrl ?? settings?.url ?? settings?.endpoint ?? "",
-    apiKey: settings?.apiKey ?? settings?.api_key ?? "",
+    apiKey: settings?.apiKey ?? settings?.api_key ?? settings?.token ?? "",
+    authType: settings?.authType ?? "none",
+    toolAllowlist: settings?.toolAllowlist ?? "",
+    timeoutMs: settings?.timeoutMs ?? "",
+  };
+}
+
+export function normalizeKbSettings(
+  settings?: Record<string, string>,
+): Record<string, string> {
+  return {
+    indexName: settings?.indexName ?? "",
+    retrievalTopK: settings?.retrievalTopK ?? "5",
+    scoreThreshold: settings?.scoreThreshold ?? "0.3",
+    embeddingProvider: settings?.embeddingProvider ?? "bailian",
+    embeddingModel: settings?.embeddingModel ?? "text-embedding-v4",
+    embeddingBaseUrl:
+      settings?.embeddingBaseUrl ??
+      settings?.embedding_base_url ??
+      "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    embeddingApiKey: settings?.embeddingApiKey ?? settings?.embedding_api_key ?? "",
+    vectorStore: settings?.vectorStore ?? "local-sqlite",
+    rerankEnabled: settings?.rerankEnabled ?? "false",
+    rerankModel: settings?.rerankModel ?? "",
+    citationRequired: settings?.citationRequired ?? "true",
+    chunkSize: settings?.chunkSize ?? "1600",
+    chunkOverlap: settings?.chunkOverlap ?? "200",
+    scope: settings?.scope ?? "workspace",
+    graphRagEnabled: settings?.graphRagEnabled ?? "false",
+    indexStatus: settings?.indexStatus ?? "",
+  };
+}
+
+export function normalizeLlmSettingsExtended(
+  settings?: Record<string, string>,
+): Record<string, string> {
+  const base = normalizeLlmSettings(settings);
+  return {
+    ...base,
+    fallbackProfileId: settings?.fallbackProfileId ?? "",
+    timeoutMs: settings?.timeoutMs ?? "60000",
+    temperature: settings?.temperature ?? "",
+    maxTokens: settings?.maxTokens ?? "",
+    topP: settings?.topP ?? "",
+    frequencyPenalty: settings?.frequencyPenalty ?? "",
+    presencePenalty: settings?.presencePenalty ?? "",
+    reasoningModel: settings?.reasoningModel ?? "false",
+    contextLength: settings?.contextLength ?? "",
   };
 }
 
@@ -714,8 +941,6 @@ export const WORKSPACE_CONFIG_FIELDS: Record<
   WorkspaceConfigKind,
   ConfigFieldDef[]
 > = {
-  // 仅暴露后端 Data Gateway 真正能消费的字段。多数据库连接参数（host/账号/
-  // BigQuery/Snowflake 等）后端 adapter 未实现，故不在 UI 出现；契约见后端文档。
   db: [
     {
       key: "datasourceId",
@@ -730,8 +955,10 @@ export const WORKSPACE_CONFIG_FIELDS: Record<
       key: "type",
       label: "数据源类型",
       inputType: "select",
-      options: dbTypeOptions(),
-      helpText: "当前后端可连接：DuckDB(demo) / SQLite / CSV / Excel。",
+      getOptions: () => dbTypeOptions(),
+      pendingOptionValues: [...DB_PENDING_TYPES],
+      helpText:
+        "已实现：DuckDB / SQLite / CSV / Excel / PostgreSQL / MySQL。扩展类型标「待后端」。",
       required: true,
       readOnly: (item) => !!item.builtin,
     },
@@ -752,7 +979,6 @@ export const WORKSPACE_CONFIG_FIELDS: Record<
       fullWidth: true,
       visibleWhen: (s) => dbTypeOf(s) !== "duckdb" && !isDbServerType(s),
     },
-    // 以下为 gated-off：后端 PostgreSQL/MySQL adapter（#2）就绪后翻 datasource.server。
     {
       key: "host",
       label: "Host",
@@ -760,6 +986,8 @@ export const WORKSPACE_CONFIG_FIELDS: Record<
       required: true,
       requiresCapability: "datasource.server",
       visibleWhen: isDbServerType,
+      pendingWhen: isDbExtendedPendingType,
+      pendingCapability: "datasource.extendedTypes",
     },
     {
       key: "port",
@@ -769,6 +997,8 @@ export const WORKSPACE_CONFIG_FIELDS: Record<
       required: true,
       requiresCapability: "datasource.server",
       visibleWhen: isDbServerType,
+      pendingWhen: isDbExtendedPendingType,
+      pendingCapability: "datasource.extendedTypes",
     },
     {
       key: "database",
@@ -777,13 +1007,17 @@ export const WORKSPACE_CONFIG_FIELDS: Record<
       required: true,
       requiresCapability: "datasource.server",
       visibleWhen: isDbServerType,
+      pendingWhen: isDbExtendedPendingType,
+      pendingCapability: "datasource.extendedTypes",
     },
     {
       key: "schema",
       label: "Schema",
       placeholder: "public",
       requiresCapability: "datasource.server",
-      visibleWhen: isDbServerType,
+      visibleWhen: (s) => isDbServerType(s) && !isDbBigQueryType(s) && !isDbSnowflakeType(s),
+      pendingWhen: isDbExtendedPendingType,
+      pendingCapability: "datasource.extendedTypes",
     },
     {
       key: "username",
@@ -791,18 +1025,112 @@ export const WORKSPACE_CONFIG_FIELDS: Record<
       placeholder: "readonly_user",
       required: true,
       requiresCapability: "datasource.server",
-      visibleWhen: isDbServerType,
+      visibleWhen: (s) => isDbServerType(s) && !isDbBigQueryType(s),
+      pendingWhen: isDbExtendedPendingType,
+      pendingCapability: "datasource.extendedTypes",
     },
     {
       key: "password",
       label: "密码",
       inputType: "password",
       placeholder: "••••••",
-      helpText: "仅保存在浏览器 localStorage，不经 AG-UI 协议外发；后端由 secretRef 解析。",
+      helpText: "写入 secretRef，读接口不回传明文。",
       requiresCapability: "datasource.server",
-      visibleWhen: isDbServerType,
+      visibleWhen: (s) => isDbServerType(s) && !isDbBigQueryType(s),
+      pendingWhen: isDbExtendedPendingType,
+      pendingCapability: "datasource.extendedTypes",
     },
-    // gated-off：后端把 SQL_* / per-datasource 策略接入 Gateway（#5）后翻 datasource.queryPolicy。
+    {
+      key: "projectId",
+      label: "Project ID",
+      placeholder: "my-gcp-project",
+      required: true,
+      visibleWhen: isDbBigQueryType,
+      pendingWhen: isDbBigQueryType,
+      pendingCapability: "datasource.extendedTypes",
+      fullWidth: true,
+    },
+    {
+      key: "dataset",
+      label: "Dataset",
+      placeholder: "analytics",
+      required: true,
+      visibleWhen: isDbBigQueryType,
+      pendingWhen: isDbBigQueryType,
+      pendingCapability: "datasource.extendedTypes",
+    },
+    {
+      key: "credentialsJson",
+      label: "Credentials JSON",
+      inputType: "password",
+      placeholder: "{ ... }",
+      visibleWhen: isDbBigQueryType,
+      pendingWhen: isDbBigQueryType,
+      pendingCapability: "datasource.extendedTypes",
+      fullWidth: true,
+    },
+    {
+      key: "account",
+      label: "Account",
+      placeholder: "xy12345.us-east-1",
+      required: true,
+      visibleWhen: isDbSnowflakeType,
+      pendingWhen: isDbSnowflakeType,
+      pendingCapability: "datasource.extendedTypes",
+    },
+    {
+      key: "warehouse",
+      label: "Warehouse",
+      placeholder: "COMPUTE_WH",
+      required: true,
+      visibleWhen: isDbSnowflakeType,
+      pendingWhen: isDbSnowflakeType,
+      pendingCapability: "datasource.extendedTypes",
+    },
+    {
+      key: "tableAllowlist",
+      label: "表白名单",
+      placeholder: "orders, customers",
+      helpText: "逗号分隔；为空表示允许全部表。",
+      pendingCapability: "datasource.introspectionPolicy",
+      fullWidth: true,
+    },
+    {
+      key: "refreshIntervalSec",
+      label: "Schema 刷新间隔 (秒)",
+      inputType: "number",
+      placeholder: "3600",
+      pendingCapability: "datasource.introspectionPolicy",
+    },
+    {
+      key: "denyWrite",
+      label: "拒绝写入",
+      inputType: "boolean",
+      helpText: "当前后端强制只读；此开关待策略下沉。",
+      pendingCapability: "datasource.introspectionPolicy",
+    },
+    {
+      key: "maskFields",
+      label: "脱敏字段",
+      placeholder: "phone, email",
+      helpText: "逗号分隔字段名，查询结果脱敏。",
+      pendingCapability: "datasource.fieldMasking",
+      fullWidth: true,
+    },
+    {
+      key: "allowSample",
+      label: "允许采样",
+      inputType: "boolean",
+      pendingCapability: "datasource.samplePolicy",
+    },
+    {
+      key: "maxSampleRows",
+      label: "最大采样行数",
+      inputType: "number",
+      placeholder: "100",
+      visibleWhen: (s) => s.allowSample === "true",
+      pendingCapability: "datasource.samplePolicy",
+    },
     {
       key: "maxRows",
       label: "最大返回行数",
@@ -818,7 +1146,6 @@ export const WORKSPACE_CONFIG_FIELDS: Record<
       requiresCapability: "datasource.queryPolicy",
     },
   ],
-  // 后端 packages/knowledge 仅有接口、无实现，先保留最小骨架。
   kb: [
     {
       key: "indexName",
@@ -828,20 +1155,111 @@ export const WORKSPACE_CONFIG_FIELDS: Record<
       fullWidth: true,
     },
     {
+      key: "scope",
+      label: "作用域",
+      inputType: "select",
+      options: [...KB_SCOPE_OPTIONS],
+      pendingCapability: "kb.scope",
+    },
+    {
       key: "retrievalTopK",
       label: "检索 Top K",
       inputType: "number",
       placeholder: "5",
     },
+    {
+      key: "scoreThreshold",
+      label: "分数阈值",
+      inputType: "number",
+      placeholder: "0.3",
+      helpText: "后端已落库；检索过滤待后端生效。",
+    },
+    {
+      key: "embeddingProvider",
+      label: "Embedding Provider",
+      inputType: "select",
+      options: [...EMBEDDING_PROVIDER_OPTIONS],
+      fullWidth: true,
+    },
+    {
+      key: "embeddingModel",
+      label: "Embedding Model",
+      placeholder: "text-embedding-v4",
+      fullWidth: true,
+    },
+    {
+      key: "embeddingBaseUrl",
+      label: "Embedding Base URL",
+      inputType: "url",
+      placeholder: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      fullWidth: true,
+    },
+    {
+      key: "embeddingApiKey",
+      label: "Embedding API Key",
+      inputType: "password",
+      placeholder: "sk-...",
+      helpText: "写入 secretRef；未配置时回退服务端 EMBEDDING_* 环境变量。",
+      fullWidth: true,
+    },
+    {
+      key: "vectorStore",
+      label: "向量库类型",
+      inputType: "select",
+      options: [...KB_VECTOR_STORE_OPTIONS],
+      pendingCapability: "kb.vectorStore",
+      fullWidth: true,
+    },
+    {
+      key: "rerankEnabled",
+      label: "启用 Rerank",
+      inputType: "boolean",
+      pendingCapability: "kb.rerank",
+    },
+    {
+      key: "rerankModel",
+      label: "Rerank Model",
+      placeholder: "gte-rerank",
+      visibleWhen: (s) => s.rerankEnabled === "true",
+      pendingCapability: "kb.rerank",
+      fullWidth: true,
+    },
+    {
+      key: "citationRequired",
+      label: "强制引用",
+      inputType: "boolean",
+      helpText: "回答必须附带 KB 引用。",
+      pendingCapability: "kb.citationPolicy",
+    },
+    {
+      key: "chunkSize",
+      label: "分块大小",
+      inputType: "number",
+      placeholder: "1600",
+      pendingCapability: "kb.chunking",
+    },
+    {
+      key: "chunkOverlap",
+      label: "分块重叠",
+      inputType: "number",
+      placeholder: "200",
+      pendingCapability: "kb.chunking",
+    },
+    {
+      key: "graphRagEnabled",
+      label: "GraphRAG",
+      inputType: "boolean",
+      pendingCapability: "kb.graphRag",
+    },
   ],
-  // 后端无 MCP 实现，先保留最小连接骨架。
   mcp: [
     {
       key: "transport",
       label: "Transport",
       inputType: "select",
       options: [...MCP_TRANSPORT_OPTIONS],
-      helpText: "远程 MCP 常用 SSE 或 Streamable HTTP；stdio 用于本地进程。",
+      pendingOptionValues: ["stdio"],
+      helpText: "远程 MCP 常用 SSE 或 Streamable HTTP；stdio 待后端支持。",
       required: true,
       fullWidth: true,
     },
@@ -853,6 +1271,37 @@ export const WORKSPACE_CONFIG_FIELDS: Record<
       required: true,
       fullWidth: true,
     },
+    {
+      key: "authType",
+      label: "认证方式",
+      inputType: "select",
+      options: [...MCP_AUTH_TYPE_OPTIONS],
+      pendingOptionValues: ["custom-header"],
+    },
+    {
+      key: "apiKey",
+      label: "Token / API Key",
+      inputType: "password",
+      placeholder: "••••••",
+      helpText: "Bearer 认证时写入 secretRef。",
+      visibleWhen: (s) => (s.authType ?? "none") !== "none",
+      fullWidth: true,
+    },
+    {
+      key: "toolAllowlist",
+      label: "工具白名单",
+      placeholder: "search, fetch_page",
+      helpText: "逗号分隔；为空表示允许 manifest 中全部工具。",
+      pendingCapability: "mcp.toolPolicy",
+      fullWidth: true,
+    },
+    {
+      key: "timeoutMs",
+      label: "单工具超时 (ms)",
+      inputType: "number",
+      placeholder: "30000",
+      pendingCapability: "mcp.toolPolicy",
+    },
   ],
   llm: [
     {
@@ -861,7 +1310,7 @@ export const WORKSPACE_CONFIG_FIELDS: Record<
       inputType: "select",
       options: [...LLM_PROVIDER_OPTIONS],
       helpText:
-        "对应服务端 LLM_PROVIDER。openai-compatible / bailian 使用 OpenAI 兼容 /chat/completions；其他值走 Mastra model router（provider/model）。",
+        "openai-compatible / bailian 走 OpenAI 兼容路径；anthropic/google 等待集成验证。",
       required: true,
       readOnly: (item) => !!item.builtin,
       fullWidth: true,
@@ -871,7 +1320,7 @@ export const WORKSPACE_CONFIG_FIELDS: Record<
       label: "Base URL",
       inputType: "url",
       placeholder: "https://dashscope.aliyuncs.com/compatible-mode/v1",
-      helpText: "对应 LLM_BASE_URL，OpenAI 兼容 Chat Completions 根路径（不含 /chat/completions）。",
+      helpText: "OpenAI 兼容 Chat Completions 根路径（不含 /chat/completions）。",
       required: true,
       readOnly: (item) => !!item.builtin,
       fullWidth: true,
@@ -881,8 +1330,7 @@ export const WORKSPACE_CONFIG_FIELDS: Record<
       label: "API Key",
       inputType: "password",
       placeholder: "sk-...",
-      helpText:
-        "对应 LLM_API_KEY。仅保存在浏览器 localStorage，不经 AG-UI 协议外发；当前 dataAgent 仍读取服务端环境变量，后端接入后由 secretRef 解析。",
+      helpText: "写入 secretRef；run 时不经 AG-UI 外发。",
       readOnly: (item) => !!item.builtin,
       fullWidth: true,
     },
@@ -890,12 +1338,35 @@ export const WORKSPACE_CONFIG_FIELDS: Record<
       key: "modelName",
       label: "Model Name",
       placeholder: "qwen-plus",
-      helpText: "对应 LLM_MODEL，即 chat model id（如 gpt-4o、qwen-plus、deepseek-chat）。",
+      helpText: "Chat model id（如 gpt-4o、qwen-plus、deepseek-chat）。",
       required: true,
       readOnly: (item) => !!item.builtin,
       fullWidth: true,
     },
-    // gated-off：后端确认按 run 消费采样参数（#4）后翻 llm.samplingParams。
+    {
+      key: "fallbackProfileId",
+      label: "Fallback Profile",
+      inputType: "select",
+      placeholder: "无",
+      helpText: "主 profile 失败时按链式 fallback 切换。",
+      getOptions: ({ workspaceConfig, currentItemId }) => {
+        const profiles = workspaceConfig?.llm ?? [];
+        return profiles
+          .filter((profile) => profile.id !== currentItemId)
+          .map((profile) => ({
+            value: profile.id,
+            label: profile.name || profile.id,
+          }));
+      },
+      fullWidth: true,
+    },
+    {
+      key: "timeoutMs",
+      label: "Timeout (ms)",
+      inputType: "number",
+      placeholder: "60000",
+      helpText: "当前主要用于 test 探测；run 阶段消费待后端。",
+    },
     {
       key: "temperature",
       label: "Temperature",
@@ -912,8 +1383,46 @@ export const WORKSPACE_CONFIG_FIELDS: Record<
       requiresCapability: "llm.samplingParams",
       readOnly: (item) => !!item.builtin,
     },
+    {
+      key: "topP",
+      label: "Top P",
+      inputType: "number",
+      placeholder: "1.0",
+      pendingCapability: "llm.advancedSampling",
+      readOnly: (item) => !!item.builtin,
+    },
+    {
+      key: "frequencyPenalty",
+      label: "Frequency Penalty",
+      inputType: "number",
+      placeholder: "0",
+      pendingCapability: "llm.advancedSampling",
+      readOnly: (item) => !!item.builtin,
+    },
+    {
+      key: "presencePenalty",
+      label: "Presence Penalty",
+      inputType: "number",
+      placeholder: "0",
+      pendingCapability: "llm.advancedSampling",
+      readOnly: (item) => !!item.builtin,
+    },
+    {
+      key: "reasoningModel",
+      label: "Reasoning Model",
+      inputType: "boolean",
+      pendingCapability: "llm.advancedSampling",
+      readOnly: (item) => !!item.builtin,
+    },
+    {
+      key: "contextLength",
+      label: "Context Length",
+      inputType: "number",
+      placeholder: "128000",
+      pendingCapability: "llm.advancedSampling",
+      readOnly: (item) => !!item.builtin,
+    },
   ],
-  // Skill 为上传包模型：元数据只读展示，正文经上传写入 settings.packageContent。
   skill: [
     {
       key: "packageFileName",
@@ -938,6 +1447,35 @@ export const WORKSPACE_CONFIG_FIELDS: Record<
       fullWidth: true,
       visibleWhen: (settings) => (settings.allowedTools ?? "").trim().length > 0,
     },
+    {
+      key: "defaultDbIds",
+      label: "默认数据源",
+      placeholder: "api-duckdb-demo, sales-pg",
+      helpText: "逗号分隔 datasource id；run 时自动启用待后端。",
+      pendingCapability: "skill.resourceBinding",
+      fullWidth: true,
+    },
+    {
+      key: "defaultKbIds",
+      label: "默认知识库",
+      placeholder: "metrics-docs",
+      pendingCapability: "skill.resourceBinding",
+      fullWidth: true,
+    },
+    {
+      key: "defaultMcpIds",
+      label: "默认 MCP",
+      placeholder: "notion",
+      pendingCapability: "skill.resourceBinding",
+      fullWidth: true,
+    },
+    {
+      key: "modelProfileId",
+      label: "默认模型 Profile",
+      placeholder: "qwen-plus-default",
+      pendingCapability: "skill.resourceBinding",
+      fullWidth: true,
+    },
   ],
 };
 
@@ -952,32 +1490,48 @@ export function defaultSettingsForKind(
         type: "sqlite",
         mode: "readonly",
         filePath: "",
+        denyWrite: "true",
+        allowSample: "true",
+        maxSampleRows: "100",
       };
     case "kb":
-      return { indexName: name || "custom-kb", retrievalTopK: "5" };
+      return normalizeKbSettings({ indexName: name || "custom-kb" });
     case "mcp":
       return {
         transport: "sse",
         serverUrl: name ? `https://${name}` : "",
         apiKey: "",
+        authType: "none",
       };
     case "llm":
-      return {
+      return normalizeLlmSettingsExtended({
         provider: "openai-compatible",
         baseUrl: "",
         apiKey: "",
         modelName: name || "qwen-plus",
-      };
+      });
     case "skill":
-      return {
+      return normalizeSkillSettings({
         packageFileName: "",
         packageFormat: "",
         packageVersion: "",
         packageSource: "",
         allowedTools: "",
         packageContent: "",
-      };
+      });
   }
+}
+
+/** Fields visible in the detail form (includes pending placeholders). */
+export function renderableConfigFields(
+  panel: WorkspaceConfigKind,
+  settings: Record<string, string>,
+): ConfigFieldDef[] {
+  return WORKSPACE_CONFIG_FIELDS[panel].filter(
+    (field) =>
+      !isFieldHiddenByCapability(field) &&
+      (!field.visibleWhen || field.visibleWhen(settings)),
+  );
 }
 
 /** Fields that should currently render/validate given the item's settings. */
@@ -985,11 +1539,39 @@ export function visibleConfigFields(
   panel: WorkspaceConfigKind,
   settings: Record<string, string>,
 ): ConfigFieldDef[] {
-  return WORKSPACE_CONFIG_FIELDS[panel].filter(
-    (field) =>
-      (!field.requiresCapability || hasCapability(field.requiresCapability)) &&
-      (!field.visibleWhen || field.visibleWhen(settings)),
+  return renderableConfigFields(panel, settings).filter(
+    (field) => !isFieldPending(field, settings),
   );
+}
+
+export function resolveConfigFieldOptions(
+  field: ConfigFieldDef,
+  context: ConfigFieldOptionsContext,
+): Array<{ value: string; label: string }> {
+  if (field.getOptions) {
+    return field.getOptions(context);
+  }
+  return field.options ?? [];
+}
+
+export function isSelectOptionPending(
+  field: ConfigFieldDef,
+  optionValue: string,
+): boolean {
+  if (!field.pendingOptionValues?.includes(optionValue)) {
+    return false;
+  }
+  if (optionValue === "stdio") {
+    return !hasPendingCapability("mcp.stdio");
+  }
+  if (optionValue === "custom-header") {
+    return true;
+  }
+  if (field.pendingCapability) {
+    return !hasPendingCapability(field.pendingCapability);
+  }
+  return DB_PENDING_TYPES.includes(optionValue as (typeof DB_PENDING_TYPES)[number])
+    && !hasPendingCapability("datasource.extendedTypes");
 }
 
 /**
@@ -1019,7 +1601,7 @@ export type WorkspaceConfigStore = Record<
 
 const WORKSPACE_CONFIG_STORAGE_KEY = "data-tasks:workspace-config:v1";
 
-function defaultWorkspaceConfig(): WorkspaceConfigStore {
+export function defaultWorkspaceConfig(): WorkspaceConfigStore {
   return {
     db: [
       {
@@ -1311,6 +1893,15 @@ export const PER_RUN_MENTION_META: Record<
   mcp: { label: "MCP", token: "mcp", backendSupported: false },
   skill: { label: "技能", token: "skill", backendSupported: false },
 };
+
+export type MentionSupportMap = Record<PerRunMentionKind, boolean>;
+
+/** Updates `@` picker hints from runtime knowledge/mcp/skills capability flags. */
+export function setLiveMentionSupport(support: MentionSupportMap): void {
+  for (const kind of PER_RUN_MENTION_KINDS) {
+    PER_RUN_MENTION_META[kind].backendSupported = support[kind];
+  }
+}
 
 /** Shared per-kind palette for sidebar labels and session/@ pills. */
 const CONFIG_APPEARANCE = {

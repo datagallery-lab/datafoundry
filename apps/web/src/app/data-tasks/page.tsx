@@ -10,6 +10,7 @@ import {
   useAgent,
   useAgentContext,
   useAttachments,
+  useCopilotChatConfiguration,
   useCopilotKit,
   useFrontendTool,
   useRenderTool,
@@ -46,10 +47,18 @@ import {
   summarizeMcpItems,
   togglePerRunMention,
   toggleSessionResource,
+  renderableConfigFields,
+  resolveConfigFieldOptions,
+  isFieldPending,
+  isFieldDisabled,
+  normalizeKbSettings,
+  normalizeLlmSettingsExtended,
   visibleConfigFields,
+  type WorkspaceConfigStore,
   WORKSPACE_CONFIG_BADGE_CLASS,
   WORKSPACE_CONFIG_SHORT_LABEL,
 } from "./data-task-state";
+import { configApi } from "../../lib/config-api/client";
 import { resolveAssistantThoughtContent } from "./assistant-thought-content";
 import { JobProgressBanner } from "./components/JobProgressBanner";
 import {
@@ -130,7 +139,14 @@ import { CollaborationInterruptHandler } from "./components/chat/CollaborationIn
 import {
   CollaborationResponseBridge,
   CollaborationResponsesProvider,
+  CollaborationChoiceBubble,
+  useThreadCollaborationResponsesForChat,
 } from "./components/chat/collaboration-responses";
+import {
+  AgentMessageRenderSync,
+  useAgentMessageRenderGeneration,
+} from "./agent-message-render-sync";
+import { resolveStepAssistantFlags } from "./step-assistant-state";
 import { btnSecondaryClass, sectionLabelClass } from "./ui-tokens";
 import { getBackendCapabilities, getConfigApiBaseUrl } from "../../lib/config-api";
 
@@ -851,6 +867,7 @@ function DataTaskWorkspace() {
           <WorkspaceConfigPanel
             panel={configPanel}
             items={workspaceConfig[configPanel]}
+            workspaceConfig={workspaceConfig}
             loading={workspaceLoading}
             onAdd={(payload, skillFile) => addConfigItem(configPanel, payload, skillFile)}
             onBack={() => setConfigPanel(null)}
@@ -1631,35 +1648,10 @@ const toolDisplayName: Record<string, string> = {
   submit_plan: "提交计划",
 };
 
-const COLLABORATION_TOOL_NAMES = new Set(["ask_user", "submit_plan"]);
-
 type ChatRunStatus = "idle" | "running" | "suspended" | "completed" | "failed";
 
 const ChatRunStatusContext = createContext<ChatRunStatus>("idle");
 const ChatLiveRunContext = createContext<LiveRun | null>(null);
-
-function inferCollaborationFromLiveRun(
-  message: { id?: string; role?: string; toolCalls?: unknown[]; content?: unknown },
-  messages: Array<{ id?: string; role?: string; toolCalls?: unknown[]; content?: unknown }>,
-  liveRun: LiveRun | null,
-): boolean {
-  if (!liveRun) return false;
-
-  const assistants = messages.filter((item) => item.role === "assistant");
-  const assistantIndex = assistants.findIndex((item) => item.id === message.id);
-  if (assistantIndex < 0) return false;
-
-  let liveToolIndex = 0;
-  for (let index = 0; index < assistantIndex; index += 1) {
-    const toolCount = assistants[index].toolCalls?.length ?? 0;
-    liveToolIndex += toolCount > 0 ? toolCount : 1;
-  }
-
-  const currentToolCount = message.toolCalls?.length ?? 0;
-  const sliceEnd = liveToolIndex + (currentToolCount > 0 ? currentToolCount : 1);
-  const candidates = liveRun.toolCalls.slice(liveToolIndex, sliceEnd);
-  return candidates.some((call) => COLLABORATION_TOOL_NAMES.has(call.name));
-}
 
 function firstLine(text: string): string {
   const line = text.split("\n").find((segment) => segment.trim().length > 0) ?? "";
@@ -1700,30 +1692,38 @@ function CopyContentButton({ content }: { content: string }) {
 function StepAssistantMessage({
   message,
   messages,
-  isRunning,
+  isRunning: propIsRunning,
 }: CopilotChatAssistantMessageProps) {
+  useAgentMessageRenderGeneration();
+  const chatConfig = useCopilotChatConfiguration();
+  const { agent } = useAgent({ agentId: chatConfig?.agentId ?? agentId });
   const liveRunStatus = useContext(ChatRunStatusContext);
   const liveRun = useContext(ChatLiveRunContext);
-  const allMessages = messages ?? [];
+  const collaborationResponses = useThreadCollaborationResponsesForChat(chatConfig?.threadId);
+  const allMessages =
+    agent.messages && agent.messages.length > 0 ? agent.messages : (messages ?? []);
+  const isRunning = agent.isRunning ?? propIsRunning;
   const content = resolveAssistantThoughtContent(message, allMessages);
+  const {
+    hasToolCalls,
+    isWaitingForUser,
+    isCollaborationStep,
+    isCollaborationComplete,
+    isActive,
+    isFinalAnswer,
+    isFinalAnswerComplete,
+    isThought,
+    linkedCollaboration,
+  } = resolveStepAssistantFlags({
+    message,
+    messages: allMessages,
+    content,
+    isRunning: Boolean(isRunning),
+    liveRunStatus,
+    liveRun,
+    collaborationResponses,
+  });
   const toolCalls = Array.isArray(message.toolCalls) ? message.toolCalls : [];
-  const hasToolCalls = toolCalls.length > 0;
-  const rawToolNames = toolCalls.map((call) => call?.function?.name ?? "");
-  const isCollaborationStep =
-    rawToolNames.some((name) => COLLABORATION_TOOL_NAMES.has(name)) ||
-    inferCollaborationFromLiveRun(message, allMessages, liveRun);
-  const isLast = allMessages[allMessages.length - 1]?.id === message.id;
-  const isWaitingForUser = liveRunStatus === "suspended" && isLast;
-  const isActive = isLast && !!isRunning;
-  const isFinalAnswer =
-    isLast &&
-    content.length > 0 &&
-    !hasToolCalls &&
-    !isWaitingForUser &&
-    !isCollaborationStep;
-  const isFinalAnswerComplete = isFinalAnswer && !isActive;
-  const isThought =
-    !hasToolCalls && !isFinalAnswer && !isCollaborationStep && content.length > 0;
 
   const stepNumber = hasToolCalls
     ? allMessages.filter(
@@ -1799,10 +1799,10 @@ function StepAssistantMessage({
 
   const kindLabel = isWaitingForUser
     ? "等待你的回答"
-    : isCollaborationStep && (isActive || !isFinalAnswer)
-      ? isActive
-        ? "用户协作"
-        : "用户协作 · 已完成"
+    : isCollaborationStep
+      ? isCollaborationComplete || !isActive
+        ? "用户协作 · 已完成"
+        : "用户协作"
       : isFinalAnswer
         ? isActive
           ? "回答中"
@@ -1921,6 +1921,11 @@ function StepAssistantMessage({
                   className={`caret-blink ml-0.5 inline-block h-4 w-[2px] -translate-y-[1px] align-middle ${theme.caret}`}
                 />
               )}
+              {linkedCollaboration ? (
+                <div className="mt-3">
+                  <CollaborationChoiceBubble response={linkedCollaboration} inline />
+                </div>
+              ) : null}
             </div>
           ) : hasToolCalls ? (
             <StepSubPanel
@@ -2413,6 +2418,7 @@ function SessionPane({
 function WorkspaceConfigPanel({
   panel,
   items,
+  workspaceConfig,
   loading,
   onAdd,
   onBack,
@@ -2427,6 +2433,7 @@ function WorkspaceConfigPanel({
 }: {
   panel: WorkspaceConfigPanelKey;
   items: WorkspaceConfigItem[];
+  workspaceConfig: WorkspaceConfigStore;
   loading?: boolean;
   onAdd: (
     payload: {
@@ -2593,6 +2600,7 @@ function WorkspaceConfigPanel({
               item={detailItem}
               mode={isCreating ? "create" : "edit"}
               panel={panel}
+              workspaceConfig={workspaceConfig}
               onCreate={() => {
                 void handleCreate();
               }}
@@ -2766,6 +2774,7 @@ function ConfigItemDetailView({
   item,
   mode,
   panel,
+  workspaceConfig,
   onCreate,
   createDisabled,
   onUpdate,
@@ -2783,6 +2792,7 @@ function ConfigItemDetailView({
   item: WorkspaceConfigItem;
   mode: "create" | "edit";
   panel: WorkspaceConfigPanelKey;
+  workspaceConfig: WorkspaceConfigStore;
   onCreate: () => void;
   createDisabled?: boolean;
   onUpdate: (
@@ -2801,17 +2811,54 @@ function ConfigItemDetailView({
   testBusy?: boolean;
   testResult?: ConfigTestPresentation | null;
 }) {
+  const [mcpTools, setMcpTools] = useState<Array<Record<string, unknown>> | null>(null);
+  const [mcpToolsError, setMcpToolsError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (mode !== "edit" || panel !== "mcp") {
+      setMcpTools(null);
+      setMcpToolsError(null);
+      return;
+    }
+    let cancelled = false;
+    void configApi
+      .getMcpTools(item.id)
+      .then((tools) => {
+        if (!cancelled) {
+          setMcpTools(tools);
+          setMcpToolsError(null);
+        }
+      })
+      .catch((error: unknown) => {
+        if (!cancelled) {
+          setMcpTools(null);
+          setMcpToolsError(error instanceof Error ? error.message : "无法加载 tools manifest");
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [mode, panel, item.id]);
+
   const settings: Record<string, string> =
     panel === "llm"
-      ? normalizeLlmSettings(item.settings ?? defaultSettingsForKind(panel, item.name))
+      ? normalizeLlmSettingsExtended(
+          item.settings ?? defaultSettingsForKind(panel, item.name),
+        )
       : panel === "mcp"
         ? normalizeMcpSettings(item.settings ?? defaultSettingsForKind(panel, item.name))
-        : panel === "skill"
-          ? normalizeSkillSettings(
-              item.settings ?? defaultSettingsForKind(panel, item.name),
-            )
-          : (item.settings ?? defaultSettingsForKind(panel, item.name));
-  const fields = visibleConfigFields(panel, settings);
+        : panel === "kb"
+          ? normalizeKbSettings(item.settings ?? defaultSettingsForKind(panel, item.name))
+          : panel === "skill"
+            ? normalizeSkillSettings(
+                item.settings ?? defaultSettingsForKind(panel, item.name),
+              )
+            : (item.settings ?? defaultSettingsForKind(panel, item.name));
+  const fields = renderableConfigFields(panel, settings);
+  const fieldOptionsContext = {
+    workspaceConfig,
+    currentItemId: item.id,
+  };
   const nameReadOnly = mode === "edit" && !!item.builtin;
   const isBuiltinSkill = panel === "skill" && !!item.builtin;
   const hasUploadedSkillPackage =
@@ -2927,10 +2974,15 @@ function ConfigItemDetailView({
             <LlmConfigProtocolHint builtin={!!item.builtin && mode === "edit"} />
           )}
           {panel === "mcp" && <McpConfigProtocolHint />}
+          {panel === "mcp" && mode === "edit" ? (
+            <McpToolsManifest tools={mcpTools} error={mcpToolsError} />
+          ) : null}
           <div className="grid gap-3 sm:grid-cols-2">
             {fields.map((field) => {
               const isSecretField =
-                field.inputType === "password" || field.key === "apiKey";
+                field.inputType === "password" ||
+                field.key === "apiKey" ||
+                field.key === "embeddingApiKey";
               const secretPlaceholder =
                 mode === "edit" &&
                 item.hasSecret &&
@@ -2938,6 +2990,9 @@ function ConfigItemDetailView({
                 !(settings[field.key] ?? "").trim()
                   ? "已保存（留空则不修改）"
                   : field.placeholder;
+              const pending = isFieldPending(field, settings);
+              const disabled = isFieldDisabled(field, item, settings);
+              const options = resolveConfigFieldOptions(field, fieldOptionsContext);
               return (
               <EditableField
                 key={field.key}
@@ -2946,10 +3001,13 @@ function ConfigItemDetailView({
                 placeholder={secretPlaceholder}
                 helpText={field.helpText}
                 inputType={field.inputType}
-                options={field.options}
+                options={options}
+                pendingOptionValues={field.pendingOptionValues}
                 fullWidth={field.fullWidth}
-                required={field.required}
+                required={field.required && !pending}
                 readOnly={field.readOnly?.(item) ?? false}
+                disabled={disabled}
+                pending={pending}
                 onChange={(value) =>
                   onUpdate({ settings: { [field.key]: value } })
                 }
@@ -3220,16 +3278,56 @@ function LlmConfigProtocolHint({ builtin }: { builtin: boolean }) {
   );
 }
 
+function McpToolsManifest({
+  tools,
+  error,
+}: {
+  tools: Array<Record<string, unknown>> | null;
+  error: string | null;
+}) {
+  return (
+    <div className="rounded-lg border border-slate-200 bg-white px-3 py-2.5 sm:col-span-2">
+      <h5 className="text-xs font-semibold text-slate-700">Tools Manifest</h5>
+      {error ? (
+        <p className="mt-1 text-xs text-rose-600">{error}</p>
+      ) : tools === null ? (
+        <p className="mt-1 text-xs text-slate-400">正在加载…</p>
+      ) : tools.length === 0 ? (
+        <p className="mt-1 text-xs text-slate-500">暂无工具；请先测试连接以刷新 manifest。</p>
+      ) : (
+        <ul className="mt-2 max-h-40 space-y-1 overflow-y-auto text-xs text-slate-600">
+          {tools.map((tool, index) => {
+            const name = typeof tool.name === "string" ? tool.name : `tool-${index + 1}`;
+            const description =
+              typeof tool.description === "string" ? tool.description : "";
+            return (
+              <li key={`${name}-${index}`} className="rounded-md bg-slate-50 px-2 py-1">
+                <span className="font-medium text-slate-800">{name}</span>
+                {description ? (
+                  <span className="ml-2 text-slate-500">{description}</span>
+                ) : null}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 function EditableField({
   label,
   value,
   placeholder,
   helpText,
   readOnly,
+  disabled = false,
+  pending = false,
   required,
   multiline,
   inputType = "text",
   options,
+  pendingOptionValues,
   fullWidth,
   onChange,
 }: {
@@ -3238,41 +3336,71 @@ function EditableField({
   placeholder?: string;
   helpText?: string;
   readOnly?: boolean;
+  disabled?: boolean;
+  pending?: boolean;
   required?: boolean;
   multiline?: boolean;
-  inputType?: "text" | "password" | "url" | "select" | "number";
+  inputType?: "text" | "password" | "url" | "select" | "number" | "boolean";
   options?: Array<{ value: string; label: string }>;
+  pendingOptionValues?: string[];
   fullWidth?: boolean;
   onChange: (value: string) => void;
 }) {
+  const isLocked = readOnly || disabled;
   const className =
-    "w-full rounded-lg border border-border bg-white px-3 py-2 text-sm text-slate-900 outline-none transition read-only:bg-slate-50 read-only:text-slate-500 focus:border-slate-400";
+    "w-full rounded-lg border border-border bg-white px-3 py-2 text-sm text-slate-900 outline-none transition read-only:bg-slate-50 read-only:text-slate-500 focus:border-slate-400 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-400";
   const wrapperClass = fullWidth ? "sm:col-span-2" : "";
 
   return (
     <label className={`block ${wrapperClass}`}>
-      <span className="mb-1 block text-xs font-medium text-slate-600">
-        {label}
-        {required && <span className="ml-0.5 text-rose-500">*</span>}
+      <span className="mb-1 flex items-center gap-2 text-xs font-medium text-slate-600">
+        <span>
+          {label}
+          {required && <span className="ml-0.5 text-rose-500">*</span>}
+        </span>
+        {pending ? (
+          <span className="rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-semibold text-amber-700">
+            待后端
+          </span>
+        ) : null}
       </span>
-      {inputType === "select" && options ? (
+      {inputType === "boolean" ? (
+        <select
+          value={value === "true" ? "true" : "false"}
+          disabled={isLocked}
+          onChange={(event) => onChange(event.target.value)}
+          className={`${className} h-9`}
+        >
+          <option value="false">否</option>
+          <option value="true">是</option>
+        </select>
+      ) : inputType === "select" && options ? (
         <select
           value={value}
-          disabled={readOnly}
+          disabled={isLocked}
           onChange={(event) => onChange(event.target.value)}
           className={`${className} h-9`}
         >
           <option value="">请选择…</option>
-          {options.map((option) => (
-            <option key={option.value} value={option.value}>
-              {option.label}
-            </option>
-          ))}
+          {options.map((option) => {
+            const optionPending = pendingOptionValues?.includes(option.value) ?? false;
+            return (
+              <option
+                key={option.value}
+                value={option.value}
+                disabled={optionPending}
+              >
+                {option.label}
+                {optionPending ? "（待后端）" : ""}
+              </option>
+            );
+          })}
         </select>
       ) : multiline ? (
         <textarea
           value={value}
-          readOnly={readOnly}
+          readOnly={isLocked}
+          disabled={disabled}
           placeholder={placeholder}
           rows={3}
           onChange={(event) => onChange(event.target.value)}
@@ -3289,6 +3417,7 @@ function EditableField({
           }
           value={value}
           readOnly={readOnly}
+          disabled={disabled}
           placeholder={placeholder}
           autoComplete={inputType === "password" ? "off" : undefined}
           onChange={(event) => onChange(event.target.value)}
@@ -3517,6 +3646,7 @@ function ChatPane({
             hasExplicitThreadId
           >
             <LiveRunEventSubscriber agentId={agentId} threadId={activeThreadId} />
+            <AgentMessageRenderSync agentId={agentId} runStatus={liveRunStatus} />
             <CollaborationResponseBridge />
             <CollaborationInterruptHandler
               key={activeThreadId}

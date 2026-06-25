@@ -269,9 +269,13 @@ class DataAgentAgUiAgent extends AbstractAgent {
     return new Observable<BaseEvent>((subscriber) => {
       const run = async (): Promise<void> => {
         const sessionId = runInput.threadId;
-        const runId = runInput.runId;
         const interactionResume = extractInteractionResume(runInput);
-        const userInput = extractLastUserText(runInput) ?? "CopilotKit AG-UI run";
+        const runId = interactionResume?.interrupt.runId ?? runInput.runId;
+        // CopilotKit may send a fresh runId on resume; Mastra embeds runInput.runId in
+        // on_interrupt payloads, so keep AG-UI identity aligned with the suspended run.
+        const normalizedRunInput =
+          runId === runInput.runId ? runInput : { ...runInput, runId };
+        const userInput = extractLastUserText(normalizedRunInput) ?? "CopilotKit AG-UI run";
         const {
           effectiveRunConfig,
           mcpRuntime,
@@ -282,7 +286,7 @@ class DataAgentAgUiAgent extends AbstractAgent {
         } = resolveRunConfig({
           defaultDatasourceId: this.input.defaultDatasourceId,
           metadataStore: this.input.metadataStore,
-          runInput,
+          runInput: normalizedRunInput,
           userId: this.input.user.id,
           userInput
         });
@@ -293,7 +297,7 @@ class DataAgentAgUiAgent extends AbstractAgent {
           metadataStore: this.input.metadataStore,
           modelName: modelProvider.model_name,
           runEventWriter,
-          runInput,
+          runInput: normalizedRunInput,
           userId: this.input.user.id,
           userInput
         });
@@ -312,7 +316,7 @@ class DataAgentAgUiAgent extends AbstractAgent {
           modelName: modelProvider.model_name,
           modelTemperature: modelSettings?.temperature,
           runId,
-          runInput,
+          runInput: normalizedRunInput,
           selectedDatasourceId,
           sessionId,
           taskStateRuntime: this.input.taskStateRuntime,
@@ -388,7 +392,8 @@ class DataAgentAgUiAgent extends AbstractAgent {
         let resumeResolved = false;
         let finalization: Promise<void> | undefined;
         const subscription = agentAssembly.mastraAgent.run({
-          ...runInput,
+          ...normalizedRunInput,
+          runId,
           messages: agentAssembly.governedMessages
         }).subscribe({
           next: (event) => {
@@ -397,6 +402,15 @@ class DataAgentAgUiAgent extends AbstractAgent {
               suspended = true;
               emit(interactionRequested);
               finalizer.suspend();
+              // CopilotKit useInterrupt listens for the native Mastra interrupt event.
+              if (event.type === EventType.CUSTOM && event.name === "on_interrupt") {
+                emit(event);
+              }
+              // Stream must finalize so CopilotKit can surface the interrupt UI via onRunFinalized.
+              emit({
+                type: EventType.RUN_FINISHED,
+                timestamp: Date.now()
+              });
               return;
             }
             if (event.type === EventType.RUN_FINISHED && suspended) {
@@ -425,8 +439,17 @@ class DataAgentAgUiAgent extends AbstractAgent {
               && event.type === EventType.TOOL_CALL_RESULT
               && event.toolCallId === interactionResume.interrupt.toolCallId
             ) {
-              emit(interactionRuntime.resolve(interactionResume));
-              resumeResolved = true;
+              try {
+                emit(interactionRuntime.resolve(interactionResume));
+                resumeResolved = true;
+              } catch (error) {
+                const message = error instanceof Error ? error.message : "Interaction resume failed";
+                emit({
+                  type: EventType.RUN_ERROR,
+                  message,
+                  timestamp: Date.now()
+                });
+              }
             }
 
             if (event.type === EventType.RUN_STARTED) {

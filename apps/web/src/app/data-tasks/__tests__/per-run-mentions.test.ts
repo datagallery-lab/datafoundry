@@ -7,6 +7,7 @@ import {
   emptyPerRunSelection,
   removePerRunMention,
   resolveActiveDatasourceId,
+  setLiveMentionSupport,
   togglePerRunMention,
   toggleSessionResource,
   type WorkspaceConfigStore,
@@ -52,6 +53,7 @@ describe("per-run mention selection", () => {
   });
 
   it("lists only session-enabled resources for @ picker", () => {
+    setLiveMentionSupport({ db: true, kb: true, mcp: true, skill: true });
     const narrowed = toggleSessionResource(session, "db", "db-orders");
     const resources = buildMentionResources(store, narrowed);
     expect(resources).toHaveLength(5); // db(1)+kb(1)+mcp(1)+skill(2)
@@ -59,7 +61,7 @@ describe("per-run mention selection", () => {
     const db = resources.find((r) => r.id === "db-default");
     const kb = resources.find((r) => r.id === "kb-docs");
     expect(db?.backendSupported).toBe(true);
-    expect(kb?.backendSupported).toBe(false);
+    expect(kb?.backendSupported).toBe(true);
     expect(resources.some((r) => r.kind === "llm")).toBe(false);
   });
 });

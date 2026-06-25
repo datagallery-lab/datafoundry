@@ -1,4 +1,4 @@
-import { LocalArtifactService } from "@open-data-agent/artifacts";
+import { LocalArtifactService, type CreateArtifactInput } from "@open-data-agent/artifacts";
 import type { ArtifactSummary, DataSourceSummary } from "@open-data-agent/contracts";
 import type { DataSourceRecord, MetadataStore } from "@open-data-agent/metadata";
 import { randomUUID } from "node:crypto";
@@ -101,6 +101,7 @@ export interface DataGateway {
   inspectSchema(input: InspectSchemaInput): Promise<SchemaSummary>;
   previewTable(input: PreviewTableInput): Promise<TableResult>;
   runSqlReadonly(input: RunSqlReadonlyInput): Promise<SqlExecutionResult>;
+  createArtifact(input: CreateArtifactInput): Promise<ArtifactSummary>;
 }
 
 export type DataGatewayPolicy = {
@@ -273,6 +274,10 @@ export class LocalDataGateway implements DataGateway {
       });
       throw error;
     }
+  }
+
+  async createArtifact(input: CreateArtifactInput): Promise<ArtifactSummary> {
+    return this.artifactService.createArtifact(input);
   }
 
   private createAdapter(dataSource: DataSourceRecord): DataSourceAdapter {

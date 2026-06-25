@@ -5,6 +5,7 @@ import {
   createInitialSessionUsage,
   deriveLiveSessionView,
   deriveRunUsage,
+  resolveTokenUsageForEvent,
   reduceLiveRunEvent,
 } from "../live-run-state";
 
@@ -174,6 +175,86 @@ describe("live run state reducer", () => {
     });
   });
 
+  it("links batched sql artifacts to earliest unlinked sql tool after multiple tools", () => {
+    let run = createInitialLiveRun();
+    run = reduceLiveRunEvent(run, { type: "RUN_STARTED" });
+
+    run = reduceLiveRunEvent(run, {
+      type: "TOOL_CALL_START",
+      toolCallId: "tool-inspect-1",
+      toolCallName: "inspect_schema",
+    });
+    run = reduceLiveRunEvent(run, {
+      type: "TOOL_CALL_RESULT",
+      toolCallId: "tool-inspect-1",
+      toolCallName: "inspect_schema",
+      result: JSON.stringify({ tables: [{ name: "orders", columns: [] }] }),
+    });
+
+    for (const [toolCallId, rowCount] of [
+      ["tool-sql-1", 2],
+      ["tool-sql-2", 1],
+    ] as const) {
+      run = reduceLiveRunEvent(run, {
+        type: "TOOL_CALL_START",
+        toolCallId,
+        toolCallName: "run_sql_readonly",
+      });
+      run = reduceLiveRunEvent(run, {
+        type: "TOOL_CALL_RESULT",
+        toolCallId,
+        toolCallName: "run_sql_readonly",
+        result: JSON.stringify({ row_count: rowCount, elapsed_ms: 5 }),
+      });
+    }
+
+    run = reduceLiveRunEvent(run, {
+      type: "CUSTOM",
+      name: "artifact",
+      value: {
+        id: "artifact-1",
+        type: "table",
+        name: "Result A",
+        preview_json: {
+          columns: ["value"],
+          rows: [["A1"], ["A2"]],
+          row_count: 2,
+        },
+      },
+    });
+    run = reduceLiveRunEvent(run, {
+      type: "CUSTOM",
+      name: "artifact",
+      value: {
+        id: "artifact-2",
+        type: "table",
+        name: "Result B",
+        preview_json: {
+          columns: ["value"],
+          rows: [["B"]],
+          row_count: 1,
+        },
+      },
+    });
+
+    expect(run.events.find((event) => event.id === "tool-sql-1")?.artifactIds).toEqual([
+      "artifact-1",
+    ]);
+    expect(run.events.find((event) => event.id === "tool-sql-2")?.artifactIds).toEqual([
+      "artifact-2",
+    ]);
+    expect(run.artifacts.find((artifact) => artifact.id === "artifact-1")?.detail).toEqual({
+      type: "dataset",
+      columns: ["value"],
+      rows: [["A1"], ["A2"]],
+    });
+    expect(run.artifacts.find((artifact) => artifact.id === "artifact-2")?.detail).toEqual({
+      type: "dataset",
+      columns: ["value"],
+      rows: [["B"]],
+    });
+  });
+
   it("captures an artifact custom event without fabricating extra state", () => {
     const initial = createInitialLiveRun();
     const withArtifact = reduceLiveRunEvent(initial, {
@@ -189,7 +270,244 @@ describe("live run state reducer", () => {
     expect(withArtifact.artifacts).toHaveLength(1);
   });
 
-  it("resets to an idle empty run on RUN_STARTED", () => {
+  it("parses file artifacts and links them to write_file tool calls", () => {
+    let run = reduceLiveRunEvent(createInitialLiveRun(), {
+      type: "TOOL_CALL_START",
+      toolCallId: "tool-write-1",
+      toolCallName: "write_file",
+      args: { path: "hello.txt", content: "hi" },
+    });
+    run = reduceLiveRunEvent(run, {
+      type: "TOOL_CALL_RESULT",
+      toolCallId: "tool-write-1",
+      result: JSON.stringify({ observation: "Wrote 2 bytes to hello.txt" }),
+    });
+    run = reduceLiveRunEvent(run, {
+      type: "CUSTOM",
+      name: "artifact",
+      value: {
+        id: "artifact-file-1",
+        type: "file",
+        name: "hello.txt",
+        preview_json: {
+          path: "hello.txt",
+          size: 2,
+          mtime: "2026-06-23T09:00:00.000Z",
+          tool: "write_file",
+        },
+      },
+    });
+
+    expect(run.artifacts[0]).toMatchObject({
+      id: "artifact-file-1",
+      type: "file",
+      kind: "file",
+      detail: {
+        type: "file",
+        path: "hello.txt",
+        size: 2,
+        tool: "write_file",
+      },
+    });
+    expect(run.events.find((event) => event.id === "tool-write-1")?.artifactIds).toEqual([
+      "artifact-file-1",
+    ]);
+  });
+
+  it("links write_file and edit_file artifacts to distinct tool calls", () => {
+    let run = createInitialLiveRun();
+    run = reduceLiveRunEvent(run, { type: "RUN_STARTED" });
+
+    run = reduceLiveRunEvent(run, {
+      type: "TOOL_CALL_START",
+      toolCallId: "tool-write-1",
+      toolCallName: "write_file",
+    });
+    run = reduceLiveRunEvent(run, {
+      type: "TOOL_CALL_RESULT",
+      toolCallId: "tool-write-1",
+      toolCallName: "write_file",
+      result: JSON.stringify({ observation: "Wrote 47 bytes to test_dir/test.txt" }),
+    });
+    run = reduceLiveRunEvent(run, {
+      type: "CUSTOM",
+      name: "artifact",
+      value: {
+        id: "artifact-write",
+        type: "file",
+        name: "test_dir/test.txt",
+        preview_json: {
+          path: "test_dir/test.txt",
+          size: 47,
+          tool: "write_file",
+        },
+      },
+    });
+
+    run = reduceLiveRunEvent(run, {
+      type: "TOOL_CALL_START",
+      toolCallId: "tool-edit-1",
+      toolCallName: "edit_file",
+    });
+    run = reduceLiveRunEvent(run, {
+      type: "TOOL_CALL_RESULT",
+      toolCallId: "tool-edit-1",
+      toolCallName: "edit_file",
+      result: JSON.stringify({
+        observation: "Replaced 1 occurrence in test_dir/test.txt",
+      }),
+    });
+    run = reduceLiveRunEvent(run, {
+      type: "CUSTOM",
+      name: "artifact",
+      value: {
+        id: "artifact-edit",
+        type: "file",
+        name: "test_dir/test.txt",
+        preview_json: {
+          path: "test_dir/test.txt",
+          size: 46,
+          tool: "edit_file",
+        },
+      },
+    });
+
+    expect(run.artifacts.find((artifact) => artifact.id === "artifact-write")?.createdByEventId).toBe(
+      "tool-write-1",
+    );
+    expect(run.artifacts.find((artifact) => artifact.id === "artifact-edit")?.createdByEventId).toBe(
+      "tool-edit-1",
+    );
+    expect(run.events.find((event) => event.id === "tool-write-1")?.artifactIds).toEqual([
+      "artifact-write",
+    ]);
+    expect(run.events.find((event) => event.id === "tool-edit-1")?.artifactIds).toEqual([
+      "artifact-edit",
+    ]);
+  });
+
+  it("links file artifact when CUSTOM arrives before TOOL_CALL_RESULT", () => {
+    let run = createInitialLiveRun();
+    run = reduceLiveRunEvent(run, {
+      type: "TOOL_CALL_START",
+      toolCallId: "tool-write-1",
+      toolCallName: "write_file",
+    });
+    run = reduceLiveRunEvent(run, {
+      type: "CUSTOM",
+      name: "artifact",
+      value: {
+        id: "artifact-write",
+        type: "file",
+        name: "test_dir/test.txt",
+        preview_json: {
+          path: "test_dir/test.txt",
+          size: 47,
+          tool: "write_file",
+        },
+      },
+    });
+    expect(run.artifacts[0]?.createdByEventId).toBeUndefined();
+
+    run = reduceLiveRunEvent(run, {
+      type: "TOOL_CALL_RESULT",
+      toolCallId: "tool-write-1",
+      toolCallName: "write_file",
+      result: JSON.stringify({ observation: "Wrote 47 bytes to test_dir/test.txt" }),
+    });
+
+    expect(run.artifacts.find((artifact) => artifact.id === "artifact-write")?.createdByEventId).toBe(
+      "tool-write-1",
+    );
+  });
+
+  it("does not link edit_file artifact to write_file when write_file is still unlinked", () => {
+    let run = createInitialLiveRun();
+    run = reduceLiveRunEvent(run, { type: "RUN_STARTED" });
+
+    run = reduceLiveRunEvent(run, {
+      type: "TOOL_CALL_START",
+      toolCallId: "tool-write-1",
+      toolCallName: "write_file",
+    });
+    run = reduceLiveRunEvent(run, {
+      type: "TOOL_CALL_RESULT",
+      toolCallId: "tool-write-1",
+      toolCallName: "write_file",
+      result: JSON.stringify({ observation: "Wrote 47 bytes to test_dir/test.txt" }),
+    });
+
+    run = reduceLiveRunEvent(run, {
+      type: "TOOL_CALL_START",
+      toolCallId: "tool-edit-1",
+      toolCallName: "edit_file",
+    });
+    run = reduceLiveRunEvent(run, {
+      type: "TOOL_CALL_RESULT",
+      toolCallId: "tool-edit-1",
+      toolCallName: "edit_file",
+      result: JSON.stringify({
+        observation: "Replaced 1 occurrence in test_dir/test.txt",
+      }),
+    });
+
+    run = reduceLiveRunEvent(run, {
+      type: "CUSTOM",
+      name: "artifact",
+      value: {
+        id: "artifact-write",
+        type: "file",
+        name: "test_dir/test.txt",
+        preview_json: { path: "test_dir/test.txt", size: 47, tool: "write_file" },
+      },
+    });
+    run = reduceLiveRunEvent(run, {
+      type: "CUSTOM",
+      name: "artifact",
+      value: {
+        id: "artifact-edit",
+        type: "file",
+        name: "test_dir/test.txt",
+        preview_json: { path: "test_dir/test.txt", size: 46, tool: "edit_file" },
+      },
+    });
+
+    expect(run.artifacts.find((artifact) => artifact.id === "artifact-write")?.createdByEventId).toBe(
+      "tool-write-1",
+    );
+    expect(run.artifacts.find((artifact) => artifact.id === "artifact-edit")?.createdByEventId).toBe(
+      "tool-edit-1",
+    );
+  });
+
+  it("preserves run progress when RUN_STARTED resumes after suspension", () => {
+    let run = createInitialLiveRun();
+    run = reduceLiveRunEvent(run, { type: "RUN_STARTED" });
+    run = reduceLiveRunEvent(run, {
+      type: "TOOL_CALL_START",
+      toolCallId: "tool-inspect-1",
+      toolCallName: "inspect_schema",
+    });
+    run = reduceLiveRunEvent(run, {
+      type: "TOOL_CALL_RESULT",
+      toolCallId: "tool-inspect-1",
+      toolCallName: "inspect_schema",
+      result: JSON.stringify({ tables: [{ name: "orders", columns: [] }] }),
+    });
+    run = reduceLiveRunEvent(run, {
+      type: "STATE_DELTA",
+      delta: [{ op: "replace", path: "/runStatus", value: "suspended" }],
+    });
+
+    const resumed = reduceLiveRunEvent(run, { type: "RUN_STARTED" });
+
+    expect(resumed.runStatus).toBe("running");
+    expect(resumed.toolCalls).toHaveLength(1);
+    expect(resumed.events).toHaveLength(1);
+    expect(resumed.toolCalls[0]?.name).toBe("inspect_schema");
+  });
+
+  it("preserves orphan session artifacts when a new run starts", () => {
     const seeded = reduceLiveRunEvent(createInitialLiveRun(), {
       type: "CUSTOM",
       name: "artifact",
@@ -198,8 +516,44 @@ describe("live run state reducer", () => {
 
     const restarted = reduceLiveRunEvent(seeded, { type: "RUN_STARTED" });
 
+    expect(restarted.artifacts).toHaveLength(1);
+    expect(restarted.events).toEqual([]);
+    expect(restarted.runStatus).toBe("running");
+  });
+
+  it("accumulates session tool calls when a new run starts in the same thread", () => {
+    let run = createInitialLiveRun();
+    run = reduceLiveRunEvent(run, { type: "RUN_STARTED" });
+    run = reduceLiveRunEvent(run, {
+      type: "TOOL_CALL_START",
+      toolCallId: "tool-1",
+      toolCallName: "inspect_schema",
+    });
+    run = reduceLiveRunEvent(run, { type: "RUN_FINISHED" });
+
+    run = reduceLiveRunEvent(run, { type: "RUN_STARTED" });
+
+    expect(run.toolCalls).toHaveLength(1);
+    expect(run.runHistory).toHaveLength(1);
+    expect(run.runHistory?.[0]?.toolCallEndIndex).toBe(1);
+    expect(run.runStatus).toBe("running");
+    expect(run.runFinishedAt).toBeUndefined();
+
+    run = reduceLiveRunEvent(run, {
+      type: "TOOL_CALL_START",
+      toolCallId: "tool-2",
+      toolCallName: "run_sql_readonly",
+    });
+
+    expect(run.toolCalls).toHaveLength(2);
+  });
+
+  it("resets to an idle empty run on first RUN_STARTED with no session activity", () => {
+    const restarted = reduceLiveRunEvent(createInitialLiveRun(), { type: "RUN_STARTED" });
+
     expect(restarted.artifacts).toEqual([]);
     expect(restarted.events).toEqual([]);
+    expect(restarted.toolCalls).toEqual([]);
     expect(restarted.runStatus).toBe("running");
   });
 
@@ -341,6 +695,92 @@ describe("live run state reducer", () => {
     expect(session.tokens.outputTokens).toBe(340);
   });
 
+  it("tracks token_usage model, cost, and step-level usage", () => {
+    let run = createInitialLiveRun();
+    run = reduceLiveRunEvent(run, { type: "RUN_STARTED" });
+    run = reduceLiveRunEvent(run, {
+      type: "TOOL_CALL_START",
+      toolCallId: "tool-sql-1",
+      toolCallName: "run_sql_readonly",
+    });
+    run = reduceLiveRunEvent(run, {
+      type: "CUSTOM",
+      name: "token_usage",
+      value: {
+        step_number: 1,
+        model: "qwen-plus",
+        input_tokens: 1000,
+        output_tokens: 250,
+        cost_usd: 0.0123,
+      },
+    });
+
+    const runUsage = deriveRunUsage(run);
+    expect(runUsage.tokens).toMatchObject({
+      inputTokens: 1000,
+      outputTokens: 250,
+      costUsd: 0.0123,
+    });
+    expect(runUsage.models).toEqual(["qwen-plus"]);
+
+    const stepUsage = resolveTokenUsageForEvent(run, run.events[0] ?? null);
+    expect(stepUsage).toMatchObject({
+      reported: true,
+      inputTokens: 1000,
+      outputTokens: 250,
+      costUsd: 0.0123,
+      models: ["qwen-plus"],
+      approximate: true,
+    });
+  });
+
+  it("prefers tool_call_id over step_number when both are present", () => {
+    let run = createInitialLiveRun();
+    run = reduceLiveRunEvent(run, { type: "RUN_STARTED" });
+    run = reduceLiveRunEvent(run, {
+      type: "TOOL_CALL_START",
+      toolCallId: "tool-sql-1",
+      toolCallName: "run_sql_readonly",
+    });
+    run = reduceLiveRunEvent(run, {
+      type: "TOOL_CALL_START",
+      toolCallId: "tool-sql-2",
+      toolCallName: "run_sql_readonly",
+    });
+    run = reduceLiveRunEvent(run, {
+      type: "CUSTOM",
+      name: "token_usage",
+      value: {
+        tool_call_id: "tool-sql-2",
+        input_tokens: 50,
+        output_tokens: 10,
+      },
+    });
+    run = reduceLiveRunEvent(run, {
+      type: "CUSTOM",
+      name: "token_usage",
+      value: {
+        step_number: 1,
+        input_tokens: 900,
+        output_tokens: 100,
+      },
+    });
+
+    const firstStepUsage = resolveTokenUsageForEvent(run, run.events[0] ?? null);
+    const secondStepUsage = resolveTokenUsageForEvent(run, run.events[1] ?? null);
+
+    expect(firstStepUsage).toMatchObject({
+      inputTokens: 900,
+      outputTokens: 100,
+      approximate: true,
+    });
+    expect(secondStepUsage).toMatchObject({
+      inputTokens: 50,
+      outputTokens: 10,
+      approximate: undefined,
+    });
+  });
+
   it("preserves sql tool identity when bridged TOOL_CALL_RESULT omits toolCallName", () => {
     let run = createInitialLiveRun();
     run = reduceLiveRunEvent(run, { type: "RUN_STARTED" });
@@ -456,5 +896,103 @@ describe("live run state reducer", () => {
       stepId: "sql-1",
       status: "failed",
     });
+  });
+
+  it("does not link sql artifact to a failed tool call when artifact arrives after failure", () => {
+    let run = createInitialLiveRun();
+    run = reduceLiveRunEvent(run, { type: "RUN_STARTED" });
+
+    run = reduceLiveRunEvent(run, {
+      type: "TOOL_CALL_START",
+      toolCallId: "tool-sql-1",
+      toolCallName: "run_sql_readonly",
+      args: { sql: "SELECT * FROM orders" },
+    });
+    run = reduceLiveRunEvent(run, {
+      type: "TOOL_CALL_RESULT",
+      toolCallId: "tool-sql-1",
+      toolCallName: "run_sql_readonly",
+      result: JSON.stringify({
+        audit_log_id: "audit-success",
+        row_count: 3,
+        elapsed_ms: 6,
+      }),
+    });
+
+    run = reduceLiveRunEvent(run, {
+      type: "TOOL_CALL_START",
+      toolCallId: "tool-sql-2",
+      toolCallName: "run_sql_readonly",
+      args: { sql: "SELECT channel, COUNT(*) AS count FROM orders GROUP BY channel" },
+    });
+    run = reduceLiveRunEvent(run, {
+      type: "TOOL_CALL_RESULT",
+      toolCallId: "tool-sql-2",
+      toolCallName: "run_sql_readonly",
+      result: JSON.stringify({
+        status: "error",
+        error: "Only simple SELECT column list FROM table queries are supported for file/demo data sources.",
+      }),
+    });
+
+    run = reduceLiveRunEvent(run, {
+      type: "CUSTOM",
+      name: "artifact",
+      value: {
+        id: "artifact-orders",
+        type: "table",
+        name: "SQL result audit-success",
+        preview_json: {
+          audit_log_id: "audit-success",
+          columns: ["order_id", "channel"],
+          rows: [["o_001", "search"]],
+          row_count: 3,
+        },
+      },
+    });
+
+    expect(run.artifacts[0]?.createdByEventId).toBe("tool-sql-1");
+    expect(run.events.find((event) => event.id === "tool-sql-1")?.artifactIds).toEqual([
+      "artifact-orders",
+    ]);
+    expect(run.events.find((event) => event.id === "tool-sql-2")?.artifactIds).toBeUndefined();
+    expect(run.events.find((event) => event.id === "tool-sql-2")?.payload).toMatchObject({
+      sql: "SELECT channel, COUNT(*) AS count FROM orders GROUP BY channel",
+      scannedRows: 0,
+    });
+  });
+
+  it("stores workspace.metadata and sandbox.output CUSTOM events", () => {
+    let run = createInitialLiveRun();
+    run = reduceLiveRunEvent(run, {
+      type: "CUSTOM",
+      name: "workspace.metadata",
+      value: { toolCallId: "tc-1", toolName: "write_file", status: "ready" },
+    });
+    run = reduceLiveRunEvent(run, {
+      type: "CUSTOM",
+      name: "sandbox.output",
+      value: { kind: "stdout", text: "verify-ok\n" },
+    });
+
+    expect(run.workspaceMetadata).toHaveLength(1);
+    expect(run.workspaceMetadata[0]).toMatchObject({
+      toolCallId: "tc-1",
+      toolName: "write_file",
+    });
+    expect(run.sandboxOutputs).toHaveLength(1);
+    expect(run.sandboxOutputs[0]).toMatchObject({ kind: "stdout" });
+  });
+
+  it("keeps suspended status when RUN_FINISHED follows ask_user suspension", () => {
+    let run = reduceLiveRunEvent(createInitialLiveRun(), { type: "RUN_STARTED" });
+    run = reduceLiveRunEvent(run, {
+      type: "STATE_DELTA",
+      delta: [{ op: "replace", path: "/runStatus", value: "suspended" }],
+    });
+    run = reduceLiveRunEvent(run, { type: "RUN_FINISHED" });
+
+    expect(run.runStatus).toBe("suspended");
+    expect(run.runFinishedAt).toBeTypeOf("number");
   });
 });

@@ -25,9 +25,9 @@ import { scheduleChatTextareaResize } from "./use-chat-textarea-autoresize";
 const MENTION_TOKEN_RE = /(?:^|\s)@([\p{L}\p{N}_-]*)$/u;
 
 /**
- * React (18) attaches event handlers at the root, so a native listener on the
- * element in the capture phase runs first. We use this to intercept arrow/enter
- * keys for the `@` menu before CopilotChat's textarea turns Enter into a send.
+ * CopilotKit handles Enter on the textarea via React onKeyDown. While the `@`
+ * menu is open we register a document capture listener so ↑/↓/Enter/Esc win
+ * reliably (including under React 19's per-node delegation).
  */
 function setNativeTextareaValue(
   el: HTMLTextAreaElement,
@@ -130,13 +130,17 @@ export function useMentionAutocomplete({
     [menuState, onToggle],
   );
 
-  // Keep refs to the latest values for the native (non-React) key handler.
   const filteredRef = useRef(filtered);
   filteredRef.current = filtered;
   const highlightRef = useRef(highlight);
   highlightRef.current = highlight;
-  const menuOpenRef = useRef(menuState !== null);
-  menuOpenRef.current = menuState !== null;
+  const selectResourceRef = useRef(selectResource);
+  selectResourceRef.current = selectResource;
+
+  const handleBlurRef = useRef(() => {
+    // Delay so a click on a menu item registers before the menu unmounts.
+    window.setTimeout(() => setMenuState(null), 120);
+  });
 
   const bindTextarea = useCallback(
     (node: HTMLDivElement | null) => {
@@ -147,7 +151,6 @@ export function useMentionAutocomplete({
         previous.removeEventListener("input", syncFromCaret);
         previous.removeEventListener("keyup", syncFromCaret);
         previous.removeEventListener("click", syncFromCaret);
-        previous.removeEventListener("keydown", handleKeyDownRef.current, true);
         previous.removeEventListener("blur", handleBlurRef.current);
       }
       textareaRef.current = nextTextarea;
@@ -155,7 +158,6 @@ export function useMentionAutocomplete({
         nextTextarea.addEventListener("input", syncFromCaret);
         nextTextarea.addEventListener("keyup", syncFromCaret);
         nextTextarea.addEventListener("click", syncFromCaret);
-        nextTextarea.addEventListener("keydown", handleKeyDownRef.current, true);
         nextTextarea.addEventListener("blur", handleBlurRef.current);
       }
     },
@@ -175,50 +177,55 @@ export function useMentionAutocomplete({
     bindTextarea(columnNodeRef.current);
   }, [bindTextarea, refreshToken]);
 
-  // Stable handler refs so add/remove listener pairs always match.
-  const handleKeyDownRef = useRef((event: KeyboardEvent) => {
-    if (!menuOpenRef.current) return;
-    const items = filteredRef.current;
-    switch (event.key) {
-      case "ArrowDown":
-        event.preventDefault();
-        event.stopImmediatePropagation();
-        setHighlight((index) =>
-          items.length === 0 ? 0 : (index + 1) % items.length,
-        );
-        break;
-      case "ArrowUp":
-        event.preventDefault();
-        event.stopImmediatePropagation();
-        setHighlight((index) =>
-          items.length === 0 ? 0 : (index - 1 + items.length) % items.length,
-        );
-        break;
-      case "Enter":
-      case "Tab": {
-        const choice = items[highlightRef.current];
-        if (choice) {
+  // React 19 attaches onKeyDown on the textarea; document capture runs first and
+  // reliably intercepts ↑/↓/Enter/Esc for the @ menu while it is open.
+  useEffect(() => {
+    if (menuState === null) return;
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      const textarea = textareaRef.current;
+      if (!textarea || event.target !== textarea) return;
+      if (event.isComposing || event.keyCode === 229) return;
+
+      const items = filteredRef.current;
+      switch (event.key) {
+        case "ArrowDown":
           event.preventDefault();
           event.stopImmediatePropagation();
-          selectResourceRef.current(choice);
+          setHighlight((index) =>
+            items.length === 0 ? 0 : (index + 1) % items.length,
+          );
+          break;
+        case "ArrowUp":
+          event.preventDefault();
+          event.stopImmediatePropagation();
+          setHighlight((index) =>
+            items.length === 0 ? 0 : (index - 1 + items.length) % items.length,
+          );
+          break;
+        case "Enter":
+        case "Tab": {
+          const choice = items[highlightRef.current];
+          if (choice) {
+            event.preventDefault();
+            event.stopImmediatePropagation();
+            selectResourceRef.current(choice);
+          }
+          break;
         }
-        break;
+        case "Escape":
+          event.preventDefault();
+          event.stopImmediatePropagation();
+          setMenuState(null);
+          break;
+        default:
+          break;
       }
-      case "Escape":
-        event.preventDefault();
-        event.stopImmediatePropagation();
-        setMenuState(null);
-        break;
-      default:
-        break;
-    }
-  });
-  const handleBlurRef = useRef(() => {
-    // Delay so a click on a menu item registers before the menu unmounts.
-    window.setTimeout(() => setMenuState(null), 120);
-  });
-  const selectResourceRef = useRef(selectResource);
-  selectResourceRef.current = selectResource;
+    };
+
+    document.addEventListener("keydown", handleKeyDown, true);
+    return () => document.removeEventListener("keydown", handleKeyDown, true);
+  }, [menuState !== null]);
 
   const openAtCaret = useCallback(() => {
     const el = textareaRef.current;
@@ -262,27 +269,33 @@ function MentionMenu({
   onPick: (resource: MentionResource) => void;
   onClose: () => void;
 }) {
+  const optionRefs = useRef<Array<HTMLButtonElement | null>>([]);
+
+  useEffect(() => {
+    optionRefs.current[highlight]?.scrollIntoView({ block: "nearest" });
+  }, [highlight, items.length]);
+
   return (
     <div
       role="listbox"
       aria-label="选择能力（@）"
-      className="absolute bottom-full left-0 z-50 mb-2 w-[min(420px,calc(100vw-2rem))] overflow-hidden rounded-xl border border-slate-200 bg-white shadow-lg dark:border-slate-700 dark:bg-[#252525]"
+      className="absolute bottom-full left-0 z-50 mb-2 w-[min(420px,calc(100vw-2rem))] overflow-hidden rounded-xl border border-border bg-surface shadow-lg"
       onMouseDown={(event) => event.preventDefault()}
     >
-      <div className="flex items-center justify-between border-b border-slate-100 px-3 py-2 dark:border-slate-700">
-        <span className="text-[11px] font-medium uppercase tracking-[0.06em] text-slate-400">
+      <div className="flex items-center justify-between border-b border-border px-3 py-2">
+        <span className="text-[11px] font-medium uppercase tracking-[0.06em] text-muted-light">
           通过 @ 指定本轮能力
         </span>
         <button
           type="button"
           onClick={onClose}
-          className="rounded px-1.5 text-xs text-slate-400 transition hover:text-slate-700"
+          className="rounded px-1.5 text-xs text-muted-light transition hover:text-muted"
         >
           Esc
         </button>
       </div>
       {items.length === 0 ? (
-        <p className="px-3 py-4 text-sm text-slate-500">
+        <p className="px-3 py-4 text-sm text-muted-light">
           没有匹配的资源，先在左侧配置中添加
         </p>
       ) : (
@@ -297,12 +310,15 @@ function MentionMenu({
                 <button
                   type="button"
                   role="option"
-                  aria-selected={selected}
+                  aria-selected={active}
+                  ref={(node) => {
+                    optionRefs.current[index] = node;
+                  }}
                   onMouseEnter={() => onHover(index)}
                   onClick={() => onPick(resource)}
                   className={[
                     "flex w-full items-center gap-2 px-3 py-2 text-left transition",
-                    active ? "bg-slate-100 dark:bg-slate-700/60" : "",
+                    active ? "bg-surface-subtle" : "",
                   ].join(" ")}
                 >
                   <span
@@ -315,18 +331,18 @@ function MentionMenu({
                   </span>
                   <span className="min-w-0 flex-1">
                     <span className="flex items-center gap-1.5">
-                      <span className="truncate text-sm font-medium text-slate-900 dark:text-slate-100">
+                      <span className="truncate text-sm font-medium text-foreground">
                         {resource.name}
                       </span>
                     </span>
                     {resource.description && (
-                      <span className="mt-0.5 block truncate text-xs text-slate-500">
+                      <span className="mt-0.5 block truncate text-xs text-muted-light">
                         {resource.description}
                       </span>
                     )}
                   </span>
                   {selected && (
-                    <span className="shrink-0 self-center text-slate-600 dark:text-slate-300">
+                    <span className="shrink-0 self-center text-muted">
                       <CheckIcon />
                     </span>
                   )}
@@ -400,7 +416,7 @@ export function MentionChips({
               type="button"
               aria-label={`移除 ${resource.name}`}
               onClick={() => onRemove(resource.kind, resource.id)}
-              className="ml-0.5 grid h-4 w-4 place-items-center rounded-full text-slate-400 transition hover:bg-slate-200 hover:text-slate-700 dark:hover:bg-slate-600"
+              className="ml-0.5 grid h-4 w-4 place-items-center rounded-full text-muted-light transition hover:bg-surface-subtle hover:text-muted"
             >
               <CloseIcon />
             </button>
@@ -410,7 +426,7 @@ export function MentionChips({
       <button
         type="button"
         onClick={onClear}
-        className="ml-0.5 rounded-full px-2 py-0.5 text-[11px] text-slate-400 transition hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-slate-700"
+        className="ml-0.5 rounded-full px-2 py-0.5 text-[11px] text-muted-light transition hover:bg-surface-subtle hover:text-muted"
       >
         清除
       </button>

@@ -24,7 +24,7 @@ export type LiveAudit = {
   elapsedMs?: number;
 };
 
-export type LiveRunStatus = "idle" | "running" | "completed" | "failed";
+export type LiveRunStatus = "idle" | "running" | "suspended" | "completed" | "failed";
 
 export type LiveToolCallRecord = {
   id: string;
@@ -56,6 +56,14 @@ export type SqlUsageStats = {
 export type TokenUsageStats = {
   inputTokens: number;
   outputTokens: number;
+  costUsd?: number;
+};
+
+export type LiveTokenUsageRecord = TokenUsageStats & {
+  stepNumber?: number;
+  stepId?: string;
+  toolCallId?: string;
+  model?: string;
 };
 
 export type RunUsageSnapshot = {
@@ -67,6 +75,7 @@ export type RunUsageSnapshot = {
   artifactCount: number;
   tokens: TokenUsageStats;
   tokenUsageReported: boolean;
+  models: string[];
 };
 
 export type SessionUsageStats = {
@@ -78,6 +87,31 @@ export type SessionUsageStats = {
   artifactCount: number;
   tokens: TokenUsageStats;
   tokenUsageReported: boolean;
+  models: string[];
+};
+
+export type LiveSandboxOutput = {
+  kind: string;
+  receivedAt: number;
+  payload: unknown;
+};
+
+export type LiveWorkspaceMetadata = {
+  toolCallId?: string;
+  toolName?: string;
+  receivedAt: number;
+  payload: unknown;
+};
+
+export type LiveRunHistoryEntry = {
+  startedAt?: number;
+  finishedAt?: number;
+  status: LiveRunStatus;
+  errorMessage?: string;
+  /** Cumulative toolCalls.length when this segment ended. */
+  toolCallEndIndex: number;
+  /** Cumulative audits.length when this segment ended. */
+  auditEndIndex: number;
 };
 
 export type LiveRun = {
@@ -91,6 +125,11 @@ export type LiveRun = {
   runStartedAt?: number;
   runFinishedAt?: number;
   tokenUsage?: TokenUsageStats;
+  tokenUsageEvents: LiveTokenUsageRecord[];
+  workspaceMetadata: LiveWorkspaceMetadata[];
+  sandboxOutputs: LiveSandboxOutput[];
+  /** Completed run segments within the current chat thread. */
+  runHistory?: LiveRunHistoryEntry[];
 };
 
 type AgUiLikeEvent = {
@@ -112,7 +151,69 @@ export function createInitialLiveRun(): LiveRun {
     audits: [],
     runStatus: "idle",
     toolCalls: [],
+    tokenUsageEvents: [],
+    workspaceMetadata: [],
+    sandboxOutputs: [],
+    runHistory: [],
   };
+}
+
+export function getSegmentToolCallStartIndex(liveRun: LiveRun): number {
+  return liveRun.runHistory?.at(-1)?.toolCallEndIndex ?? 0;
+}
+
+export function getSegmentAuditStartIndex(liveRun: LiveRun): number {
+  return liveRun.runHistory?.at(-1)?.auditEndIndex ?? 0;
+}
+
+export function deriveSegmentRunUsage(liveRun: LiveRun): RunUsageSnapshot {
+  const toolCallStart = getSegmentToolCallStartIndex(liveRun);
+  const auditStart = getSegmentAuditStartIndex(liveRun);
+  const segmentTools = liveRun.toolCalls.slice(toolCallStart);
+  const segmentToolIds = new Set(segmentTools.map((call) => call.id));
+  const segmentAudits = liveRun.audits.slice(0, Math.max(0, liveRun.audits.length - auditStart));
+  const segmentArtifactCount = liveRun.artifacts.filter(
+    (artifact) => artifact.createdByEventId && segmentToolIds.has(artifact.createdByEventId),
+  ).length;
+  const base = deriveRunUsage(liveRun);
+
+  return {
+    ...base,
+    toolCalls: toolCallsToStats(segmentTools),
+    sql: sqlAuditsToStats(segmentAudits),
+    artifactCount: segmentArtifactCount,
+  };
+}
+
+function archiveCurrentRunSegment(state: LiveRun): LiveRunHistoryEntry[] {
+  if (state.runStartedAt === undefined) return state.runHistory ?? [];
+
+  const resolvedStatus =
+    state.runStatus === "running" || state.runStatus === "suspended"
+      ? "completed"
+      : state.runStatus;
+
+  return [
+    ...(state.runHistory ?? []),
+    {
+      startedAt: state.runStartedAt,
+      finishedAt: state.runFinishedAt ?? Date.now(),
+      status: resolvedStatus,
+      errorMessage: state.errorMessage,
+      toolCallEndIndex: state.toolCalls.length,
+      auditEndIndex: state.audits.length,
+    },
+  ];
+}
+
+function hasSessionActivity(state: LiveRun): boolean {
+  return (
+    state.toolCalls.length > 0 ||
+    state.events.length > 0 ||
+    state.artifacts.length > 0 ||
+    state.audits.length > 0 ||
+    (state.runHistory?.length ?? 0) > 0
+  );
 }
 
 export function createInitialSessionUsage(): SessionUsageStats {
@@ -125,18 +226,21 @@ export function createInitialSessionUsage(): SessionUsageStats {
     artifactCount: 0,
     tokens: emptyTokenUsageStats(),
     tokenUsageReported: false,
+    models: [],
   };
 }
 
 function tokenUsageFromRun(liveRun: LiveRun): {
   tokens: TokenUsageStats;
   tokenUsageReported: boolean;
+  models: string[];
 } {
   const tokens = liveRun.tokenUsage ?? emptyTokenUsageStats();
   const tokenUsageReported =
     tokens.inputTokens > 0 ||
-    tokens.outputTokens > 0;
-  return { tokens, tokenUsageReported };
+    tokens.outputTokens > 0 ||
+    (tokens.costUsd ?? 0) > 0;
+  return { tokens, tokenUsageReported, models: uniqueModels(liveRun.tokenUsageEvents) };
 }
 
 export function deriveRunUsage(liveRun: LiveRun): RunUsageSnapshot {
@@ -147,7 +251,7 @@ export function deriveRunUsage(liveRun: LiveRun): RunUsageSnapshot {
         ? Math.max(0, Date.now() - liveRun.runStartedAt)
         : undefined;
 
-  const { tokens, tokenUsageReported } = tokenUsageFromRun(liveRun);
+  const { tokens, tokenUsageReported, models } = tokenUsageFromRun(liveRun);
 
   return {
     runStatus: liveRun.runStatus,
@@ -158,6 +262,7 @@ export function deriveRunUsage(liveRun: LiveRun): RunUsageSnapshot {
     artifactCount: liveRun.artifacts.length,
     tokens,
     tokenUsageReported,
+    models,
   };
 }
 
@@ -175,6 +280,7 @@ export function accumulateSessionUsage(
     artifactCount: session.artifactCount + run.artifactCount,
     tokens: mergeTokenUsageStats(session.tokens, run.tokens),
     tokenUsageReported: session.tokenUsageReported || run.tokenUsageReported,
+    models: uniqueStrings([...session.models, ...run.models]),
   };
 }
 
@@ -197,6 +303,7 @@ export function deriveLiveSessionView(
     artifactCount: session.artifactCount + run.artifactCount,
     tokens: mergeTokenUsageStats(session.tokens, run.tokens),
     tokenUsageReported: session.tokenUsageReported || run.tokenUsageReported,
+    models: uniqueStrings([...session.models, ...run.models]),
     includesInProgressRun: true,
   };
 }
@@ -204,12 +311,36 @@ export function deriveLiveSessionView(
 export function reduceLiveRunEvent(state: LiveRun, event: AgUiLikeEvent): LiveRun {
   switch (event.type) {
     case "RUN_STARTED":
+      if (state.runStatus === "suspended") {
+        return {
+          ...state,
+          runStatus: "running",
+          errorMessage: undefined,
+        };
+      }
+      if (hasSessionActivity(state)) {
+        return {
+          ...state,
+          runHistory: archiveCurrentRunSegment(state),
+          runStatus: "running",
+          runStartedAt: Date.now(),
+          runFinishedAt: undefined,
+          errorMessage: undefined,
+          plan: defaultPlan,
+        };
+      }
       return {
         ...createInitialLiveRun(),
         runStatus: "running",
         runStartedAt: Date.now(),
       };
     case "RUN_FINISHED":
+      if (state.runStatus === "suspended") {
+        return {
+          ...state,
+          runFinishedAt: Date.now(),
+        };
+      }
       return {
         ...state,
         runStatus: "completed",
@@ -416,56 +547,81 @@ function reduceToolEvent(state: LiveRun, event: AgUiLikeEvent): LiveRun {
   if (kind === "query") {
     const existing = nextState.events.find((item) => item.id === id);
     const parsed = parseResultObject(result);
-    const rowCount = numberValue(parsed?.row_count) ?? latestAudit(state)?.rowCount ?? 0;
-    const elapsedMs = numberValue(parsed?.elapsed_ms) ?? latestAudit(state)?.elapsedMs ?? 0;
-    return upsertTimelineEvent(nextState, {
-      id,
-      kind,
-      toolName: effectiveToolName,
-      title,
-      summary: summarizeSqlResult(result, parsed, event.type),
-      thought: "Agent 将自然语言问题转换成只读 SQL，并通过后端 Data Gateway 执行。",
-      payload: {
-        question: "",
-        sql: sql || extractSql(existing),
-        scannedRows: rowCount,
-        durationMs: elapsedMs,
-      },
-      ...(existingEvent?.artifactIds ? { artifactIds: existingEvent.artifactIds } : {}),
-      ...(existingEvent?.stepId ? { stepId: existingEvent.stepId } : {}),
-      ...(existingEvent?.activityStatus ? { activityStatus: existingEvent.activityStatus } : {}),
-    });
+    const toolCall = nextState.toolCalls.find((item) => item.id === id);
+    const failed =
+      toolResultPayloadLooksFailed(parsed) ||
+      toolCall?.status === "failed" ||
+      existingEvent?.activityStatus === "failed" ||
+      existing?.activityStatus === "failed";
+    const rowCount = failed ? (numberValue(parsed?.row_count) ?? 0) : (numberValue(parsed?.row_count) ?? 0);
+    const elapsedMs = failed ? (numberValue(parsed?.elapsed_ms) ?? 0) : (numberValue(parsed?.elapsed_ms) ?? 0);
+    return finalizeToolEventState(
+      upsertTimelineEvent(nextState, {
+        id,
+        kind,
+        toolName: effectiveToolName,
+        title,
+        summary: summarizeSqlResult(result, parsed, event.type),
+        thought: "Agent 将自然语言问题转换成只读 SQL，并通过后端 Data Gateway 执行。",
+        payload: {
+          question: "",
+          sql: sql || extractSql(existing),
+          scannedRows: rowCount,
+          durationMs: elapsedMs,
+        },
+        ...(existingEvent?.artifactIds ? { artifactIds: existingEvent.artifactIds } : {}),
+        ...(existingEvent?.stepId ? { stepId: existingEvent.stepId } : {}),
+        ...(existingEvent?.activityStatus ? { activityStatus: existingEvent.activityStatus } : {}),
+      }),
+      eventType,
+    );
   }
 
   if (kind === "inspect") {
     const parsedSchema = parseResultObject(result);
     const tables = parseSchemaTables(parsedSchema);
-    return upsertTimelineEvent(nextState, {
+    return finalizeToolEventState(
+      upsertTimelineEvent(nextState, {
+        id,
+        kind,
+        toolName: effectiveToolName,
+        title,
+        summary: summarizeSchemaResult(result, tables, event.type),
+        thought: "Agent 先确认数据源结构，避免在不可靠字段上直接下结论。",
+        payload: { tables },
+        ...(existingEvent?.artifactIds ? { artifactIds: existingEvent.artifactIds } : {}),
+        ...(existingEvent?.stepId ? { stepId: existingEvent.stepId } : {}),
+        ...(existingEvent?.activityStatus ? { activityStatus: existingEvent.activityStatus } : {}),
+      }),
+      eventType,
+    );
+  }
+
+  return finalizeToolEventState(
+    upsertTimelineEvent(nextState, {
       id,
       kind,
       toolName: effectiveToolName,
       title,
-      summary: summarizeSchemaResult(result, tables, event.type),
-      thought: "Agent 先确认数据源结构，避免在不可靠字段上直接下结论。",
-      payload: { tables },
+      summary: summarizeGenericResult(result, event.type),
+      thought: "Agent 正在执行一次数据操作。",
+      payload: { description: result || "", rawResult: result || undefined },
       ...(existingEvent?.artifactIds ? { artifactIds: existingEvent.artifactIds } : {}),
       ...(existingEvent?.stepId ? { stepId: existingEvent.stepId } : {}),
       ...(existingEvent?.activityStatus ? { activityStatus: existingEvent.activityStatus } : {}),
-    });
-  }
+    }),
+    eventType,
+  );
+}
 
-  return upsertTimelineEvent(nextState, {
-    id,
-    kind,
-    toolName: effectiveToolName,
-    title,
-    summary: summarizeGenericResult(result, event.type),
-    thought: "Agent 正在执行一次数据操作。",
-    payload: { description: result || "", rawResult: result || undefined },
-    ...(existingEvent?.artifactIds ? { artifactIds: existingEvent.artifactIds } : {}),
-    ...(existingEvent?.stepId ? { stepId: existingEvent.stepId } : {}),
-    ...(existingEvent?.activityStatus ? { activityStatus: existingEvent.activityStatus } : {}),
-  });
+function finalizeToolEventState(
+  state: LiveRun,
+  eventType?: string,
+): LiveRun {
+  if (eventType === "TOOL_CALL_RESULT") {
+    return reconcileUnlinkedArtifacts(state);
+  }
+  return state;
 }
 
 function summarizeGenericResult(result: string, eventType?: string): string {
@@ -555,7 +711,7 @@ function reduceCustomEvent(state: LiveRun, event: AgUiLikeEvent): LiveRun {
     if (!value) return state;
 
     const artifact = parseArtifactFromCustom(value);
-    const sqlTool = findSqlToolForArtifact(state);
+    const linkedTool = findArtifactSourceTool(state, artifact, value);
     let nextState: LiveRun = {
       ...state,
       artifacts: [
@@ -563,15 +719,15 @@ function reduceCustomEvent(state: LiveRun, event: AgUiLikeEvent): LiveRun {
         ...state.artifacts.filter((item) => item.id !== artifact.id),
       ],
     };
-    if (sqlTool) {
-      nextState = linkArtifactToToolCall(nextState, artifact.id, sqlTool.id);
+    if (linkedTool) {
+      nextState = linkArtifactToToolCall(nextState, artifact.id, linkedTool.id);
     }
-    return nextState;
+    return reconcileUnlinkedArtifacts(nextState);
   }
 
   if (event.name === "token_usage") {
     const value = recordValue(event.value);
-    const delta: TokenUsageStats = {
+    const delta: LiveTokenUsageRecord = {
       inputTokens:
         numberValue(value?.input_tokens) ??
         numberValue(value?.prompt_tokens) ??
@@ -580,10 +736,55 @@ function reduceCustomEvent(state: LiveRun, event: AgUiLikeEvent): LiveRun {
         numberValue(value?.output_tokens) ??
         numberValue(value?.completion_tokens) ??
         0,
+      ...(numberValue(value?.cost_usd) !== undefined
+        ? { costUsd: numberValue(value?.cost_usd) }
+        : {}),
+      ...(numberValue(value?.step_number) !== undefined
+        ? { stepNumber: numberValue(value?.step_number) }
+        : {}),
+      ...(stringValue(value?.step_id)
+        ? { stepId: stringValue(value?.step_id) }
+        : {}),
+      ...(stringValue(value?.tool_call_id)
+        ? { toolCallId: stringValue(value?.tool_call_id) }
+        : {}),
+      ...(stringValue(value?.model) ? { model: stringValue(value?.model) } : {}),
     };
     return {
       ...state,
       tokenUsage: mergeTokenUsageStats(state.tokenUsage ?? emptyTokenUsageStats(), delta),
+      tokenUsageEvents: [...state.tokenUsageEvents, delta],
+    };
+  }
+
+  if (event.name === "workspace.metadata") {
+    const value = recordValue(event.value);
+    return {
+      ...state,
+      workspaceMetadata: [
+        {
+          toolCallId: stringValue(value?.toolCallId),
+          toolName: stringValue(value?.toolName),
+          receivedAt: Date.now(),
+          payload: value ?? event.value,
+        },
+        ...state.workspaceMetadata,
+      ],
+    };
+  }
+
+  if (event.name === "sandbox.output") {
+    const value = recordValue(event.value);
+    return {
+      ...state,
+      sandboxOutputs: [
+        {
+          kind: stringValue(value?.kind) ?? "output",
+          receivedAt: Date.now(),
+          payload: value ?? event.value,
+        },
+        ...state.sandboxOutputs,
+      ],
     };
   }
 
@@ -663,6 +864,27 @@ function parseArtifactFromCustom(value: Record<string, unknown>): DataArtifact {
     type = "report";
     kind = "memo";
     summary = summary ?? `${backendType} 报告`;
+  } else if (backendType === "file") {
+    type = "file";
+    kind = "file";
+    const filePath = stringValue(previewRecord?.path) ?? title;
+    const fileSize = numberValue(previewRecord?.size);
+    const fileMtime = stringValue(previewRecord?.mtime);
+    const fileTool = stringValue(previewRecord?.tool);
+    const fileContent = stringValue(previewRecord?.content);
+    detail = {
+      type: "file",
+      path: filePath,
+      ...(fileSize !== undefined ? { size: fileSize } : {}),
+      ...(fileMtime ? { mtime: fileMtime } : {}),
+      ...(fileTool ? { tool: fileTool } : {}),
+      ...(fileContent ? { content: fileContent } : {}),
+    };
+    summary =
+      summary ??
+      (fileSize !== undefined
+        ? `文件 ${filePath}（${fileSize.toLocaleString()} bytes）`
+        : `文件 ${filePath}`);
   }
 
   return {
@@ -677,18 +899,231 @@ function parseArtifactFromCustom(value: Record<string, unknown>): DataArtifact {
   };
 }
 
-function findSqlToolForArtifact(state: LiveRun): LiveToolCallRecord | undefined {
-  const isSqlToolCall = (tool: LiveToolCallRecord): boolean =>
-    tool.name === "run_sql_readonly" ||
-    state.events.some((event) => event.id === tool.id && event.kind === "query");
+function extractAuditIdFromArtifactValue(value: Record<string, unknown>): string | undefined {
+  const preview = recordValue(value.preview_json);
+  const fromPreview = stringValue(preview?.audit_log_id);
+  if (fromPreview) return fromPreview;
+  const name = stringValue(value.name) ?? stringValue(value.title);
+  const match = name?.match(/^SQL result\s+(.+)$/i);
+  return match?.[1];
+}
 
-  for (let index = state.toolCalls.length - 1; index >= 0; index -= 1) {
-    const tool = state.toolCalls[index];
-    if (!isSqlToolCall(tool)) continue;
-    const event = state.events.find((item) => item.id === tool.id);
-    if (!event?.artifactIds?.length) return tool;
+function extractAuditIdFromToolResult(result?: string): string | undefined {
+  const parsed = parseResultObject(result ?? "");
+  return stringValue(parsed?.audit_log_id);
+}
+
+function isSqlToolCall(state: LiveRun, tool: LiveToolCallRecord): boolean {
+  return (
+    tool.name === "run_sql_readonly" ||
+    state.events.some((event) => event.id === tool.id && event.kind === "query")
+  );
+}
+
+function toolCallHasLinkedArtifacts(state: LiveRun, toolCallId: string): boolean {
+  const event = state.events.find((item) => item.id === toolCallId);
+  return (event?.artifactIds?.length ?? 0) > 0;
+}
+
+function unlinkedSuccessfulSqlTools(state: LiveRun): LiveToolCallRecord[] {
+  return state.toolCalls.filter((tool) => {
+    if (!isSqlToolCall(state, tool)) return false;
+    if (tool.status === "failed") return false;
+    return !toolCallHasLinkedArtifacts(state, tool.id);
+  });
+}
+
+function findSqlToolForArtifact(
+  state: LiveRun,
+  artifactValue?: Record<string, unknown>,
+): LiveToolCallRecord | undefined {
+  const auditId = artifactValue ? extractAuditIdFromArtifactValue(artifactValue) : undefined;
+  const preview = artifactValue ? recordValue(artifactValue.preview_json) : undefined;
+  const artifactRowCount = numberValue(preview?.row_count);
+
+  if (auditId) {
+    for (let index = state.toolCalls.length - 1; index >= 0; index -= 1) {
+      const tool = state.toolCalls[index];
+      if (!isSqlToolCall(state, tool)) continue;
+      if (extractAuditIdFromToolResult(tool.result) === auditId) return tool;
+    }
   }
-  return state.toolCalls.filter(isSqlToolCall).at(-1);
+
+  const unlinked = unlinkedSuccessfulSqlTools(state);
+
+  if (artifactRowCount !== undefined) {
+    const rowMatch = unlinked.find((tool) => {
+      if (!tool.result) return false;
+      const parsed = parseResultObject(tool.result);
+      return numberValue(parsed?.row_count) === artifactRowCount;
+    });
+    if (rowMatch) return rowMatch;
+  }
+
+  // Artifacts usually arrive after sequential tool calls; link to the oldest
+  // successful SQL call that still has no linked artifact.
+  return unlinked[0];
+}
+
+const FILE_ARTIFACT_TOOLS = new Set(["write_file", "edit_file", "execute_command"]);
+
+type FileArtifactMeta = {
+  path?: string;
+  tool?: string;
+};
+
+function extractFileArtifactMeta(value: Record<string, unknown>): FileArtifactMeta {
+  const preview = recordValue(value.preview_json);
+  return {
+    path: stringValue(preview?.path) ?? stringValue(value.name) ?? stringValue(value.title),
+    tool: stringValue(preview?.tool),
+  };
+}
+
+function fileArtifactMetaFromDataArtifact(artifact: DataArtifact): FileArtifactMeta {
+  if (artifact.detail?.type === "file") {
+    return {
+      path: artifact.detail.path,
+      tool: artifact.detail.tool,
+    };
+  }
+  return { path: artifact.title };
+}
+
+function normalizeWorkspacePath(relativePath: string): string {
+  return relativePath.replace(/\\/gu, "/").replace(/^\.\/+/, "");
+}
+
+function extractObservationFromToolResult(result?: string): string | undefined {
+  if (!result) return undefined;
+  const parsed = parseResultObject(result);
+  const observation = stringValue(parsed?.observation);
+  if (observation) return observation;
+  const trimmed = result.trim();
+  if (trimmed.startsWith("{")) return undefined;
+  return trimmed;
+}
+
+function extractWorkspacePathFromToolResult(result?: string): string | undefined {
+  const observation = extractObservationFromToolResult(result);
+  if (!observation) return undefined;
+
+  const firstLine = observation.split("\n")[0]?.trim() ?? observation.trim();
+  const wroteMatch = /^Wrote \d+ bytes to (.+)$/u.exec(firstLine);
+  if (wroteMatch?.[1]) return wroteMatch[1].trim();
+
+  const replacedMatch = /^Replaced \d+ occurrence(?:s)? in (.+)$/u.exec(firstLine);
+  if (replacedMatch?.[1]) {
+    return replacedMatch[1].replace(/\s+\(lines [^)]+\)$/u, "").trim();
+  }
+
+  return undefined;
+}
+
+function workspaceToolMatchesFileArtifact(
+  tool: LiveToolCallRecord,
+  meta: FileArtifactMeta,
+): boolean {
+  if (meta.tool && tool.name !== meta.tool) return false;
+  if (!meta.path) return true;
+
+  const resultPath = extractWorkspacePathFromToolResult(tool.result);
+  if (!resultPath) return true;
+  return normalizeWorkspacePath(resultPath) === normalizeWorkspacePath(meta.path);
+}
+
+function findFileToolForArtifact(
+  state: LiveRun,
+  artifactValue?: Record<string, unknown>,
+): LiveToolCallRecord | undefined {
+  const meta = artifactValue ? extractFileArtifactMeta(artifactValue) : undefined;
+  return findFileToolForArtifactByMeta(state, meta ?? {});
+}
+
+function findFileToolForArtifactByMeta(
+  state: LiveRun,
+  meta: FileArtifactMeta,
+): LiveToolCallRecord | undefined {
+  const candidates = state.toolCalls.filter(
+    (tool) =>
+      FILE_ARTIFACT_TOOLS.has(tool.name) &&
+      tool.status === "success" &&
+      workspaceToolMatchesFileArtifact(tool, meta),
+  );
+
+  const unlinked = candidates.filter((tool) => !toolCallHasLinkedArtifacts(state, tool.id));
+  if (unlinked.length > 0) return unlinked[0];
+
+  if (meta.path && meta.tool && candidates.length === 1) return candidates[0];
+  return undefined;
+}
+
+function artifactValueFromDataArtifact(artifact: DataArtifact): Record<string, unknown> {
+  const value: Record<string, unknown> = {
+    id: artifact.id,
+    title: artifact.title,
+    name: artifact.title,
+    summary: artifact.summary,
+    type: artifact.type ?? artifact.kind,
+  };
+
+  if (artifact.detail?.type === "dataset") {
+    value.type = "table";
+    value.preview_json = {
+      columns: artifact.detail.columns,
+      rows: artifact.detail.rows,
+      row_count: artifact.detail.rows?.length ?? 0,
+    };
+  } else if (artifact.detail?.type === "file") {
+    value.type = "file";
+    value.preview_json = {
+      path: artifact.detail.path,
+      size: artifact.detail.size,
+      tool: artifact.detail.tool,
+    };
+  }
+
+  return value;
+}
+
+function reconcileUnlinkedArtifacts(state: LiveRun): LiveRun {
+  let nextState = state;
+  for (const artifact of state.artifacts) {
+    if (artifact.createdByEventId) continue;
+    const linkedTool = findArtifactSourceTool(nextState, artifact);
+    if (linkedTool) {
+      nextState = linkArtifactToToolCall(nextState, artifact.id, linkedTool.id);
+    }
+  }
+  return nextState;
+}
+
+function findArtifactSourceTool(
+  state: LiveRun,
+  artifact: DataArtifact,
+  artifactValue?: Record<string, unknown>,
+): LiveToolCallRecord | undefined {
+  const value = artifactValue ?? artifactValueFromDataArtifact(artifact);
+
+  if (artifact.type === "file" || artifact.kind === "file") {
+    return findFileToolForArtifact(state, value);
+  }
+  if (
+    artifact.type === "dataset" ||
+    artifact.detail?.type === "dataset" ||
+    stringValue(value.type) === "table"
+  ) {
+    return findSqlToolForArtifact(state, value);
+  }
+  if (stringValue(value.type) === "file") {
+    return findFileToolForArtifact(state, value);
+  }
+
+  // Title-only artifact payloads: link only when a single SQL tool is waiting.
+  const unlinkedSql = unlinkedSuccessfulSqlTools(state);
+  if (unlinkedSql.length === 1) return unlinkedSql[0];
+
+  return undefined;
 }
 
 function linkArtifactToToolCall(
@@ -771,7 +1206,14 @@ function planStatusFromValue(value: unknown): LiveTaskStatus | null {
 }
 
 function liveStatusFromValue(value: unknown): LiveRunStatus | null {
-  if (value === "running" || value === "completed" || value === "failed") return value;
+  if (
+    value === "running" ||
+    value === "suspended" ||
+    value === "completed" ||
+    value === "failed"
+  ) {
+    return value;
+  }
   return null;
 }
 
@@ -899,6 +1341,67 @@ export function resolveTraceToolStatus(
   return toolStatus;
 }
 
+export type StepTokenUsageSnapshot = TokenUsageStats & {
+  reported: boolean;
+  models: string[];
+  /** True when usage was matched only via step_number fallback (no tool_call_id/step_id). */
+  approximate?: boolean;
+};
+
+export function resolveTokenUsageForEvent(
+  liveRun: LiveRun,
+  event: TimelineEvent | null | undefined,
+): StepTokenUsageSnapshot {
+  if (!event) {
+    return { ...emptyTokenUsageStats(), reported: false, models: [] };
+  }
+  const toolCall = resolveToolCallForEvent(liveRun, event);
+  const toolCallIndex = toolCall
+    ? liveRun.toolCalls.findIndex((call) => call.id === toolCall.id)
+    : -1;
+  const stepNumber = toolCallIndex >= 0 ? toolCallIndex + 1 : undefined;
+
+  const isExactMatch = (record: LiveTokenUsageRecord) => {
+    if (
+      record.toolCallId &&
+      (record.toolCallId === event.id || record.toolCallId === toolCall?.id)
+    ) {
+      return true;
+    }
+    if (
+      record.stepId &&
+      (record.stepId === event.stepId || record.stepId === toolCall?.stepId)
+    ) {
+      return true;
+    }
+    return false;
+  };
+
+  const exactMatches = liveRun.tokenUsageEvents.filter(isExactMatch);
+  const matches =
+    exactMatches.length > 0
+      ? exactMatches
+      : liveRun.tokenUsageEvents.filter(
+          (record) =>
+            stepNumber !== undefined && record.stepNumber === stepNumber,
+        );
+  const approximate = exactMatches.length === 0 && matches.length > 0;
+
+  const tokens = matches.reduce(
+    (current, record) => mergeTokenUsageStats(current, record),
+    emptyTokenUsageStats(),
+  );
+  return {
+    ...tokens,
+    reported:
+      tokens.inputTokens > 0 ||
+      tokens.outputTokens > 0 ||
+      (tokens.costUsd ?? 0) > 0,
+    models: uniqueModels(matches),
+    approximate: approximate || undefined,
+  };
+}
+
 function activityStatusFromValue(value: unknown): TimelineEvent["activityStatus"] | undefined {
   const status = stringValue(value);
   if (status === "running" || status === "completed" || status === "failed") {
@@ -1014,13 +1517,26 @@ function emptyTokenUsageStats(): TokenUsageStats {
   return { inputTokens: 0, outputTokens: 0 };
 }
 
+function uniqueStrings(values: string[]): string[] {
+  return [...new Set(values.filter(Boolean))];
+}
+
+function uniqueModels(records: Array<{ model?: string }>): string[] {
+  return uniqueStrings(records.map((record) => record.model).filter((model): model is string => Boolean(model)));
+}
+
 function mergeTokenUsageStats(
   left: TokenUsageStats,
   right: TokenUsageStats,
 ): TokenUsageStats {
+  const costUsd =
+    left.costUsd !== undefined || right.costUsd !== undefined
+      ? (left.costUsd ?? 0) + (right.costUsd ?? 0)
+      : undefined;
   return {
     inputTokens: left.inputTokens + right.inputTokens,
     outputTokens: left.outputTokens + right.outputTokens,
+    ...(costUsd !== undefined ? { costUsd } : {}),
   };
 }
 

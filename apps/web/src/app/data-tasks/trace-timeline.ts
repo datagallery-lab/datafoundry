@@ -391,19 +391,52 @@ function buildArtifactEntry(artifact: DataArtifact, fallbackMs?: number): TraceE
 }
 
 function sortTraceEntries(entries: TraceEntry[]): TraceEntry[] {
-  const start = entries.filter((entry) => entry.kind === "run_started");
-  const end = entries.filter(
-    (entry) => entry.kind === "run_finished" || entry.kind === "run_failed",
-  );
-  const middle = entries.filter(
-    (entry) =>
-      entry.kind !== "run_started" &&
-      entry.kind !== "run_finished" &&
-      entry.kind !== "run_failed",
-  );
+  return [...entries].sort((left, right) => (left.tsMs ?? 0) - (right.tsMs ?? 0));
+}
 
-  middle.sort((left, right) => (left.tsMs ?? 0) - (right.tsMs ?? 0));
-  return [...start, ...middle, ...end];
+function pushRunBoundaryEntries(
+  entries: TraceEntry[],
+  segment: {
+    startedAt?: number;
+    finishedAt?: number;
+    status: LiveRun["runStatus"];
+    errorMessage?: string;
+  },
+  idPrefix: string,
+): void {
+  if (segment.startedAt !== undefined) {
+    entries.push({
+      id: `${idPrefix}-started`,
+      kind: "run_started",
+      tsMs: segment.startedAt,
+      ts: formatTraceTime(segment.startedAt),
+      title: "运行开始",
+      summary: "Agent 开始处理本轮请求。",
+    });
+  }
+  if (segment.status === "completed" && segment.finishedAt !== undefined) {
+    entries.push({
+      id: `${idPrefix}-finished`,
+      kind: "run_finished",
+      tsMs: segment.finishedAt,
+      ts: formatTraceTime(segment.finishedAt),
+      title: "运行完成",
+      summary: "Agent 已完成本轮任务。",
+    });
+  } else if (segment.status === "failed") {
+    entries.push({
+      id: `${idPrefix}-failed`,
+      kind: "run_failed",
+      tsMs: segment.finishedAt,
+      ts:
+        segment.finishedAt !== undefined
+          ? formatTraceTime(segment.finishedAt)
+          : undefined,
+      title: "运行失败",
+      summary: segment.errorMessage ?? "Agent 运行失败。",
+      errorMessage: segment.errorMessage,
+    });
+  }
 }
 
 export function buildTraceTimeline(liveRun: LiveRun): TraceEntry[] {
@@ -411,7 +444,8 @@ export function buildTraceTimeline(liveRun: LiveRun): TraceEntry[] {
     liveRun.runStatus !== "idle" ||
     liveRun.toolCalls.length > 0 ||
     liveRun.events.length > 0 ||
-    liveRun.artifacts.length > 0;
+    liveRun.artifacts.length > 0 ||
+    (liveRun.runHistory?.length ?? 0) > 0;
 
   if (!hasActivity) return [];
 
@@ -422,9 +456,13 @@ export function buildTraceTimeline(liveRun: LiveRun): TraceEntry[] {
   const linkedArtifactIds = new Set<string>();
   let sequenceFallbackMs = liveRun.runStartedAt ?? Date.now();
 
+  for (const [index, segment] of liveRun.runHistory?.entries() ?? []) {
+    pushRunBoundaryEntries(entries, segment, `run-history-${index}`);
+  }
+
   if (liveRun.runStartedAt !== undefined) {
     entries.push({
-      id: "run-started",
+      id: "run-started-current",
       kind: "run_started",
       tsMs: liveRun.runStartedAt,
       ts: formatTraceTime(liveRun.runStartedAt),
@@ -463,7 +501,7 @@ export function buildTraceTimeline(liveRun: LiveRun): TraceEntry[] {
 
   if (liveRun.runStatus === "completed" && liveRun.runFinishedAt !== undefined) {
     entries.push({
-      id: "run-finished",
+      id: "run-finished-current",
       kind: "run_finished",
       tsMs: liveRun.runFinishedAt,
       ts: formatTraceTime(liveRun.runFinishedAt),
@@ -472,7 +510,7 @@ export function buildTraceTimeline(liveRun: LiveRun): TraceEntry[] {
     });
   } else if (liveRun.runStatus === "failed") {
     entries.push({
-      id: "run-failed",
+      id: "run-failed-current",
       kind: "run_failed",
       tsMs: liveRun.runFinishedAt,
       ts:

@@ -37,12 +37,19 @@ import {
 import { ToolObservationDispatcher } from "./context/tool-observation/tool-observation-dispatcher.js";
 import { createAgUiContextEventSink } from "./context/protocol/ag-ui/ag-ui-context-event-sink.js";
 import {
+  DashScopePromptCompatProcessor,
+  shouldApplyDashScopePromptCompat,
+} from "./context/dashscope-prompt-compat.js";
+import {
   type TaskStateRuntime
 } from "./memory/task-state-runtime.js";
 import { GoalRuntimeAdapter, type GoalRequest } from "./memory/goal-runtime-adapter.js";
 import { createDataAgentToolRegistry } from "./tools/data-tools.js";
 import { GovernedToolFactory } from "./tools/governed-tool-factory.js";
 import { createRunWorkspace, resolveRunWorkspaceDir } from "./tools/workspace-factory.js";
+import { wrapWorkspaceToolsWithArtifactRecording } from "./tools/workspace-artifact-recorder.js";
+import { createMastraStreamNormalizerHooks } from "./stream/mastra-stream-hooks.js";
+import { wrapAgentForAgUi } from "./stream/mastra-stream-normalizer.js";
 import type { AgentRunContext, AgentRunContextInput, AgUiEventEmitter } from "./types.js";
 import { createCustomEvent } from "./events.js";
 import { createTool } from "@mastra/core/tools";
@@ -90,6 +97,15 @@ export {
   type AgentMemoryRuntimeOptions,
   type TaskStateRuntime
 } from "./memory/task-state-runtime.js";
+export {
+  normalizeMastraFullStream,
+  wrapAgentForAgUi,
+  type MastraStreamChunk,
+  type MastraStreamNormalizerHooks
+} from "./stream/mastra-stream-normalizer.js";
+export { createMastraStreamNormalizerHooks } from "./stream/mastra-stream-hooks.js";
+export { projectWorkspaceObservation } from "./context/tool-observation/adapters/workspace-tool-observation-adapters.js";
+export { createDataAgentToolRegistry, type ToolRegistry } from "./tools/data-tools.js";
 export { GoalRuntimeAdapter, type GoalRequest, type GoalSnapshot } from "./memory/goal-runtime-adapter.js";
 export {
   CONVERSATION_WORKING_MEMORY_CONFIG,
@@ -228,6 +244,9 @@ export const createDataAgent = async (
     runState: contextRunState,
     ...(input.taskStateRuntime ? { taskStateRuntime: input.taskStateRuntime } : {})
   });
+  const dashScopePromptCompat = new DashScopePromptCompatProcessor(
+    shouldApplyDashScopePromptCompat(input.modelProvider.kind),
+  );
   const taskTools = input.taskStateRuntime
     ? {
         task_check: taskCheckTool,
@@ -284,9 +303,16 @@ export const createDataAgent = async (
         workspaceDir: runWorkspace.runDir
       })
     : {};
-  const workspaceTools = await createWorkspaceTools(runWorkspace.workspace, {
+  const workspaceToolsRaw = await createWorkspaceTools(runWorkspace.workspace, {
     requestContext: {},
     workspace: runWorkspace.workspace
+  });
+  const workspaceTools = wrapWorkspaceToolsWithArtifactRecording({
+    tools: workspaceToolsRaw,
+    runDir: runWorkspace.runDir,
+    runContext: input.runContext,
+    emitter: input.emitter,
+    createArtifact: (artifactInput) => input.dataGateway.createArtifact(artifactInput)
   });
   const skillTools = runWorkspace.workspace.skills ? createSkillTools(runWorkspace.workspace.skills) : {};
   runWorkspace.workspace.setToolsConfig({ enabled: false });
@@ -321,7 +347,7 @@ export const createDataAgent = async (
     // Workspace remains attached for execution context, while auto-injection is disabled above.
     // Explicitly created tools are wrapped by the same governed execution boundary as every other tool.
     workspace: runWorkspace.workspace,
-    inputProcessors: mastraContextProcessors.inputProcessors,
+    inputProcessors: [...mastraContextProcessors.inputProcessors, dashScopePromptCompat],
     outputProcessors: mastraContextProcessors.outputProcessors,
     defaultOptions: {
       maxSteps: AGENT_MAX_STEPS,
@@ -333,15 +359,16 @@ export const createDataAgent = async (
       }
     }
   });
+  const agentForAgUi = wrapAgentForAgUi(agent, createMastraStreamNormalizerHooks(input.emitter));
   const mastra = input.taskStateRuntime
     ? new Mastra({
-        agents: { dataAgent: agent },
+        agents: { dataAgent: agentForAgUi },
         storage: input.taskStateRuntime.storage
       })
     : undefined;
   let goalRuntime: GoalRuntimeAdapter | undefined;
   if (input.goal && mastra) {
-    goalRuntime = new GoalRuntimeAdapter(agent, input.runContext.user_id, input.runContext.session_id);
+    goalRuntime = new GoalRuntimeAdapter(agentForAgUi, input.runContext.user_id, input.runContext.session_id);
     const objective = await goalRuntime.setObjective(input.goal);
     input.emitter.emit(createCustomEvent("goal.updated", {
       goal: objective,
@@ -350,7 +377,7 @@ export const createDataAgent = async (
   }
 
   return {
-    agent,
+    agent: agentForAgUi,
     commandExecutionEnabled: runWorkspace.commandExecutionEnabled,
     destroyWorkspace: () => runWorkspace.workspace.destroy(),
     governedMessages,

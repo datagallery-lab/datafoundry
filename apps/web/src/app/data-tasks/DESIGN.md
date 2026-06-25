@@ -66,8 +66,10 @@ State + schema live in [data-task-state.ts](./data-task-state.ts); UI lives in
   — REST contract for config management and the **`run_config` merge model**
   section (server-side merge of workspace defaults, session overrides, and per-run
   selections).
-- [frontend-backend-capability-requests.md](../../../../../docs/engineering/frontend-backend-capability-requests.md)
+- [2026-06-25-backend-requirements.md](../../../../../docs/engineering/2026-06-25-backend-requirements.md)
   — what the frontend needs the backend to implement, prioritized.
+- [2026-06-25-frontend-capability-status.md](../../../../../docs/engineering/2026-06-25-frontend-capability-status.md)
+  — the current frontend-side capability/gating state.
 
 ### Three-layer resolution
 
@@ -100,7 +102,7 @@ effectiveRunConfig = merge(workspaceDefaults, sessionEnabled, perRunMentioned, s
 4. **Server policy (backend)** — the final authority; merges the above with
    permission/policy. The frontend always sends the forward-compatible
    `run_config`; backend support is discovered through runtime capabilities and
-   tracked in [frontend-backend-capability-requests.md](../../../../../docs/engineering/frontend-backend-capability-requests.md).
+   tracked in [2026-06-25-backend-requirements.md](../../../../../docs/engineering/2026-06-25-backend-requirements.md).
 
 LLM model selection stays in `ChatModelPicker` (not a session pill).
 
@@ -110,7 +112,7 @@ Earlier this page hid anything the backend could not yet consume. That rule is
 **relaxed**: the frontend MAY ship UX ahead of the backend **as long as**
 
 1. the requirement is a reasonable ask of the backend, and is written down in
-   [frontend-backend-capability-requests.md](../../../../../docs/engineering/frontend-backend-capability-requests.md);
+   [2026-06-25-backend-requirements.md](../../../../../docs/engineering/2026-06-25-backend-requirements.md);
 2. nothing the user sees implies an effect the backend can't deliver — anything
    inert is surfaced with a 「后端未支持」 hint (the `ConfigRow` `unsupported`
    badge, the `@` menu/chip badge, etc.); and
@@ -447,7 +449,7 @@ can evolve consistently.
   job progress, trace overlay status pills, and tool-result status badges.
   `overlayBackdropClass` / `overlayPanelClass` standardize drawer and modal shells
   (`TaskConsoleDrawer`, `TraceOverlay`).
-- **Token usage contract:** [frontend-backend-capability-requests.md #11](../../../../../docs/engineering/frontend-backend-capability-requests.md)
+- **Token usage contract:** [2026-06-25-backend-requirements.md R-002](../../../../../docs/engineering/2026-06-25-backend-requirements.md#r-002-llm-token-用量上报)
   defines `CUSTOM(name="token_usage")`. Besides `input_tokens` /
   `output_tokens`, the frontend consumes `tool_call_id`, `step_id`, `model`, and
   optional `cost_usd` for the Overview KPI and Detail usage panel. `step_number`
@@ -473,7 +475,7 @@ console usage hint) when runtime capabilities say the backend cannot honor them:
 - **Artifact export/download** — the Deliverables zone reserves the affordance
   behind the `artifact.export` flag; backend support is tracked by #9.
 - **Chat file attachments** — UI is complete (select/drag/paste/chips). Image inline
-  and data-file upload require `chat.imageInput` / `chat.fileUpload` (#13 / O-007).
+  and data-file upload require `chat.imageInput` / `chat.fileUpload` (R-007).
   Until then, unsupported attachments are labeled and excluded from the run payload.
 
 ## Deferred (not in this delivery)
@@ -481,7 +483,7 @@ console usage hint) when runtime capabilities say the backend cannot honor them:
 - `/` slash commands for run-level **actions** (e.g. `/clear`, `/export`); the
   `@` mention picker (layer 2 resource selection) has shipped.
 - Backend-gated runtime behaviors — see runtime capabilities and
-  `frontend-backend-capability-requests.md`; the UI can expose forward-compatible
+  `2026-06-25-backend-requirements.md`; the UI can expose forward-compatible
   controls, but must label anything the backend cannot honor yet.
 - secretRef hardening and multi-user workspace isolation as the backend
   production path matures.

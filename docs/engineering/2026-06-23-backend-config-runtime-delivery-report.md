@@ -86,16 +86,22 @@ packages/metadata
 
 ## 5. 当前限制
 
-- 多用户认证未做；当前仍是固定 `dev-user`，但表结构按 `workspace_id` / `user_id` 保留隔离维度。
-- PostgreSQL / MySQL adapter 已实现，但还缺真实数据库服务端凭据下的端到端 smoke。
+> 下列限制中**后端待办**已收录至 [对后端的能力要求](./2026-06-25-backend-requirements.md)。
+
+- 多用户认证未做；当前仍是固定 `dev-user`，但表结构按 `workspace_id` / `user_id` 保留隔离维度 → [R-006](./2026-06-25-backend-requirements.md#r-006-多用户认证)。
+- PostgreSQL / MySQL adapter 已实现，但还缺真实数据库服务端凭据下的端到端 smoke → [R-003](./2026-06-25-backend-requirements.md#r-003-pg--mysql-真实环境验收)。
 - 外部 model profile、embedding、MCP server 的真实调用依赖用户本地 secret。
 - 前端当前仍主要使用 localStorage 配置，尚未接 `/api/v1` 配置面；后端接口已经可供接入。
 - `@ag-ui/mastra@1.0.3` 仍要求旧 CopilotKit runtime canary；本轮未强行替换框架栈。
-- Artifact 北向事件仍携带 preview JSON；等 workspace artifact 模型整合后再收敛。
+- Artifact 北向事件仍携带 preview JSON；等 workspace artifact 模型整合后再收敛 → [R-004](./2026-06-25-backend-requirements.md#r-004-artifact-北向协议收敛)。
+- Workspace 仍为 run 级隔离，run 结束销毁；同 session 多轮无法复用文件 → [R-001](./2026-06-25-backend-requirements.md#r-001-session-级-workspace-隔离)。
 
 ## 6. 建议下一步
 
+> **未实现项统一跟踪**：[对后端的能力要求](./2026-06-25-backend-requirements.md)（含后端答复区）
+
 1. 前端将左栏配置源切换到 `/api/v1/workspace-config` 和各资源 CRUD。
-2. 用真实 PostgreSQL / MySQL / model / MCP / embedding key 做集成验收。
-3. 开始 conversation memory 设计与实现，明确 memory 与 Knowledge 的职责边界。
-4. 将 artifact 北向事件从 preview JSON 逐步改为 workspace artifact reference。
+2. 用真实 PostgreSQL / MySQL / model / MCP / embedding key 做集成验收 → [R-003](./2026-06-25-backend-requirements.md#r-003-pg--mysql-真实环境验收)。
+3. 开始 conversation memory 设计与实现 → [R-005](./2026-06-25-backend-requirements.md#r-005-conversation-memory)。
+4. 将 artifact 北向事件从 preview JSON 逐步改为 workspace artifact reference → [R-004](./2026-06-25-backend-requirements.md#r-004-artifact-北向协议收敛)。
+5. Session 级 Workspace 跨 run 文件持久 → [R-001](./2026-06-25-backend-requirements.md#r-001-session-级-workspace-隔离)。

@@ -1,7 +1,10 @@
 "use client";
 
 import { useMemo } from "react";
-import { resolveResponsiveSidebars } from "../workspace-layout";
+import {
+  canDockRightPanel as computeCanDockRightPanel,
+  resolveResponsiveSidebars,
+} from "../workspace-layout";
 
 type UseWorkspaceResponsiveLayoutOptions = {
   viewportWidth: number;
@@ -15,6 +18,8 @@ type UseWorkspaceResponsiveLayoutResult = {
   sidebarCollapsed: boolean;
   rightPanelOpen: boolean;
   isAutoLayout: boolean;
+  /** False when viewport is too narrow for a docked right panel; use drawer instead. */
+  canDockRightPanel: boolean;
 };
 
 /**
@@ -34,13 +39,19 @@ export function useWorkspaceResponsiveLayout({
         sidebarCollapsed: userSidebarCollapsed,
         rightPanelOpen: userRightPanelOpen,
         isAutoLayout: false,
+        canDockRightPanel: true,
       };
     }
+
+    const dockable = computeCanDockRightPanel({
+      viewportWidth,
+      rightPanelWidth,
+    });
 
     const resolved = resolveResponsiveSidebars({
       viewportWidth,
       userSidebarCollapsed,
-      userRightPanelOpen,
+      userRightPanelOpen: dockable ? userRightPanelOpen : false,
       rightPanelWidth,
     });
 
@@ -48,7 +59,8 @@ export function useWorkspaceResponsiveLayout({
       ...resolved,
       isAutoLayout:
         resolved.sidebarCollapsed !== userSidebarCollapsed ||
-        resolved.rightPanelOpen !== userRightPanelOpen,
+        (dockable && resolved.rightPanelOpen !== userRightPanelOpen),
+      canDockRightPanel: dockable,
     };
   }, [
     enabled,

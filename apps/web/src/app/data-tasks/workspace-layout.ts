@@ -114,4 +114,25 @@ export function resolveResponsiveSidebars({
   return { sidebarCollapsed, rightPanelOpen };
 }
 
+/**
+ * Whether the viewport can fit a docked right panel (left collapsed + chat
+ * reservation + right panel). When false, TaskConsole should use drawer mode.
+ */
+export function canDockRightPanel({
+  viewportWidth,
+  rightPanelWidth,
+}: {
+  viewportWidth: number;
+  rightPanelWidth: number;
+}): boolean {
+  if (viewportWidth <= 0) return true;
+  return (
+    getRequiredWorkspaceWidth({
+      sidebarCollapsed: true,
+      rightPanelOpen: true,
+      rightPanelWidth,
+    }) <= viewportWidth
+  );
+}
+
 export const chatPaneClassName = "min-h-0 w-full flex-1";

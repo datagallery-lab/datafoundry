@@ -124,9 +124,8 @@
 
 ## 6. 后端能力需求（已落档）
 
-> 已写入：能力清单
-> [`frontend-backend-capability-requests.md` #13](../../engineering/frontend-backend-capability-requests.md)，
-> 工作项 [`backend-open-requirements-backlog.md` O-007](../../engineering/backend-open-requirements-backlog.md)。
+> 已写入：[对后端的能力要求 R-007](../../engineering/2026-06-25-backend-requirements.md#r-007-对话框文件上传)；
+> 前端现状见 [前端能力现状](../../engineering/2026-06-25-frontend-capability-status.md)。
 
 ### #13a 对话框多模态图片消费
 
@@ -164,7 +163,7 @@
 
 - 更新 `apps/web/src/app/data-tasks/DESIGN.md`：新增「对话框附件上传」小节
   （模态分流、能力位门控、提交流程）。
-- 更新 `docs/engineering/frontend-backend-capability-requests.md`：新增 #13。
+- 更新 `docs/engineering/2026-06-25-backend-requirements.md`：R-007（原能力清单 #13）。
 
 ## 9. 非目标（YAGNI）
 

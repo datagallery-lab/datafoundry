@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  canDockRightPanel,
   chatPaneClassName,
   clampRightPanelWidth,
   fixedGridColumn,
@@ -11,6 +12,7 @@ import {
   RIGHT_PANEL_MIN_WIDTH,
   resolveResponsiveSidebars,
   CHAT_MIN_WIDTH,
+  LEFT_PANEL_WIDTH_COLLAPSED,
 } from "../workspace-layout";
 
 describe("workspace layout", () => {
@@ -166,5 +168,42 @@ describe("getRequiredWorkspaceWidth", () => {
         rightPanelWidth: 360,
       }),
     ).toBe(320 + 360 + getChatInputReservedWidth());
+  });
+});
+
+describe("canDockRightPanel", () => {
+  it("returns true when the viewport fits collapsed left + right + chat reservation", () => {
+    const minWidth =
+      LEFT_PANEL_WIDTH_COLLAPSED +
+      RIGHT_PANEL_MIN_WIDTH +
+      getChatInputReservedWidth();
+    expect(
+      canDockRightPanel({
+        viewportWidth: minWidth,
+        rightPanelWidth: RIGHT_PANEL_MIN_WIDTH,
+      }),
+    ).toBe(true);
+  });
+
+  it("returns false when the viewport is narrower than the dock minimum", () => {
+    const minWidth =
+      LEFT_PANEL_WIDTH_COLLAPSED +
+      RIGHT_PANEL_MIN_WIDTH +
+      getChatInputReservedWidth();
+    expect(
+      canDockRightPanel({
+        viewportWidth: minWidth - 1,
+        rightPanelWidth: RIGHT_PANEL_MIN_WIDTH,
+      }),
+    ).toBe(false);
+  });
+
+  it("returns true for unknown viewport width (SSR/hydration)", () => {
+    expect(
+      canDockRightPanel({
+        viewportWidth: 0,
+        rightPanelWidth: RIGHT_PANEL_DEFAULT_WIDTH,
+      }),
+    ).toBe(true);
   });
 });

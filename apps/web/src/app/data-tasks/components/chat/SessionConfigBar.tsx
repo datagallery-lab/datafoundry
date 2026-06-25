@@ -1,6 +1,16 @@
 "use client";
 
-import { useEffect, useRef, useState, type MouseEvent, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type MouseEvent,
+  type ReactNode,
+  type RefObject,
+} from "react";
+import { createPortal } from "react-dom";
 import { useConfigPillOverflow } from "../../hooks/use-config-pill-overflow";
 import {
   PER_RUN_MENTION_APPEARANCE,
@@ -14,6 +24,8 @@ import type {
   WorkspaceConfigItem,
   WorkspaceConfigStore,
 } from "../../data-task-state";
+
+const SESSION_CONFIG_PORTAL_ATTR = "data-session-config-portal";
 
 type SessionConfigBarProps = {
   workspaceConfig: WorkspaceConfigStore;
@@ -33,6 +45,7 @@ export function SessionConfigBar({
   const [openKind, setOpenKind] = useState<PerRunMentionKind | null>(null);
   const [overflowOpen, setOverflowOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
+  const overflowAnchorRef = useRef<HTMLDivElement>(null);
 
   const {
     pillsContainerRef,
@@ -41,27 +54,32 @@ export function SessionConfigBar({
     overflowKinds,
   } = useConfigPillOverflow();
 
+  const isInsideSessionConfigUi = useCallback((target: Node) => {
+    if (rootRef.current?.contains(target)) return true;
+    return (target as HTMLElement).closest?.(`[${SESSION_CONFIG_PORTAL_ATTR}]`) != null;
+  }, []);
+
   useEffect(() => {
     if (!openKind) return;
     const handlePointerDown = (event: globalThis.MouseEvent) => {
-      if (!rootRef.current?.contains(event.target as Node)) {
+      if (!isInsideSessionConfigUi(event.target as Node)) {
         setOpenKind(null);
       }
     };
     document.addEventListener("mousedown", handlePointerDown);
     return () => document.removeEventListener("mousedown", handlePointerDown);
-  }, [openKind]);
+  }, [isInsideSessionConfigUi, openKind]);
 
   useEffect(() => {
     if (!overflowOpen) return;
     const handlePointerDown = (event: globalThis.MouseEvent) => {
-      if (!rootRef.current?.contains(event.target as Node)) {
+      if (!isInsideSessionConfigUi(event.target as Node)) {
         setOverflowOpen(false);
       }
     };
     document.addEventListener("mousedown", handlePointerDown);
     return () => document.removeEventListener("mousedown", handlePointerDown);
-  }, [overflowOpen]);
+  }, [isInsideSessionConfigUi, overflowOpen]);
 
   useEffect(() => {
     if (overflowKinds.length === 0) {
@@ -108,11 +126,11 @@ export function SessionConfigBar({
       ) : null}
       <div
         ref={pillsContainerRef}
-        className="flex min-w-0 flex-1 flex-nowrap items-center gap-1.5 overflow-hidden"
+        className="flex min-w-0 flex-1 flex-nowrap items-center gap-1.5 overflow-visible"
       >
         {visibleKinds.map((kind) => renderPill(kind))}
         {overflowKinds.length > 0 ? (
-          <div className="relative shrink-0">
+          <div ref={overflowAnchorRef} className="relative shrink-0">
             <button
               type="button"
               aria-haspopup="menu"
@@ -126,22 +144,26 @@ export function SessionConfigBar({
               className={[
                 "inline-flex h-7 min-w-9 items-center justify-center rounded-full border px-2 text-xs font-semibold transition",
                 overflowOpen
-                  ? "border-slate-300 bg-slate-200 text-slate-900 dark:border-slate-500 dark:bg-slate-600 dark:text-slate-100"
-                  : "border-slate-200 bg-slate-100 text-slate-700 hover:border-slate-300 hover:bg-slate-200 hover:text-slate-900 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-200 dark:hover:bg-slate-600",
+                  ? "border-border bg-surface-subtle text-foreground"
+                  : "border-border bg-surface-subtle text-muted hover:border-primary-light/40 hover:bg-surface-subtle hover:text-foreground",
               ].join(" ")}
             >
               ...
             </button>
-            {overflowOpen && (
+            <AnchoredPortal
+              anchorRef={overflowAnchorRef}
+              open={overflowOpen}
+              minWidth={220}
+            >
               <div
                 role="menu"
                 aria-label="更多会话配置"
-                className="absolute bottom-full left-0 z-[100] mb-2 flex min-w-[220px] flex-col gap-1 rounded-xl border border-slate-200 bg-white p-2 shadow-lg dark:border-slate-700 dark:bg-[#252525]"
+                className="flex flex-col gap-1 rounded-xl border border-border bg-surface p-2 shadow-lg"
                 onMouseDown={preventFocusSteal}
               >
                 {overflowKinds.map((kind) => renderPill(kind))}
               </div>
-            )}
+            </AnchoredPortal>
           </div>
         ) : null}
       </div>
@@ -156,6 +178,77 @@ function preventFocusSteal(event: MouseEvent) {
   const target = event.target as HTMLElement;
   if (target.closest('button, input, [role="switch"]')) return;
   event.preventDefault();
+}
+
+function AnchoredPortal({
+  anchorRef,
+  open,
+  children,
+  minWidth = 220,
+}: {
+  anchorRef: RefObject<HTMLElement | null>;
+  open: boolean;
+  children: ReactNode;
+  minWidth?: number;
+}) {
+  const [coords, setCoords] = useState<{
+    left: number;
+    bottom: number;
+    width: number;
+  } | null>(null);
+
+  useLayoutEffect(() => {
+    if (!open || !anchorRef.current) {
+      setCoords(null);
+      return;
+    }
+
+    const update = () => {
+      const anchor = anchorRef.current;
+      if (!anchor) return;
+      const rect = anchor.getBoundingClientRect();
+      const width = Math.min(Math.max(minWidth, rect.width), window.innerWidth - 32);
+      const left = Math.min(
+        Math.max(16, rect.left),
+        window.innerWidth - width - 16,
+      );
+      setCoords({
+        left,
+        bottom: window.innerHeight - rect.top + 8,
+        width,
+      });
+    };
+
+    update();
+    const observer = new ResizeObserver(update);
+    observer.observe(anchorRef.current);
+    window.addEventListener("resize", update);
+    window.addEventListener("scroll", update, true);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", update);
+      window.removeEventListener("scroll", update, true);
+    };
+  }, [anchorRef, minWidth, open]);
+
+  if (!open || !coords || typeof document === "undefined") return null;
+
+  return createPortal(
+    <div
+      {...{ [SESSION_CONFIG_PORTAL_ATTR]: "" }}
+      className="pointer-events-auto"
+      style={{
+        position: "fixed",
+        left: coords.left,
+        bottom: coords.bottom,
+        width: coords.width,
+        zIndex: 200,
+      }}
+    >
+      {children}
+    </div>,
+    document.body,
+  );
 }
 
 function SessionConfigPill({
@@ -177,11 +270,20 @@ function SessionConfigPill({
   onToggleResource: (id: string) => void;
   rootRef?: (node: HTMLDivElement | null) => void;
 }) {
+  const anchorRef = useRef<HTMLDivElement>(null);
   const meta = PER_RUN_MENTION_META[kind];
   const appearance = PER_RUN_MENTION_APPEARANCE[kind];
 
+  const setRefs = useCallback(
+    (node: HTMLDivElement | null) => {
+      anchorRef.current = node;
+      rootRef?.(node);
+    },
+    [rootRef],
+  );
+
   return (
-    <div ref={rootRef} className="relative shrink-0">
+    <div ref={setRefs} className="relative shrink-0">
       <button
         type="button"
         aria-haspopup="listbox"
@@ -207,51 +309,74 @@ function SessionConfigPill({
         </span>
       </button>
 
-      {open && (
-        <div
-          role="listbox"
-          aria-label={`${meta.label} 会话配置`}
-          className="absolute bottom-full left-0 z-[100] mb-2 w-[min(320px,calc(100vw-2rem))] overflow-hidden rounded-xl border border-slate-200 bg-white shadow-lg dark:border-slate-700 dark:bg-[#252525]"
-          onMouseDown={preventFocusSteal}
-        >
-          <div className="border-b border-slate-100 px-3 py-2 text-[11px] font-medium uppercase tracking-[0.06em] text-slate-400 dark:border-slate-700">
-            本会话 · {meta.label}
-          </div>
-          {items.length === 0 ? (
-            <p className="px-3 py-4 text-sm text-slate-500">
-              暂无配置，请先在左侧面板添加
-            </p>
-          ) : (
-            <ul className="max-h-56 overflow-y-auto py-1">
-              {items.map((item) => {
-                const enabled = !new Set(
-                  session?.config?.disabled[kind] ?? [],
-                ).has(item.id);
-                return (
-                  <li key={item.id}>
-                    <div className="flex items-start gap-3 px-3 py-2 transition hover:bg-slate-50 dark:hover:bg-slate-700/50">
-                      <span className="min-w-0 flex-1">
-                        <span className="block truncate text-sm font-medium text-slate-900 dark:text-slate-100">
-                          {item.name}
-                        </span>
-                        {item.description && (
-                          <span className="mt-0.5 block truncate text-xs text-slate-500">
-                            {item.description}
-                          </span>
-                        )}
+      <AnchoredPortal anchorRef={anchorRef} open={open}>
+        <SessionConfigPillPanel
+          kind={kind}
+          items={items}
+          session={session}
+          onToggleResource={onToggleResource}
+        />
+      </AnchoredPortal>
+    </div>
+  );
+}
+
+function SessionConfigPillPanel({
+  kind,
+  items,
+  session,
+  onToggleResource,
+}: {
+  kind: PerRunMentionKind;
+  items: WorkspaceConfigItem[];
+  session: ChatSession | null;
+  onToggleResource: (id: string) => void;
+}) {
+  const meta = PER_RUN_MENTION_META[kind];
+
+  return (
+    <div
+      role="listbox"
+      aria-label={`${meta.label} 会话配置`}
+      className="overflow-hidden rounded-xl border border-border bg-surface shadow-lg"
+      onMouseDown={preventFocusSteal}
+    >
+      <div className="border-b border-border px-3 py-2 text-[11px] font-medium uppercase tracking-[0.06em] text-muted-light">
+        本会话 · {meta.label}
+      </div>
+      {items.length === 0 ? (
+        <p className="px-3 py-4 text-sm text-muted-light">
+          暂无配置，请先在左侧面板添加
+        </p>
+      ) : (
+        <ul className="max-h-56 overflow-y-auto py-1">
+          {items.map((item) => {
+            const enabled = !new Set(session?.config?.disabled[kind] ?? []).has(
+              item.id,
+            );
+            return (
+              <li key={item.id}>
+                <div className="flex items-start gap-3 px-3 py-2 transition hover:bg-surface-subtle">
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-sm font-medium text-foreground">
+                      {item.name}
+                    </span>
+                    {item.description && (
+                      <span className="mt-0.5 block truncate text-xs text-muted-light">
+                        {item.description}
                       </span>
-                      <Switch
-                        checked={enabled}
-                        onChange={() => onToggleResource(item.id)}
-                        aria-label={`${enabled ? "禁用" : "启用"} ${item.name}`}
-                      />
-                    </div>
-                  </li>
-                );
-              })}
-            </ul>
-          )}
-        </div>
+                    )}
+                  </span>
+                  <Switch
+                    checked={enabled}
+                    onChange={() => onToggleResource(item.id)}
+                    aria-label={`${enabled ? "禁用" : "启用"} ${item.name}`}
+                  />
+                </div>
+              </li>
+            );
+          })}
+        </ul>
       )}
     </div>
   );
@@ -278,12 +403,12 @@ function Switch({
       }}
       className={[
         "relative z-10 h-5 w-9 shrink-0 self-center rounded-full transition",
-        checked ? "bg-slate-800 dark:bg-slate-300" : "bg-slate-200 dark:bg-slate-600",
+        checked ? "bg-primary" : "bg-border",
       ].join(" ")}
     >
       <span
         className={[
-          "pointer-events-none absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-white shadow transition-transform dark:bg-slate-900",
+          "pointer-events-none absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-surface shadow transition-transform",
           checked ? "translate-x-4" : "translate-x-0",
         ].join(" ")}
       />
@@ -296,7 +421,7 @@ function ChevronUpIcon({ open }: { open: boolean }) {
     <svg
       viewBox="0 0 20 20"
       className={[
-        "h-3 w-3 shrink-0 text-slate-400 transition-transform",
+        "h-3 w-3 shrink-0 text-muted-light transition-transform",
         open ? "rotate-180" : "",
       ].join(" ")}
       fill="none"

@@ -18,7 +18,8 @@ Primary UI: `/data-tasks` — design doc at
 1. [`docs/engineering/copilotkit-ag-ui-frontend-protocol.md`](../../docs/engineering/copilotkit-ag-ui-frontend-protocol.md)
 2. [`src/app/data-tasks/DESIGN.md`](src/app/data-tasks/DESIGN.md)
 3. [`docs/engineering/config-management-api.md`](../../docs/engineering/config-management-api.md) (when wiring config REST)
-4. [`docs/engineering/frontend-backend-capability-requests.md`](../../docs/engineering/frontend-backend-capability-requests.md) (gap tracking only)
+4. [`docs/engineering/2026-06-25-frontend-capability-status.md`](../../docs/engineering/2026-06-25-frontend-capability-status.md) (前端现状自述)
+5. [`docs/engineering/2026-06-25-backend-requirements.md`](../../docs/engineering/2026-06-25-backend-requirements.md) (对后端要求 / gap tracking)
 
 ## Code conventions
 

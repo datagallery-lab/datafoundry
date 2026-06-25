@@ -1,11 +1,33 @@
-import { asRecord, BaseToolObservationAdapter, pickFields } from "./base-tool-observation-adapter.js";
+import { BaseToolObservationAdapter, pickFields } from "./base-tool-observation-adapter.js";
+
+/** Project Mastra workspace tool output into a plain string for the model context layer. */
+export const projectWorkspaceObservation = (raw: unknown): string => {
+  if (typeof raw === "string") {
+    return raw.trim().length > 0 ? raw : "(no output)";
+  }
+
+  if (raw && typeof raw === "object") {
+    const record = raw as Record<string, unknown>;
+    if (typeof record.observation === "string") {
+      return record.observation.trim().length > 0 ? record.observation : "(no output)";
+    }
+    try {
+      return JSON.stringify(raw);
+    } catch {
+      return String(raw);
+    }
+  }
+
+  const text = String(raw ?? "");
+  return text.trim().length > 0 ? text : "(no output)";
+};
 
 export class ReadFileToolObservationAdapter extends BaseToolObservationAdapter {
   readonly toolName = "read_file";
   readonly resultType = "workspace-read-file";
 
   protected project(raw: unknown): unknown {
-    return asRecord(raw);
+    return projectWorkspaceObservation(raw);
   }
 }
 
@@ -14,7 +36,7 @@ export class WriteFileToolObservationAdapter extends BaseToolObservationAdapter 
   readonly resultType = "workspace-write-file";
 
   protected project(raw: unknown): unknown {
-    return pickFields(raw, ["path", "size", "bytesWritten", "success", "message"]);
+    return projectWorkspaceObservation(raw);
   }
 }
 
@@ -23,7 +45,7 @@ export class EditFileToolObservationAdapter extends BaseToolObservationAdapter {
   readonly resultType = "workspace-edit-file";
 
   protected project(raw: unknown): unknown {
-    return pickFields(raw, ["path", "changes", "diff", "success", "message"]);
+    return projectWorkspaceObservation(raw);
   }
 }
 
@@ -32,7 +54,7 @@ export class ListFilesToolObservationAdapter extends BaseToolObservationAdapter 
   readonly resultType = "workspace-list-files";
 
   protected project(raw: unknown): unknown {
-    return asRecord(raw);
+    return projectWorkspaceObservation(raw);
   }
 }
 
@@ -41,7 +63,7 @@ export class GrepToolObservationAdapter extends BaseToolObservationAdapter {
   readonly resultType = "workspace-grep";
 
   protected project(raw: unknown): unknown {
-    return asRecord(raw);
+    return projectWorkspaceObservation(raw);
   }
 }
 
@@ -50,7 +72,7 @@ export class FileStatToolObservationAdapter extends BaseToolObservationAdapter {
   readonly resultType = "workspace-file-stat";
 
   protected project(raw: unknown): unknown {
-    return pickFields(raw, ["path", "name", "size", "type", "mimeType", "modifiedAt", "createdAt"]);
+    return projectWorkspaceObservation(raw);
   }
 }
 
@@ -59,7 +81,7 @@ export class MkdirToolObservationAdapter extends BaseToolObservationAdapter {
   readonly resultType = "workspace-mkdir";
 
   protected project(raw: unknown): unknown {
-    return pickFields(raw, ["path", "created", "success", "message"]);
+    return projectWorkspaceObservation(raw);
   }
 }
 
@@ -68,7 +90,7 @@ export class ExecuteCommandToolObservationAdapter extends BaseToolObservationAda
   readonly resultType = "workspace-execute-command";
 
   protected project(raw: unknown): unknown {
-    return pickFields(raw, ["command", "stdout", "stderr", "exitCode", "success", "timedOut"]);
+    return projectWorkspaceObservation(raw);
   }
 }
 

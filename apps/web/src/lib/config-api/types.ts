@@ -69,6 +69,9 @@ export type KnowledgeBaseDto = {
   description?: string;
   retrievalTopK?: number;
   scoreThreshold?: number;
+  embeddingProvider?: string;
+  embeddingModel?: string;
+  embeddingBaseUrl?: string;
   secretRef?: string | null;
   hasSecret?: boolean;
   defaultEnabled?: boolean;
@@ -85,6 +88,7 @@ export type McpServerDto = {
   description?: string;
   transport?: string;
   serverUrl?: string;
+  authType?: string;
   toolManifest?: unknown[];
   secretRef?: string | null;
   hasSecret?: boolean;
@@ -124,6 +128,10 @@ export type SkillDto = {
   allowedTools?: string[];
   version?: string;
   manifest?: Record<string, unknown>;
+  defaultDbIds?: string[];
+  defaultKbIds?: string[];
+  defaultMcpIds?: string[];
+  modelProfileId?: string;
   secretRef?: string | null;
   hasSecret?: boolean;
   defaultEnabled?: boolean;

@@ -2,6 +2,7 @@ import { useEffect, useMemo } from "react";
 import type { DataArtifact } from "../../data-task-state";
 import type { LiveRun } from "../../live-run-state";
 import { buildTraceTimeline, traceTimelineStats } from "../../trace-timeline";
+import { overlayBackdropClass, overlayPanelClass, statusTone } from "../../ui-tokens";
 import { TraceList } from "./TraceList";
 
 type TraceOverlayProps = {
@@ -57,22 +58,22 @@ export function TraceOverlay({
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 bg-slate-950/40 p-4 backdrop-blur-sm">
-      <div className="mx-auto flex h-full max-w-5xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl">
-        <header className="border-b border-slate-200 px-5 py-4">
+    <div className={`${overlayBackdropClass} p-4`}>
+      <div className={`mx-auto h-full max-w-5xl ${overlayPanelClass}`}>
+        <header className="border-b border-border px-5 py-4">
           <div className="flex items-start justify-between gap-3">
             <div>
-              <h2 className="text-base font-semibold text-slate-950">
+              <h2 className="text-base font-semibold text-foreground">
                 完整任务链追溯
               </h2>
-              <p className="mt-1 text-xs text-slate-500">
+              <p className="mt-1 text-xs text-muted-light">
                 按时间查看数据操作、SQL、原始结果与产出血缘；对话区结果缺失时可在此排障。
               </p>
             </div>
             <button
               type="button"
               onClick={onClose}
-              className="shrink-0 rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 transition hover:bg-slate-50"
+              className="shrink-0 rounded-lg border border-border px-3 py-1.5 text-xs font-semibold text-muted transition hover:bg-surface-subtle"
             >
               关闭
             </button>
@@ -80,14 +81,24 @@ export function TraceOverlay({
 
           {stats.runStatus !== "idle" ? (
             <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
-              <span className="rounded-full bg-slate-100 px-2.5 py-1 font-semibold text-slate-700">
+              <span
+                className={`rounded-full px-2.5 py-1 font-semibold ${
+                  stats.runStatus === "completed"
+                    ? statusTone("success")
+                    : stats.runStatus === "failed"
+                      ? statusTone("error")
+                      : stats.runStatus === "running"
+                        ? statusTone("info")
+                        : statusTone("muted")
+                }`}
+              >
                 {runStatusLabel(stats.runStatus)}
               </span>
-              <span className="text-slate-500">
+              <span className="text-muted-light">
                 运行耗时 {formatDuration(stats.durationMs)}
               </span>
               {liveRun.errorMessage ? (
-                <span className="text-red-600">{liveRun.errorMessage}</span>
+                <span className="text-step-error">{liveRun.errorMessage}</span>
               ) : null}
             </div>
           ) : null}
@@ -103,7 +114,7 @@ export function TraceOverlay({
         </div>
 
         {stats.entryCount > 0 ? (
-          <footer className="border-t border-slate-200 px-5 py-3 text-[11px] text-slate-500">
+          <footer className="border-t border-border px-5 py-3 text-[11px] text-muted-light">
             {stats.entryCount} 条记录 · {stats.toolCount} 次数据操作 ·{" "}
             {stats.artifactCount} 项产出
           </footer>

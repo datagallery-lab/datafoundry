@@ -38,9 +38,9 @@ export function PanelResizeHandle({
       className={[
         "absolute left-0 top-0 z-10 h-full w-1.5 -translate-x-1/2 cursor-col-resize",
         "transition-colors duration-150",
-        "before:absolute before:inset-y-0 before:left-1/2 before:w-px before:-translate-x-1/2 before:bg-slate-200 before:content-['']",
-        "hover:before:bg-violet-400",
-        isResizing ? "before:bg-violet-500" : "",
+        "before:absolute before:inset-y-0 before:left-1/2 before:w-px before:-translate-x-1/2 before:bg-border before:content-['']",
+        "hover:before:bg-primary-light",
+        isResizing ? "before:bg-primary" : "",
       ].join(" ")}
     />
   );

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   getEnabledLlmItems,
+  resolveActiveLlmProfileId,
   summarizeConfigItems,
   summarizeLlmItems,
   summarizeMcpItems,
@@ -41,5 +42,18 @@ describe("workspace config defaults", () => {
       "server-default",
     ]);
     expect(summarizeLlmItems(workspaceConfig.llm, "未配置")).toBe("qwen-plus");
+  });
+});
+
+describe("active LLM selection", () => {
+  it("keeps a valid dialog selection instead of restoring the workspace default", () => {
+    const profiles = [
+      { id: "server-default", name: "服务端默认", description: "", enabled: true },
+      { id: "profile-b", name: "Profile B", description: "", enabled: true },
+    ];
+
+    expect(
+      resolveActiveLlmProfileId(profiles, "profile-b", "server-default"),
+    ).toBe("profile-b");
   });
 });

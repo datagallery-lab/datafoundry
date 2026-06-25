@@ -1,18 +1,43 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type Dispatch,
+  type ReactNode,
+  type SetStateAction,
+} from "react";
 import { useAgent, UseAgentUpdate } from "@copilotkit/react-core/v2";
 import type { BaseEvent } from "@ag-ui/client";
 import {
   accumulateSessionUsage,
   createInitialLiveRun,
   createInitialSessionUsage,
-  deriveRunUsage,
+  deriveSegmentRunUsage,
   reduceLiveRunEvent,
   type LiveRun,
   type LiveRunStatus,
   type SessionUsageStats,
 } from "./live-run-state";
+
+type LiveRunContextValue = {
+  liveRun: LiveRun;
+  sessionUsage: SessionUsageStats;
+  latestQuestion?: string;
+};
+
+type LiveRunSetters = {
+  setLiveRun: Dispatch<SetStateAction<LiveRun>>;
+  setSessionUsage: Dispatch<SetStateAction<SessionUsageStats>>;
+  setLatestQuestion: Dispatch<SetStateAction<string | undefined>>;
+};
+
+const LiveRunContext = createContext<LiveRunContextValue | null>(null);
+const LiveRunSettersContext = createContext<LiveRunSetters | null>(null);
 
 function extractLatestUserQuestion(messages: unknown): string | undefined {
   if (!Array.isArray(messages)) return undefined;
@@ -37,14 +62,69 @@ function extractLatestUserQuestion(messages: unknown): string | undefined {
   return undefined;
 }
 
-export function useDataAgentRun(
-  agentId: string,
-  threadId?: string,
-): {
-  liveRun: LiveRun;
-  sessionUsage: SessionUsageStats;
-  latestQuestion?: string;
-} {
+export function LiveRunProvider({ children }: { children: ReactNode }) {
+  const [liveRun, setLiveRun] = useState<LiveRun>(() => createInitialLiveRun());
+  const [sessionUsage, setSessionUsage] = useState<SessionUsageStats>(() =>
+    createInitialSessionUsage(),
+  );
+  const [latestQuestion, setLatestQuestion] = useState<string | undefined>();
+  const prevRunStatusRef = useRef<LiveRunStatus>("idle");
+
+  const setters = useMemo(
+    () => ({ setLiveRun, setSessionUsage, setLatestQuestion }),
+    [],
+  );
+
+  useEffect(() => {
+    const previous = prevRunStatusRef.current;
+    const current = liveRun.runStatus;
+    if (previous === "running" && current === "completed") {
+      setSessionUsage((stats) =>
+        accumulateSessionUsage(stats, deriveSegmentRunUsage(liveRun), "completed"),
+      );
+    } else if (previous === "running" && current === "failed") {
+      setSessionUsage((stats) =>
+        accumulateSessionUsage(stats, deriveSegmentRunUsage(liveRun), "failed"),
+      );
+    }
+    prevRunStatusRef.current = current;
+  }, [liveRun]);
+
+  return (
+    <LiveRunSettersContext.Provider value={setters}>
+      <LiveRunContext.Provider value={{ liveRun, sessionUsage, latestQuestion }}>
+        {children}
+      </LiveRunContext.Provider>
+    </LiveRunSettersContext.Provider>
+  );
+}
+
+export function useLiveRun(): LiveRunContextValue {
+  const ctx = useContext(LiveRunContext);
+  if (!ctx) {
+    throw new Error("useLiveRun must be used within LiveRunProvider");
+  }
+  return ctx;
+}
+
+/**
+ * Subscribes to AG-UI events for the active thread. Must render as a sibling
+ * **before** `<CopilotChat>` inside `<CopilotChatConfigurationProvider>` so
+ * its effect runs before connectAgent replays historical events.
+ */
+export function LiveRunEventSubscriber({
+  agentId,
+  threadId,
+}: {
+  agentId: string;
+  threadId?: string;
+}) {
+  const setters = useContext(LiveRunSettersContext);
+  if (!setters) {
+    throw new Error("LiveRunEventSubscriber requires LiveRunProvider");
+  }
+  const { setLiveRun, setSessionUsage, setLatestQuestion } = setters;
+
   const { agent } = useAgent({
     agentId,
     updates: [
@@ -53,17 +133,11 @@ export function useDataAgentRun(
       UseAgentUpdate.OnRunStatusChanged,
     ],
   });
-  const [liveRun, setLiveRun] = useState<LiveRun>(() => createInitialLiveRun());
-  const [sessionUsage, setSessionUsage] = useState<SessionUsageStats>(() =>
-    createInitialSessionUsage(),
-  );
-  const prevRunStatusRef = useRef<LiveRunStatus>("idle");
 
   useEffect(() => {
     setLiveRun(createInitialLiveRun());
     setSessionUsage(createInitialSessionUsage());
-    prevRunStatusRef.current = "idle";
-  }, [threadId]);
+  }, [threadId, setLiveRun, setSessionUsage]);
 
   useEffect(() => {
     const applyEvent = (event: BaseEvent) => {
@@ -121,7 +195,7 @@ export function useDataAgentRun(
     });
 
     return () => subscription.unsubscribe();
-  }, [agent]);
+  }, [agent, setLiveRun]);
 
   useEffect(() => {
     const state = agent.state as Record<string, unknown> | undefined;
@@ -133,7 +207,7 @@ export function useDataAgentRun(
         snapshot: state,
       }),
     );
-  }, [agent.state]);
+  }, [agent.state, setLiveRun]);
 
   useEffect(() => {
     const onError = (event: Event) => {
@@ -150,26 +224,14 @@ export function useDataAgentRun(
     return () => {
       window.removeEventListener("dataagent-run-error", onError);
     };
-  }, []);
-
-  useEffect(() => {
-    const previous = prevRunStatusRef.current;
-    const current = liveRun.runStatus;
-    if (previous === "running" && current === "completed") {
-      setSessionUsage((stats) =>
-        accumulateSessionUsage(stats, deriveRunUsage(liveRun), "completed"),
-      );
-    } else if (previous === "running" && current === "failed") {
-      setSessionUsage((stats) =>
-        accumulateSessionUsage(stats, deriveRunUsage(liveRun), "failed"),
-      );
-    }
-    prevRunStatusRef.current = current;
-  }, [liveRun]);
+  }, [setLiveRun]);
 
   const latestQuestion = extractLatestUserQuestion(
     (agent as { messages?: unknown }).messages,
   );
+  useEffect(() => {
+    setLatestQuestion(latestQuestion);
+  }, [latestQuestion, setLatestQuestion]);
 
-  return { liveRun, sessionUsage, latestQuestion };
+  return null;
 }

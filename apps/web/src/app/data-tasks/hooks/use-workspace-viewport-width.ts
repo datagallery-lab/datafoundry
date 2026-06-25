@@ -26,9 +26,7 @@ export function useWorkspaceViewportWidth(
   enabled: boolean,
 ): UseWorkspaceViewportWidthResult {
   const [container, setContainer] = useState<HTMLDivElement | null>(null);
-  const [viewportWidth, setViewportWidth] = useState(() =>
-    typeof window !== "undefined" ? window.innerWidth : 1280,
-  );
+  const [viewportWidth, setViewportWidth] = useState(1280);
   const [isViewportResizing, setIsViewportResizing] = useState(false);
   const resizeEndTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 

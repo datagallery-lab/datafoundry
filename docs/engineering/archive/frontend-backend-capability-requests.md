@@ -1,13 +1,19 @@
-# 前端 → 后端能力需求清单
+# 前端 → 后端能力需求清单（已冻结归档）
+
+> **本文件已冻结（2026-06-25）。** 内容已按归属拆分，请改用：
+> - 前端自述 → [前端能力现状](../2026-06-25-frontend-capability-status.md)
+> - 对后端要求 → [对后端的能力要求](../2026-06-25-backend-requirements.md)
+>
+> 本文保留 #1–#20 需求原文历史，仅供追溯，不再更新。
 
 日期：2026-06-24（#12 新增 session 级 workspace 隔离需求）
 提出方：`apps/web`（`@open-data-agent/web`）
 受理方：`apps/api` / dataAgent 后端
-状态：**#1–#9 主体已交付**（见 [交付状态](./2026-06-23-frontend-backend-capability-status.md)）；**未实现项**见 [后端待实现需求清单](./backend-open-requirements-backlog.md)（含后端答复区）
+状态：**#1–#9 主体已交付**（见 [交付状态](./2026-06-23-frontend-backend-capability-status.md)）；**未实现项**见 [后端待实现需求清单](./backend-pending-requirements.md)（含后端答复区）
 关联：
 
-- [config-management-api.md](./config-management-api.md)（配置管理 REST 契约，本清单的"接口"列均指向此文档）
-- [copilotkit-ag-ui-frontend-protocol.md](./copilotkit-ag-ui-frontend-protocol.md)（AG-UI run 协议）
+- [config-management-api.md](../config-management-api.md)（配置管理 REST 契约，本清单的"接口"列均指向此文档）
+- [copilotkit-ag-ui-frontend-protocol.md](../copilotkit-ag-ui-frontend-protocol.md)（AG-UI run 协议）
 
 ## 背景
 
@@ -30,11 +36,22 @@ P2 = 完整产品形态；P3 = 后置增强。
 | 6 | KB / RAG 实现 + REST | 仅类型接口 | P2 | 1, 3 | 已交付 |
 | 7 | MCP 挂载 + registry REST | 完全无 | P2 | 1, 3 | 已交付 |
 | 8 | Skill / task profile 策略层 | 完全无 | P3 | 3 | 已交付 |
-| 9 | Artifact 预览/下载 API | 仅 CUSTOM 摘要 | P3 | — | 部分 → [O-004](./backend-open-requirements-backlog.md#o-004-artifact-北向协议收敛) |
-| 10 | 多用户认证 / workspace 隔离 | 固定 dev-user | P3 | — | [O-006](./backend-open-requirements-backlog.md#o-006-多用户认证--租户-workspace-隔离) |
-| 11 | LLM Token 用量上报（AG-UI） | 未 emit `token_usage` | P1 | — | [O-002](./backend-open-requirements-backlog.md#o-002-llm-token-用量上报-ag-ui) |
-| 12 | Session 级 Workspace 隔离（跨 run 文件持久） | 按 run 隔离，run 结束即销毁 | **P1** | — | [O-001](./backend-open-requirements-backlog.md#o-001-session-级-workspace-隔离跨-run-文件持久) |
-| 13 | 对话框文件上传（图片多模态 + 数据文件落工作区） | 无 chat 上传端点；`extractLastUserText` 忽略非文本 part | P1 | 12 | [O-007](./backend-open-requirements-backlog.md#o-007-对话框文件上传图片多模态--数据文件落工作区) |
+| 9 | Artifact 预览/下载 API | 仅 CUSTOM 摘要 | P3 | — | 部分 → [O-004](./backend-pending-requirements.md#o-004-artifact-北向协议收敛) |
+| 10 | 多用户认证 / workspace 隔离 | 固定 dev-user | P3 | — | [O-006](./backend-pending-requirements.md#o-006-多用户认证) |
+| 11 | LLM Token 用量上报（AG-UI） | 未 emit `token_usage` | P1 | — | [O-002](./backend-pending-requirements.md#o-002-llm-token-用量上报) |
+| 12 | Session 级 Workspace 隔离（跨 run 文件持久） | 按 run 隔离，run 结束即销毁 | **P1** | — | [O-001](./backend-pending-requirements.md#o-001-session-级-workspace-隔离) |
+| 13 | 对话框文件上传（图片多模态 + 数据文件落工作区） | 无 chat 上传端点；`extractLastUserText` 忽略非文本 part | P1 | 12 | [O-007](./backend-pending-requirements.md#o-007-对话框文件上传) |
+| 14 | DB 扩展类型 adapter（DB-GPT 对齐） | 仅 duckdb/sqlite/csv/xlsx/postgresql/mysql | P1 | 2 | [O-008](./backend-pending-requirements.md#o-008-db-扩展类型-adapter) |
+| 15 | DB 高级策略（introspection / sample / mask） | 部分字段仅落库或未消费 | P2 | 2, 5 | [O-009](./backend-pending-requirements.md#o-009-db-高级策略) |
+| 16 | KB 高级 RAG（向量库 / rerank / GraphRAG / 分块） | local FTS + 可选 embedding；TopK/阈值未全生效 | P2 | 6 | [O-010](./backend-pending-requirements.md#o-010-kb-高级-rag) |
+| 17 | LLM 高级采样 + run timeout | temperature/maxTokens 已消费；其余未消费 | P2 | 4 | [O-011](./backend-pending-requirements.md#o-011-llm-高级采样) |
+| 18 | MCP stdio + tool policy | 仅 streamable-http/sse；无 allowlist | P2 | 7 | [O-012](./backend-pending-requirements.md#o-012-mcp-stdio--tool-policy) |
+| 19 | Skill 资源默认绑定 | 仅 instructions + allowedTools | P3 | 8 | [O-013](./backend-pending-requirements.md#o-013-skill-资源默认绑定) |
+| 20 | 动态 datasource-types schema API | 前端静态枚举 + pending 占位 | P2 | 2 | [O-014](./backend-pending-requirements.md#o-014-动态-schema-api) |
+
+> 各条需求摘要、验收标准与后端答复区见 **[backend-pending-requirements.md](./backend-pending-requirements.md)**；§14–§20 详细原文见下文对应章节。
+
+**前端现状（2026-06-25）**：左栏五类配置 UI 已按 DB-GPT 完整字段面补齐；后端已能消费的字段（A 档）已接线 REST/adapter；尚未实现的字段以 disabled +「待后端」徽标占位（`PENDING_CAPABILITIES`）。后端每项交付后，对应 `pendingCapability` 翻 true 即可激活，无需重做表单。
 
 ---
 
@@ -441,7 +458,7 @@ const resolveSessionWorkspaceDir = (input: WorkspaceFactoryInput): string => {
 **提出背景**：`/data-tasks` 对话框需要支持上传文件，覆盖两类用途：图片喂多模态 LLM
 直接"看"；数据/文本文件（csv/tsv/xlsx/json/parquet/txt/pdf）作为数据让 Agent 分析，
 需落到后端 session 工作区供文件工具读取。设计规格见
-[`docs/superpowers/specs/2026-06-24-chat-file-upload-design.md`](../superpowers/specs/2026-06-24-chat-file-upload-design.md)。
+[`docs/superpowers/specs/2026-06-24-chat-file-upload-design.md`](../../superpowers/specs/2026-06-24-chat-file-upload-design.md)。
 
 **现状（后端）**：
 
@@ -473,6 +490,105 @@ const resolveSessionWorkspaceDir = (input: WorkspaceFactoryInput): string => {
 - 安全：校验 `(user_id, session_id)`、禁 `..` 逃逸、限大小/类型；仅本 session 可见。
 
 **依赖**：#13b 强依赖 #12（session 级工作区）；#12 落地前 `chat.fileUpload` 保持 false。
+
+---
+
+## 14. DB 扩展类型 adapter（DB-GPT 对齐）（P1）
+
+**提出背景**：前端已在数据源类型下拉中展示 ClickHouse / Oracle / SQL Server / Hive / Spark / Vertica / BigQuery / Snowflake（disabled「待后端」占位）。用户选择后可见对应连接字段，但 `createAdapter` 仍会 throw。
+
+**前端需求**：
+- 在 `packages/data-gateway` 实现上述类型的只读 adapter（优先级：ClickHouse → Oracle → SQL Server）。
+- BigQuery / Snowflake 可作为路线图第二批。
+- `GET /api/v1/capabilities` 或 `datasource-types` 返回 `enabled: true` 后，前端 `PENDING_CAPABILITIES["datasource.extendedTypes"]` 翻 true。
+
+**验收标准**：
+- 前端创建 ClickHouse 只读源 → test → introspect → agent `run_sql_readonly` 跑通。
+- 扩展类型不再仅落 metadata 而在 run 时失败。
+
+**依赖**：#2。
+
+## 15. DB 高级策略（introspection / sample / mask）（P2）
+
+**前端已暴露、后端待消费**：
+- `introspection.tableAllowlist` — 表白名单过滤 schema 抓取范围。
+- `introspection.refreshIntervalSec` — schema 快照自动刷新周期。
+- `queryPolicy.denyWrite` — 显式策略字段（当前强制只读但未从 per-datasource 配置读取）。
+- `maskFields` — 查询结果字段脱敏。
+- `samplePolicy.allowSample` / `maxSampleRows` — 采样预览策略。
+
+**验收标准**：调整上述字段后，introspect / preview / SQL 结果行为与配置一致（可在 audit log 或返回 rows 中验证）。
+
+**依赖**：#2、#5。
+
+## 16. KB 高级 RAG（向量库 / rerank / GraphRAG / 分块）（P2）
+
+**前端已暴露、后端待消费**：
+- `vectorStore` — chroma / milvus / pgvector / elasticsearch（当前固定 local SQLite FTS + 可选 embedding 向量表）。
+- `rerankEnabled` + `rerankModel` — 检索后 rerank。
+- `scoreThreshold` — **已落库但未用于 retrieve 过滤**，需生效。
+- `citationRequired` — agent 回答强制带 KB 引用。
+- `chunkSize` / `chunkOverlap` — ingest 分块参数（当前硬编码 splitText）。
+- `graphRagEnabled` — GraphRAG 检索链路。
+- `scope` — personal / workspace / project 隔离。
+
+**前端已接线（A 档）**：`embeddingProvider` / `embeddingModel` / `embeddingBaseUrl` / embedding API Key（secretRef）；`retrievalTopK` / `scoreThreshold` 写入 REST。
+
+**验收标准**：
+- 配置 embedding 字段后，reindex 使用对应 provider/model，而非仅 env fallback。
+- scoreThreshold 过滤低分 chunk；rerank 开启后检索顺序可验证变化。
+
+**依赖**：#6。
+
+## 17. LLM 高级采样 + run timeout（P2）
+
+**前端已接线（A 档）**：`fallbackProfileId`、`timeoutMs`（REST）；`temperature` / `maxTokens`（capability `llm.samplingParams`）。
+
+**前端已暴露、后端待消费**：
+- `topP`、`frequencyPenalty`、`presencePenalty` — 按 run 传入 modelSettings。
+- `reasoningModel` — reasoning 模型标记（DB-GPT / o-series 等）。
+- `contextLength` — 上下文窗口提示/预算。
+- profile `timeoutMs` — **当前仅 probe 测试用**，run 阶段需消费。
+
+**验收标准**：调整 top_p 后 run 行为可观测变化；run timeout 按 profile 触发 abort。
+
+**依赖**：#4。
+
+## 18. MCP stdio + tool policy（P2）
+
+**前端已接线（A 档）**：`authType`（none/bearer）、`apiKey`→`credentials.token`；详情页 `GET .../tools` manifest 展示。
+
+**前端已暴露、后端待消费**：
+- `transport=stdio` — 本地进程 MCP（当前 `MCP_TRANSPORT_UNSUPPORTED`）。
+- `toolAllowlist` — 按工具名限制 manifest 注入。
+- 单工具 `timeoutMs` / result-size 上限。
+
+**验收标准**：stdio MCP server 注册后 tools 出现在 run；allowlist 外工具不可调用。
+
+**依赖**：#7。
+
+## 19. Skill 资源默认绑定（P3）
+
+**前端已暴露、后端待消费**（disabled 占位）：
+- `defaultDbIds` / `defaultKbIds` / `defaultMcpIds` / `modelProfileId` — Skill 激活时自动注入 effectiveRunConfig 默认启用集 / active 项。
+
+**验收标准**：Skill 包元数据绑定资源后，选择该 Skill 的 run 自动启用对应 DB/KB/MCP/LLM，无需手动 session 配置。
+
+**依赖**：#8、#3。
+
+## 20. 动态 datasource-types schema API（P2）
+
+**背景**：DB-GPT 新增数据源类型后前端可自动渲染配置表单。当前前端在 `WORKSPACE_CONFIG_FIELDS` 静态维护类型与字段。
+
+**前端需求**：
+- 新增 `GET /api/v1/datasource-types`（或扩展 `supportTypes()` 为 REST），返回：
+  - `name`、`label`、`enabled`、`parameters[]`（name/label/type/required/options）
+  - 与 `packages/data-gateway` `SUPPORTED_DATA_SOURCE_TYPES` 对齐并可扩展。
+- 可选：`GET /api/v1/knowledge-base-types` 等同理。
+
+**验收标准**：后端新增 adapter 类型后，前端无需发版即可在下拉中出现（或 capability/pending 自动关闭）。
+
+**依赖**：#2。
 
 ---
 

@@ -330,7 +330,7 @@ Start here:
 - [CopilotKit / AG-UI Frontend Protocol Support](docs/engineering/copilotkit-ag-ui-frontend-protocol.md)
 - [Config Management REST API](docs/engineering/config-management-api.md)
 - [Context Layering ADR](docs/engineering/adr-0003-context-layering-and-naming.md)
-- [Frontend → Backend Capability Status](docs/engineering/frontend-backend-capability-requests.md)
+- [Frontend Capability Status](docs/engineering/2026-06-25-frontend-capability-status.md) · [Backend Requirements](docs/engineering/2026-06-25-backend-requirements.md)
 - [Data Task Page Design](apps/web/src/app/data-tasks/DESIGN.md)
 - [R&D B Architecture Plan](docs/engineering/rd-b-agent-gateway-knowledge-architecture-plan-zh.md) (historical)
 - [Final Engineering Design](docs/engineering/db-gpt-like-data-agent-final-design-zh.md) (historical)
