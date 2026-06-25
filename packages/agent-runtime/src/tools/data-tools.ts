@@ -7,7 +7,7 @@ import type { ContextPackage } from "../context/inventory/context-package.js";
 import { truncateContextText } from "../context/inventory/context-text.js";
 import { SQL_MAX_SQL_CHARS } from "../context/inventory/context-limits.js";
 import { toolObservationActivityFromPackage } from "../context/tool-observation/tool-observation-projection-items.js";
-import { createActivitySnapshot, createCustomEvent } from "../events.js";
+import { createActivitySnapshot, createArtifactEvent, createCustomEvent } from "../events.js";
 import { SQL_MAX_EXECUTION_COUNT } from "../runtime-limits.js";
 import type { AgentRunContext, AgUiEventEmitter } from "../types.js";
 
@@ -308,7 +308,7 @@ const emitSqlReferences = (
     elapsed_ms: result.elapsed_ms
   }));
   if (result.artifact) {
-    input.emitter.emit(createCustomEvent("artifact", result.artifact));
+    input.emitter.emit(createArtifactEvent(result.artifact));
   }
 };
 

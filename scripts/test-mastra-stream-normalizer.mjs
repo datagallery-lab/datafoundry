@@ -16,6 +16,12 @@ async function collectNormalized(chunks, hooks = {}) {
 
 async function* inputChunks() {
   yield { type: "text-delta", payload: { text: "hello" }, runId: "r1", from: "agent" };
+  yield {
+    type: "finish-step",
+    payload: { usage: { inputTokens: 12, outputTokens: 4, totalTokens: 16 } },
+    runId: "r1",
+    from: "agent"
+  };
   yield { type: "data-workspace-metadata", data: { toolName: "write_file", toolCallId: "tc-1" } };
   yield {
     type: "tool-error",
@@ -28,7 +34,11 @@ async function* inputChunks() {
 
 const dataChunks = [];
 const quarantined = [];
+const usageChunks = [];
 const normalized = await collectNormalized(inputChunks(), {
+  onChunk: (chunk) => {
+    if (chunk.payload?.usage) usageChunks.push(chunk);
+  },
   onDataChunk: (chunk) => dataChunks.push(chunk),
   onQuarantine: (chunk) => quarantined.push(chunk)
 });
@@ -49,6 +59,7 @@ assert(
 );
 assert(dataChunks.length === 1, "data-workspace-metadata must be routed out-of-band");
 assert(dataChunks[0].type === "data-workspace-metadata", "data chunk type preserved for hooks");
+assert(usageChunks.length === 1, "normalizer hooks should observe provider usage chunks");
 assert(quarantined.length === 0, "known chunks must not be quarantined");
 
 const wrappedChunks = [];

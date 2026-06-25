@@ -68,6 +68,16 @@ export const resolveRunIdentity = (input: ResolveRunIdentityInput): RunIdentityR
     };
   }
 
+  const activeSessionRun = input.metadataStore.runs.findActiveBySession({
+    user_id: input.userId,
+    session_id: sessionId,
+    exclude_run_id: runId
+  });
+
+  if (activeSessionRun) {
+    throw new Error(`RUN_ALREADY_ACTIVE:${activeSessionRun.id}`);
+  }
+
   if (isResume) {
     if (!resume) {
       throw new Error(`INTERACTION_RESUME_REQUIRED:${runId}`);

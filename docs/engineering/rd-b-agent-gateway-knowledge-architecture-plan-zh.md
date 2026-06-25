@@ -287,7 +287,8 @@ METADATA_DB_PATH=storage/metadata/workbench.sqlite
 - artifact metadata 写入 SQLite。
 - preview JSON 存在 artifact record。
 - 已暴露 artifact detail / preview / content / download REST endpoint。
-- workspace 集成前，北向 `CUSTOM(name="artifact")` 继续携带 preview JSON；模型只保留 `artifact_id`。
+- 北向 `CUSTOM(name="artifact")` 已收敛为 id + 摘要引用，不携带 `preview_json`；模型只保留
+  `artifact_id`，完整 preview / content / download 走 REST。
 
 ### Knowledge
 
@@ -411,7 +412,7 @@ npm run test:web
 1. 前端把配置源从 localStorage 接到 `/api/v1`，但不改变 AG-UI run 协议。
 2. 用真实 PostgreSQL / MySQL / 外部 model / MCP / embedding key 做集成验收。
 3. Conversation Memory：历史所有权、message ID 去重、summary 和 working memory。
-4. Artifact 北向事件收敛到 workspace artifact 模型，逐步减少 AG-UI preview JSON。
+4. 清理 legacy run 级 `storage_path` artifact 兼容路径，继续统一 FileAssetRef / artifact 生命周期。
 5. Knowledge citation/rerank、生产级向量库和后台 job 恢复。
 6. 多用户认证与 workspace 共享。
 

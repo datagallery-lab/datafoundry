@@ -43,8 +43,14 @@ export class ContextBudgetAllocator {
   }
 
   private resolveSourceLimits(request: AllocateRequest): Record<string, number> {
+    const prefixProfiles = request.toolName
+      ? Object.entries(this.sourceLimitProfiles)
+          .filter(([key]) => key.endsWith("*") && request.toolName?.startsWith(key.slice(0, -1)))
+          .map(([, value]) => value)
+      : [];
     return {
       ...(this.sourceLimitProfiles[request.sourceType] ?? {}),
+      ...Object.assign({}, ...prefixProfiles),
       ...(request.toolName ? this.sourceLimitProfiles[request.toolName] ?? {} : {})
     };
   }

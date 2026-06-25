@@ -88,6 +88,7 @@ npm run smoke:files
 npm run smoke:skills
 npm run smoke:run-identity
 npm run smoke:data-gateway
+npm run smoke:server-datasources
 npm run smoke:sql
 npm run smoke:agent
 npm run smoke:task-state
@@ -95,6 +96,7 @@ npm run smoke:context-architecture
 npm run smoke:context-compilation
 npm run smoke:docs
 npm run smoke:conversation-memory
+npm run smoke:knowledge-policy
 npm run smoke:long-term-memory
 npm run smoke:memory-recall-shadow
 npm run smoke:config-api
@@ -102,8 +104,10 @@ npm run smoke:collaboration
 npm run smoke:workspace
 npm run smoke:tool-state
 npm run smoke:api-context
+npm run smoke:agui-stream
 npm run smoke:copilotkit-run
 npm run smoke:api
+npm run test:ingress-messages
 npm run test:web
 npm run build:web
 ```
@@ -117,6 +121,7 @@ Expected coverage:
   and skill ToolObservationAdapter coverage.
 - `smoke:run-identity`: AG-UI thread/run identity, idempotent replay, parent run persistence.
 - `smoke:data-gateway`: datasource registration, support types, schema inspection, preview.
+- `smoke:server-datasources`: optional real PostgreSQL/MySQL/ClickHouse E2E via `ODA_E2E_*` env vars.
 - `smoke:sql`: readonly SQL guard, limit, timeout, audit log, artifact creation.
 - `smoke:agent`: Mastra tool registry policy, inspect-before-SQL enforcement, SQL audit.
 - `smoke:task-state`: Mastra task tools persist through the application-level LibSQL runtime.
@@ -127,6 +132,7 @@ Expected coverage:
 - `smoke:conversation-memory`: server-authoritative user/assistant history, spoofed client history rejection,
   message-level idempotency, summary replacement, pluggable summarizer persistence, and read-only Mastra WorkingMemory
   consumption without duplicate tagged summaries.
+- `smoke:knowledge-policy`: KB `retrievalTopK`, `scoreThreshold`, and chunk policy consumption.
 - `smoke:long-term-memory`: durable long-term memory records, local relevance retrieval, governed context injection,
   automatic extraction, sensitive candidate filtering, and ContextPackage source attribution.
 - `smoke:memory-recall-shadow`: compares local long-term memory retrieval with Knowledge retrieval and records the
@@ -137,8 +143,10 @@ Expected coverage:
 - `smoke:workspace`: Mastra workspace tools and local sandbox integration.
 - `smoke:tool-state`: concurrent tool state isolation.
 - `smoke:api-context`: CopilotKit/AG-UI request context extraction for datasource and user input.
+- `smoke:agui-stream`: Mastra stream normalization, custom token usage, and workspace custom event projection.
 - `smoke:copilotkit-run`: `/api/copilotkit` end-to-end run, event ordering, persistence, replay, and suspended state.
 - `smoke:api` / `smoke:copilotkit`: Agent Runtime startup, `/api/copilotkit` CORS, and AG-UI request validation.
+- `test:ingress-messages`: AG-UI multimodal ingress normalization for chat uploads and image/document parts.
 
 ## Run Agent Runtime
 

@@ -16,7 +16,9 @@ import {
   createWorkspaceConfigItem,
   defaultWorkspaceConfig,
   setLiveBackendCapabilities,
+  setLiveDatasourceTypes,
   setLiveMentionSupport,
+  setLivePendingCapabilities,
   type WorkspaceConfigItem,
   type WorkspaceConfigKind,
   type WorkspaceConfigStore,
@@ -93,6 +95,18 @@ export function useWorkspaceConfigApi(): WorkspaceApiState & WorkspaceApiActions
     const caps = await configApi.getCapabilities();
     const mapped = applyBackendCapabilities(caps);
     setLiveBackendCapabilities(mapped);
+    setLivePendingCapabilities({
+      "datasource.fieldMasking": caps["datasource.fieldMasking"] ?? false,
+      "datasource.introspectionPolicy": caps["datasource.introspectionPolicy"] ?? false,
+      "datasource.samplePolicy": caps["datasource.samplePolicy"] ?? false,
+      "kb.chunking": caps["kb.chunking"] ?? false,
+      "kb.citationPolicy": caps["kb.citationPolicy"] ?? false,
+      "kb.scope": caps["kb.scope"] ?? false,
+      "llm.advancedSampling": caps["llm.advancedSampling"] ?? false,
+      "mcp.stdio": caps["mcp.stdio"] ?? false,
+      "mcp.toolPolicy": caps["mcp.toolPolicy"] ?? false,
+      "skill.resourceBinding": caps["skill.resourceBinding"] ?? false,
+    });
     setLiveMentionSupport(mentionSupportFromCapabilities());
     setCapabilitiesReady(true);
   }, []);
@@ -102,10 +116,12 @@ export function useWorkspaceConfigApi(): WorkspaceApiState & WorkspaceApiActions
     setError(null);
     try {
       await applyCapabilities();
-      const [workspace, defaults] = await Promise.all([
+      const [workspace, defaults, datasourceTypes] = await Promise.all([
         configApi.getWorkspaceConfig(),
         configApi.getRunDefaults(),
+        configApi.listDatasourceTypes(),
       ]);
+      setLiveDatasourceTypes(datasourceTypes);
       setWorkspaceConfig(workspaceConfigDtoToStore(workspace));
       setRunDefaults(defaults);
     } catch (err) {

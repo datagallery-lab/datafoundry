@@ -694,15 +694,33 @@ export const DB_MODE_OPTIONS = [
 
 const DB_SERVER_TYPES = DB_SERVER_TYPE_OPTIONS.map((option) => option.value);
 const DB_PENDING_TYPES = DB_PENDING_TYPE_OPTIONS.map((option) => option.value);
+const DB_FILE_TYPES = DB_TYPE_OPTIONS.map((option) => option.value);
+let liveDbTypeOptions: Array<{ value: string; label: string; enabled: boolean }> = [
+  ...DB_TYPE_OPTIONS.map((option) => ({ ...option, enabled: true })),
+  ...DB_SERVER_TYPE_OPTIONS.map((option) => ({ ...option, enabled: true })),
+  ...DB_PENDING_TYPE_OPTIONS.map((option) => ({ ...option, enabled: false })),
+];
+
+export function setLiveDatasourceTypes(
+  types: Array<{ enabled: boolean; label: string; name: string }>,
+): void {
+  if (types.length === 0) {
+    return;
+  }
+  liveDbTypeOptions = types.map((type) => ({
+    value: type.name,
+    label: type.label,
+    enabled: type.enabled,
+  }));
+}
 
 function dbTypeOf(settings: Record<string, string>): string {
   return settings.type ?? "duckdb";
 }
 
 function isDbExtendedPendingType(settings: Record<string, string>): boolean {
-  return DB_PENDING_TYPES.includes(
-    dbTypeOf(settings) as (typeof DB_PENDING_TYPES)[number],
-  );
+  const type = dbTypeOf(settings);
+  return isDbExtendedType(type) && !isDbTypeEnabled(type);
 }
 
 function isDbBigQueryType(settings: Record<string, string>): boolean {
@@ -713,27 +731,41 @@ function isDbSnowflakeType(settings: Record<string, string>): boolean {
   return dbTypeOf(settings) === "snowflake";
 }
 
+function isDbClickHouseType(settings: Record<string, string>): boolean {
+  return dbTypeOf(settings) === "clickhouse";
+}
+
 function isDbServerType(settings: Record<string, string>): boolean {
   const type = dbTypeOf(settings);
   return (
     DB_SERVER_TYPES.includes(type as (typeof DB_SERVER_TYPES)[number]) ||
-    isDbExtendedPendingType(settings)
+    isDbExtendedType(type)
   );
+}
+
+function isDbExtendedType(type: string): boolean {
+  return (
+    DB_PENDING_TYPES.includes(type as (typeof DB_PENDING_TYPES)[number]) ||
+    liveDbTypeOptions.some((option) =>
+      option.value === type && !DB_FILE_TYPES.includes(type as (typeof DB_FILE_TYPES)[number])
+        && !DB_SERVER_TYPES.includes(type as (typeof DB_SERVER_TYPES)[number]))
+  );
+}
+
+function isDbTypeEnabled(type: string): boolean {
+  return liveDbTypeOptions.some((option) => option.value === type && option.enabled);
 }
 
 /** DB type list grows with backend capability (server types appear when on). */
 function dbTypeOptions(): Array<{ value: string; label: string }> {
-  const extendedLabel = hasPendingCapability("datasource.extendedTypes")
-    ? (option: (typeof DB_PENDING_TYPE_OPTIONS)[number]) => option.label
-    : (option: (typeof DB_PENDING_TYPE_OPTIONS)[number]) => `${option.label}（待后端）`;
-  return [
-    ...DB_TYPE_OPTIONS,
-    ...(hasCapability("datasource.server") ? DB_SERVER_TYPE_OPTIONS : []),
-    ...DB_PENDING_TYPE_OPTIONS.map((option) => ({
+  return liveDbTypeOptions
+    .filter((option) => option.enabled || isDbExtendedType(option.value))
+    .filter((option) => !DB_SERVER_TYPES.includes(option.value as (typeof DB_SERVER_TYPES)[number])
+      || hasCapability("datasource.server"))
+    .map((option) => ({
       value: option.value,
-      label: extendedLabel(option),
-    })),
-  ];
+      label: option.label,
+    }));
 }
 
 export const EMBEDDING_PROVIDER_OPTIONS = [
@@ -958,7 +990,7 @@ export const WORKSPACE_CONFIG_FIELDS: Record<
       getOptions: () => dbTypeOptions(),
       pendingOptionValues: [...DB_PENDING_TYPES],
       helpText:
-        "已实现：DuckDB / SQLite / CSV / Excel / PostgreSQL / MySQL。扩展类型标「待后端」。",
+        "已实现：DuckDB / SQLite / CSV / Excel / PostgreSQL / MySQL / ClickHouse。未启用扩展类型标「待后端」。",
       required: true,
       readOnly: (item) => !!item.builtin,
     },
@@ -1015,7 +1047,8 @@ export const WORKSPACE_CONFIG_FIELDS: Record<
       label: "Schema",
       placeholder: "public",
       requiresCapability: "datasource.server",
-      visibleWhen: (s) => isDbServerType(s) && !isDbBigQueryType(s) && !isDbSnowflakeType(s),
+      visibleWhen: (s) =>
+        isDbServerType(s) && !isDbBigQueryType(s) && !isDbSnowflakeType(s) && !isDbClickHouseType(s),
       pendingWhen: isDbExtendedPendingType,
       pendingCapability: "datasource.extendedTypes",
     },
@@ -1037,6 +1070,15 @@ export const WORKSPACE_CONFIG_FIELDS: Record<
       helpText: "写入 secretRef，读接口不回传明文。",
       requiresCapability: "datasource.server",
       visibleWhen: (s) => isDbServerType(s) && !isDbBigQueryType(s),
+      pendingWhen: isDbExtendedPendingType,
+      pendingCapability: "datasource.extendedTypes",
+    },
+    {
+      key: "secure",
+      label: "HTTPS",
+      inputType: "boolean",
+      requiresCapability: "datasource.server",
+      visibleWhen: isDbClickHouseType,
       pendingWhen: isDbExtendedPendingType,
       pendingCapability: "datasource.extendedTypes",
     },
@@ -1172,7 +1214,7 @@ export const WORKSPACE_CONFIG_FIELDS: Record<
       label: "分数阈值",
       inputType: "number",
       placeholder: "0.3",
-      helpText: "后端已落库；检索过滤待后端生效。",
+      helpText: "用于 knowledge search 和 retrieve_knowledge 的默认过滤阈值。",
     },
     {
       key: "embeddingProvider",
@@ -1259,7 +1301,7 @@ export const WORKSPACE_CONFIG_FIELDS: Record<
       inputType: "select",
       options: [...MCP_TRANSPORT_OPTIONS],
       pendingOptionValues: ["stdio"],
-      helpText: "远程 MCP 常用 SSE 或 Streamable HTTP；stdio 待后端支持。",
+      helpText: "远程 MCP 常用 SSE 或 Streamable HTTP；stdio 使用本地启动命令。",
       required: true,
       fullWidth: true,
     },
@@ -1365,7 +1407,7 @@ export const WORKSPACE_CONFIG_FIELDS: Record<
       label: "Timeout (ms)",
       inputType: "number",
       placeholder: "60000",
-      helpText: "当前主要用于 test 探测；run 阶段消费待后端。",
+      helpText: "用于 provider test 和 run 阶段超时控制。",
     },
     {
       key: "temperature",
@@ -1388,7 +1430,7 @@ export const WORKSPACE_CONFIG_FIELDS: Record<
       label: "Top P",
       inputType: "number",
       placeholder: "1.0",
-      pendingCapability: "llm.advancedSampling",
+      requiresCapability: "llm.samplingParams",
       readOnly: (item) => !!item.builtin,
     },
     {
@@ -1396,7 +1438,7 @@ export const WORKSPACE_CONFIG_FIELDS: Record<
       label: "Frequency Penalty",
       inputType: "number",
       placeholder: "0",
-      pendingCapability: "llm.advancedSampling",
+      requiresCapability: "llm.samplingParams",
       readOnly: (item) => !!item.builtin,
     },
     {
@@ -1404,7 +1446,7 @@ export const WORKSPACE_CONFIG_FIELDS: Record<
       label: "Presence Penalty",
       inputType: "number",
       placeholder: "0",
-      pendingCapability: "llm.advancedSampling",
+      requiresCapability: "llm.samplingParams",
       readOnly: (item) => !!item.builtin,
     },
     {
@@ -1451,7 +1493,7 @@ export const WORKSPACE_CONFIG_FIELDS: Record<
       key: "defaultDbIds",
       label: "默认数据源",
       placeholder: "api-duckdb-demo, sales-pg",
-      helpText: "逗号分隔 datasource id；run 时自动启用待后端。",
+      helpText: "逗号分隔 datasource id；skill 命中后自动并入本次 run。",
       pendingCapability: "skill.resourceBinding",
       fullWidth: true,
     },
@@ -1571,7 +1613,7 @@ export function isSelectOptionPending(
     return !hasPendingCapability(field.pendingCapability);
   }
   return DB_PENDING_TYPES.includes(optionValue as (typeof DB_PENDING_TYPES)[number])
-    && !hasPendingCapability("datasource.extendedTypes");
+    && !isDbTypeEnabled(optionValue);
 }
 
 /**

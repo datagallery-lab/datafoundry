@@ -3,7 +3,8 @@ export {
   createAgentMemoryRuntime,
   createDataAgent,
   createDataAgentRunContext,
-  createCustomEvent
+  createCustomEvent,
+  normalizeIngressMessages
 } from "./index.js";
 export { createDataAgentToolRegistry } from "./tools/data-tools.js";
 export { GovernedToolFactory } from "./tools/governed-tool-factory.js";

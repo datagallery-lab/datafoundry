@@ -19,6 +19,7 @@ process.env.LLM_API_KEY = "copilotkit-smoke-key";
 process.env.MASTRA_STORAGE_PATH = mastraStoragePath;
 process.env.MEMORY_EXTRACTION_TIMEOUT_MS = "25";
 process.env.METADATA_DB_PATH = metadataPath;
+process.env.SECRET_MASTER_KEY = "copilotkit-smoke-secret-master-key";
 process.env.STORAGE_ROOT_DIR = root;
 process.env.WORKSPACE_ROOT = workspaceRoot;
 
@@ -78,6 +79,13 @@ const modelProviderServer = createHttpServer(async (request, response) => {
         }]
       });
       writeStreamDone(response, body.model, "tool_calls");
+      return;
+    }
+    if (String(latestUserText).includes("触发运行超时")) {
+      await sleep(2000);
+      writeStreamChunk(response, body.model, { role: "assistant" });
+      writeStreamChunk(response, body.model, { content: "too late" });
+      writeStreamDone(response, body.model, "stop");
       return;
     }
     if (!hasToolResult) {
@@ -150,6 +158,21 @@ try {
   assert.equal(skillUploadResponse.status, 201);
   const skillUpload = await skillUploadResponse.json();
   assert.equal(skillUpload.data.validationStatus, "valid");
+
+  const timeoutProfileResponse = await fetch(`${baseUrl}/api/v1/model-profiles`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      id: "copilotkit-timeout-profile",
+      name: "CopilotKit Timeout Profile",
+      provider: "openai-compatible",
+      modelName: "copilotkit-smoke-model",
+      baseUrl: `http://127.0.0.1:${modelProviderAddress.port}`,
+      credentials: { apiKey: "copilotkit-smoke-key" },
+      timeoutMs: 1000
+    })
+  });
+  assert.equal(timeoutProfileResponse.status, 201);
 
   const runId = `copilotkit-run-smoke-${Date.now()}`;
   const threadId = `copilotkit-thread-smoke-${Date.now()}`;
@@ -233,6 +256,36 @@ try {
     "Skill run should emit a skill tool result"
   );
 
+  const timeoutRunId = `copilotkit-timeout-run-${Date.now()}`;
+  const timeoutThreadId = `copilotkit-timeout-thread-${Date.now()}`;
+  const timeoutEvents = await runCopilotKitAgent(baseUrl, {
+    threadId: timeoutThreadId,
+    runId: timeoutRunId,
+    parentRunId: undefined,
+    state: {},
+    messages: [{
+      id: "user-message-timeout",
+      role: "user",
+      content: "触发运行超时。"
+    }],
+    tools: [],
+    context: [],
+    forwardedProps: {
+      run_config: {
+        activeDatasourceId: "api-duckdb-demo",
+        activeLlmProfileId: "copilotkit-timeout-profile",
+        enabledDatasourceIds: ["api-duckdb-demo"],
+        enabledKnowledgeIds: [],
+        enabledMcpServerIds: [],
+        enabledSkillIds: []
+      }
+    }
+  });
+  assert.equal(timeoutEvents.some((event) => event.type === EventType.RUN_FINISHED), false);
+  assert.equal(timeoutEvents[timeoutEvents.length - 1]?.type, EventType.RUN_ERROR);
+  assert.equal(timeoutEvents[timeoutEvents.length - 1]?.message, "RUN_TIMEOUT:1000");
+  assertRunStatusDelta(timeoutEvents, "failed");
+
   const store = createMetadataStore({ database_path: metadataPath });
   try {
     const persisted = store.runEvents.listByRun({ user_id: "dev-user", run_id: runId });
@@ -298,7 +351,9 @@ try {
     assert.equal(
       suspendedPersistedEvents.some((event) => event.type === EventType.RUN_FINISHED),
       false,
-      "Suspended run should not persist RUN_FINISHED"
+      `Suspended run should not persist RUN_FINISHED; persisted=${suspendedPersistedEvents
+        .map((event) => event.type)
+        .join(",")}`
     );
     assertRunStatusDelta(suspendedPersistedEvents, "suspended");
     const suspendedMessages = suspendedStore.conversationMessages.listRecent({
@@ -316,7 +371,7 @@ try {
   }
 
   console.log(
-    "CopilotKit run smoke OK: endpoint run, terminal order, tool results, persistence, replay, suspended state"
+    "CopilotKit run smoke OK: endpoint run, terminal order, tool results, persistence, replay, suspended state, run timeout"
   );
 } finally {
   await closeHttpServer(server);

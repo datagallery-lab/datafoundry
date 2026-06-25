@@ -231,7 +231,8 @@ close background processes
 ```
 
 `ArtifactService` 需要扩展 `createFileArtifact()`，至少记录 `storage_path`、`mime_type`、`size_bytes`、`sha256`、
-`source_relative_path`。北向事件暂时继续携带 `preview_json`；引用化协议按已有 artifact 设计待办单独迁移。
+`source_relative_path`。当前实际实现已改为北向事件只携带 id + 摘要引用；完整 preview / content / download
+由 artifact REST 读取，文件资产由 FileAssetRef 去重和引用。
 
 ### 5.5 WorkspaceLifecycleCoordinator
 

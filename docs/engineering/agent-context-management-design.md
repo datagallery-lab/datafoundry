@@ -448,8 +448,9 @@ name = context.compiled
 value = bounded context decision metadata
 ```
 
-顶层事件类型不新增私有协议。完整敏感上下文不进入事件流。workspace 集成前，artifact `preview_json` 是临时
-北向兼容例外，会随 `CUSTOM(name="artifact")` 持久化；它仍不得包含 credential 或连接配置。
+顶层事件类型不新增私有协议。完整敏感上下文不进入事件流。artifact 北向
+`CUSTOM(name="artifact")` 只携带 id、type、name、summary、`preview_available` 等引用字段；
+完整 preview / content / download 走受控 REST。
 
 ## 10. 安全边界
 
@@ -457,7 +458,7 @@ value = bounded context decision metadata
 - system policy 只来自服务端 Agent instructions 或可信 processor，不接受客户端覆盖。
 - 客户端 tool message 必须验证其 tool-call 对应关系，不能伪造工具观察值。
 - tool execution result 只能由已注册 adapter 生成 observation package。
-- artifact 内容默认不可向模型自动展开；当前北向事件可携带 preview，完整内容仍需受控读取路径。
+- artifact 内容默认不可向模型自动展开；北向事件只携带引用，完整内容仍需受控读取路径。
 - datasource credential 永不进入 ContextItem。
 - prompt injection 标签和来源 metadata 不直接展示给模型，必要时转为服务端 policy。
 

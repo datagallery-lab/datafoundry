@@ -1,5 +1,4 @@
 import { MastraAgent } from "@ag-ui/mastra";
-import { MCPMiddleware } from "@ag-ui/mcp-middleware";
 import type { RunAgentInput } from "@ag-ui/client";
 import type { ArtifactService } from "@open-data-agent/artifacts";
 import {
@@ -18,6 +17,7 @@ import type { LongTermMemoryRecord } from "@open-data-agent/metadata";
 import type { SkillRecord, SkillSelectionResult } from "@open-data-agent/skills";
 
 import type { InteractionResume } from "./interaction-runtime-adapter.js";
+import { PolicyMcpMiddleware } from "./policy-mcp-middleware.js";
 import type { McpRuntime, ResolvedRunConfig } from "./run-config-resolver.js";
 import type { EffectiveRunConfig } from "./run-input.js";
 
@@ -40,6 +40,7 @@ type CreateRunAgentContextInput = {
   sessionId: string;
   userId: string;
   userInput: string;
+  workspaceId: string;
 };
 
 type CreateRunAgentAssemblyInput = {
@@ -54,6 +55,7 @@ type CreateRunAgentAssemblyInput = {
   longTermMemories: LongTermMemoryRecord[];
   mcpRuntime: McpRuntime;
   messages: RunAgentInput["messages"];
+  modelContextProfile?: ResolvedRunConfig["modelContextProfile"] | undefined;
   modelProvider: ResolvedRunConfig["modelProvider"];
   modelSettings?: ResolvedRunConfig["modelSettings"] | undefined;
   runContext: AgentRunContext;
@@ -61,6 +63,7 @@ type CreateRunAgentAssemblyInput = {
   skillSelection: SkillSelectionResult;
   taskStateRuntime: TaskStateRuntime;
   userId: string;
+  workspaceId: string;
   workspaceRoot: string;
 };
 
@@ -68,6 +71,7 @@ type CreateRunAgentAssemblyInput = {
 export const createRunAgentContext = (input: CreateRunAgentContextInput): AgentRunContext =>
   createDataAgentRunContext({
     user_id: input.userId,
+    workspace_id: input.workspaceId,
     session_id: input.sessionId,
     run_id: input.runId,
     user_input: input.userInput,
@@ -106,6 +110,7 @@ export const createRunAgentAssembly = async (
     ...(input.mcpRuntime.toolNames.length > 0 ? { mcpToolNames: input.mcpRuntime.toolNames } : {}),
     emitter: input.emitter,
     messages: input.messages,
+    ...(input.modelContextProfile ? { modelContextProfile: input.modelContextProfile } : {}),
     modelProvider: input.modelProvider,
     ...(input.modelSettings ? { modelSettings: input.modelSettings } : {}),
     ...(input.longTermMemories.length > 0 ? { longTermMemory: { records: input.longTermMemories } } : {}),
@@ -124,7 +129,7 @@ export const createRunAgentAssembly = async (
     resourceId: input.userId
   });
   if (input.mcpRuntime.servers.length > 0) {
-    mastraAgent.use(new MCPMiddleware(input.mcpRuntime.servers, { maxIterations: 8 }));
+    mastraAgent.use(new PolicyMcpMiddleware(input.mcpRuntime.servers, { maxIterations: 8 }));
   }
 
   return {
@@ -143,7 +148,7 @@ const resolveWorkspaceAttachments = (input: CreateRunAgentAssemblyInput): Worksp
   input.effectiveRunConfig.fileIds.map((fileId) => {
     const resolved = input.fileAssetService.getRef({
       user_id: input.userId,
-      workspace_id: "default",
+      workspace_id: input.workspaceId,
       id: fileId
     });
     return {

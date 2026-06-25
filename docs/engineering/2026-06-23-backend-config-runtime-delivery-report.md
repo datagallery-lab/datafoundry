@@ -47,7 +47,7 @@ packages/metadata
 - Knowledge：local-first `LocalKnowledgeService`，支持 FTS fallback 和可选 embedding vector retrieval。
 - MCP：使用官方 `@ag-ui/mcp-middleware`，run 内按启用 server 动态挂载 streamable HTTP / SSE。
 - Skill：multipart 上传/校验/替换，`allowedTools` 收窄工具集，active skill 注入 agent policy。
-- Artifact：detail / preview / content / download REST；北向 AG-UI 事件暂保留 preview JSON。
+- Artifact：detail / preview / content / download REST；北向 AG-UI 事件已收敛为 id + 摘要引用。
 - Audit 修复：升级 Next/Vitest，AG-UI langgraph 在 semver 范围内覆盖到 `0.0.42`。
 - 真实前端验证修复：schema / SQL tool observation adapter 支持已治理 payload 和错误 payload，
   避免 Mastra streaming 下一步 processor 因 `rows` / `tables` 缺失崩溃。
@@ -82,26 +82,28 @@ packages/metadata
 - Safari 打开 `http://127.0.0.1:3000/data-tasks`，页面正常渲染。
 - 发送 `orders` 后，前端显示 run 已完成，工具步骤 3/3 成功：`list_data_sources`、
   `inspect_schema`、`preview_table`，并渲染 `orders` 表 schema、3 行 preview 和最终回答。
-- 前端左栏仍显示 KB/MCP “后端未支持”，这是前端能力开关尚未接 `/api/v1` 的问题，不是后端缺失。
+- 当前后端 `/api/v1` 能力位已经覆盖 KB / MCP / Skill / datasource 等配置入口；前端可直接按
+  `GET /api/v1/capabilities` 与 workspace config 返回值接线。
 
 ## 5. 当前限制
 
 > 下列限制中**后端待办**已收录至 [对后端的能力要求](./2026-06-25-backend-requirements.md)。
 
-- 多用户认证未做；当前仍是固定 `dev-user`，但表结构按 `workspace_id` / `user_id` 保留隔离维度 → [R-006](./2026-06-25-backend-requirements.md#r-006-多用户认证)。
+- 产品化认证网关未做；当前为 local-first dev token 方案，运行链路和配置资源已按
+  `workspace_id` / `user_id` 隔离 → [R-006](./2026-06-25-backend-requirements.md#r-006-多用户认证)。
 - PostgreSQL / MySQL adapter 已实现，但还缺真实数据库服务端凭据下的端到端 smoke → [R-003](./2026-06-25-backend-requirements.md#r-003-pg--mysql-真实环境验收)。
 - 外部 model profile、embedding、MCP server 的真实调用依赖用户本地 secret。
-- 前端当前仍主要使用 localStorage 配置，尚未接 `/api/v1` 配置面；后端接口已经可供接入。
+- 前端配置面已开始接入 `/api/v1`；后端接口和能力位按
+  [对后端的能力要求](./2026-06-25-backend-requirements.md) 继续验收。
 - `@ag-ui/mastra@1.0.3` 仍要求旧 CopilotKit runtime canary；本轮未强行替换框架栈。
-- Artifact 北向事件仍携带 preview JSON；等 workspace artifact 模型整合后再收敛 → [R-004](./2026-06-25-backend-requirements.md#r-004-artifact-北向协议收敛)。
-- Workspace 仍为 run 级隔离，run 结束销毁；同 session 多轮无法复用文件 → [R-001](./2026-06-25-backend-requirements.md#r-001-session-级-workspace-隔离)。
+- Artifact 北向事件已按 R-004 收敛；legacy run 级 `storage_path` artifact 迁移/兼容清理仍可后续处理。
+- Workspace 已按 R-001 改为 session 级目录；回收策略仍按后续产品化生命周期治理。
 
 ## 6. 建议下一步
 
 > **未实现项统一跟踪**：[对后端的能力要求](./2026-06-25-backend-requirements.md)（含后端答复区）
 
-1. 前端将左栏配置源切换到 `/api/v1/workspace-config` 和各资源 CRUD。
+1. 用前端真实页面继续联调 `/api/v1/workspace-config`、各资源 CRUD 和 AG-UI run_config。
 2. 用真实 PostgreSQL / MySQL / model / MCP / embedding key 做集成验收 → [R-003](./2026-06-25-backend-requirements.md#r-003-pg--mysql-真实环境验收)。
-3. 开始 conversation memory 设计与实现 → [R-005](./2026-06-25-backend-requirements.md#r-005-conversation-memory)。
-4. 将 artifact 北向事件从 preview JSON 逐步改为 workspace artifact reference → [R-004](./2026-06-25-backend-requirements.md#r-004-artifact-北向协议收敛)。
-5. Session 级 Workspace 跨 run 文件持久 → [R-001](./2026-06-25-backend-requirements.md#r-001-session-级-workspace-隔离)。
+3. 继续补真实 DB 扩展 adapter 第二批（Oracle / SQL Server）和外部 RAG 能力。
+4. 产品化认证网关、workspace 共享和后台 job 生命周期治理。

@@ -8,6 +8,7 @@ import {
   createModelProviderFromEnv,
   createModelProviderFromProfile,
   probeModelProvider,
+  resolveSessionWorkspaceDir,
   STATIC_AGENT_TOOL_NAMES
 } from "@open-data-agent/agent-runtime";
 import type { LocalDataGateway } from "@open-data-agent/data-gateway";
@@ -20,19 +21,23 @@ import {
 } from "@open-data-agent/skills";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
+import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import {
   artifactRecordToSummary,
   type ConfigResourceKind,
   type ConfigResourceRecord,
+  type ConversationMessageRecord,
+  type ConversationSummaryRecord,
   type DataSourceRecord,
-  type MetadataStore
+  type MetadataStore,
+  type RunEventRecord
 } from "@open-data-agent/metadata";
 import { randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import type { IncomingMessage } from "node:http";
-import { basename, resolve, sep } from "node:path";
+import { basename, join, resolve, sep } from "node:path";
 
 import { resolveEffectiveRunConfig } from "./run-input.js";
 import { readMultipartFiles, readMultipartUpload } from "./upload-parser.js";
@@ -50,7 +55,7 @@ export type ConfigApiContext = {
 };
 
 export type ConfigApiResponse = {
-  body: ApiResult<unknown> | Buffer;
+  body: ApiResult<unknown> | Buffer | Record<string, unknown>;
   headers?: Record<string, string>;
   status: number;
 };
@@ -61,6 +66,17 @@ const RESOURCE_PATHS: Record<string, ConfigResourceKind> = {
   "model-profiles": "model-profile",
   skills: "skill"
 };
+const CHAT_UPLOAD_MAX_FILES = 1;
+const CHAT_UPLOAD_MAX_FILE_BYTES = 20 * 1024 * 1024;
+const CHAT_UPLOAD_TYPES = new Set([
+  "application/json",
+  "application/pdf",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  "text/csv",
+  "text/plain",
+  "text/tab-separated-values"
+]);
+const CHAT_UPLOAD_EXTENSIONS = new Set([".csv", ".json", ".parquet", ".pdf", ".tsv", ".txt", ".xlsx"]);
 
 /** Handle one configuration REST request, or return undefined for a non-config path. */
 export const handleConfigApiRequest = async (
@@ -89,6 +105,9 @@ const routeConfigRequest = async (
   const segments = pathname.slice("/api/v1/".length).split("/").filter(Boolean);
   const root = segments[0] ?? "";
 
+  if (root === "datasource-types" && request.method === "GET") {
+    return ok(await context.dataGateway.supportTypes());
+  }
   if (root === "datasources") {
     return handleDatasourceRequest(request, segments.slice(1), context);
   }
@@ -107,14 +126,37 @@ const routeConfigRequest = async (
   if (root === "capabilities" && request.method === "GET") {
     return ok({
       "artifact.export": true,
+      "chat.fileUpload": true,
+      "chat.imageInput": true,
+      "conversation.memory": true,
+      "datasource.fieldMasking": true,
+      "datasource.extendedTypes": true,
+      "datasource.introspectionPolicy": true,
       "datasource.queryPolicy": true,
+      "datasource.samplePolicy": true,
       "datasource.server": true,
       files: true,
+      "kb.chunking": true,
+      "kb.citationPolicy": true,
+      "kb.scope": true,
+      "llm.advancedSampling": true,
       "llm.samplingParams": true,
       knowledge: true,
       mcp: true,
+      "mcp.stdio": true,
+      "mcp.toolPolicy": true,
+      "skill.resourceBinding": true,
       skills: true
     });
+  }
+  if (root === "chat" && segments[1] === "uploads") {
+    if (request.method !== "POST") {
+      return methodNotAllowed();
+    }
+    return handleChatUpload(request, context);
+  }
+  if (root === "sessions") {
+    return handleSessionRequest(request, segments.slice(1), context);
   }
   if (root === "jobs") {
     return handleJobRequest(request, segments.slice(1), context);
@@ -133,6 +175,117 @@ const routeConfigRequest = async (
     return handleGenericResourceRequest(request, segments.slice(1), context, kind);
   }
   return fail(404, "RESOURCE_NOT_FOUND", `Unknown API resource: ${root}`);
+};
+
+const handleChatUpload = async (
+  request: IncomingMessage,
+  context: Required<ConfigApiContext>
+): Promise<ConfigApiResponse> => {
+  if (!isMultipart(request)) {
+    throw new Error("CHAT_UPLOAD_MULTIPART_REQUIRED");
+  }
+  const upload = await readMultipartFiles(request, {
+    maxFileBytes: CHAT_UPLOAD_MAX_FILE_BYTES,
+    maxFiles: CHAT_UPLOAD_MAX_FILES,
+    maxTotalBytes: CHAT_UPLOAD_MAX_FILE_BYTES
+  });
+  const file = upload.files[0];
+  if (!file) {
+    throw new Error("UPLOAD_FILE_REQUIRED");
+  }
+  if (!isSupportedChatUpload(file.filename, file.mimeType)) {
+    throw new Error("UNSUPPORTED_FILE_TYPE");
+  }
+  const sessionId = stringValue(upload.fields.sessionId)
+    ?? stringValue(upload.fields.session_id)
+    ?? stringValue(upload.fields.threadId)
+    ?? stringValue(upload.fields.thread_id)
+    ?? stringHeader(request.headers["x-session-id"])
+    ?? stringHeader(request.headers["x-thread-id"]);
+  if (!sessionId) {
+    throw new Error("CHAT_UPLOAD_SESSION_REQUIRED");
+  }
+  const workspaceRoot = process.env.WORKSPACE_ROOT ?? join(process.env.STORAGE_ROOT_DIR ?? "storage", "workspaces");
+  const workspaceDir = resolveSessionWorkspaceDir({
+    runContext: {
+      user_id: context.userId,
+      workspace_id: context.workspaceId,
+      session_id: sessionId,
+      run_id: "chat-upload",
+      selected_datasource_id: "api-duckdb-demo",
+      enabled_datasource_ids: ["api-duckdb-demo"],
+      user_input: "chat upload",
+      chat_mode: "copilotkit",
+      model_name: "chat-upload"
+    },
+    workspaceRoot
+  });
+  const uploadDir = resolve(workspaceDir, "uploads");
+  if (!uploadDir.startsWith(`${workspaceDir}${sep}`)) {
+    throw new Error("WORKSPACE_PATH_ESCAPE");
+  }
+  mkdirSync(uploadDir, { recursive: true });
+  const filename = uniqueUploadFilename(uploadDir, file.filename);
+  const targetPath = resolve(uploadDir, filename);
+  if (!targetPath.startsWith(`${uploadDir}${sep}`)) {
+    throw new Error("WORKSPACE_PATH_ESCAPE");
+  }
+  writeFileSync(targetPath, file.content);
+  return {
+    body: {
+      mimeType: file.mimeType || mimeTypeForFilename(filename),
+      path: `uploads/${filename}`,
+      size: file.content.length
+    },
+    status: 200
+  };
+};
+
+const handleSessionRequest = (
+  request: IncomingMessage,
+  segments: string[],
+  context: Required<ConfigApiContext>
+): ConfigApiResponse => {
+  const sessionId = segments[0];
+  const action = segments[1];
+  if (!sessionId) {
+    return fail(400, "BAD_REQUEST", "Session id is required.");
+  }
+  if (action !== "conversation") {
+    return methodNotAllowed();
+  }
+  if (request.method !== "GET") {
+    return methodNotAllowed();
+  }
+
+  context.metadataStore.sessions.get({ user_id: context.userId, session_id: sessionId });
+  const requestUrl = new URL(request.url ?? "/", "http://127.0.0.1");
+  const limit = clampInteger(Number.parseInt(requestUrl.searchParams.get("limit") ?? "", 10), 1, 200, 80);
+  const messages = context.metadataStore.conversationMessages.listRecent({
+    user_id: context.userId,
+    session_id: sessionId,
+    limit
+  });
+  const latestSummary = context.metadataStore.conversationSummaries.latest({
+    user_id: context.userId,
+    session_id: sessionId
+  });
+  const runIds = [...new Set([
+    ...messages.map((message) => message.run_id),
+    ...(latestSummary?.source_run_id ? [latestSummary.source_run_id] : [])
+  ])];
+  const runEventGroups = runIds.map((runId) => ({
+    runId,
+    events: context.metadataStore.runEvents.listByRun({ user_id: context.userId, run_id: runId })
+  }));
+
+  return ok({
+    sessionId,
+    messages: messages.map(conversationMessageDto),
+    ...(latestSummary ? { summary: conversationSummaryDto(latestSummary) } : {}),
+    runEventRefs: runEventGroups.map(({ runId, events }) => runEventRefDto(runId, events)),
+    toolCalls: runEventGroups.flatMap(({ runId, events }) => toolCallPairDtos(runId, events))
+  });
 };
 
 const handleDatasourceRequest = async (
@@ -184,23 +337,14 @@ const handleDatasourceRequest = async (
       progress: 10
     });
     try {
-      const schema = await context.dataGateway.inspectSchema({ user_id: context.userId, datasource_id: id });
-      context.metadataStore.configResources.upsert({
-        id,
-        workspace_id: context.workspaceId,
-        user_id: context.userId,
-        kind: "datasource-schema",
-        name: id,
-        payload: { schema, adapterSchemaVersion: 1, inspectedAt: new Date().toISOString() },
-        status: "ready"
-      });
+      const snapshot = await refreshDatasourceSchemaSnapshot(id, context);
       const completed = context.metadataStore.configJobs.update({
         id: job.id,
         workspace_id: context.workspaceId,
         user_id: context.userId,
         status: "completed",
         progress: 100,
-        result: schema
+        result: snapshot.payload.schema
       });
       return ok(completed, 202);
     } catch (error) {
@@ -215,12 +359,7 @@ const handleDatasourceRequest = async (
     }
   }
   if (action === "schema" && request.method === "GET") {
-    const snapshot = context.metadataStore.configResources.get({
-      id,
-      workspace_id: context.workspaceId,
-      user_id: context.userId,
-      kind: "datasource-schema"
-    });
+    const snapshot = await resolveDatasourceSchemaSnapshot(id, context);
     return ok(snapshot.payload);
   }
   if (request.method === "GET") {
@@ -256,6 +395,69 @@ const saveDatasource = async (
   () => saveDatasourceInTransaction(body, id, context)
 );
 
+const resolveDatasourceSchemaSnapshot = async (
+  datasourceId: string,
+  context: Required<ConfigApiContext>
+): Promise<ConfigResourceRecord> => {
+  const snapshot = context.metadataStore.configResources.find({
+    id: datasourceId,
+    workspace_id: context.workspaceId,
+    user_id: context.userId,
+    kind: "datasource-schema"
+  });
+  if (!snapshot || isDatasourceSchemaExpired(datasourceId, snapshot, context)) {
+    return refreshDatasourceSchemaSnapshot(datasourceId, context);
+  }
+  return snapshot;
+};
+
+const refreshDatasourceSchemaSnapshot = async (
+  datasourceId: string,
+  context: Required<ConfigApiContext>
+): Promise<ConfigResourceRecord> => {
+  const schema = await context.dataGateway.inspectSchema({ user_id: context.userId, datasource_id: datasourceId });
+  return context.metadataStore.configResources.upsert({
+    id: datasourceId,
+    workspace_id: context.workspaceId,
+    user_id: context.userId,
+    kind: "datasource-schema",
+    name: datasourceId,
+    payload: { schema, adapterSchemaVersion: 1, inspectedAt: new Date().toISOString() },
+    status: "ready"
+  });
+};
+
+const isDatasourceSchemaExpired = (
+  datasourceId: string,
+  snapshot: ConfigResourceRecord,
+  context: Required<ConfigApiContext>
+): boolean => {
+  const refreshIntervalSec = datasourceRefreshIntervalSec(datasourceId, context);
+  if (refreshIntervalSec === undefined) {
+    return false;
+  }
+  const inspectedAt = stringValue(snapshot.payload.inspectedAt);
+  if (!inspectedAt) {
+    return true;
+  }
+  const inspectedTime = Date.parse(inspectedAt);
+  if (!Number.isFinite(inspectedTime)) {
+    return true;
+  }
+  return Date.now() - inspectedTime >= refreshIntervalSec * 1000;
+};
+
+const datasourceRefreshIntervalSec = (
+  datasourceId: string,
+  context: Required<ConfigApiContext>
+): number | undefined => {
+  const datasource = context.metadataStore.dataSources.get({ user_id: context.userId, datasource_id: datasourceId });
+  const config = parseRecord(datasource.config_json);
+  const introspection = recordValue(config.introspection);
+  const refreshIntervalSec = numberValue(introspection?.refreshIntervalSec);
+  return refreshIntervalSec !== undefined && refreshIntervalSec > 0 ? Math.floor(refreshIntervalSec) : undefined;
+};
+
 const saveDatasourceInTransaction = (
   body: Record<string, unknown>,
   id: string,
@@ -289,7 +491,10 @@ const saveDatasourceInTransaction = (
     context.metadataStore.secrets.delete({ ref: secretRef, workspace_id: context.workspaceId, user_id: context.userId });
     secretRef = undefined;
   }
-  const policy = recordValue(body.queryPolicy);
+  const policy = recordValue(body.queryPolicy) ?? recordValue(inputConfig.queryPolicy);
+  const introspection = recordValue(body.introspection) ?? recordValue(inputConfig.introspection);
+  const samplePolicy = recordValue(body.samplePolicy) ?? recordValue(inputConfig.samplePolicy);
+  const maskFields = arrayValue(body.maskFields) ?? arrayValue(inputConfig.maskFields);
   const expectedRevision = numberValue(body.revision);
   const type = stringValue(body.type) ?? existing?.type ?? "duckdb";
   const normalizedConfig = normalizeDatasourceConfig(type, inputConfig);
@@ -297,7 +502,10 @@ const saveDatasourceInTransaction = (
   const config = {
     ...existingConfig,
     ...normalizedConfig,
-    ...(policy ? { queryPolicy: policy } : {}),
+    ...(policy ? { queryPolicy: { ...recordValue(existingConfig.queryPolicy), ...policy } } : {}),
+    ...(introspection ? { introspection: { ...recordValue(existingConfig.introspection), ...introspection } } : {}),
+    ...(samplePolicy ? { samplePolicy: { ...recordValue(existingConfig.samplePolicy), ...samplePolicy } } : {}),
+    ...(maskFields ? { maskFields } : {}),
     defaultEnabled: booleanValue(body.defaultEnabled, booleanValue(existingConfig.defaultEnabled, true)),
     builtin: booleanValue(body.builtin, booleanValue(existingConfig.builtin, false)),
     mode: "readonly"
@@ -368,6 +576,7 @@ const handleGenericResourceRequest = async (
         const content = textContentFromFile(resolved.ref.filename, file.mimeType, file.body);
         const document = await context.knowledgeService.ingestText({
           user_id: context.userId,
+          workspace_id: context.workspaceId,
           collection_id: id,
           filename: resolved.ref.filename,
           content,
@@ -408,6 +617,7 @@ const handleGenericResourceRequest = async (
     const mimeType = upload?.file.mimeType ?? stringValue(body.mimeType);
     const document = await context.knowledgeService.ingestText({
       user_id: context.userId,
+      workspace_id: context.workspaceId,
       collection_id: id,
       filename,
       content,
@@ -438,6 +648,7 @@ const handleGenericResourceRequest = async (
     const topK = numberValue(body.topK);
     return ok(await context.knowledgeService.retrieve({
       user_id: context.userId,
+      workspace_id: context.workspaceId,
       collection_id: id,
       query,
       ...(topK !== undefined ? { top_k: topK } : {})
@@ -464,7 +675,11 @@ const handleGenericResourceRequest = async (
       progress: 10
     });
     try {
-      const result = await context.knowledgeService.reindex({ user_id: context.userId, collection_id: id });
+      const result = await context.knowledgeService.reindex({
+        user_id: context.userId,
+        workspace_id: context.workspaceId,
+        collection_id: id
+      });
       return ok(context.metadataStore.configJobs.update({
         id: job.id,
         workspace_id: context.workspaceId,
@@ -891,6 +1106,107 @@ const handleArtifactRequest = (
   });
 };
 
+const conversationMessageDto = (message: ConversationMessageRecord): Record<string, unknown> => ({
+  id: message.id,
+  runId: message.run_id,
+  role: message.role,
+  source: message.source,
+  ...(message.message_id ? { messageId: message.message_id } : {}),
+  contentText: message.content_text,
+  position: message.position,
+  createdAt: message.created_at
+});
+
+const conversationSummaryDto = (summary: ConversationSummaryRecord): Record<string, unknown> => ({
+  id: summary.id,
+  ...(summary.source_run_id ? { sourceRunId: summary.source_run_id } : {}),
+  fromPosition: summary.from_position,
+  toPosition: summary.to_position,
+  summaryText: summary.summary_text,
+  createdAt: summary.created_at
+});
+
+const runEventRefDto = (runId: string, events: RunEventRecord[]): Record<string, unknown> => ({
+  runId,
+  eventCount: events.length,
+  ...(events[0] ? { firstSeq: events[0].seq } : {}),
+  ...(events.at(-1) ? { lastSeq: events.at(-1)?.seq } : {})
+});
+
+const toolCallPairDtos = (runId: string, events: RunEventRecord[]): Array<Record<string, unknown>> => {
+  const calls = new Map<string, {
+    callEventSeq?: number;
+    endEventSeq?: number;
+    resultEventSeq?: number;
+    resultMessageId?: string;
+    resultPreview?: string;
+    status: "completed" | "failed" | "pending";
+    toolCallId: string;
+    toolName?: string;
+  }>();
+
+  events.forEach((eventRecord) => {
+    const event = parseRecord(eventRecord.payload_json);
+    const type = stringValue(event.type);
+    const toolCallId = stringValue(event.toolCallId);
+    if (!type || !toolCallId) {
+      return;
+    }
+    const existing = calls.get(toolCallId) ?? { status: "pending" as const, toolCallId };
+    const toolName = stringValue(event.toolCallName) ?? existing.toolName;
+
+    if (type === "TOOL_CALL_START" || type === "TOOL_CALL_END") {
+      calls.set(toolCallId, {
+        ...existing,
+        ...(toolName ? { toolName } : {}),
+        ...(type === "TOOL_CALL_START" ? { callEventSeq: eventRecord.seq } : {}),
+        ...(type === "TOOL_CALL_END" ? { endEventSeq: eventRecord.seq } : {})
+      });
+      return;
+    }
+
+    if (type === "TOOL_CALL_RESULT") {
+      const resultMessageId = stringValue(event.messageId);
+      const resultPreview = previewToolResult(event.content);
+      calls.set(toolCallId, {
+        ...existing,
+        ...(toolName ? { toolName } : {}),
+        resultEventSeq: eventRecord.seq,
+        ...(resultMessageId ? { resultMessageId } : {}),
+        ...(resultPreview ? { resultPreview } : {}),
+        status: isToolResultError(event.content) ? "failed" : "completed"
+      });
+    }
+  });
+
+  return [...calls.values()].map((call) => ({
+    runId,
+    toolCallId: call.toolCallId,
+    status: call.status,
+    ...(call.toolName ? { toolName: call.toolName } : {}),
+    ...(call.callEventSeq !== undefined ? { callEventSeq: call.callEventSeq } : {}),
+    ...(call.endEventSeq !== undefined ? { endEventSeq: call.endEventSeq } : {}),
+    ...(call.resultEventSeq !== undefined ? { resultEventSeq: call.resultEventSeq } : {}),
+    ...(call.resultMessageId ? { resultMessageId: call.resultMessageId } : {}),
+    ...(call.resultPreview ? { resultPreview: call.resultPreview } : {})
+  }));
+};
+
+const previewToolResult = (value: unknown): string | undefined => {
+  if (value === undefined) {
+    return undefined;
+  }
+  const text = typeof value === "string" ? value : JSON.stringify(value);
+  return text.length > 1000
+    ? `${text.slice(0, 1000)}\n[tool result preview truncated: original_chars=${text.length}]`
+    : text;
+};
+
+const isToolResultError = (value: unknown): boolean => {
+  const parsed = typeof value === "string" ? tryParseRecord(value) : recordValue(value);
+  return Boolean(parsed && (parsed.isError === true || typeof parsed.error === "string"));
+};
+
 const artifactFileContent = (storagePath: string | undefined): { body: Buffer; mimeType: string } | undefined => {
   if (!storagePath) {
     return undefined;
@@ -1213,6 +1529,9 @@ const errorResponse = (error: unknown): ConfigApiResponse => {
   if (message.startsWith("DATASOURCE_TEST_FAILED")) {
     return fail(422, "DATASOURCE_TEST_FAILED", message);
   }
+  if (message.startsWith("UNSUPPORTED_FILE_TYPE")) {
+    return fail(415, "UNSUPPORTED_FILE_TYPE", message);
+  }
   if (message.startsWith("PROVIDER_") || message.startsWith("MODEL_FALLBACK")) {
     return fail(422, "PROVIDER_TEST_FAILED", message);
   }
@@ -1234,14 +1553,24 @@ const methodNotAllowed = (): ConfigApiResponse => fail(405, "BAD_REQUEST", "Meth
 const messageOf = (value: unknown): string => value instanceof Error ? value.message : String(value);
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null;
 const recordValue = (value: unknown): Record<string, unknown> | undefined => isRecord(value) ? value : undefined;
+const arrayValue = (value: unknown): unknown[] | undefined => Array.isArray(value) ? value : undefined;
 const stringValue = (value: unknown): string | undefined => typeof value === "string" && value.trim() ? value.trim() : undefined;
 const numberValue = (value: unknown): number | undefined => typeof value === "number" && Number.isFinite(value) ? value : undefined;
 const booleanValue = (value: unknown, fallback: boolean): boolean => typeof value === "boolean" ? value : fallback;
+const clampInteger = (value: number, min: number, max: number, fallback: number): number =>
+  Number.isInteger(value) ? Math.min(max, Math.max(min, value)) : fallback;
 const stringArrayValue = (value: unknown): string[] =>
   Array.isArray(value) ? value.filter((item): item is string => typeof item === "string" && item.trim().length > 0) : [];
 const parseRecord = (value: string): Record<string, unknown> => {
   const parsed: unknown = JSON.parse(value);
   return isRecord(parsed) ? parsed : {};
+};
+const tryParseRecord = (value: string): Record<string, unknown> | undefined => {
+  try {
+    return parseRecord(value);
+  } catch {
+    return undefined;
+  }
 };
 const slugify = (value: string): string => value.toLowerCase().replace(/[^a-z0-9_-]+/gu, "-").replace(/^-|-$/gu, "");
 const datasourceStatus = (status: DataSourceRecord["status"]): string => status === "ready" ? "connected" : status;
@@ -1302,6 +1631,38 @@ const findDatasource = (store: MetadataStore, userId: string, id: string): DataS
 const isMultipart = (request: IncomingMessage): boolean =>
   String(request.headers["content-type"] ?? "").toLowerCase().startsWith("multipart/form-data");
 
+const isSupportedChatUpload = (filename: string, mimeType: string): boolean => {
+  const lowerName = filename.toLowerCase();
+  const dot = lowerName.lastIndexOf(".");
+  const extension = dot >= 0 ? lowerName.slice(dot) : "";
+  return CHAT_UPLOAD_TYPES.has(mimeType.toLowerCase()) || CHAT_UPLOAD_EXTENSIONS.has(extension);
+};
+
+const uniqueUploadFilename = (directory: string, filename: string): string => {
+  const safe = safeUploadFilename(filename);
+  const dot = safe.lastIndexOf(".");
+  const stem = dot > 0 ? safe.slice(0, dot) : safe;
+  const extension = dot > 0 ? safe.slice(dot) : "";
+  let candidate = safe;
+  let counter = 2;
+  while (existsSync(resolve(directory, candidate))) {
+    candidate = `${stem}-${counter}${extension}`;
+    counter += 1;
+  }
+  return candidate;
+};
+
+const safeUploadFilename = (filename: string): string => {
+  const safe = basename(filename).replace(/[^a-zA-Z0-9._ -]+/gu, "-").trim();
+  if (!safe || safe === "." || safe === "..") {
+    return `upload-${randomUUID()}`;
+  }
+  return safe;
+};
+
+const stringHeader = (value: string | string[] | undefined): string | undefined =>
+  Array.isArray(value) ? value[0] : value;
+
 const publicPayload = (payload: Record<string, unknown>): Record<string, unknown> =>
   Object.fromEntries(Object.entries(payload).filter(([key]) =>
     !["apiKey", "api_key", "headers", "packageBase64", "packageContent", "password", "token"].includes(key)));
@@ -1341,9 +1702,9 @@ const listMcpTools = async (
   resource: ConfigResourceRecord,
   context: Required<ConfigApiContext>
 ): Promise<Array<Record<string, unknown>>> => {
-  const url = stringValue(resource.payload.serverUrl) ?? stringValue(resource.payload.url);
+  const urlOrCommand = stringValue(resource.payload.serverUrl) ?? stringValue(resource.payload.url);
   const transport = stringValue(resource.payload.transport) ?? "streamable-http";
-  if (!url || (transport !== "streamable-http" && transport !== "sse")) {
+  if (!urlOrCommand || (transport !== "streamable-http" && transport !== "sse" && transport !== "stdio")) {
     throw new Error("MCP_SERVER_CONFIG_INVALID");
   }
   const secret = resource.secret_ref
@@ -1358,20 +1719,122 @@ const listMcpTools = async (
   const requestOptions = headers ? { requestInit: { headers } } : undefined;
   const client = new Client({ name: "open-data-agent-config", version: "0.1.0" });
   try {
-    const clientTransport = transport === "sse"
-      ? new SSEClientTransport(new URL(url), requestOptions)
-      : new StreamableHTTPClientTransport(new URL(url), requestOptions);
+    const clientTransport = transport === "stdio"
+      ? new StdioClientTransport({
+          ...resolveStdioCommand(resource.payload, urlOrCommand),
+          stderr: "pipe"
+        })
+      : transport === "sse"
+        ? new SSEClientTransport(new URL(urlOrCommand), requestOptions)
+        : new StreamableHTTPClientTransport(new URL(urlOrCommand), requestOptions);
     await client.connect(clientTransport as unknown as Transport);
     const result = await client.listTools();
-    return result.tools.map((tool) => ({
-      name: tool.name,
-      description: tool.description ?? "",
-      inputSchema: tool.inputSchema
-    }));
+    const allowlist = mcpToolAllowlistValue(resource.payload.toolAllowlist);
+    return result.tools
+      .filter((tool) => matchesMcpToolAllowlist(resource.id, tool.name, allowlist))
+      .map((tool) => ({
+        name: tool.name,
+        description: tool.description ?? "",
+        inputSchema: tool.inputSchema
+      }));
   } finally {
     await client.close().catch(() => undefined);
   }
 };
+
+const resolveStdioCommand = (
+  payload: Record<string, unknown>,
+  fallbackCommand: string
+): { args?: string[]; command: string; cwd?: string; env?: Record<string, string> } => {
+  const command = stringValue(payload.command);
+  const args = stringArrayValue(payload.args);
+  const cwd = stringValue(payload.cwd);
+  const env = recordStringMapValue(payload.env);
+  if (command) {
+    return {
+      command,
+      ...(args.length > 0 ? { args } : {}),
+      ...(cwd ? { cwd } : {}),
+      ...(env ? { env } : {})
+    };
+  }
+  const parts = splitCommandLine(fallbackCommand);
+  const head = parts[0];
+  if (!head) {
+    throw new Error("MCP_STDIO_COMMAND_REQUIRED");
+  }
+  return {
+    command: head,
+    ...(parts.length > 1 ? { args: parts.slice(1) } : {}),
+    ...(cwd ? { cwd } : {}),
+    ...(env ? { env } : {})
+  };
+};
+
+const mcpToolAllowlistValue = (value: unknown): string[] | undefined => {
+  const values = Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+    : csvStringValue(value);
+  return values.length > 0 ? values : undefined;
+};
+
+const csvStringValue = (value: unknown): string[] => {
+  if (typeof value !== "string") {
+    return [];
+  }
+  return value.split(",").map((item) => item.trim()).filter(Boolean);
+};
+
+const matchesMcpToolAllowlist = (
+  serverId: string,
+  toolName: string,
+  allowlist: string[] | undefined
+): boolean => {
+  if (!allowlist || allowlist.length === 0) {
+    return true;
+  }
+  const namespaced = `mcp__${sanitizeMcpName(serverId)}__${sanitizeMcpName(toolName)}`;
+  return allowlist.includes(toolName) || allowlist.includes(namespaced);
+};
+
+const recordStringMapValue = (value: unknown): Record<string, string> | undefined => {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const entries = Object.entries(value).filter((entry): entry is [string, string] => typeof entry[1] === "string");
+  return entries.length > 0 ? Object.fromEntries(entries) : undefined;
+};
+
+const splitCommandLine = (value: string): string[] => {
+  const parts: string[] = [];
+  let current = "";
+  let quote: "\"" | "'" | undefined;
+  for (let index = 0; index < value.length; index += 1) {
+    const char = value[index];
+    if ((char === "\"" || char === "'") && !quote) {
+      quote = char;
+      continue;
+    }
+    if (char === quote) {
+      quote = undefined;
+      continue;
+    }
+    if (/\s/u.test(char ?? "") && !quote) {
+      if (current) {
+        parts.push(current);
+        current = "";
+      }
+      continue;
+    }
+    current += char;
+  }
+  if (current) {
+    parts.push(current);
+  }
+  return parts;
+};
+
+const sanitizeMcpName = (value: string): string => value.replace(/[^a-zA-Z0-9_-]/gu, "_");
 
 const resolveProfileProvider = (
   resource: ConfigResourceRecord,

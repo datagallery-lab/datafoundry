@@ -9,14 +9,21 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { z } from "zod";
 
 import { createServer as createApiServer } from "../apps/api/dist/server.js";
+import { resolveRunConfig } from "../apps/api/dist/run-config-resolver.js";
 import { resolveEffectiveRunConfig } from "../apps/api/dist/run-input.js";
 import { createTaskStateRuntime } from "../packages/agent-runtime/dist/index.js";
-import { createMetadataStore } from "../packages/metadata/dist/index.js";
+import { LocalDataGateway } from "../packages/data-gateway/dist/index.js";
+import { RunEventWriter, createMetadataStore } from "../packages/metadata/dist/index.js";
 
 const root = mkdtempSync(join(tmpdir(), "open-data-agent-config-smoke-"));
 const datasourcePath = join(root, "source.sqlite");
 const source = new DatabaseSync(datasourcePath);
-source.exec("CREATE TABLE metrics (name TEXT, value INTEGER); INSERT INTO metrics VALUES ('revenue', 42)");
+source.exec(`
+  CREATE TABLE metrics (name TEXT, value INTEGER, secret TEXT);
+  INSERT INTO metrics VALUES ('revenue', 42, 'top-secret'), ('cost', 12, 'hidden-cost');
+  CREATE TABLE private_metrics (name TEXT, value INTEGER);
+  INSERT INTO private_metrics VALUES ('internal', 999);
+`);
 source.close();
 
 process.env.EMBEDDING_API_KEY = "";
@@ -65,6 +72,10 @@ const mcpServer = createHttpServer(async (request, response) => {
     description: "Echo one value.",
     inputSchema: { value: z.string() }
   }, async ({ value }) => ({ content: [{ type: "text", text: value }] }));
+  server.registerTool("hidden", {
+    description: "Hidden tool.",
+    inputSchema: { value: z.string() }
+  }, async ({ value }) => ({ content: [{ type: "text", text: value }] }));
   const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
   await server.connect(transport);
   await transport.handleRequest(request, response);
@@ -82,6 +93,12 @@ await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
 const address = server.address();
 assert(address && typeof address === "object");
 const baseUrl = `http://127.0.0.1:${address.port}`;
+metadataStore.users.upsertDevUser({
+  id: "tenant-user",
+  email: "tenant@example.com",
+  display_name: "Tenant User",
+  dev_token: "tenant-token"
+});
 
 const requestJson = async (path, init = {}) => {
   const response = await fetch(`${baseUrl}${path}`, init);
@@ -99,7 +116,186 @@ const closeHttpServer = async (httpServer) => {
   httpServer.unref?.();
 };
 
+const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
 try {
+  const capabilities = await requestJson("/api/v1/capabilities");
+  assert.equal(capabilities.body.data["chat.fileUpload"], true);
+  assert.equal(capabilities.body.data["chat.imageInput"], true);
+  assert.equal(capabilities.body.data["datasource.fieldMasking"], true);
+  assert.equal(capabilities.body.data["datasource.extendedTypes"], true);
+  assert.equal(capabilities.body.data["datasource.introspectionPolicy"], true);
+  assert.equal(capabilities.body.data["datasource.samplePolicy"], true);
+  assert.equal(capabilities.body.data["kb.chunking"], true);
+  assert.equal(capabilities.body.data["kb.citationPolicy"], true);
+  assert.equal(capabilities.body.data["kb.scope"], true);
+  assert.equal(capabilities.body.data["llm.advancedSampling"], true);
+  assert.equal(capabilities.body.data["mcp.stdio"], true);
+  assert.equal(capabilities.body.data["mcp.toolPolicy"], true);
+  assert.equal(capabilities.body.data["skill.resourceBinding"], true);
+
+  const datasourceTypes = await requestJson("/api/v1/datasource-types");
+  assert.equal(datasourceTypes.response.status, 200);
+  assert(
+    datasourceTypes.body.data.some((type) => type.name === "sqlite" && type.enabled === true),
+    "datasource-types should expose enabled sqlite"
+  );
+  assert(
+    datasourceTypes.body.data.some((type) => type.name === "postgresql" && type.enabled === true),
+    "datasource-types should expose enabled postgresql"
+  );
+  assert(
+    datasourceTypes.body.data.some((type) => type.name === "clickhouse" && type.enabled === true),
+    "datasource-types should expose enabled clickhouse"
+  );
+  assert(
+    !datasourceTypes.body.data.some((type) => type.name === "oracle" && type.enabled === true),
+    "datasource-types must not mark unsupported extended adapters as enabled"
+  );
+
+  const invalidToken = await requestJson("/api/v1/workspace-config", {
+    headers: { "Authorization": "Bearer invalid-token" }
+  });
+  assert.equal(invalidToken.response.status, 401);
+  assert.equal(invalidToken.body.error.code, "UNAUTHORIZED");
+
+  const tenantHeaders = {
+    "Authorization": "Bearer tenant-token",
+    "Content-Type": "application/json",
+    "X-Workspace-Id": "tenant-workspace"
+  };
+  const tenantDatasource = await requestJson("/api/v1/datasources", {
+    method: "POST",
+    headers: tenantHeaders,
+    body: JSON.stringify({
+      id: "local-sqlite",
+      name: "Tenant SQLite",
+      type: "sqlite",
+      settings: { filePath: datasourcePath }
+    })
+  });
+  assert.equal(tenantDatasource.response.status, 201, JSON.stringify(tenantDatasource.body));
+  const devDatasourceListBeforeTenant = await requestJson("/api/v1/datasources");
+  assert.equal(devDatasourceListBeforeTenant.body.data.some((item) => item.id === "local-sqlite"), false);
+  const tenantKnowledge = await requestJson("/api/v1/knowledge-bases", {
+    method: "POST",
+    headers: tenantHeaders,
+    body: JSON.stringify({
+      id: "tenant-docs",
+      name: "Tenant Docs",
+      defaultEnabled: true,
+      retrievalTopK: 2
+    })
+  });
+  assert.equal(tenantKnowledge.response.status, 201);
+  const devTenantKnowledge = await requestJson("/api/v1/knowledge-bases/tenant-docs");
+  assert.equal(devTenantKnowledge.response.status, 404);
+  const tenantOtherWorkspaceKnowledge = await requestJson("/api/v1/knowledge-bases/tenant-docs", {
+    headers: {
+      "Authorization": "Bearer tenant-token",
+      "X-Workspace-Id": "other-workspace"
+    }
+  });
+  assert.equal(tenantOtherWorkspaceKnowledge.response.status, 404);
+
+  const uploadForm = new FormData();
+  uploadForm.append("sessionId", "session-smoke-upload");
+  uploadForm.append("file", new Blob(["name,value\nrevenue,42\n"], { type: "text/csv" }), "metrics.csv");
+  const chatUpload = await requestJson("/api/v1/chat/uploads", {
+    method: "POST",
+    body: uploadForm
+  });
+  assert.equal(chatUpload.response.status, 200);
+  assert.equal(chatUpload.body.path, "uploads/metrics.csv");
+  assert.equal(chatUpload.body.mimeType, "text/csv");
+  assert.equal(chatUpload.body.size > 0, true);
+
+  const conversationSessionId = "conversation-api-session";
+  const conversationRunId = "conversation-api-run";
+  metadataStore.sessions.create({ user_id: "dev-user", id: conversationSessionId, title: "conversation API" });
+  metadataStore.runs.create({
+    user_id: "dev-user",
+    id: conversationRunId,
+    session_id: conversationSessionId,
+    request_fingerprint: "conversation-api-fingerprint",
+    user_input: "inspect orders",
+    status: "completed"
+  });
+  metadataStore.conversationMessages.append({
+    user_id: "dev-user",
+    session_id: conversationSessionId,
+    run_id: conversationRunId,
+    id: `${conversationRunId}:user`,
+    role: "user",
+    source: "client",
+    message_id: "frontend-user-message",
+    content_text: "inspect orders",
+    content: { text: "inspect orders" }
+  });
+  metadataStore.conversationMessages.append({
+    user_id: "dev-user",
+    session_id: conversationSessionId,
+    run_id: conversationRunId,
+    id: `${conversationRunId}:assistant`,
+    role: "assistant",
+    source: "agent",
+    message_id: "assistant-message",
+    content_text: "orders has 2 columns",
+    content: { text: "orders has 2 columns" }
+  });
+  metadataStore.conversationSummaries.create({
+    user_id: "dev-user",
+    session_id: conversationSessionId,
+    id: `summary:${conversationSessionId}:1-1`,
+    source_run_id: conversationRunId,
+    from_position: 1,
+    to_position: 1,
+    summary_text: "User asked to inspect orders."
+  });
+  const conversationWriter = new RunEventWriter(metadataStore.runEvents);
+  conversationWriter.write({
+    user_id: "dev-user",
+    run_id: conversationRunId,
+    session_id: conversationSessionId,
+    event: { type: "TOOL_CALL_START", toolCallId: "call_schema", toolCallName: "inspect_schema" }
+  });
+  conversationWriter.write({
+    user_id: "dev-user",
+    run_id: conversationRunId,
+    session_id: conversationSessionId,
+    event: { type: "TOOL_CALL_END", toolCallId: "call_schema", toolCallName: "inspect_schema" }
+  });
+  conversationWriter.write({
+    user_id: "dev-user",
+    run_id: conversationRunId,
+    session_id: conversationSessionId,
+    event: {
+      type: "TOOL_CALL_RESULT",
+      toolCallId: "call_schema",
+      toolCallName: "inspect_schema",
+      messageId: "tool-result-message",
+      content: JSON.stringify({ columns: 2 })
+    }
+  });
+  const conversation = await requestJson(`/api/v1/sessions/${conversationSessionId}/conversation?limit=10`);
+  assert.equal(conversation.response.status, 200);
+  assert.equal(conversation.body.data.sessionId, conversationSessionId);
+  assert.equal(conversation.body.data.messages.length, 2);
+  assert.equal(conversation.body.data.messages[0].messageId, "frontend-user-message");
+  assert.equal(conversation.body.data.summary.summaryText, "User asked to inspect orders.");
+  assert.equal(conversation.body.data.runEventRefs[0].eventCount, 3);
+  assert.deepEqual(conversation.body.data.toolCalls[0], {
+    runId: conversationRunId,
+    toolCallId: "call_schema",
+    status: "completed",
+    toolName: "inspect_schema",
+    callEventSeq: 1,
+    endEventSeq: 2,
+    resultEventSeq: 3,
+    resultMessageId: "tool-result-message",
+    resultPreview: JSON.stringify({ columns: 2 })
+  });
+
   const createdDatasource = await requestJson("/api/v1/datasources", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -132,7 +328,27 @@ try {
   });
   assert.equal(introspection.body.data.id, repeatedIntrospection.body.data.id);
   const schema = await requestJson("/api/v1/datasources/local-sqlite/schema");
-  assert.equal(schema.body.data.schema.tables[0].name, "metrics");
+  assert(schema.body.data.schema.tables.some((table) => table.name === "metrics"));
+  const refreshPatch = await requestJson("/api/v1/datasources/local-sqlite", {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      revision: datasourceRevision,
+      introspection: { refreshIntervalSec: 1 }
+    })
+  });
+  assert.equal(refreshPatch.response.status, 200);
+  assert.equal(refreshPatch.body.data.config.introspection.refreshIntervalSec, 1);
+  const refreshSource = new DatabaseSync(datasourcePath);
+  refreshSource.exec("CREATE TABLE refreshed_metrics (name TEXT, value INTEGER);");
+  refreshSource.close();
+  await delay(1100);
+  const refreshedSchema = await requestJson("/api/v1/datasources/local-sqlite/schema");
+  const refreshedTableNames = refreshedSchema.body.data.schema.tables.map((table) => table.name);
+  assert(
+    refreshedTableNames.includes("refreshed_metrics"),
+    `refreshIntervalSec should refresh expired datasource schema snapshots, got ${refreshedTableNames.join(",")}`
+  );
 
   const conflict = await requestJson("/api/v1/datasources/local-sqlite", {
     method: "PATCH",
@@ -142,12 +358,99 @@ try {
   assert.equal(conflict.response.status, 409);
   assert.equal(conflict.body.error.code, "REVISION_CONFLICT");
 
+  const policyPatch = await requestJson("/api/v1/datasources/local-sqlite", {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      revision: refreshPatch.body.data.revision,
+      introspection: { tableAllowlist: ["metrics"] },
+      maskFields: ["secret"],
+      queryPolicy: { maxRows: 25, timeoutMs: 5000 },
+      samplePolicy: { allowSample: true, maxSampleRows: 1 }
+    })
+  });
+  assert.equal(policyPatch.response.status, 200);
+  assert.deepEqual(policyPatch.body.data.config.introspection.tableAllowlist, ["metrics"]);
+  assert.equal(policyPatch.body.data.config.introspection.refreshIntervalSec, 1);
+  assert.deepEqual(policyPatch.body.data.config.maskFields, ["secret"]);
+  assert.equal(policyPatch.body.data.config.samplePolicy.maxSampleRows, 1);
+  const policyGateway = new LocalDataGateway(metadataStore, {
+    defaultLimit: 100,
+    maxLimit: 1000,
+    timeoutMs: 10000
+  });
+  const policySchema = await policyGateway.inspectSchema({ user_id: "dev-user", datasource_id: "local-sqlite" });
+  assert.deepEqual(policySchema.tables.map((table) => table.name), ["metrics"]);
+  const preview = await policyGateway.previewTable({
+    user_id: "dev-user",
+    datasource_id: "local-sqlite",
+    table: "metrics",
+    limit: 10
+  });
+  assert.equal(preview.row_count, 1, "samplePolicy.maxSampleRows should cap preview rows");
+  assert.equal(preview.rows[0]?.[preview.columns.indexOf("secret")], "[MASKED]");
+  const maskedSql = await policyGateway.runSqlReadonly({
+    user_id: "dev-user",
+    datasource_id: "local-sqlite",
+    sql: "SELECT name, secret FROM metrics",
+    limit: 10
+  });
+  assert.equal(maskedSql.rows[0]?.[maskedSql.columns.indexOf("secret")], "[MASKED]");
+  await assert.rejects(
+    () => policyGateway.previewTable({
+      user_id: "dev-user",
+      datasource_id: "local-sqlite",
+      table: "private_metrics",
+      limit: 1
+    }),
+    /TABLE_NOT_ALLOWED:private_metrics/u
+  );
+  await assert.rejects(
+    () => policyGateway.runSqlReadonly({
+      user_id: "dev-user",
+      datasource_id: "local-sqlite",
+      sql: "SELECT * FROM private_metrics",
+      limit: 1
+    }),
+    /TABLE_NOT_ALLOWED:private_metrics/u
+  );
+  const sampleDisabledPatch = await requestJson("/api/v1/datasources/local-sqlite", {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      revision: policyPatch.body.data.revision,
+      samplePolicy: { allowSample: false, maxSampleRows: 1 }
+    })
+  });
+  assert.equal(sampleDisabledPatch.response.status, 200);
+  await assert.rejects(
+    () => policyGateway.previewTable({
+      user_id: "dev-user",
+      datasource_id: "local-sqlite",
+      table: "metrics",
+      limit: 1
+    }),
+    /SAMPLE_BLOCKED:local-sqlite:metrics/u
+  );
+
   const knowledgeBase = await requestJson("/api/v1/knowledge-bases", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ id: "metrics-docs", name: "Metrics Docs", retrievalTopK: 3 })
+    body: JSON.stringify({
+      id: "metrics-docs",
+      name: "Metrics Docs",
+      chunkOverlap: 25,
+      chunkSize: 1200,
+      citationRequired: true,
+      retrievalTopK: 3,
+      scope: "workspace"
+    })
   });
   assert.equal(knowledgeBase.response.status, 201);
+  assert.equal(knowledgeBase.body.data.chunkSize, 1200);
+  assert.equal(knowledgeBase.body.data.chunkOverlap, 25);
+  assert.equal(knowledgeBase.body.data.citationRequired, true);
+  assert.equal(knowledgeBase.body.data.scope, "workspace");
   const fileForm = new FormData();
   fileForm.append("files", new Blob(["Revenue metric can be imported from file assets."], {
     type: "text/markdown"
@@ -184,14 +487,22 @@ try {
 
   const skillForm = new FormData();
   skillForm.set("file", new Blob([
-    "---\nname: Smoke Skill\ndescription: Smoke skill package\nversion: 1.0.0\nallowed-tools: inspect_schema\n---\nInspect schema first.\n"
+    "---\nname: Smoke Skill\ndescription: Smoke skill package\nversion: 1.0.0\nallowed-tools: [inspect_schema, mcp__smoke-mcp__echo]\n---\nInspect schema first.\n"
   ], { type: "text/markdown" }), "SKILL.md");
+  skillForm.set("defaultDbIds", "local-sqlite");
+  skillForm.set("defaultKbIds", "metrics-docs");
+  skillForm.set("defaultMcpIds", "smoke-mcp");
+  skillForm.set("modelProfileId", "smoke-openai-compatible");
   const skill = await requestJson("/api/v1/skills", { method: "POST", body: skillForm });
   assert.equal(skill.response.status, 201);
   assert.equal(skill.body.data.validationStatus, "valid");
   assert.equal("packageContent" in skill.body.data, false);
   assert.equal(typeof skill.body.data.packageFileRefId, "string");
-  assert.deepEqual(skill.body.data.allowedTools, ["inspect_schema"]);
+  assert.deepEqual(skill.body.data.allowedTools, ["inspect_schema", "mcp__smoke-mcp__echo"]);
+  assert.deepEqual(skill.body.data.defaultDbIds, ["local-sqlite"]);
+  assert.deepEqual(skill.body.data.defaultKbIds, ["metrics-docs"]);
+  assert.deepEqual(skill.body.data.defaultMcpIds, ["smoke-mcp"]);
+  assert.equal(skill.body.data.modelProfileId, "smoke-openai-compatible");
   const skillDownload = await requestRaw(`/api/v1/skills/${skill.body.data.id}/download`);
   assert.equal(skillDownload.status, 200);
   assert.equal((await skillDownload.text()).includes("Inspect schema first."), true);
@@ -218,13 +529,18 @@ try {
       id: "smoke-mcp",
       name: "Smoke MCP",
       transport: "streamable-http",
-      serverUrl: `http://127.0.0.1:${mcpAddress.port}`
+      serverUrl: `http://127.0.0.1:${mcpAddress.port}`,
+      toolAllowlist: ["echo"],
+      timeoutMs: 5000
     })
   });
   assert.equal(mcpConfig.response.status, 201);
+  assert.deepEqual(mcpConfig.body.data.toolAllowlist, ["echo"]);
+  assert.equal(mcpConfig.body.data.timeoutMs, 5000);
   const mcpTest = await requestJson("/api/v1/mcp-servers/smoke-mcp/test", { method: "POST" });
   assert.equal(mcpTest.body.data.toolCount, 1);
   const mcpTools = await requestJson("/api/v1/mcp-servers/smoke-mcp/tools");
+  assert.equal(mcpTools.body.data.length, 1);
   assert.equal(mcpTools.body.data[0].name, "echo");
 
   const modelProfile = await requestJson("/api/v1/model-profiles", {
@@ -237,11 +553,18 @@ try {
       modelName: "smoke-model",
       baseUrl: `http://127.0.0.1:${modelProviderAddress.port}`,
       credentials: { apiKey: "smoke-model-key" },
+      topP: 0.75,
+      frequencyPenalty: 0.25,
+      presencePenalty: -0.25,
+      contextLength: 64000,
+      reasoningModel: true,
       timeoutMs: 5000
     })
   });
   assert.equal(modelProfile.response.status, 201);
   assert.equal(modelProfile.body.data.hasSecret, true);
+  assert.equal(modelProfile.body.data.contextLength, 64000);
+  assert.equal(modelProfile.body.data.reasoningModel, true);
   assert.equal(JSON.stringify(modelProfile.body).includes("smoke-model-key"), false);
   const modelProfileTest = await requestJson("/api/v1/model-profiles/smoke-openai-compatible/test", {
     method: "POST"
@@ -255,6 +578,125 @@ try {
   assert.equal(modelProbeRequest.authorization, "Bearer smoke-model-key");
   assert.equal(modelProbeRequest.body.model, "smoke-model");
   assert.equal(modelProbeRequest.body.messages.some((message) => message.role === "system"), true);
+  const resolvedModelRun = resolveRunConfig({
+    defaultDatasourceId: "api-duckdb-demo",
+    metadataStore,
+    runInput: {
+      threadId: "model-profile-session",
+      runId: "model-profile-run",
+      parentRunId: undefined,
+      messages: [{ id: "user-message-model-profile", role: "user", content: "inspect metrics" }],
+      tools: [],
+      context: [],
+      state: {},
+      forwardedProps: {
+        run_config: {
+          activeDatasourceId: "local-sqlite",
+          activeLlmProfileId: "smoke-openai-compatible",
+          enabledDatasourceIds: ["local-sqlite"],
+          enabledKnowledgeIds: [],
+          enabledMcpServerIds: [],
+          enabledSkillIds: []
+        }
+      }
+    },
+    userId: "dev-user",
+    userInput: "inspect metrics",
+    workspaceId: "default"
+  });
+  assert.equal(resolvedModelRun.modelSettings?.topP, 0.75);
+  assert.equal(resolvedModelRun.modelSettings?.frequencyPenalty, 0.25);
+  assert.equal(resolvedModelRun.modelSettings?.presencePenalty, -0.25);
+  assert.equal(resolvedModelRun.modelContextProfile?.contextWindow, 64000);
+  assert.equal(resolvedModelRun.modelContextProfile?.outputReserve, 4096);
+  assert.equal(resolvedModelRun.reasoningModel, true);
+  assert.equal(resolvedModelRun.runTimeoutMs, 5000);
+  const skillBoundRun = resolveRunConfig({
+    defaultDatasourceId: "api-duckdb-demo",
+    metadataStore,
+    runInput: {
+      threadId: "skill-bound-session",
+      runId: "skill-bound-run",
+      parentRunId: undefined,
+      messages: [{ id: "user-message-skill-bound", role: "user", content: "use smoke skill to inspect schema" }],
+      tools: [],
+      context: [],
+      state: {},
+      forwardedProps: {
+        run_config: {
+          enabledDatasourceIds: ["api-duckdb-demo"],
+          enabledKnowledgeIds: [],
+          enabledMcpServerIds: [],
+          enabledSkillIds: [skill.body.data.id],
+          skill_mode: "auto"
+        }
+      }
+    },
+    userId: "dev-user",
+    userInput: "use smoke skill to inspect schema",
+    workspaceId: "default"
+  });
+  assert.equal(skillBoundRun.effectiveRunConfig.activeDatasourceId, "local-sqlite");
+  assert.equal(skillBoundRun.effectiveRunConfig.activeLlmProfileId, "smoke-openai-compatible");
+  assert(skillBoundRun.effectiveRunConfig.enabledDatasourceIds.includes("local-sqlite"));
+  assert(skillBoundRun.effectiveRunConfig.enabledKnowledgeIds.includes("metrics-docs"));
+  assert(skillBoundRun.effectiveRunConfig.enabledMcpServerIds.includes("smoke-mcp"));
+  assert.deepEqual(skillBoundRun.mcpRuntime.toolNames, ["mcp__smoke-mcp__echo"]);
+  assert.equal(skillBoundRun.mcpRuntime.servers[0]?.timeoutMs, 5000);
+  assert.deepEqual(skillBoundRun.mcpRuntime.servers[0]?.toolAllowlist, ["echo"]);
+  const currentMetricsDocsResource = metadataStore.configResources.get({
+    id: "metrics-docs",
+    workspace_id: "default",
+    user_id: "dev-user",
+    kind: "knowledge-base"
+  });
+  const currentMcpResource = metadataStore.configResources.get({
+    id: "smoke-mcp",
+    workspace_id: "default",
+    user_id: "dev-user",
+    kind: "mcp-server"
+  });
+  const currentModelProfileResource = metadataStore.configResources.get({
+    id: "smoke-openai-compatible",
+    workspace_id: "default",
+    user_id: "dev-user",
+    kind: "model-profile"
+  });
+  assert.equal(skillBoundRun.effectiveRunConfig.resourceRevisions["datasource:local-sqlite"], sampleDisabledPatch.body.data.revision);
+  assert.equal(skillBoundRun.effectiveRunConfig.resourceRevisions["knowledge-base:metrics-docs"], currentMetricsDocsResource.revision);
+  assert.equal(skillBoundRun.effectiveRunConfig.resourceRevisions["mcp-server:smoke-mcp"], currentMcpResource.revision);
+  assert.equal(
+    skillBoundRun.effectiveRunConfig.resourceRevisions["model-profile:smoke-openai-compatible"],
+    currentModelProfileResource.revision
+  );
+  const explicitResourceRun = resolveRunConfig({
+    defaultDatasourceId: "api-duckdb-demo",
+    metadataStore,
+    runInput: {
+      threadId: "skill-explicit-session",
+      runId: "skill-explicit-run",
+      parentRunId: undefined,
+      messages: [{ id: "user-message-skill-explicit", role: "user", content: "use smoke skill to inspect schema" }],
+      tools: [],
+      context: [],
+      state: {},
+      forwardedProps: {
+        run_config: {
+          activeDatasourceId: "api-duckdb-demo",
+          enabledDatasourceIds: ["api-duckdb-demo"],
+          enabledKnowledgeIds: [],
+          enabledMcpServerIds: [],
+          enabledSkillIds: [skill.body.data.id],
+          skill_mode: "auto"
+        }
+      }
+    },
+    userId: "dev-user",
+    userInput: "use smoke skill to inspect schema",
+    workspaceId: "default"
+  });
+  assert.equal(explicitResourceRun.effectiveRunConfig.activeDatasourceId, "api-duckdb-demo");
+  assert(explicitResourceRun.effectiveRunConfig.enabledDatasourceIds.includes("local-sqlite"));
   const testedModelProfile = await requestJson("/api/v1/model-profiles/smoke-openai-compatible");
   assert.equal(testedModelProfile.body.data.connectionStatus, "connected");
   assert.equal(testedModelProfile.body.data.revision, modelProfileTest.body.data.revision);
@@ -280,7 +722,7 @@ try {
     forwardedProps: {}
   }, metadataStore, "dev-user", "api-duckdb-demo");
   assert.equal(effective.activeSkillId, undefined);
-  assert.equal(effective.resourceRevisions["datasource:local-sqlite"], datasource.body.data.revision);
+  assert.equal(effective.resourceRevisions["datasource:local-sqlite"], sampleDisabledPatch.body.data.revision);
   assert.equal(effective.resourceRevisions["model-profile:server-default"] > 0, true);
 
   const currentKnowledgeBase = await requestJson("/api/v1/knowledge-bases/metrics-docs");
@@ -344,7 +786,7 @@ try {
   }), /SECRET_NOT_FOUND/u);
 
   console.log(
-    "Config API smoke OK: secrets, datasource, revision, KB, MCP, model profile, skill, defaults, artifact, tombstone"
+    "Config API smoke OK: secrets, datasource/types/policies, chat upload, conversation, revision, KB, MCP, model profile, skill binding, defaults, artifact, tombstone"
   );
 } finally {
   await closeHttpServer(server);

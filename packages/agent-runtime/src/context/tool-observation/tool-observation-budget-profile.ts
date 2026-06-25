@@ -12,6 +12,9 @@ export const DEFAULT_TOOL_OBSERVATION_SOURCE_LIMIT_PROFILES: Record<string, Reco
     maxColumnsPerTable: SCHEMA_MAX_COLUMNS_PER_TABLE,
     maxTables: SCHEMA_MAX_TABLES
   },
+  "mcp__*": {
+    maxChars: 12000
+  },
   run_sql_readonly: {
     maxActivityRows: SQL_MAX_ACTIVITY_ROWS,
     maxCellChars: SQL_MAX_CELL_CHARS,

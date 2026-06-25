@@ -925,6 +925,34 @@ if (
   throw new Error("Expected SQL tool observation to expose source metadata contract");
 }
 
+const mcpToolName = "mcp__smoke__big_result";
+const mcpObservationBoundary = createToolObservationBoundary({
+  identity: { ...identity, runId: "context-mcp-observation-run" },
+  mcpToolNames: [mcpToolName]
+});
+const mcpPackage = mcpObservationBoundary.packager.packageToolObservation({
+  toolName: mcpToolName,
+  rawResult: "mcp-result ".repeat(2000),
+  runScope: {
+    modelName: "context-smoke-model",
+    resourceId: identity.resourceId,
+    runId: "context-mcp-observation-run",
+    sessionId: identity.sessionId
+  }
+});
+const mcpModel = mcpPackage.items.find((item) => item.visibility === "model")?.content;
+if (!mcpPackage.truncation.some((entry) => entry.sourceId === mcpToolName && entry.truncated)) {
+  throw new Error("Expected oversized MCP tool observations to produce truncation metadata");
+}
+if (
+  !mcpModel
+  || typeof mcpModel !== "object"
+  || !String(mcpModel.content ?? "").includes("[truncated")
+  || String(mcpModel.content ?? "").length > 13000
+) {
+  throw new Error("Expected oversized MCP tool observations to be bounded before model visibility");
+}
+
 const schemaAdapter = new SchemaToolObservationAdapter();
 const invalidSchemaItems = schemaAdapter.toContextItems({ error: "schema failed before returning tables" }, {
   maxChars: 4096

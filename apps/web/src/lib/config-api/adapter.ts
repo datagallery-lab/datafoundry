@@ -95,6 +95,7 @@ export function datasourceDtoToItem(dto: DatasourceDto): WorkspaceConfigItem {
       database: pickString(config, "database"),
       schema: pickString(config, "schema"),
       username: pickString(config, "username"),
+      secure: pickBooleanString(config, "secure"),
       projectId: pickString(config, "projectId"),
       dataset: pickString(config, "dataset"),
       account: pickString(config, "account"),
@@ -137,6 +138,14 @@ export function knowledgeBaseDtoToItem(dto: KnowledgeBaseDto): WorkspaceConfigIt
         payloadEmbeddingBaseUrl ??
         "https://dashscope.aliyuncs.com/compatible-mode/v1",
       embeddingApiKey: "",
+      vectorStore: dto.vectorStore ?? "local-sqlite",
+      rerankEnabled: asString(dto.rerankEnabled ?? false),
+      rerankModel: dto.rerankModel ?? "",
+      citationRequired: asString(dto.citationRequired ?? true),
+      chunkSize: asString(dto.chunkSize ?? 1600),
+      chunkOverlap: asString(dto.chunkOverlap ?? 200),
+      scope: dto.scope ?? "workspace",
+      graphRagEnabled: asString(dto.graphRagEnabled ?? false),
       indexStatus: dto.indexStatus ?? "empty",
     },
   };
@@ -158,6 +167,8 @@ export function mcpServerDtoToItem(dto: McpServerDto): WorkspaceConfigItem {
       serverUrl: dto.serverUrl ?? "",
       authType: dto.authType ?? "none",
       apiKey: "",
+      toolAllowlist: Array.isArray(dto.toolAllowlist) ? dto.toolAllowlist.join(", ") : dto.toolAllowlist ?? "",
+      timeoutMs: asString(dto.timeoutMs ?? ""),
       toolCount: asString(Array.isArray(dto.toolManifest) ? dto.toolManifest.length : 0),
       healthStatus: dto.healthStatus ?? "untested",
     },
@@ -182,8 +193,13 @@ export function modelProfileDtoToItem(dto: ModelProfileDto): WorkspaceConfigItem
       apiKey: "",
       fallbackProfileId: dto.fallbackProfileId ?? "",
       temperature: asString(dto.temperature ?? ""),
+      topP: asString(dto.topP ?? ""),
+      frequencyPenalty: asString(dto.frequencyPenalty ?? ""),
+      presencePenalty: asString(dto.presencePenalty ?? ""),
       maxTokens: asString(dto.maxTokens ?? ""),
       timeoutMs: asString(dto.timeoutMs ?? ""),
+      contextLength: asString(dto.contextLength ?? ""),
+      reasoningModel: dto.reasoningModel === true ? "true" : dto.reasoningModel === false ? "false" : "",
       connectionStatus: dto.connectionStatus ?? "untested",
     },
   };
@@ -299,6 +315,10 @@ export function itemToCreateBody(
         if (settings[key]?.trim()) config[key] = settings[key].trim();
       }
       const maxRows = parseNumber(settings.maxRows);
+      const secure = parseBoolean(settings.secure);
+      if (secure !== undefined) {
+        config.secure = secure;
+      }
       const timeoutMs = parseNumber(settings.timeoutMs);
       const denyWrite = parseBoolean(settings.denyWrite);
       if (maxRows !== undefined || timeoutMs !== undefined || denyWrite !== undefined) {
@@ -357,6 +377,20 @@ export function itemToCreateBody(
         ...(settings.embeddingBaseUrl?.trim()
           ? { embeddingBaseUrl: settings.embeddingBaseUrl.trim() }
           : {}),
+        ...(settings.vectorStore?.trim() ? { vectorStore: settings.vectorStore.trim() } : {}),
+        ...(parseBoolean(settings.rerankEnabled) !== undefined
+          ? { rerankEnabled: parseBoolean(settings.rerankEnabled) }
+          : {}),
+        ...(settings.rerankModel?.trim() ? { rerankModel: settings.rerankModel.trim() } : {}),
+        ...(parseBoolean(settings.citationRequired) !== undefined
+          ? { citationRequired: parseBoolean(settings.citationRequired) }
+          : {}),
+        ...(parseNumber(settings.chunkSize) !== undefined ? { chunkSize: parseNumber(settings.chunkSize) } : {}),
+        ...(parseNumber(settings.chunkOverlap) !== undefined ? { chunkOverlap: parseNumber(settings.chunkOverlap) } : {}),
+        ...(settings.scope?.trim() ? { scope: settings.scope.trim() } : {}),
+        ...(parseBoolean(settings.graphRagEnabled) !== undefined
+          ? { graphRagEnabled: parseBoolean(settings.graphRagEnabled) }
+          : {}),
         ...(credentials ? { credentials } : {}),
       };
     }
@@ -369,6 +403,8 @@ export function itemToCreateBody(
         transport: settings.transport ?? "streamable-http",
         serverUrl: settings.serverUrl?.trim() ?? "",
         ...(settings.authType?.trim() ? { authType: settings.authType.trim() } : {}),
+        ...(splitCsv(settings.toolAllowlist) ? { toolAllowlist: splitCsv(settings.toolAllowlist) } : {}),
+        ...(parseNumber(settings.timeoutMs) !== undefined ? { timeoutMs: parseNumber(settings.timeoutMs) } : {}),
         ...(credentials ? { credentials } : {}),
       };
     }
@@ -387,8 +423,23 @@ export function itemToCreateBody(
         ...(parseNumber(settings.temperature) !== undefined
           ? { temperature: parseNumber(settings.temperature) }
           : {}),
+        ...(parseNumber(settings.topP) !== undefined
+          ? { topP: parseNumber(settings.topP) }
+          : {}),
+        ...(parseNumber(settings.frequencyPenalty) !== undefined
+          ? { frequencyPenalty: parseNumber(settings.frequencyPenalty) }
+          : {}),
+        ...(parseNumber(settings.presencePenalty) !== undefined
+          ? { presencePenalty: parseNumber(settings.presencePenalty) }
+          : {}),
         ...(parseNumber(settings.maxTokens) !== undefined
           ? { maxTokens: parseNumber(settings.maxTokens) }
+          : {}),
+        ...(parseNumber(settings.contextLength) !== undefined
+          ? { contextLength: parseNumber(settings.contextLength) }
+          : {}),
+        ...(parseBoolean(settings.reasoningModel) !== undefined
+          ? { reasoningModel: parseBoolean(settings.reasoningModel) }
           : {}),
         ...(settings.fallbackProfileId?.trim()
           ? { fallbackProfileId: settings.fallbackProfileId.trim() }
@@ -397,7 +448,13 @@ export function itemToCreateBody(
       };
     }
     case "skill":
-      return base;
+      return {
+        ...base,
+        ...(splitCsv(settings.defaultDbIds) ? { defaultDbIds: splitCsv(settings.defaultDbIds) } : {}),
+        ...(splitCsv(settings.defaultKbIds) ? { defaultKbIds: splitCsv(settings.defaultKbIds) } : {}),
+        ...(splitCsv(settings.defaultMcpIds) ? { defaultMcpIds: splitCsv(settings.defaultMcpIds) } : {}),
+        ...(settings.modelProfileId?.trim() ? { modelProfileId: settings.modelProfileId.trim() } : {}),
+      };
     default:
       return base;
   }
@@ -434,6 +491,10 @@ export function itemToPatchBody(
         if (settings[key]?.trim()) config[key] = settings[key].trim();
       }
       const maxRows = parseNumber(settings.maxRows);
+      const secure = parseBoolean(settings.secure);
+      if (secure !== undefined) {
+        config.secure = secure;
+      }
       const timeoutMs = parseNumber(settings.timeoutMs);
       const denyWrite = parseBoolean(settings.denyWrite);
       if (maxRows !== undefined || timeoutMs !== undefined || denyWrite !== undefined) {
@@ -490,6 +551,30 @@ export function itemToPatchBody(
       if (settings.embeddingBaseUrl?.trim()) {
         body.embeddingBaseUrl = settings.embeddingBaseUrl.trim();
       }
+      if (settings.vectorStore?.trim()) {
+        body.vectorStore = settings.vectorStore.trim();
+      }
+      if (parseBoolean(settings.rerankEnabled) !== undefined) {
+        body.rerankEnabled = parseBoolean(settings.rerankEnabled);
+      }
+      if (settings.rerankModel?.trim()) {
+        body.rerankModel = settings.rerankModel.trim();
+      }
+      if (parseBoolean(settings.citationRequired) !== undefined) {
+        body.citationRequired = parseBoolean(settings.citationRequired);
+      }
+      if (parseNumber(settings.chunkSize) !== undefined) {
+        body.chunkSize = parseNumber(settings.chunkSize);
+      }
+      if (parseNumber(settings.chunkOverlap) !== undefined) {
+        body.chunkOverlap = parseNumber(settings.chunkOverlap);
+      }
+      if (settings.scope?.trim()) {
+        body.scope = settings.scope.trim();
+      }
+      if (parseBoolean(settings.graphRagEnabled) !== undefined) {
+        body.graphRagEnabled = parseBoolean(settings.graphRagEnabled);
+      }
       if (settings.embeddingApiKey?.trim()) {
         body.credentials = { apiKey: settings.embeddingApiKey.trim() };
       }
@@ -513,12 +598,39 @@ export function itemToPatchBody(
       if (parseNumber(settings.temperature) !== undefined) {
         body.temperature = parseNumber(settings.temperature);
       }
+      if (parseNumber(settings.topP) !== undefined) {
+        body.topP = parseNumber(settings.topP);
+      }
+      if (parseNumber(settings.frequencyPenalty) !== undefined) {
+        body.frequencyPenalty = parseNumber(settings.frequencyPenalty);
+      }
+      if (parseNumber(settings.presencePenalty) !== undefined) {
+        body.presencePenalty = parseNumber(settings.presencePenalty);
+      }
       if (parseNumber(settings.maxTokens) !== undefined) {
         body.maxTokens = parseNumber(settings.maxTokens);
+      }
+      if (parseNumber(settings.contextLength) !== undefined) {
+        body.contextLength = parseNumber(settings.contextLength);
+      }
+      if (parseBoolean(settings.reasoningModel) !== undefined) {
+        body.reasoningModel = parseBoolean(settings.reasoningModel);
       }
       if (settings.apiKey?.trim()) body.credentials = { apiKey: settings.apiKey.trim() };
       break;
     case "skill":
+      if (splitCsv(settings.defaultDbIds)) {
+        body.defaultDbIds = splitCsv(settings.defaultDbIds);
+      }
+      if (splitCsv(settings.defaultKbIds)) {
+        body.defaultKbIds = splitCsv(settings.defaultKbIds);
+      }
+      if (splitCsv(settings.defaultMcpIds)) {
+        body.defaultMcpIds = splitCsv(settings.defaultMcpIds);
+      }
+      if (settings.modelProfileId?.trim()) {
+        body.modelProfileId = settings.modelProfileId.trim();
+      }
       break;
   }
 

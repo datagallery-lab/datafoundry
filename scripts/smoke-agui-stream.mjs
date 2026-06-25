@@ -23,6 +23,12 @@ async function* problematicFullStream() {
   };
   yield { type: "data-workspace-metadata", data: { toolName: "write_file", toolCallId: "tc-write-1" } };
   yield {
+    type: "finish-step",
+    payload: { usage: { inputTokens: 20, outputTokens: 5, totalTokens: 25 } },
+    runId: "run-smoke",
+    from: "agent"
+  };
+  yield {
     type: "tool-error",
     payload: {
       toolCallId: "tc-write-1",
@@ -72,6 +78,7 @@ const runFinished = events.some((event) => event.type === EventType.RUN_FINISHED
 const runError = events.some((event) => event.type === EventType.RUN_ERROR);
 const toolResults = events.filter((event) => event.type === EventType.TOOL_CALL_RESULT);
 const workspaceCustom = customEvents.filter((event) => event.name === "workspace.metadata");
+const tokenUsageCustom = customEvents.filter((event) => event.name === "token_usage");
 
 assert(runFinished, "run must reach RUN_FINISHED");
 assert(!runError, "run must not emit RUN_ERROR for data-workspace-metadata chunks");
@@ -81,9 +88,12 @@ assert(
   "TOOL_CALL_RESULT must carry tool failure payload"
 );
 assert(workspaceCustom.length >= 1, "data-workspace-metadata must map to workspace.metadata CUSTOM event");
+assert(tokenUsageCustom.length >= 1, "provider usage chunks must map to token_usage CUSTOM event");
+assert(tokenUsageCustom[0].value?.input_tokens === 20, "token_usage must expose input_tokens");
 
 console.log(
-  `AG-UI stream smoke OK: events=${events.length}, toolResults=${toolResults.length}, workspaceCustom=${workspaceCustom.length}`
+  `AG-UI stream smoke OK: events=${events.length}, toolResults=${toolResults.length}, `
+    + `workspaceCustom=${workspaceCustom.length}, tokenUsageCustom=${tokenUsageCustom.length}`
 );
 process.exit(0);
 
