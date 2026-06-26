@@ -1,0 +1,40 @@
+{
+  "name": "@dataagent/tui",
+  "version": "0.0.1",
+  "description": "Terminal UI for DataAgent - CopilotKit protocol client",
+  "private": true,
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "dataagent-tui": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "start": "node dist/index.js",
+    "clean": "rm -rf dist"
+  },
+  "keywords": [
+    "dataagent",
+    "tui",
+    "copilotkit",
+    "terminal",
+    "cli"
+  ],
+  "dependencies": {
+    "@ag-ui/core": "^0.0.57",
+    "ink": "^6.8.0",
+    "ink-table": "^3.1.0",
+    "react": "^19.1.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/react": "^19.1.8",
+    "typescript": "^5.8.0"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}

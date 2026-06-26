@@ -1,0 +1,22 @@
+export { ConfigClient, ConfigClientError } from "./config-client.js";
+export type {
+  ConfigClientConfig,
+  Datasource,
+  DatasourceList,
+  DatasourceTestResult,
+  DatasourceSchemaResponse,
+  ModelProfile,
+  ModelProfileList,
+  ModelTestResult,
+  Skill,
+  SkillList,
+  McpServer,
+  McpServerList,
+  McpTestResult,
+  KnowledgeBase,
+  KnowledgeBaseList,
+  KnowledgeSearchResult,
+  WorkspaceConfig,
+  RunDefaults,
+  Capabilities,
+} from "./config-client.js";
