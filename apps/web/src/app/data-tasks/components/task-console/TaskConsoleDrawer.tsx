@@ -15,10 +15,13 @@ type TaskConsoleDrawerProps = {
   artifactFocusId?: string | null;
   onArtifactFocusHandled?: () => void;
   onClearSelection: () => void;
+  onMentionArtifact?: (artifact: DataArtifact) => void;
   isOpen: boolean;
   onClose: () => void;
   onOpenTrace: () => void;
+  onPromoteArtifact?: (artifact: DataArtifact) => Promise<void> | void;
   onSelectEvent: (eventId: string) => void;
+  promotedArtifactIds?: ReadonlySet<string>;
 };
 
 export function TaskConsoleDrawer({
@@ -31,10 +34,13 @@ export function TaskConsoleDrawer({
   artifactFocusId,
   onArtifactFocusHandled,
   onClearSelection,
+  onMentionArtifact,
   isOpen,
   onClose,
   onOpenTrace,
+  onPromoteArtifact,
   onSelectEvent,
+  promotedArtifactIds,
 }: TaskConsoleDrawerProps) {
   useEffect(() => {
     if (!isOpen) return;
@@ -67,8 +73,11 @@ export function TaskConsoleDrawer({
           onArtifactFocusHandled={onArtifactFocusHandled}
           onClearSelection={onClearSelection}
           onClose={onClose}
+          onMentionArtifact={onMentionArtifact}
           onOpenTrace={onOpenTrace}
+          onPromoteArtifact={onPromoteArtifact}
           onSelectEvent={onSelectEvent}
+          promotedArtifactIds={promotedArtifactIds}
         />
       </div>
     </div>

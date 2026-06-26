@@ -24,6 +24,8 @@ function entryKindLabel(entry: TraceEntry): string {
       return "运行";
     case "run_finished":
       return "运行";
+    case "run_suspended":
+      return "运行";
     case "run_failed":
       return "运行";
     case "tool":
@@ -39,6 +41,8 @@ function entryKindTone(entry: TraceEntry): string {
       return "bg-surface-subtle text-muted";
     case "run_finished":
       return "bg-step-success/10 text-step-success";
+    case "run_suspended":
+      return "bg-step-warning/10 text-step-warning";
     case "run_failed":
       return "bg-step-error/10 text-step-error";
     case "artifact":

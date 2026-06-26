@@ -16,6 +16,7 @@ export const kpiValueClass = "tabular text-2xl font-semibold tracking-tight text
 
 export const metricLabelClass = "text-[11px] font-medium text-muted-light";
 
+/** Secondary actions — pair with `.hitl-action-btn-secondary` in globals.css inside CopilotKit. */
 export const btnSecondaryClass =
   "cursor-pointer rounded-lg border border-border bg-surface px-3 py-1.5 text-xs font-medium text-muted transition-colors duration-200 hover:border-primary-light/40 hover:bg-surface-subtle hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-light/50";
 

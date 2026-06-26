@@ -141,4 +141,59 @@ describe("buildTraceTimeline", () => {
       toolStatus: "failed",
     });
   });
+
+  it("shows run suspended instead of finished after ask_user suspension", () => {
+    let run = createInitialLiveRun();
+    run = reduceLiveRunEvent(run, { type: "RUN_STARTED" });
+    run = reduceLiveRunEvent(run, {
+      type: "TOOL_CALL_START",
+      toolCallId: "call-ask-1",
+    });
+    run = reduceLiveRunEvent(run, {
+      type: "STATE_DELTA",
+      delta: [{ op: "replace", path: "/runStatus", value: "suspended" }],
+    });
+    run = reduceLiveRunEvent(run, { type: "RUN_FINISHED" });
+
+    const entries = buildTraceTimeline(run);
+    expect(entries.some((entry) => entry.kind === "run_finished")).toBe(false);
+    expect(entries.at(-1)).toMatchObject({
+      kind: "run_suspended",
+      title: "运行暂停",
+      summary: "Agent 等待你的回答后继续。",
+    });
+  });
+
+  it("shows run resumed after a suspended segment is archived", () => {
+    const run = {
+      ...createInitialLiveRun(),
+      runStatus: "running" as const,
+      runStartedAt: 2_000,
+      runHistory: [
+        {
+          startedAt: 1_000,
+          finishedAt: 1_500,
+          status: "suspended" as const,
+          toolCallEndIndex: 1,
+          auditEndIndex: 0,
+        },
+      ],
+      toolCalls: [
+        {
+          id: "call-ask-1",
+          name: "ask_user",
+          status: "success" as const,
+        },
+      ],
+    };
+
+    const entries = buildTraceTimeline(run);
+    expect(entries.find((entry) => entry.id === "run-history-0-suspended")).toMatchObject({
+      title: "运行暂停",
+    });
+    expect(entries.find((entry) => entry.id === "run-started-current")).toMatchObject({
+      title: "运行继续",
+      summary: "Agent 已收到你的回答，继续执行。",
+    });
+  });
 });

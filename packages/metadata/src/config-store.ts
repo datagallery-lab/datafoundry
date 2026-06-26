@@ -197,10 +197,10 @@ export class ConfigResourceRepository {
     `).all(input.workspace_id, input.user_id, input.kind).map(mapRequiredConfigResource);
   }
 
-  /** Delete one non-builtin configuration resource. */
+  /** Delete one configuration resource. Builtin skill packages remain protected. */
   delete(input: { id: string; workspace_id: string; user_id: string; kind: ConfigResourceKind }): void {
     const current = this.get(input);
-    if (current.builtin) {
+    if (current.builtin && input.kind === "skill") {
       throw new Error(`BUILTIN_RESOURCE_READONLY:${input.id}`);
     }
     this.db.prepare(`

@@ -30,10 +30,7 @@ export function BackendToolRuntimeProvider({
   );
 }
 
-/** @deprecated use BackendToolRuntimeProvider */
-export const BackendToolPhaseProvider = BackendToolRuntimeProvider;
-
-export function useBackendToolRuntime(): BackendToolRuntime {
+function useBackendToolRuntime(): BackendToolRuntime {
   return useContext(BackendToolRuntimeContext);
 }
 

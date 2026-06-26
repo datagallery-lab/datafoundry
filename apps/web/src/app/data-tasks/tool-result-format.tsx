@@ -632,10 +632,6 @@ function renderKnowledge(record: Record<string, unknown>, variant: ToolResultVar
   );
 }
 
-export function hasFormattedToolView(toolName: string, result: unknown): boolean {
-  return renderFormattedToolResult(toolName, result, "chat") !== null;
-}
-
 export function renderFormattedToolResult(
   toolName: string,
   result: unknown,

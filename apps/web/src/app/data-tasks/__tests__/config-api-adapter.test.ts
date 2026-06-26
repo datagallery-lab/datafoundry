@@ -3,6 +3,7 @@ import {
   datasourceDtoToItem,
   itemToCreateBody,
   itemToPatchBody,
+  mcpServerDtoToItem,
   workspaceConfigDtoToStore,
 } from "../../../lib/config-api/adapter";
 import { configApi } from "../../../lib/config-api/client";
@@ -176,6 +177,69 @@ describe("config api adapter", () => {
     expect(body.toolAllowlist).toEqual(["search", "fetch_page"]);
     expect(body.timeoutMs).toBe(45000);
     expect(body.credentials).toEqual({ token: "token-value" });
+  });
+
+  it("builds mcp patch body with tool policy fields", () => {
+    const body = itemToPatchBody("mcp", {
+      id: "notion",
+      name: "Notion",
+      description: "",
+      enabled: true,
+      settings: {
+        transport: "sse",
+        serverUrl: "https://example.com/mcp/sse",
+        authType: "bearer",
+        toolAllowlist: "search, fetch_page",
+        timeoutMs: "45000",
+      },
+    });
+
+    expect(body.toolAllowlist).toEqual(["search", "fetch_page"]);
+    expect(body.timeoutMs).toBe(45000);
+  });
+
+  it("builds mcp stdio create body with command args cwd env", () => {
+    const body = itemToCreateBody("mcp", {
+      id: "local-fs",
+      name: "Local FS",
+      description: "",
+      enabled: true,
+      settings: {
+        transport: "stdio",
+        serverUrl: "",
+        command: "/usr/bin/npx",
+        args: "-y @modelcontextprotocol/server-filesystem /data",
+        cwd: "/home/agent",
+        env: '{ "NODE_ENV": "production" }',
+      },
+    });
+
+    expect(body.transport).toBe("stdio");
+    expect(body.command).toBe("/usr/bin/npx");
+    expect(body.args).toEqual([
+      "-y",
+      "@modelcontextprotocol/server-filesystem",
+      "/data",
+    ]);
+    expect(body.cwd).toBe("/home/agent");
+    expect(body.env).toEqual({ NODE_ENV: "production" });
+  });
+
+  it("maps stdio mcp dto fields into workspace item settings", () => {
+    const item = mcpServerDtoToItem({
+      id: "local-fs",
+      name: "Local FS",
+      transport: "stdio",
+      command: "/usr/bin/npx",
+      args: ["-y", "pkg"],
+      cwd: "/tmp",
+      env: { FOO: "bar" },
+    });
+
+    expect(item.settings?.command).toBe("/usr/bin/npx");
+    expect(item.settings?.args).toBe("-y pkg");
+    expect(item.settings?.cwd).toBe("/tmp");
+    expect(item.settings?.env).toContain("FOO");
   });
 
   it("builds skill resource binding bodies", () => {

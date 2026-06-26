@@ -1,14 +1,16 @@
 "use client";
 
-import type { Attachment } from "@copilotkit/shared";
-import { formatFileSize } from "@copilotkit/shared";
-import { isAttachmentUnsupported } from "./chat-attachments";
+import {
+  formatFileSize,
+  isAttachmentUnsupported,
+  type ChatAttachment,
+} from "./chat-attachments";
 
 export function AttachmentChips({
   attachments,
   onRemove,
 }: {
-  attachments: Attachment[];
+  attachments: ChatAttachment[];
   onRemove: (id: string) => void;
 }) {
   if (attachments.length === 0) return null;
@@ -52,7 +54,7 @@ export function AttachmentChips({
   );
 }
 
-function AttachmentIcon({ modality }: { modality: Attachment["type"] }) {
+function AttachmentIcon({ modality }: { modality: ChatAttachment["type"] }) {
   return (
     <svg
       viewBox="0 0 20 20"

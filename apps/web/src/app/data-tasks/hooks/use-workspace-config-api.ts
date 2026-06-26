@@ -13,7 +13,6 @@ import {
 } from "../../../lib/config-api";
 import type { JobDto, RunDefaultsDto } from "../../../lib/config-api";
 import {
-  createWorkspaceConfigItem,
   defaultWorkspaceConfig,
   setLiveBackendCapabilities,
   setLiveDatasourceTypes,
@@ -49,8 +48,7 @@ export type WorkspaceApiActions = {
   updateItem: (
     kind: WorkspaceConfigKind,
     item: WorkspaceConfigItem,
-    previous?: WorkspaceConfigItem,
-  ) => Promise<void>;
+  ) => Promise<WorkspaceConfigItem>;
   deleteItem: (kind: WorkspaceConfigKind, itemId: string) => Promise<void>;
   testItem: (kind: WorkspaceConfigKind, itemId: string) => Promise<Record<string, unknown>>;
   introspectDatasource: (itemId: string) => Promise<JobDto>;
@@ -96,6 +94,7 @@ export function useWorkspaceConfigApi(): WorkspaceApiState & WorkspaceApiActions
     const mapped = applyBackendCapabilities(caps);
     setLiveBackendCapabilities(mapped);
     setLivePendingCapabilities({
+      "datasource.extendedTypes": caps["datasource.extendedTypes"] ?? false,
       "datasource.fieldMasking": caps["datasource.fieldMasking"] ?? false,
       "datasource.introspectionPolicy": caps["datasource.introspectionPolicy"] ?? false,
       "datasource.samplePolicy": caps["datasource.samplePolicy"] ?? false,
@@ -240,34 +239,40 @@ export function useWorkspaceConfigApi(): WorkspaceApiState & WorkspaceApiActions
     async (
       kind: WorkspaceConfigKind,
       item: WorkspaceConfigItem,
-      previous?: WorkspaceConfigItem,
-    ): Promise<void> => {
-      const body = itemToPatchBody(kind, item, previous);
+    ): Promise<WorkspaceConfigItem> => {
+      const body = itemToPatchBody(kind, item);
       try {
         if (kind === "db") {
           const updated = await configApi.patchDatasource(item.id, body);
-          replaceItemInStore(kind, mergeItemFromDto(kind, item, updated));
-          return;
+          const merged = mergeItemFromDto(kind, item, updated);
+          replaceItemInStore(kind, merged);
+          return merged;
         }
         if (kind === "kb") {
           const updated = await configApi.patchKnowledgeBase(item.id, body);
-          replaceItemInStore(kind, mergeItemFromDto(kind, item, updated));
-          return;
+          const merged = mergeItemFromDto(kind, item, updated);
+          replaceItemInStore(kind, merged);
+          return merged;
         }
         if (kind === "mcp") {
           const updated = await configApi.patchMcpServer(item.id, body);
-          replaceItemInStore(kind, mergeItemFromDto(kind, item, updated));
-          return;
+          const merged = mergeItemFromDto(kind, item, updated);
+          replaceItemInStore(kind, merged);
+          return merged;
         }
         if (kind === "llm") {
           const updated = await configApi.patchModelProfile(item.id, body);
-          replaceItemInStore(kind, mergeItemFromDto(kind, item, updated));
-          return;
+          const merged = mergeItemFromDto(kind, item, updated);
+          replaceItemInStore(kind, merged);
+          return merged;
         }
         if (kind === "skill") {
           const updated = await configApi.patchSkill(item.id, body);
-          replaceItemInStore(kind, mergeItemFromDto(kind, item, updated));
+          const merged = mergeItemFromDto(kind, item, updated);
+          replaceItemInStore(kind, merged);
+          return merged;
         }
+        return item;
       } catch (err) {
         if (err instanceof ConfigApiError && err.code === "REVISION_CONFLICT") {
           await refresh();
@@ -423,12 +428,4 @@ export function useWorkspaceConfigApi(): WorkspaceApiState & WorkspaceApiActions
     pollJob,
     cancelJob,
   };
-}
-
-export function createDraftWorkspaceItem(
-  kind: WorkspaceConfigKind,
-  name: string,
-  description: string,
-): WorkspaceConfigItem {
-  return createWorkspaceConfigItem(kind, name, description);
 }

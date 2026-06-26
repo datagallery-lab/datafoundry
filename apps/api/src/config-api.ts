@@ -370,9 +370,6 @@ const handleDatasourceRequest = async (
   }
   if (request.method === "DELETE") {
     const current = context.metadataStore.dataSources.get({ user_id: context.userId, datasource_id: id });
-    if (booleanValue(parseRecord(current.config_json).builtin, false)) {
-      throw new Error(`BUILTIN_RESOURCE_READONLY:${id}`);
-    }
     if (current.credential_ref) {
       context.metadataStore.secrets.delete({
         ref: current.credential_ref,
@@ -465,13 +462,6 @@ const saveDatasourceInTransaction = (
 ): Record<string, unknown> => {
   const existing = findDatasource(context.metadataStore, context.userId, id);
   const existingConfig = existing ? parseRecord(existing.config_json) : {};
-  if (existing && booleanValue(existingConfig.builtin, false)) {
-    const mutableKeys = new Set(["defaultEnabled", "revision"]);
-    const readonlyKeys = Object.keys(body).filter((key) => !mutableKeys.has(key));
-    if (readonlyKeys.length > 0) {
-      throw new Error(`BUILTIN_RESOURCE_READONLY:${id}`);
-    }
-  }
   const rawConfig = recordValue(body.config) ?? recordValue(body.connection) ?? recordValue(body.settings) ?? {};
   const inputConfig = { ...rawConfig };
   const inlinePassword = stringValue(inputConfig.password) ?? stringValue(body.password);
@@ -892,7 +882,7 @@ const saveConfigResourceInTransaction = (
     user_id: context.userId,
     kind
   });
-  if (current?.builtin) {
+  if (current?.builtin && kind === "skill") {
     const mutableKeys = new Set(["defaultEnabled", "revision"]);
     const readonlyKeys = Object.keys(body).filter((key) => !mutableKeys.has(key));
     if (readonlyKeys.length > 0) {

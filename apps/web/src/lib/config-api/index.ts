@@ -4,7 +4,6 @@ export {
   applyBackendCapabilities,
   getBackendCapabilities,
   getRuntimeCapabilities,
-  isMentionBackendSupported,
   isResourcePanelSupported,
   resetCapabilitiesForTests,
 } from "./capabilities";
@@ -31,6 +30,7 @@ export type {
   DatasourceDto,
   DatasourceTypeDto,
   DatasourceTypeParamDto,
+  FileAssetRefDto,
   JobDto,
   KnowledgeBaseDto,
   McpServerDto,

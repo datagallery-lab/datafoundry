@@ -15,7 +15,6 @@ import {
   useFrontendTool,
   useRenderTool,
 } from "@copilotkit/react-core/v2";
-import { readFileAsBase64 } from "@copilotkit/shared";
 import { useCallback, createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
 import type { ComponentProps, ComponentType, ReactNode } from "react";
 import { z } from "zod";
@@ -25,8 +24,13 @@ import {
   createChatSession,
   createWorkspaceConfigItem,
   defaultSettingsForKind,
+  emptyPerRunFileSelection,
   emptyPerRunSelection,
+  fileMentionFromArtifact,
+  fileMentionFromWorkspaceAsset,
+  filterWorkspaceAssetFiles,
   getEnabledLlmItems,
+  hasCapability,
   loadActiveLlmId,
   loadChatSessions,
   normalizeLlmSettings,
@@ -37,14 +41,17 @@ import {
   normalizeSkillSettings,
   parseSkillPackageFile,
   prunePerRunSelection,
+  removePerRunFileMention,
   removePerRunMention,
   resolveActiveLlmProfileId,
   resolveActiveDatasourceId,
   skillSettingsFromPackage,
   SKILL_PACKAGE_LOCAL_ONLY_KEYS,
+  workspaceConfigItemDraftEquals,
   summarizeConfigItems,
   summarizeLlmItems,
   summarizeMcpItems,
+  togglePerRunFileMention,
   togglePerRunMention,
   toggleSessionResource,
   renderableConfigFields,
@@ -55,7 +62,6 @@ import {
   normalizeKbSettings,
   normalizeLlmSettingsExtended,
   visibleConfigFields,
-  type WorkspaceConfigStore,
   WORKSPACE_CONFIG_BADGE_CLASS,
   WORKSPACE_CONFIG_SHORT_LABEL,
 } from "./data-task-state";
@@ -68,14 +74,16 @@ import {
   type ConfigTestPresentation,
 } from "./config-test-result";
 import { useWorkspaceConfigApi } from "./hooks/use-workspace-config-api";
-import type { JobDto } from "../../lib/config-api";
+import type { FileAssetRefDto, JobDto } from "../../lib/config-api";
 import type {
   CopilotChatAssistantMessageProps,
   JsonSerializable,
 } from "@copilotkit/react-core/v2";
 import type {
   ChatSession,
-  MentionResource,
+  DataArtifact,
+  FileMentionResource,
+  PerRunFileSelection,
   ParsedSkillPackage,
   PerRunMentionKind,
   PerRunSelection,
@@ -86,12 +94,14 @@ import type {
 import { TaskConsole } from "./components/task-console/TaskConsole";
 import { TaskConsoleDrawer } from "./components/task-console/TaskConsoleDrawer";
 import { TraceOverlay } from "./components/task-console/TraceOverlay";
+import { WorkspaceFileAssetsPanel } from "./components/task-console/WorkspaceFileAssetsPanel";
 import { DataTaskChatInput } from "./components/chat/DataTaskChatInput";
 import {
   CHAT_ATTACHMENT_ACCEPT,
   CHAT_ATTACHMENT_MAX_BYTES,
   buildMessageContent,
   createChatOnUpload,
+  readFileAsBase64,
 } from "./components/chat/chat-attachments";
 import { scheduleChatTextareaResize } from "./components/chat/use-chat-textarea-autoresize";
 import {
@@ -136,11 +146,12 @@ import {
   DataTaskWelcomeScreen,
   DatasourceChip,
 } from "./components/chat/DataTaskWelcome";
+import { SessionConversationRestore } from "./components/chat/SessionConversationRestore";
+import { SessionArtifactsRestore } from "./components/chat/SessionArtifactsRestore";
 import { CollaborationInterruptHandler } from "./components/chat/CollaborationInterruptHandler";
 import {
   CollaborationResponseBridge,
   CollaborationResponsesProvider,
-  CollaborationChoiceBubble,
   useThreadCollaborationResponsesForChat,
 } from "./components/chat/collaboration-responses";
 import {
@@ -148,8 +159,8 @@ import {
   useAgentMessageRenderGeneration,
 } from "./agent-message-render-sync";
 import { resolveStepAssistantFlags } from "./step-assistant-state";
-import { btnSecondaryClass, sectionLabelClass } from "./ui-tokens";
-import { getBackendCapabilities, getConfigApiBaseUrl } from "../../lib/config-api";
+import { btnSecondaryClass, panelTitleClass, sectionLabelClass } from "./ui-tokens";
+import { getBackendCapabilities, isResourcePanelSupported } from "../../lib/config-api";
 
 export const dynamic = "force-dynamic";
 
@@ -172,18 +183,7 @@ async function uploadChatDataFile(
   file: File,
   sessionId?: string | null,
 ): Promise<{ path: string; mimeType: string; size: number }> {
-  const form = new FormData();
-  form.append("file", file);
-  if (sessionId) {
-    form.append("sessionId", sessionId);
-    form.append("threadId", sessionId);
-  }
-  const res = await fetch(`${getConfigApiBaseUrl()}/api/v1/chat/uploads`, {
-    method: "POST",
-    body: form,
-  });
-  if (!res.ok) throw new Error("CHAT_UPLOAD_FAILED");
-  return (await res.json()) as { path: string; mimeType: string; size: number };
+  return configApi.uploadChatFile(file, sessionId);
 }
 
 function StableDataTaskChatInput({
@@ -196,11 +196,17 @@ function StableDataTaskChatInput({
   const { copilotkit } = useCopilotKit();
 
   const capabilities = useCallback(
-    () => ({
-      imageInput: getBackendCapabilities()["chat.imageInput"],
-      fileUpload: getBackendCapabilities()["chat.fileUpload"],
-    }),
-    [],
+    () => {
+      if (!bindings.capabilitiesReady) {
+        return { imageInput: false, fileUpload: false };
+      }
+      const caps = getBackendCapabilities();
+      return {
+        imageInput: caps["chat.imageInput"],
+        fileUpload: caps["chat.fileUpload"],
+      };
+    },
+    [bindings.capabilitiesReady],
   );
   const onUpload = useMemo(
     () =>
@@ -217,7 +223,7 @@ function StableDataTaskChatInput({
       enabled: true,
       accept: CHAT_ATTACHMENT_ACCEPT,
       maxSize: CHAT_ATTACHMENT_MAX_BYTES,
-      onUpload,
+      onUpload: onUpload as never,
       onUploadFailed: ({ message }) => {
         if (typeof window !== "undefined") {
           console.warn(`[attachments] ${message}`);
@@ -236,6 +242,7 @@ function StableDataTaskChatInput({
       inputProps.onSubmitMessage?.(value);
     }
     bindings.onClearPerRunMentions();
+    bindings.onClearPerRunFileMentions();
     requestAnimationFrame(scheduleChatTextareaResize);
   };
   return (
@@ -387,8 +394,8 @@ function DataTaskWorkspace() {
     workspaceConfig,
     runDefaults,
     loading: workspaceLoading,
+    capabilitiesReady,
     error: workspaceError,
-    patchLocalItem,
     createItem,
     updateItem,
     deleteItem,
@@ -413,15 +420,21 @@ function DataTaskWorkspace() {
   const [configPanel, setConfigPanel] = useState<WorkspaceConfigPanelKey | null>(
     null,
   );
+  const [workspaceFilesPanelOpen, setWorkspaceFilesPanelOpen] = useState(false);
+  const [workspaceFileAssets, setWorkspaceFileAssets] = useState<FileAssetRefDto[]>([]);
+  const [promotedArtifactIds, setPromotedArtifactIds] = useState<Set<string>>(
+    () => new Set(),
+  );
   const [activeLlmId, setActiveLlmId] = useState<string | null>(null);
   const [activeJob, setActiveJob] = useState<JobDto | null>(null);
   const [configActionError, setConfigActionError] = useState<string | null>(null);
-  const saveTimersRef = useRef(new Map<string, ReturnType<typeof setTimeout>>());
-  const itemSnapshotRef = useRef(new Map<string, WorkspaceConfigItem>());
   // Layer-2 per-run override (DESIGN.md): `@`-selected capabilities for the next
   // run only. Cleared after each send so it never mutates workspace defaults.
   const [perRunSelection, setPerRunSelection] = useState<PerRunSelection>(
     emptyPerRunSelection,
+  );
+  const [perRunFiles, setPerRunFiles] = useState<PerRunFileSelection>(
+    emptyPerRunFileSelection,
   );
   const [chatColumnWidth, setChatColumnWidth] = useState(1280);
   const [layoutHydrated, setLayoutHydrated] = useState(false);
@@ -446,6 +459,16 @@ function DataTaskWorkspace() {
     () => setPerRunSelection(emptyPerRunSelection()),
     [],
   );
+  const togglePerRunFileMentionItem = useCallback((resource: FileMentionResource) => {
+    setPerRunFiles((current) => togglePerRunFileMention(current, resource));
+  }, []);
+  const removePerRunFileMentionItem = useCallback((resource: FileMentionResource) => {
+    setPerRunFiles((current) => removePerRunFileMention(current, resource));
+  }, []);
+  const clearPerRunFileMentions = useCallback(
+    () => setPerRunFiles(emptyPerRunFileSelection()),
+    [],
+  );
 
   const {
     width: rightPanelWidth,
@@ -453,14 +476,15 @@ function DataTaskWorkspace() {
     onResizeStart: onRightPanelResizeStart,
     resetWidth: resetRightPanelWidth,
   } = usePanelResize({
-    enabled: !configPanel,
+    enabled: !configPanel && !workspaceFilesPanelOpen,
   });
 
+  const sidePanelOpen = Boolean(configPanel) || workspaceFilesPanelOpen;
   const {
     containerRef: gridRef,
     viewportWidth: workspaceViewportWidth,
     isViewportResizing,
-  } = useWorkspaceViewportWidth(!configPanel);
+  } = useWorkspaceViewportWidth(!sidePanelOpen);
 
   const {
     sidebarCollapsed,
@@ -472,11 +496,11 @@ function DataTaskWorkspace() {
     userSidebarCollapsed,
     userRightPanelOpen,
     rightPanelWidth,
-    enabled: !configPanel && layoutHydrated,
+    enabled: !sidePanelOpen && layoutHydrated,
   });
 
   const isRightConsoleVisible =
-    !configPanel &&
+    !sidePanelOpen &&
     ((canDockRightPanel && rightPanelOpen) || isConsoleDrawerOpen);
 
   useEffect(() => {
@@ -487,6 +511,7 @@ function DataTaskWorkspace() {
 
   const openTaskConsole = useCallback(() => {
     if (canDockRightPanel) {
+      setUserSidebarCollapsed(true);
       setUserRightPanelOpen(true);
       return;
     }
@@ -500,6 +525,20 @@ function DataTaskWorkspace() {
     }
     setIsConsoleDrawerOpen(false);
   }, [canDockRightPanel]);
+
+  const openConfigPanel = useCallback((panel: WorkspaceConfigPanelKey) => {
+    setWorkspaceFilesPanelOpen(false);
+    setConfigPanel((current) => (current === panel ? null : panel));
+  }, []);
+
+  const openWorkspaceFilesPanel = useCallback(() => {
+    setConfigPanel(null);
+    setWorkspaceFilesPanelOpen((open) => !open);
+  }, []);
+
+  const closeWorkspaceFilesPanel = useCallback(() => {
+    setWorkspaceFilesPanelOpen(false);
+  }, []);
 
   useEffect(() => {
     if (!canDockRightPanel || !isConsoleDrawerOpen) return;
@@ -539,22 +578,17 @@ function DataTaskWorkspace() {
     if (activeLlmId) persistActiveLlmId(activeLlmId);
   }, [activeLlmId]);
 
-  const schedulePersistItem = useCallback(
-    (kind: WorkspaceConfigKind, item: WorkspaceConfigItem) => {
-      const previous = itemSnapshotRef.current.get(item.id);
-      itemSnapshotRef.current.set(item.id, item);
-      const existing = saveTimersRef.current.get(item.id);
-      if (existing) clearTimeout(existing);
-      saveTimersRef.current.set(
-        item.id,
-        setTimeout(() => {
-          void updateItem(kind, item, previous).catch((error: unknown) => {
-            setConfigActionError(
-              error instanceof Error ? error.message : "保存配置失败",
-            );
-          });
-        }, 600),
-      );
+  const saveConfigItem = useCallback(
+    async (kind: WorkspaceConfigKind, item: WorkspaceConfigItem) => {
+      setConfigActionError(null);
+      try {
+        return await updateItem(kind, item);
+      } catch (error) {
+        setConfigActionError(
+          error instanceof Error ? error.message : "保存配置失败",
+        );
+        throw error;
+      }
     },
     [updateItem],
   );
@@ -596,32 +630,6 @@ function DataTaskWorkspace() {
     [createItem],
   );
 
-  const updateConfigItem = useCallback(
-    (
-      kind: WorkspaceConfigKind,
-      itemId: string,
-      patch: Partial<
-        Pick<WorkspaceConfigItem, "name" | "description" | "enabled" | "settings">
-      >,
-    ) => {
-      patchLocalItem(kind, itemId, patch);
-      const current = workspaceConfig[kind].find((item) => item.id === itemId);
-      if (!current) return;
-      const next: WorkspaceConfigItem = {
-        ...current,
-        ...patch,
-        settings: patch.settings
-          ? { ...current.settings, ...patch.settings }
-          : current.settings,
-      };
-      if (!itemSnapshotRef.current.has(itemId)) {
-        itemSnapshotRef.current.set(itemId, current);
-      }
-      schedulePersistItem(kind, next);
-    },
-    [patchLocalItem, schedulePersistItem, workspaceConfig],
-  );
-
   const activeSession =
     sessions.find((session) => session.id === activeSessionId) ??
     sessions[0] ??
@@ -636,6 +644,10 @@ function DataTaskWorkspace() {
   const mentionResources = useMemo(
     () => buildMentionResources(workspaceConfig, activeSession),
     [workspaceConfig, activeSession],
+  );
+  const workspaceFileMentionResources = useMemo(
+    () => filterWorkspaceAssetFiles(workspaceFileAssets).map(fileMentionFromWorkspaceAsset),
+    [workspaceFileAssets],
   );
 
   const toggleSessionResourceItem = useCallback(
@@ -659,6 +671,41 @@ function DataTaskWorkspace() {
     );
   }, [workspaceConfig, activeSession]);
   const { liveRun, sessionUsage, latestQuestion } = useLiveRun();
+  const refreshWorkspaceFileAssets = useCallback(async () => {
+    if (!capabilitiesReady || !hasCapability("files")) {
+      setWorkspaceFileAssets([]);
+      return;
+    }
+    const response = await configApi.listWorkspaceFiles();
+    setWorkspaceFileAssets(filterWorkspaceAssetFiles(response.files ?? []));
+  }, [capabilitiesReady]);
+  useEffect(() => {
+    if (!capabilitiesReady || !hasCapability("files")) {
+      setWorkspaceFileAssets([]);
+      return;
+    }
+    let cancelled = false;
+    void refreshWorkspaceFileAssets()
+      .then(() => {
+        if (!cancelled) {
+          // refreshWorkspaceFileAssets already updated state.
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setWorkspaceFileAssets([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [capabilitiesReady, refreshWorkspaceFileAssets]);
+  const sessionArtifactFileMentionResources = useMemo(
+    () => liveRun.artifacts.map(fileMentionFromArtifact).filter((file): file is FileMentionResource => Boolean(file)),
+    [liveRun.artifacts],
+  );
+  const fileMentionResources = useMemo(
+    () => [...sessionArtifactFileMentionResources, ...workspaceFileMentionResources],
+    [sessionArtifactFileMentionResources, workspaceFileMentionResources],
+  );
 
   const backendToolPhases = useMemo(
     () => buildBackendToolPhaseMap(liveRun.toolCalls),
@@ -686,6 +733,7 @@ function DataTaskWorkspace() {
     setActiveSessionId(next.id);
     setSelection(null);
     setConfigPanel(null);
+    setWorkspaceFilesPanelOpen(false);
   }, []);
 
   const agentContext = useMemo<JsonSerializable>(
@@ -735,6 +783,7 @@ function DataTaskWorkspace() {
       defaultDatasourceId: runDefaults?.activeDatasourceId ?? defaultDatasourceId,
       session: activeSession,
       perRunSelection,
+      perRunFiles,
     }),
   });
   // General workspace state for debugging / richer context (secrets stripped).
@@ -748,30 +797,43 @@ function DataTaskWorkspace() {
       activeLlmId,
       llmOptions: enabledLlmOptions,
       onActiveLlmChange: setActiveLlmId,
-      onOpenLlmConfig: () => setConfigPanel("llm"),
+      onOpenLlmConfig: () => openConfigPanel("llm"),
       mentionResources,
       perRunSelection,
       onTogglePerRunMention: togglePerRunMentionItem,
       onRemovePerRunMention: removePerRunMentionItem,
       onClearPerRunMentions: clearPerRunMentions,
+      fileMentionResources,
+      perRunFiles,
+      onTogglePerRunFileMention: togglePerRunFileMentionItem,
+      onRemovePerRunFileMention: removePerRunFileMentionItem,
+      onClearPerRunFileMentions: clearPerRunFileMentions,
       workspaceConfig,
       activeSession,
       onToggleSessionResource: toggleSessionResourceItem,
       chatColumnWidth,
       agentId,
       activeThreadId: activeThreadId ?? null,
+      capabilitiesReady,
     }),
     [
       activeLlmId,
       activeSession,
       activeThreadId,
+      capabilitiesReady,
       chatColumnWidth,
       enabledLlmOptions,
+      openConfigPanel,
       mentionResources,
       perRunSelection,
+      perRunFiles,
+      fileMentionResources,
       togglePerRunMentionItem,
       removePerRunMentionItem,
       clearPerRunMentions,
+      togglePerRunFileMentionItem,
+      removePerRunFileMentionItem,
+      clearPerRunFileMentions,
       toggleSessionResourceItem,
       workspaceConfig,
     ],
@@ -815,6 +877,25 @@ function DataTaskWorkspace() {
     [openTaskConsole],
   );
 
+  const mentionArtifactFile = useCallback((artifact: DataArtifact) => {
+    const fileMention = fileMentionFromArtifact(artifact);
+    if (!fileMention) return;
+    setPerRunFiles((current) => togglePerRunFileMention(current, fileMention));
+  }, []);
+
+  const promoteArtifactToWorkspace = useCallback(
+    async (artifact: DataArtifact) => {
+      await configApi.promoteArtifact(artifact.id);
+      setPromotedArtifactIds((current) => {
+        const next = new Set(current);
+        next.add(artifact.id);
+        return next;
+      });
+      await refreshWorkspaceFileAssets();
+    },
+    [refreshWorkspaceFileAssets],
+  );
+
   return (
     <BackendToolRuntimeProvider runtime={backendToolRuntime}>
       <DataTaskToolRenderers onSelectToolAction={handleSelectToolAction} />
@@ -828,7 +909,7 @@ function DataTaskWorkspace() {
       ].join(" ")}
       style={{
         gridTemplateColumns: getWorkspaceGridTemplateColumns({
-          isConfigPanelOpen: Boolean(configPanel),
+          isConfigPanelOpen: sidePanelOpen,
           isRightPanelOpen: canDockRightPanel && rightPanelOpen,
           sidebarCollapsed,
           rightPanelWidth,
@@ -838,12 +919,16 @@ function DataTaskWorkspace() {
       <SessionPane
         activeSessionId={activeSession?.id ?? null}
         activeConfigPanel={configPanel}
+        activeFilesPanel={workspaceFilesPanelOpen}
         collapsed={sidebarCollapsed}
         filteredSessions={filteredSessions}
         query={query}
         sessionCount={sessions.length}
+        workspaceFileCount={workspaceFileAssets.length}
+        capabilitiesReady={capabilitiesReady}
         onCreateSession={createSession}
-        onOpenConfigPanel={setConfigPanel}
+        onOpenConfigPanel={openConfigPanel}
+        onOpenFilesPanel={openWorkspaceFilesPanel}
         onQueryChange={setQuery}
         onToggleCollapse={() =>
           setUserSidebarCollapsed((value) => !value)
@@ -852,11 +937,17 @@ function DataTaskWorkspace() {
           setActiveSessionId(sessionId);
           setSelection(null);
           setConfigPanel(null);
+          setWorkspaceFilesPanelOpen(false);
         }}
         workspaceConfig={workspaceConfig}
       />
 
-      {configPanel ? (
+      {workspaceFilesPanelOpen ? (
+        <WorkspaceFilesLibraryPanel
+          onBack={closeWorkspaceFilesPanel}
+          onFilesChange={setWorkspaceFileAssets}
+        />
+      ) : configPanel ? (
         <div className="flex min-h-0 min-w-0 flex-col overflow-hidden bg-surface">
           {(workspaceError || configActionError) && (
             <div className="border-b border-rose-200 bg-rose-50 px-4 py-2 text-xs text-rose-800">
@@ -874,12 +965,10 @@ function DataTaskWorkspace() {
             panel={configPanel}
             items={workspaceConfig[configPanel]}
             workspaceConfig={workspaceConfig}
-            loading={workspaceLoading}
+            loading={workspaceLoading || !capabilitiesReady}
             onAdd={(payload, skillFile) => addConfigItem(configPanel, payload, skillFile)}
             onBack={() => setConfigPanel(null)}
-            onUpdateItem={(itemId, patch) =>
-              updateConfigItem(configPanel, itemId, patch)
-            }
+            onSaveItem={(item) => saveConfigItem(configPanel, item)}
             onDeleteItem={(itemId) => deleteItem(configPanel, itemId)}
             onTestItem={(itemId) => testItem(configPanel, itemId)}
             onIntrospect={
@@ -939,6 +1028,7 @@ function DataTaskWorkspace() {
         rightPanelOpen={isRightConsoleVisible}
         onOpenRightPanel={openTaskConsole}
         onChatColumnWidthChange={setChatColumnWidth}
+        capabilitiesReady={capabilitiesReady}
       />
       </DataTaskChatInputBindingsProvider>
 
@@ -968,10 +1058,13 @@ function DataTaskWorkspace() {
             onArtifactFocusHandled={() => setArtifactFocusId(null)}
             onClearSelection={() => setSelection(null)}
             onClose={closeTaskConsole}
+            onMentionArtifact={mentionArtifactFile}
             onOpenTrace={() => setIsTraceOpen(true)}
+            onPromoteArtifact={promoteArtifactToWorkspace}
             onSelectEvent={(eventId) =>
               setSelection({ type: "action", id: eventId })
             }
+            promotedArtifactIds={promotedArtifactIds}
           />
         </div>
       ) : null}
@@ -988,12 +1081,15 @@ function DataTaskWorkspace() {
         artifactFocusId={artifactFocusId}
         onArtifactFocusHandled={() => setArtifactFocusId(null)}
         onClearSelection={() => setSelection(null)}
-        isOpen={!canDockRightPanel && isConsoleDrawerOpen}
+        onMentionArtifact={mentionArtifactFile}
+        isOpen={!sidePanelOpen && !canDockRightPanel && isConsoleDrawerOpen}
         onClose={() => setIsConsoleDrawerOpen(false)}
         onOpenTrace={() => setIsTraceOpen(true)}
+        onPromoteArtifact={promoteArtifactToWorkspace}
         onSelectEvent={(eventId) =>
           setSelection({ type: "action", id: eventId })
         }
+        promotedArtifactIds={promotedArtifactIds}
       />
 
       <TraceOverlay
@@ -1254,17 +1350,6 @@ function toolStatusToneClass(
   return "border-border bg-slate-50 text-slate-600";
 }
 
-function ToolSection({ title, children }: { title: string; children: ReactNode }) {
-  return (
-    <div className="mt-2">
-      <div className="mb-1 text-[11px] font-semibold uppercase tracking-[0.06em] text-slate-400">
-        {title}
-      </div>
-      {children}
-    </div>
-  );
-}
-
 function ToolPendingHint({ displayStatus }: { displayStatus: ToolDisplayStatus }) {
   if (displayStatus === "complete") return null;
   const toneClass =
@@ -1327,14 +1412,6 @@ function renderToolFailureCard(name: string, result?: string) {
       message={failure.message}
       hint={failure.hint}
     />
-  );
-}
-
-function SqlCodeBlock({ sql }: { sql: string }) {
-  return (
-    <pre className="max-h-60 overflow-auto rounded-lg bg-code-bg p-2.5 text-[11px] leading-5 text-slate-100">
-      <code>{sql}</code>
-    </pre>
   );
 }
 
@@ -1661,7 +1738,11 @@ const ChatLiveRunContext = createContext<LiveRun | null>(null);
 
 function firstLine(text: string): string {
   const line = text.split("\n").find((segment) => segment.trim().length > 0) ?? "";
-  const trimmed = line.replace(/^[#>*\-\s]+/, "").trim();
+  const trimmed = line
+    .replace(/^[#>*\-\s]+/, "")
+    .replace(/\*\*([^*]+)\*\*/g, "$1")
+    .replace(/`([^`]+)`/g, "$1")
+    .trim();
   return trimmed.length > 64 ? `${trimmed.slice(0, 64)}…` : trimmed;
 }
 
@@ -1719,7 +1800,6 @@ function StepAssistantMessage({
     isFinalAnswer,
     isFinalAnswerComplete,
     isThought,
-    linkedCollaboration,
   } = resolveStepAssistantFlags({
     message,
     messages: allMessages,
@@ -1756,43 +1836,48 @@ function StepAssistantMessage({
   }, [isActive]);
 
   if (!content && !hasToolCalls) {
-    if (!isWaitingForUser) return null;
-    const theme = getStepCardTheme({
-      hasToolCalls: false,
-      isActive: false,
-      isFinalAnswer: false,
-      isFinalAnswerComplete: false,
-      isThought: false,
-      isCollaborationStep: true,
-      isWaitingForUser: true,
-    });
-    return (
-      <div
-        data-copilotkit
-        className={[
-          "copilotKitMessage copilotKitAssistantMessage step-enter mb-4 rounded-2xl border p-3 shadow-sm",
-          theme.card,
-        ].join(" ")}
-      >
-        <div className="flex items-center gap-2">
-          <StepBadge
-            stepNumber={0}
-            isFinalAnswer={false}
-            isStreamingAnswer={false}
-            isActive={false}
-            isThought={false}
-            isCollaboration={true}
-            isWaitingForUser={true}
-          />
-          <span className={`text-[11px] font-semibold uppercase tracking-[0.06em] ${theme.label}`}>
-            等待你的回答
-          </span>
+    if (isWaitingForUser) {
+      const theme = getStepCardTheme({
+        hasToolCalls: false,
+        isActive: false,
+        isFinalAnswer: false,
+        isFinalAnswerComplete: false,
+        isThought: false,
+        isCollaborationStep: true,
+        isWaitingForUser: true,
+      });
+      return (
+        <div
+          data-copilotkit
+          className={[
+            "copilotKitMessage copilotKitAssistantMessage step-enter mb-4 rounded-2xl border p-3 shadow-sm",
+            theme.card,
+          ].join(" ")}
+        >
+          <div className="flex items-center gap-2">
+            <StepBadge
+              stepNumber={0}
+              isFinalAnswer={false}
+              isStreamingAnswer={false}
+              isActive={false}
+              isThought={false}
+              isCollaboration={true}
+              isWaitingForUser={true}
+            />
+            <span className={`text-xs font-semibold ${theme.label}`}>
+              等待你的回答
+            </span>
+          </div>
+          <p className="mt-2 text-sm leading-6 text-muted">
+            Agent 已暂停，请在下方卡片中选择或填写你的回答。
+          </p>
         </div>
-        <p className="mt-2 text-sm leading-6 text-muted">
-          Agent 已暂停，请在下方卡片中选择或填写你的回答。
-        </p>
-      </div>
-    );
+      );
+    }
+    if (isActive) {
+      return <ChatAssistantLoadingRow />;
+    }
+    return null;
   }
 
   const toolNames = toolCalls
@@ -1807,17 +1892,17 @@ function StepAssistantMessage({
     ? "等待你的回答"
     : isCollaborationStep
       ? isCollaborationComplete || !isActive
-        ? "用户协作 · 已完成"
-        : "用户协作"
+        ? "已采纳你的选择"
+        : "请你选择"
       : isFinalAnswer
         ? isActive
-          ? "回答中"
-          : "最终回答"
+          ? "正在回答"
+          : "回答"
         : hasToolCalls
           ? content
-            ? "ReAct 回合"
-            : "工具调用"
-          : "思考 · 观察";
+            ? "思考并调用工具"
+            : "调用工具"
+          : "思考";
 
   const summary =
     content && hasToolCalls
@@ -1847,11 +1932,18 @@ function StepAssistantMessage({
         isActive ? "step-streaming" : "",
       ].join(" ")}
     >
-      <button
-        type="button"
+      <div
+        role="button"
+        tabIndex={0}
         onClick={toggleCollapsed}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            toggleCollapsed();
+          }
+        }}
         aria-expanded={!collapsed}
-        className="flex w-full items-center gap-2 text-left"
+        className="flex w-full cursor-pointer items-center gap-2 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-light/50"
       >
         <StepBadge
           stepNumber={stepNumber}
@@ -1862,7 +1954,7 @@ function StepAssistantMessage({
           isCollaboration={isCollaborationStep || isWaitingForUser}
           isWaitingForUser={isWaitingForUser}
         />
-        <span className={`text-[11px] font-semibold uppercase tracking-[0.06em] ${theme.label}`}>
+        <span className={`text-xs font-semibold ${theme.label}`}>
           {kindLabel}
         </span>
         {isActive && (
@@ -1881,7 +1973,7 @@ function StepAssistantMessage({
           )}
           <StepChevron expanded={!collapsed} />
         </div>
-      </button>
+      </div>
 
       {collapsed ? (
         <button
@@ -1927,11 +2019,6 @@ function StepAssistantMessage({
                   className={`caret-blink ml-0.5 inline-block h-4 w-[2px] -translate-y-[1px] align-middle ${theme.caret}`}
                 />
               )}
-              {linkedCollaboration ? (
-                <div className="mt-3">
-                  <CollaborationChoiceBubble response={linkedCollaboration} inline />
-                </div>
-              ) : null}
             </div>
           ) : hasToolCalls ? (
             <StepSubPanel
@@ -2136,6 +2223,31 @@ function StepChevron({ expanded }: { expanded: boolean }) {
   );
 }
 
+function ChatAssistantLoadingRow() {
+  return (
+    <div
+      data-copilotkit
+      className="copilotKitMessage copilotKitAssistantMessage mb-4 flex items-center gap-2.5"
+      role="status"
+      aria-live="polite"
+      aria-label="Agent 思考中"
+    >
+      <StepBadge
+        stepNumber={0}
+        isFinalAnswer={false}
+        isStreamingAnswer={false}
+        isActive={true}
+        isThought={true}
+      />
+      <span className="chat-assistant-loading-pill inline-flex items-center gap-1 rounded-full px-3 py-1.5 text-sm font-medium">
+        <span className="chat-assistant-loading-dot h-1.5 w-1.5 rounded-full" />
+        <span className="chat-assistant-loading-dot h-1.5 w-1.5 rounded-full" />
+        <span className="chat-assistant-loading-dot h-1.5 w-1.5 rounded-full" />
+      </span>
+    </div>
+  );
+}
+
 function StepBadge({
   stepNumber,
   isFinalAnswer,
@@ -2254,26 +2366,34 @@ function ChevronIcon({ direction }: { direction: "left" | "right" }) {
 function SessionPane({
   activeSessionId,
   activeConfigPanel,
+  activeFilesPanel,
   collapsed,
   filteredSessions,
   query,
   sessionCount,
+  workspaceFileCount,
   workspaceConfig,
+  capabilitiesReady,
   onCreateSession,
   onOpenConfigPanel,
+  onOpenFilesPanel,
   onQueryChange,
   onToggleCollapse,
   onSelectSession,
 }: {
   activeSessionId: string | null;
   activeConfigPanel: WorkspaceConfigPanelKey | null;
+  activeFilesPanel: boolean;
   collapsed: boolean;
   filteredSessions: ChatSession[];
   query: string;
   sessionCount: number;
+  workspaceFileCount: number;
   workspaceConfig: WorkspaceConfigStore;
+  capabilitiesReady: boolean;
   onCreateSession: () => void;
   onOpenConfigPanel: (panel: WorkspaceConfigPanelKey) => void;
+  onOpenFilesPanel: () => void;
   onQueryChange: (value: string) => void;
   onToggleCollapse: () => void;
   onSelectSession: (sessionId: string) => void;
@@ -2301,6 +2421,20 @@ function SessionPane({
           className="flex h-8 w-8 cursor-pointer items-center justify-center rounded-lg bg-primary text-white transition-colors duration-200 hover:bg-primary-light"
         >
           <span className="text-lg leading-none">+</span>
+        </button>
+        <button
+          type="button"
+          onClick={onOpenFilesPanel}
+          title="工作区文件"
+          aria-label="工作区文件"
+          className={[
+            "flex h-8 w-8 cursor-pointer items-center justify-center rounded-lg border border-border text-xs font-semibold transition-colors duration-200",
+            activeFilesPanel
+              ? "bg-slate-100 text-slate-950"
+              : "text-muted hover:bg-surface-subtle hover:text-foreground",
+          ].join(" ")}
+        >
+          F
         </button>
         <span className="tabular mt-1 rounded-full bg-surface-subtle px-1.5 py-0.5 text-[10px] font-medium text-muted-light">
           {sessionCount}
@@ -2348,18 +2482,21 @@ function SessionPane({
             kind="kb"
             value={configSummary("kb", workspaceConfig)}
             active={activeConfigPanel === "kb"}
+            unsupported={capabilitiesReady && !isResourcePanelSupported("kb")}
             onClick={() => onOpenConfigPanel("kb")}
           />
           <ConfigRow
             kind="mcp"
             value={configSummary("mcp", workspaceConfig)}
             active={activeConfigPanel === "mcp"}
+            unsupported={capabilitiesReady && !isResourcePanelSupported("mcp")}
             onClick={() => onOpenConfigPanel("mcp")}
           />
           <ConfigRow
             kind="skill"
             value={configSummary("skill", workspaceConfig)}
             active={activeConfigPanel === "skill"}
+            unsupported={capabilitiesReady && !isResourcePanelSupported("skill")}
             onClick={() => onOpenConfigPanel("skill")}
           />
           <ConfigRow
@@ -2367,6 +2504,12 @@ function SessionPane({
             value={configSummary("llm", workspaceConfig)}
             active={activeConfigPanel === "llm"}
             onClick={() => onOpenConfigPanel("llm")}
+          />
+          <WorkspaceFilesRow
+            count={workspaceFileCount}
+            active={activeFilesPanel}
+            unsupported={capabilitiesReady && !hasCapability("files")}
+            onClick={onOpenFilesPanel}
           />
         </div>
       </div>
@@ -2421,6 +2564,39 @@ function SessionPane({
   );
 }
 
+function WorkspaceFilesLibraryPanel({
+  onBack,
+  onFilesChange,
+}: {
+  onBack: () => void;
+  onFilesChange: (files: FileAssetRefDto[]) => void;
+}) {
+  return (
+    <div className="flex min-h-0 min-w-0 flex-col overflow-hidden bg-surface">
+      <div className="flex h-16 items-center gap-3 border-b border-border px-4">
+        <button
+          type="button"
+          onClick={onBack}
+          className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-muted-light transition hover:bg-surface-subtle hover:text-foreground"
+          aria-label="返回对话"
+          title="返回对话"
+        >
+          <ChevronIcon direction="left" />
+        </button>
+        <div className="min-w-0">
+          <h2 className={panelTitleClass}>工作区文件</h2>
+          <p className="text-xs text-muted-light">
+            跨会话可复用的文件资产，可在 @ 文件中注入到后续任务。
+          </p>
+        </div>
+      </div>
+      <div className="min-h-0 flex-1 overflow-y-auto p-4">
+        <WorkspaceFileAssetsPanel onFilesChange={onFilesChange} />
+      </div>
+    </div>
+  );
+}
+
 function WorkspaceConfigPanel({
   panel,
   items,
@@ -2428,7 +2604,7 @@ function WorkspaceConfigPanel({
   loading,
   onAdd,
   onBack,
-  onUpdateItem,
+  onSaveItem,
   onDeleteItem,
   onTestItem,
   onIntrospect,
@@ -2451,12 +2627,7 @@ function WorkspaceConfigPanel({
     skillFile?: File,
   ) => Promise<string>;
   onBack: () => void;
-  onUpdateItem: (
-    itemId: string,
-    patch: Partial<
-      Pick<WorkspaceConfigItem, "name" | "description" | "enabled" | "settings">
-    >,
-  ) => void;
+  onSaveItem: (item: WorkspaceConfigItem) => Promise<WorkspaceConfigItem>;
   onDeleteItem: (itemId: string) => Promise<void>;
   onTestItem: (itemId: string) => Promise<Record<string, unknown>>;
   onIntrospect?: (itemId: string) => Promise<void>;
@@ -2467,6 +2638,7 @@ function WorkspaceConfigPanel({
 }) {
   const [detailItemId, setDetailItemId] = useState<string | null>(null);
   const [draftItem, setDraftItem] = useState<WorkspaceConfigItem | null>(null);
+  const [editDraftItem, setEditDraftItem] = useState<WorkspaceConfigItem | null>(null);
   const [pendingSkillFile, setPendingSkillFile] = useState<File | null>(null);
   const [panelError, setPanelError] = useState<string | null>(null);
   const [actionBusy, setActionBusy] = useState(false);
@@ -2475,17 +2647,36 @@ function WorkspaceConfigPanel({
   useEffect(() => {
     setDetailItemId(null);
     setDraftItem(null);
+    setEditDraftItem(null);
     setPendingSkillFile(null);
     setPanelError(null);
     setTestResult(null);
   }, [panel]);
 
+  useEffect(() => {
+    if (!detailItemId || detailItemId === NEW_CONFIG_ITEM_ID) {
+      setEditDraftItem(null);
+      return;
+    }
+    const saved = items.find((entry) => entry.id === detailItemId);
+    if (!saved) return;
+    setEditDraftItem((current) => {
+      if (!current || current.id !== detailItemId) {
+        return saved;
+      }
+      if (workspaceConfigItemDraftEquals(current, saved)) {
+        return saved;
+      }
+      return current;
+    });
+  }, [detailItemId, items]);
+
   const isCreating = detailItemId === NEW_CONFIG_ITEM_ID;
-  const detailItem = isCreating
-    ? draftItem
-    : detailItemId
+  const savedItem =
+    !isCreating && detailItemId
       ? items.find((item) => item.id === detailItemId) ?? null
       : null;
+  const detailItem = isCreating ? draftItem : editDraftItem ?? savedItem;
 
   const titles: Record<typeof panel, string> = {
     db: "数据源",
@@ -2534,10 +2725,32 @@ function WorkspaceConfigPanel({
     if (detailItem) {
       setDetailItemId(null);
       setDraftItem(null);
+      setEditDraftItem(null);
       setTestResult(null);
       return;
     }
     onBack();
+  };
+
+  const handleSaveEdit = async () => {
+    if (!editDraftItem) return;
+    setActionBusy(true);
+    setPanelError(null);
+    try {
+      const saved = await onSaveItem(editDraftItem);
+      setEditDraftItem(saved);
+    } catch (error) {
+      setPanelError(error instanceof Error ? error.message : "保存失败");
+    } finally {
+      setActionBusy(false);
+    }
+  };
+
+  const handleCancelEdit = () => {
+    if (savedItem) {
+      setEditDraftItem(savedItem);
+    }
+    setPanelError(null);
   };
 
   const handleCreate = async () => {
@@ -2604,6 +2817,7 @@ function WorkspaceConfigPanel({
           {detailItem ? (
             <ConfigItemDetailView
               item={detailItem}
+              savedItem={savedItem}
               mode={isCreating ? "create" : "edit"}
               panel={panel}
               workspaceConfig={workspaceConfig}
@@ -2628,10 +2842,29 @@ function WorkspaceConfigPanel({
                   );
                   return;
                 }
-                onUpdateItem(detailItem.id, patch);
+                setEditDraftItem((current) =>
+                  current
+                    ? {
+                        ...current,
+                        ...patch,
+                        settings: patch.settings
+                          ? { ...current.settings, ...patch.settings }
+                          : current.settings,
+                      }
+                    : current,
+                );
               }}
+              onSave={
+                !isCreating
+                  ? () => {
+                      void handleSaveEdit();
+                    }
+                  : undefined
+              }
+              onCancel={!isCreating ? handleCancelEdit : undefined}
+              saveBusy={actionBusy}
               onDelete={
-                !isCreating && !detailItem.builtin
+                !isCreating && !(panel === "skill" && detailItem.builtin)
                   ? async () => {
                       setActionBusy(true);
                       try {
@@ -2778,12 +3011,16 @@ function WorkspaceConfigPanel({
 
 function ConfigItemDetailView({
   item,
+  savedItem,
   mode,
   panel,
   workspaceConfig,
   onCreate,
   createDisabled,
   onUpdate,
+  onSave,
+  onCancel,
+  saveBusy = false,
   onDelete,
   onTest,
   onIntrospect,
@@ -2796,6 +3033,7 @@ function ConfigItemDetailView({
   testResult,
 }: {
   item: WorkspaceConfigItem;
+  savedItem?: WorkspaceConfigItem | null;
   mode: "create" | "edit";
   panel: WorkspaceConfigPanelKey;
   workspaceConfig: WorkspaceConfigStore;
@@ -2806,6 +3044,9 @@ function ConfigItemDetailView({
       Pick<WorkspaceConfigItem, "name" | "description" | "enabled" | "settings">
     >,
   ) => void;
+  onSave?: () => void;
+  onCancel?: () => void;
+  saveBusy?: boolean;
   onDelete?: () => void | Promise<void>;
   onTest?: () => void | Promise<void>;
   onIntrospect?: () => void | Promise<void>;
@@ -2865,7 +3106,7 @@ function ConfigItemDetailView({
     workspaceConfig,
     currentItemId: item.id,
   };
-  const nameReadOnly = mode === "edit" && !!item.builtin;
+  const nameReadOnly = mode === "edit" && panel === "skill" && !!item.builtin;
   const isBuiltinSkill = panel === "skill" && !!item.builtin;
   const hasUploadedSkillPackage =
     panel === "skill" &&
@@ -2897,8 +3138,17 @@ function ConfigItemDetailView({
   };
 
   const createDisabledFinal =
-    createDisabled ?? !isWorkspaceConfigItemValid(panel, item, settings);
+    Boolean(createDisabled) ||
+    !isWorkspaceConfigItemValid(panel, item, settings);
   const createLabel = panel === "skill" ? "导入 Skill" : "创建配置项";
+  const isDirty =
+    mode === "edit" &&
+    savedItem != null &&
+    !workspaceConfigItemDraftEquals(item, savedItem);
+  const saveDisabledFinal =
+    !isDirty ||
+    saveBusy ||
+    !isWorkspaceConfigItemValid(panel, item, settings);
 
   return (
     <div className="space-y-4">
@@ -2996,8 +3246,9 @@ function ConfigItemDetailView({
                 !(settings[field.key] ?? "").trim()
                   ? "已保存（留空则不修改）"
                   : field.placeholder;
-              const pending = isFieldPending(field, settings);
-              const disabled = isFieldDisabled(field, item, settings);
+              const lockField = panel === "skill";
+              const pending = lockField && isFieldPending(field, settings);
+              const disabled = lockField ? isFieldDisabled(field, item, settings) : false;
               const options = resolveConfigFieldOptions(field, fieldOptionsContext);
               return (
               <EditableField
@@ -3008,10 +3259,12 @@ function ConfigItemDetailView({
                 helpText={field.helpText}
                 inputType={field.inputType}
                 options={options}
-                isOptionPending={(value) => isSelectOptionPending(field, value)}
+                isOptionPending={
+                  lockField ? (value) => isSelectOptionPending(field, value) : undefined
+                }
                 fullWidth={field.fullWidth}
                 required={field.required && !pending}
-                readOnly={field.readOnly?.(item) ?? false}
+                readOnly={lockField ? (field.readOnly?.(item) ?? false) : false}
                 disabled={disabled}
                 pending={pending}
                 onChange={(value) =>
@@ -3049,6 +3302,27 @@ function ConfigItemDetailView({
           </button>
         </div>
       )}
+
+      {mode === "edit" && onSave && onCancel ? (
+        <div className="flex flex-wrap items-center justify-end gap-2 border-t border-border pt-4">
+          {isDirty ? (
+            <span className="mr-auto text-xs text-amber-700">有未保存的修改</span>
+          ) : null}
+          <ActionButton
+            label="取消"
+            disabled={!isDirty || saveBusy}
+            onClick={onCancel}
+          />
+          <button
+            type="button"
+            disabled={saveDisabledFinal}
+            onClick={onSave}
+            className="h-9 rounded-lg bg-code-bg px-4 text-sm font-medium text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            {saveBusy ? "保存中…" : "保存"}
+          </button>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -3346,7 +3620,7 @@ function EditableField({
   pending?: boolean;
   required?: boolean;
   multiline?: boolean;
-  inputType?: "text" | "password" | "url" | "select" | "number" | "boolean";
+  inputType?: "text" | "password" | "url" | "select" | "number" | "boolean" | "textarea";
   options?: Array<{ value: string; label: string }>;
   isOptionPending?: (value: string) => boolean;
   fullWidth?: boolean;
@@ -3586,6 +3860,45 @@ function ConfigRow({
   );
 }
 
+function WorkspaceFilesRow({
+  count,
+  unsupported,
+  active,
+  onClick,
+}: {
+  count: number;
+  unsupported?: boolean;
+  active?: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={[
+        "flex w-full items-center gap-2 rounded-md px-2 py-1 text-xs transition hover:bg-slate-100",
+        active ? "bg-slate-100 font-medium" : "",
+      ].join(" ")}
+      title="工作区文件"
+    >
+      <span className="inline-flex w-9 shrink-0 items-center justify-center rounded-md bg-indigo-50 px-1 py-px text-[10px] font-semibold uppercase tracking-wide text-indigo-700">
+        File
+      </span>
+      <span className="min-w-0 flex-1 truncate text-left text-slate-600">
+        {count > 0 ? `${count} 个跨会话文件` : "跨会话文件资产"}
+      </span>
+      {unsupported ? (
+        <span className="shrink-0 rounded bg-slate-100 px-1 py-0.5 text-[10px] text-slate-400">
+          未支持
+        </span>
+      ) : null}
+      <span className="shrink-0 text-slate-400">
+        <ChevronIcon direction="right" />
+      </span>
+    </button>
+  );
+}
+
 function ChatPane({
   activeThreadId,
   title,
@@ -3596,6 +3909,7 @@ function ChatPane({
   rightPanelOpen,
   onOpenRightPanel,
   onChatColumnWidthChange,
+  capabilitiesReady,
 }: {
   activeThreadId?: string;
   title: string;
@@ -3606,6 +3920,7 @@ function ChatPane({
   rightPanelOpen: boolean;
   onOpenRightPanel: () => void;
   onChatColumnWidthChange: (width: number) => void;
+  capabilitiesReady: boolean;
 }) {
   const { containerRef, chatColumnWidth } = useChatColumnWidth();
 
@@ -3652,6 +3967,14 @@ function ChatPane({
             hasExplicitThreadId
           >
             <LiveRunEventSubscriber agentId={agentId} threadId={activeThreadId} />
+            <SessionConversationRestore
+              agentId={agentId}
+              capabilitiesReady={capabilitiesReady}
+            />
+            <SessionArtifactsRestore
+              capabilitiesReady={capabilitiesReady}
+              threadId={activeThreadId}
+            />
             <AgentMessageRenderSync agentId={agentId} runStatus={liveRunStatus} />
             <CollaborationResponseBridge />
             <CollaborationInterruptHandler
@@ -3665,9 +3988,14 @@ function ChatPane({
               key={activeThreadId}
               welcomeScreen={DataTaskWelcomeScreen}
               autoScroll="pin-to-send"
+              intelligenceIndicator={{ className: "chat-intelligence-indicator" }}
               messageView={{
                 assistantMessage:
                   StepAssistantMessage as unknown as typeof CopilotChatAssistantMessage,
+                reasoningMessage: {
+                  header: { className: "chat-reasoning-header" },
+                },
+                cursor: { className: "chat-stream-cursor" },
               }}
               input={ChatInput as typeof CopilotChatInput}
               className={chatPaneClassName}

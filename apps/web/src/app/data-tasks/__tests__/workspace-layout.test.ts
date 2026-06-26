@@ -88,7 +88,7 @@ describe("resolveResponsiveSidebars", () => {
     });
   });
 
-  it("closes the right panel first to preserve the preferred chat input width", () => {
+  it("collapses the left sidebar and closes the right panel when both are needed", () => {
     expect(
       resolveResponsiveSidebars({
         viewportWidth: 1200,
@@ -97,12 +97,12 @@ describe("resolveResponsiveSidebars", () => {
         rightPanelWidth: 360,
       }),
     ).toEqual({
-      sidebarCollapsed: false,
+      sidebarCollapsed: true,
       rightPanelOpen: false,
     });
   });
 
-  it("closes the right panel before collapsing the left panel", () => {
+  it("collapses the left sidebar before closing the console when the user wants it open", () => {
     expect(
       resolveResponsiveSidebars({
         viewportWidth: 1300,
@@ -111,8 +111,8 @@ describe("resolveResponsiveSidebars", () => {
         rightPanelWidth: 360,
       }),
     ).toEqual({
-      sidebarCollapsed: false,
-      rightPanelOpen: false,
+      sidebarCollapsed: true,
+      rightPanelOpen: true,
     });
   });
 

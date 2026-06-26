@@ -169,6 +169,13 @@ export function mcpServerDtoToItem(dto: McpServerDto): WorkspaceConfigItem {
       apiKey: "",
       toolAllowlist: Array.isArray(dto.toolAllowlist) ? dto.toolAllowlist.join(", ") : dto.toolAllowlist ?? "",
       timeoutMs: asString(dto.timeoutMs ?? ""),
+      command: dto.command ?? "",
+      args: Array.isArray(dto.args) ? dto.args.join(" ") : "",
+      cwd: dto.cwd ?? "",
+      env:
+        dto.env && typeof dto.env === "object"
+          ? JSON.stringify(dto.env, null, 2)
+          : "",
       toolCount: asString(Array.isArray(dto.toolManifest) ? dto.toolManifest.length : 0),
       healthStatus: dto.healthStatus ?? "untested",
     },
@@ -266,6 +273,50 @@ function splitCsv(value: string | undefined): string[] | undefined {
     .map((entry) => entry.trim())
     .filter(Boolean);
   return items.length > 0 ? items : undefined;
+}
+
+function splitArgs(value: string | undefined): string[] | undefined {
+  if (!value?.trim()) return undefined;
+  const items = value.trim().split(/\s+/).filter(Boolean);
+  return items.length > 0 ? items : undefined;
+}
+
+function parseEnvObject(value: string | undefined): Record<string, string> | undefined {
+  if (!value?.trim()) return undefined;
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return undefined;
+    }
+    const record: Record<string, string> = {};
+    for (const [key, entry] of Object.entries(parsed as Record<string, unknown>)) {
+      if (entry === null || entry === undefined) continue;
+      record[key] = typeof entry === "string" ? entry : String(entry);
+    }
+    return Object.keys(record).length > 0 ? record : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function appendMcpStdioFields(
+  body: Record<string, unknown>,
+  settings: Record<string, string>,
+): void {
+  if (settings.command?.trim()) {
+    body.command = settings.command.trim();
+  }
+  const args = splitArgs(settings.args);
+  if (args) {
+    body.args = args;
+  }
+  if (settings.cwd?.trim()) {
+    body.cwd = settings.cwd.trim();
+  }
+  const env = parseEnvObject(settings.env);
+  if (env) {
+    body.env = env;
+  }
 }
 
 function buildCredentials(
@@ -398,7 +449,7 @@ export function itemToCreateBody(
       const credentials = buildCredentials(settings, [
         { settingKey: "apiKey", credentialKey: "token" },
       ]);
-      return {
+      const body: Record<string, unknown> = {
         ...base,
         transport: settings.transport ?? "streamable-http",
         serverUrl: settings.serverUrl?.trim() ?? "",
@@ -407,6 +458,8 @@ export function itemToCreateBody(
         ...(parseNumber(settings.timeoutMs) !== undefined ? { timeoutMs: parseNumber(settings.timeoutMs) } : {}),
         ...(credentials ? { credentials } : {}),
       };
+      appendMcpStdioFields(body, settings);
+      return body;
     }
     case "llm": {
       const credentials = buildCredentials(settings, [
@@ -463,7 +516,6 @@ export function itemToCreateBody(
 export function itemToPatchBody(
   kind: WorkspaceConfigKind,
   item: WorkspaceConfigItem,
-  previous?: WorkspaceConfigItem,
 ): Record<string, unknown> {
   const settings = item.settings ?? {};
   const body: Record<string, unknown> = {
@@ -583,7 +635,14 @@ export function itemToPatchBody(
       if (settings.transport?.trim()) body.transport = settings.transport.trim();
       if (settings.serverUrl?.trim()) body.serverUrl = settings.serverUrl.trim();
       if (settings.authType?.trim()) body.authType = settings.authType.trim();
+      if (splitCsv(settings.toolAllowlist)) {
+        body.toolAllowlist = splitCsv(settings.toolAllowlist);
+      }
+      if (parseNumber(settings.timeoutMs) !== undefined) {
+        body.timeoutMs = parseNumber(settings.timeoutMs);
+      }
       if (settings.apiKey?.trim()) body.credentials = { token: settings.apiKey.trim() };
+      appendMcpStdioFields(body, settings);
       break;
     case "llm":
       if (settings.provider?.trim()) body.provider = settings.provider.trim();
@@ -632,15 +691,6 @@ export function itemToPatchBody(
         body.modelProfileId = settings.modelProfileId.trim();
       }
       break;
-  }
-
-  if (previous && kind !== "skill") {
-    const prevSettings = previous.settings ?? {};
-    for (const key of ["password", "apiKey", "embeddingApiKey", "credentialsJson"] as const) {
-      if (!settings[key]?.trim() && prevSettings[key]?.trim()) {
-        // Preserve server-side secret when user did not re-enter credential.
-      }
-    }
   }
 
   return body;

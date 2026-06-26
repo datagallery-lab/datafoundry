@@ -10,7 +10,9 @@ Only expose:
 - `POST /api/copilotkit` (+ CORS `OPTIONS`)
 
 **Planned (not yet implemented)** — see
-[`docs/engineering/2026-06-25-backend-requirements.md`](../../docs/engineering/2026-06-25-backend-requirements.md):
+[`docs/engineering/2026-06-25-backend-requirements.md`](../../docs/engineering/2026-06-25-backend-requirements.md)
+and the latest increment
+[`docs/engineering/2026-06-26-backend-requirements.md`](../../docs/engineering/2026-06-26-backend-requirements.md):
 
 - R-004 — `GET /api/v1/artifacts/:id` (+ `/preview`, `/download`) — artifact metadata / inline preview / attachment download
 - R-002 — AG-UI `CUSTOM(name="token_usage")` — LLM input/output token usage per run (no REST)
@@ -30,6 +32,7 @@ Do **not** add REST CRUD here unless documented in
 1. [`docs/engineering/copilotkit-ag-ui-frontend-protocol.md`](../../docs/engineering/copilotkit-ag-ui-frontend-protocol.md)
 2. [`docs/engineering/config-management-api.md`](../../docs/engineering/config-management-api.md)
 3. [`docs/engineering/2026-06-25-backend-requirements.md`](../../docs/engineering/2026-06-25-backend-requirements.md)
+4. [`docs/engineering/2026-06-26-backend-requirements.md`](../../docs/engineering/2026-06-26-backend-requirements.md)
 
 ## Code conventions
 

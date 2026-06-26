@@ -29,6 +29,22 @@ async function* problematicFullStream() {
     from: "agent"
   };
   yield {
+    type: "step-finish",
+    payload: {
+      output: {
+        usage: {
+          inputTokens: { total: 120 },
+          outputTokens: { total: 34 },
+          totalTokens: 154,
+        },
+        toolCalls: [{ toolCallId: "tc-write-1", toolName: "write_file" }],
+      },
+      model: { modelId: "qwen-plus" },
+    },
+    runId: "run-smoke",
+    from: "agent",
+  };
+  yield {
     type: "tool-error",
     payload: {
       toolCallId: "tc-write-1",
@@ -38,7 +54,18 @@ async function* problematicFullStream() {
     runId: "run-smoke",
     from: "agent"
   };
-  yield { type: "finish", payload: {}, runId: "run-smoke", from: "agent" };
+  yield {
+    type: "finish",
+    payload: {
+      totalUsage: {
+        inputTokens: 100000,
+        outputTokens: 2000,
+        totalTokens: 102000
+      }
+    },
+    runId: "run-smoke",
+    from: "agent"
+  };
 }
 
 const customEvents = [];
@@ -88,8 +115,13 @@ assert(
   "TOOL_CALL_RESULT must carry tool failure payload"
 );
 assert(workspaceCustom.length >= 1, "data-workspace-metadata must map to workspace.metadata CUSTOM event");
-assert(tokenUsageCustom.length >= 1, "provider usage chunks must map to token_usage CUSTOM event");
+assert(tokenUsageCustom.length >= 2, "provider usage chunks must map to token_usage CUSTOM event");
 assert(tokenUsageCustom[0].value?.input_tokens === 20, "token_usage must expose input_tokens");
+assert(tokenUsageCustom.some((event) => event.value?.input_tokens === 120), "step-finish output.usage must map to token_usage");
+assert(
+  !tokenUsageCustom.some((event) => event.value?.input_tokens === 100000),
+  "aggregate totalUsage must not be emitted as an incremental token_usage event"
+);
 
 console.log(
   `AG-UI stream smoke OK: events=${events.length}, toolResults=${toolResults.length}, `

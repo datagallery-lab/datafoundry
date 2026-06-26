@@ -1,12 +1,12 @@
 import type {
+  ArtifactDetail,
   DataArtifact,
   DataStepKind,
   DataStepPayload,
   SchemaTable,
   TimelineEvent,
-  TimelineStep,
 } from "./data-task-state";
-import { dataStepKindForTool, emptyStepPayload } from "./data-task-state";
+import { dataStepKindForTool, emptyStepPayload, toolDisplayTitle } from "./data-task-state";
 
 export type LiveTaskStatus = "pending" | "running" | "completed" | "failed";
 
@@ -63,6 +63,7 @@ export type LiveTokenUsageRecord = TokenUsageStats & {
   stepNumber?: number;
   stepId?: string;
   toolCallId?: string;
+  toolName?: string;
   model?: string;
 };
 
@@ -103,6 +104,44 @@ export type LiveWorkspaceMetadata = {
   payload: unknown;
 };
 
+export type LiveSkillSelection = {
+  mode?: string;
+  selected: Array<{
+    id: string;
+    name?: string;
+    revision?: number;
+    tags?: string[];
+  }>;
+  effectiveToolPolicy?: Record<string, unknown>;
+  audit: unknown[];
+  raw: unknown;
+};
+
+export type LiveGoalSnapshot = {
+  objective?: string;
+  status?: string;
+  source?: string;
+  raw: unknown;
+};
+
+export type LiveResolvedRunConfig = {
+  activeDatasourceId?: string;
+  activeLlmProfileId?: string;
+  enabledDatasourceIds?: string[];
+  enabledKnowledgeIds?: string[];
+  enabledMcpServerIds?: string[];
+  enabledSkillIds?: string[];
+  selectedSkills?: Array<{ id: string; name?: string }>;
+  fileIds?: string[];
+  raw: unknown;
+};
+
+export type LiveContextReport = {
+  name: "context.compiled" | "context.prompt-verified";
+  receivedAt: number;
+  value: unknown;
+};
+
 export type LiveRunHistoryEntry = {
   startedAt?: number;
   finishedAt?: number;
@@ -128,6 +167,10 @@ export type LiveRun = {
   tokenUsageEvents: LiveTokenUsageRecord[];
   workspaceMetadata: LiveWorkspaceMetadata[];
   sandboxOutputs: LiveSandboxOutput[];
+  skillSelection?: LiveSkillSelection;
+  goal?: LiveGoalSnapshot;
+  resolvedRunConfig?: LiveResolvedRunConfig;
+  contextReports: LiveContextReport[];
   /** Completed run segments within the current chat thread. */
   runHistory?: LiveRunHistoryEntry[];
 };
@@ -154,6 +197,7 @@ export function createInitialLiveRun(): LiveRun {
     tokenUsageEvents: [],
     workspaceMetadata: [],
     sandboxOutputs: [],
+    contextReports: [],
     runHistory: [],
   };
 }
@@ -189,7 +233,7 @@ function archiveCurrentRunSegment(state: LiveRun): LiveRunHistoryEntry[] {
   if (state.runStartedAt === undefined) return state.runHistory ?? [];
 
   const resolvedStatus =
-    state.runStatus === "running" || state.runStatus === "suspended"
+    state.runStatus === "running"
       ? "completed"
       : state.runStatus;
 
@@ -327,6 +371,8 @@ export function reduceLiveRunEvent(state: LiveRun, event: AgUiLikeEvent): LiveRu
           runFinishedAt: undefined,
           errorMessage: undefined,
           plan: defaultPlan,
+          tokenUsage: undefined,
+          tokenUsageEvents: [],
         };
       }
       return {
@@ -378,14 +424,6 @@ export function reduceLiveRunEvent(state: LiveRun, event: AgUiLikeEvent): LiveRu
     default:
       return state;
   }
-}
-
-export function planTasksToTimelineSteps(tasks: LivePlanTask[]): TimelineStep[] {
-  return tasks.map((task) => ({
-    id: task.id,
-    label: task.title,
-    linkedEventId: task.id,
-  }));
 }
 
 function reduceStateSnapshot(state: LiveRun, event: AgUiLikeEvent): LiveRun {
@@ -495,6 +533,11 @@ function reduceToolEvent(state: LiveRun, event: AgUiLikeEvent): LiveRun {
   const existingEvent = state.events.find((item) => item.id === id);
   const toolName = resolveIncomingToolName(event, existing, existingEvent);
   const eventType = stringValue(event.type);
+  const effectiveToolName =
+    toolName !== "tool" && toolName !== "unknown"
+      ? toolName
+      : (existingEvent?.toolName ?? existing?.name ?? toolName);
+  const title = toolDisplayTitle(effectiveToolName);
 
   let nextState = state;
   const resultPayload =
@@ -502,14 +545,14 @@ function reduceToolEvent(state: LiveRun, event: AgUiLikeEvent): LiveRun {
   if (eventType === "TOOL_CALL_START") {
     nextState = upsertToolCallRecord(nextState, {
       id,
-      name: toolName,
+      name: effectiveToolName,
       status: "running",
       startedAtMs: Date.now(),
     });
   } else if (eventType === "TOOL_CALL_END") {
     nextState = upsertToolCallRecord(nextState, {
       id,
-      name: toolName,
+      name: effectiveToolName,
       status: existing?.status === "failed" ? "failed" : "running",
       startedAtMs: existing?.startedAtMs ?? Date.now(),
     });
@@ -518,7 +561,7 @@ function reduceToolEvent(state: LiveRun, event: AgUiLikeEvent): LiveRun {
     const failed = toolResultPayloadLooksFailed(parsed);
     nextState = upsertToolCallRecord(nextState, {
       id,
-      name: toolName,
+      name: effectiveToolName,
       status: failed ? "failed" : "success",
       startedAtMs: existing?.startedAtMs ?? Date.now(),
       finishedAtMs: Date.now(),
@@ -527,19 +570,9 @@ function reduceToolEvent(state: LiveRun, event: AgUiLikeEvent): LiveRun {
   }
 
   const kind =
-    dataStepKindForTool(toolName) !== "other"
-      ? dataStepKindForTool(toolName)
-      : existingEvent?.kind ?? dataStepKindForTool(toolName);
-  const effectiveToolName =
-    toolName !== "tool" && toolName !== "unknown"
-      ? toolName
-      : (existingEvent?.toolName ?? toolName);
-  const title =
-    effectiveToolName === "run_sql_readonly"
-      ? "生成并执行 SQL"
-      : effectiveToolName === "inspect_schema"
-        ? "检查数据源 Schema"
-        : effectiveToolName;
+    dataStepKindForTool(effectiveToolName) !== "other"
+      ? dataStepKindForTool(effectiveToolName)
+      : existingEvent?.kind ?? dataStepKindForTool(effectiveToolName);
   const args = recordValue(event.args) ?? recordValue(event.parameters);
   const sql = stringValue(args?.sql) ?? stringValue(event.delta) ?? "";
   const result = resultPayload;
@@ -693,6 +726,17 @@ function parseSchemaTables(parsed: Record<string, unknown> | null): SchemaTable[
   return tables;
 }
 
+function patchTokenUsageCorrelations(
+  events: LiveTokenUsageRecord[],
+  correlation: { stepId: string; toolCallId: string },
+): LiveTokenUsageRecord[] {
+  return events.map((record) =>
+    record.toolCallId === correlation.toolCallId
+      ? { ...record, stepId: correlation.stepId }
+      : record,
+  );
+}
+
 function reduceCustomEvent(state: LiveRun, event: AgUiLikeEvent): LiveRun {
   if (event.name === "sql_audit") {
     const value = recordValue(event.value);
@@ -725,6 +769,20 @@ function reduceCustomEvent(state: LiveRun, event: AgUiLikeEvent): LiveRun {
     return reconcileUnlinkedArtifacts(nextState);
   }
 
+  if (event.name === "token_usage.correlation") {
+    const value = recordValue(event.value);
+    const stepId = stringValue(value?.step_id);
+    const toolCallId = stringValue(value?.tool_call_id);
+    if (!stepId || !toolCallId) return state;
+    return {
+      ...state,
+      tokenUsageEvents: patchTokenUsageCorrelations(state.tokenUsageEvents, {
+        stepId,
+        toolCallId,
+      }),
+    };
+  }
+
   if (event.name === "token_usage") {
     const value = recordValue(event.value);
     const delta: LiveTokenUsageRecord = {
@@ -745,6 +803,7 @@ function reduceCustomEvent(state: LiveRun, event: AgUiLikeEvent): LiveRun {
       ...(stringValue(value?.step_id)
         ? { stepId: stringValue(value?.step_id) }
         : {}),
+      ...(stringValue(value?.tool_name) ? { toolName: stringValue(value?.tool_name) } : {}),
       ...(stringValue(value?.tool_call_id)
         ? { toolCallId: stringValue(value?.tool_call_id) }
         : {}),
@@ -788,7 +847,179 @@ function reduceCustomEvent(state: LiveRun, event: AgUiLikeEvent): LiveRun {
     };
   }
 
+  if (event.name === "skill.selection") {
+    return {
+      ...state,
+      skillSelection: parseSkillSelection(event.value),
+    };
+  }
+
+  if (event.name === "goal.updated") {
+    return {
+      ...state,
+      goal: parseGoalSnapshot(event.value),
+    };
+  }
+
+  if (event.name === "run.config.resolved") {
+    return {
+      ...state,
+      resolvedRunConfig: parseResolvedRunConfig(event.value),
+    };
+  }
+
+  if (event.name === "context.compiled" || event.name === "context.prompt-verified") {
+    const name: LiveContextReport["name"] = event.name;
+    return {
+      ...state,
+      contextReports: [
+        {
+          name,
+          receivedAt: Date.now(),
+          value: event.value,
+        },
+        ...state.contextReports,
+      ].slice(0, 8),
+    };
+  }
+
+  if (event.name === "interaction.requested" || event.name === "interaction.resolved") {
+    const value = recordValue(event.value);
+    const toolCallId = stringValue(value?.tool_call_id);
+    const toolName = stringValue(value?.tool_name);
+    if (toolCallId && toolName) {
+      return applyInteractionToolIdentity(state, toolCallId, toolName);
+    }
+  }
+
   return state;
+}
+
+function parseSkillSelection(value: unknown): LiveSkillSelection {
+  const record = recordValue(value);
+  const selected = arrayValue(record?.selected)
+    .map((item) => {
+      const skill = recordValue(item);
+      const id = stringValue(skill?.id);
+      if (!id) return undefined;
+      return {
+        id,
+        ...(stringValue(skill?.name) ? { name: stringValue(skill?.name) } : {}),
+        ...(numberValue(skill?.revision) !== undefined
+          ? { revision: numberValue(skill?.revision) }
+          : {}),
+        ...(stringArrayValue(skill?.tags).length > 0
+          ? { tags: stringArrayValue(skill?.tags) }
+          : {}),
+      };
+    })
+    .filter((item): item is LiveSkillSelection["selected"][number] => Boolean(item));
+  return {
+    ...(stringValue(record?.mode) ? { mode: stringValue(record?.mode) } : {}),
+    selected,
+    ...(recordValue(record?.effective_tool_policy)
+      ? { effectiveToolPolicy: recordValue(record?.effective_tool_policy) ?? undefined }
+      : recordValue(record?.effectiveToolPolicy)
+        ? { effectiveToolPolicy: recordValue(record?.effectiveToolPolicy) ?? undefined }
+        : {}),
+    audit: arrayValue(record?.audit),
+    raw: value,
+  };
+}
+
+function parseGoalSnapshot(value: unknown): LiveGoalSnapshot {
+  const record = recordValue(value);
+  return {
+    ...(stringValue(record?.objective) ? { objective: stringValue(record?.objective) } : {}),
+    ...(stringValue(record?.status) ? { status: stringValue(record?.status) } : {}),
+    ...(stringValue(record?.source) ? { source: stringValue(record?.source) } : {}),
+    raw: value,
+  };
+}
+
+function parseResolvedRunConfig(value: unknown): LiveResolvedRunConfig {
+  const record = recordValue(value);
+  const activeDatasourceId = firstString(record, [
+    "activeDatasourceId",
+    "active_datasource_id",
+  ]);
+  const activeLlmProfileId = firstString(record, [
+    "activeLlmProfileId",
+    "requested_llm_profile_id",
+  ]);
+  const enabledDatasourceIds = firstStringArray(record, [
+    "enabledDatasourceIds",
+    "enabled_datasource_ids",
+  ]);
+  const enabledKnowledgeIds = firstStringArray(record, [
+    "enabledKnowledgeIds",
+    "enabled_knowledge_ids",
+  ]);
+  const enabledMcpServerIds = firstStringArray(record, [
+    "enabledMcpServerIds",
+    "enabled_mcp_server_ids",
+  ]);
+  const enabledSkillIds = firstStringArray(record, [
+    "enabledSkillIds",
+    "enabled_skill_ids",
+    "selected_skill_ids",
+  ]);
+  const fileIds = firstStringArray(record, ["fileIds", "file_ids"]);
+  const selectedSkills = parseSelectedSkills(record?.selectedSkills);
+  const resolvedSelectedSkills =
+    selectedSkills.length > 0
+      ? selectedSkills
+      : enabledSkillIds.map((id) => ({ id }));
+
+  return {
+    ...(activeDatasourceId ? { activeDatasourceId } : {}),
+    ...(activeLlmProfileId ? { activeLlmProfileId } : {}),
+    ...(enabledDatasourceIds.length > 0 ? { enabledDatasourceIds } : {}),
+    ...(enabledKnowledgeIds.length > 0 ? { enabledKnowledgeIds } : {}),
+    ...(enabledMcpServerIds.length > 0 ? { enabledMcpServerIds } : {}),
+    ...(enabledSkillIds.length > 0 ? { enabledSkillIds } : {}),
+    ...(fileIds.length > 0 ? { fileIds } : {}),
+    ...(resolvedSelectedSkills.length > 0 ? { selectedSkills: resolvedSelectedSkills } : {}),
+    raw: value,
+  };
+}
+
+function firstString(
+  record: Record<string, unknown> | null,
+  keys: string[],
+): string | undefined {
+  if (!record) return undefined;
+  for (const key of keys) {
+    const value = stringValue(record[key]);
+    if (value) return value;
+  }
+  return undefined;
+}
+
+function firstStringArray(
+  record: Record<string, unknown> | null,
+  keys: string[],
+): string[] {
+  if (!record) return [];
+  for (const key of keys) {
+    if (!(key in record)) continue;
+    return stringArrayValue(record[key]);
+  }
+  return [];
+}
+
+function parseSelectedSkills(value: unknown): Array<{ id: string; name?: string }> {
+  return arrayValue(value)
+    .map((item) => {
+      const skill = recordValue(item);
+      const id = stringValue(skill?.id);
+      if (!id) return undefined;
+      return {
+        id,
+        ...(stringValue(skill?.name) ? { name: stringValue(skill?.name) } : {}),
+      };
+    })
+    .filter((item): item is { id: string; name?: string } => Boolean(item));
 }
 
 function parseTablePreview(
@@ -823,6 +1054,125 @@ function parseTablePreview(
   return { columns, rows };
 }
 
+function parseChartPreview(preview: unknown): Extract<ArtifactDetail, { type: "chart" }> | null {
+  const record = recordValue(preview);
+  if (!record) return null;
+
+  const points = parseChartPoints(record.points);
+  const series = arrayValue(record.series)
+    .map((item) => {
+      const seriesRecord = recordValue(item);
+      const name = stringValue(seriesRecord?.name);
+      const seriesPoints = parseChartPoints(seriesRecord?.points);
+      if (!name || seriesPoints.length === 0) return undefined;
+      return { name, points: seriesPoints };
+    })
+    .filter((item): item is { name: string; points: Array<{ label: string; value: number }> } =>
+      Boolean(item),
+    );
+
+  if (points.length === 0 && series.length === 0) return null;
+
+  const chartType = chartTypeValue(record.chartType ?? record.chart_type ?? record.kind);
+  return {
+    type: "chart",
+    ...(chartType ? { chartType } : {}),
+    ...(stringValue(record.unit) ? { unit: stringValue(record.unit) } : {}),
+    points,
+    ...(series.length > 0 ? { series } : {}),
+  };
+}
+
+function parseChartPoints(value: unknown): Array<{ label: string; value: number }> {
+  return arrayValue(value)
+    .map((item) => {
+      const point = recordValue(item);
+      const label =
+        stringValue(point?.label) ??
+        stringValue(point?.x) ??
+        stringValue(point?.name);
+      const valueNumber =
+        numberValue(point?.value) ??
+        numberValue(point?.y) ??
+        numberValue(point?.count);
+      if (!label || valueNumber === undefined) return undefined;
+      return { label, value: valueNumber };
+    })
+    .filter((item): item is { label: string; value: number } => Boolean(item));
+}
+
+function previewPayload(value: unknown): unknown {
+  const record = recordValue(value);
+  return recordValue(record?.preview_json) ?? recordValue(record?.preview) ?? value;
+}
+
+function chartTypeValue(value: unknown): Extract<ArtifactDetail, { type: "chart" }>["chartType"] {
+  if (value === "bar" || value === "line" || value === "pie") return value;
+  return undefined;
+}
+
+/** Builds inline artifact detail from REST preview JSON or stream preview_json. */
+export function artifactDetailFromPreview(
+  artifact: Pick<DataArtifact, "type" | "kind" | "title">,
+  preview: unknown,
+): ArtifactDetail | undefined {
+  const previewRecord = recordValue(preview);
+  const payload = previewPayload(preview);
+  const payloadRecord = recordValue(payload);
+  const backendType =
+    stringValue(previewRecord?.type) ??
+    (artifact.type === "dataset"
+      ? "table"
+      : artifact.type === "file"
+        ? "file"
+        : artifact.type === "report"
+          ? "markdown"
+          : artifact.type);
+
+  const tablePreview = parseTablePreview(payload);
+  if (backendType === "table" || tablePreview) {
+    if (!tablePreview) return undefined;
+    return {
+      type: "dataset",
+      columns: tablePreview.columns,
+      rows: tablePreview.rows,
+    };
+  }
+
+  if (backendType === "chart") {
+    return parseChartPreview(payload) ?? undefined;
+  }
+
+  if (backendType === "file") {
+    const filePath = stringValue(payloadRecord?.path) ?? artifact.title;
+    const fileSize = numberValue(payloadRecord?.size);
+    const fileMtime = stringValue(payloadRecord?.mtime);
+    const fileTool = stringValue(payloadRecord?.tool);
+    const fileContent = stringValue(payloadRecord?.content);
+    return {
+      type: "file",
+      path: filePath,
+      ...(fileSize !== undefined ? { size: fileSize } : {}),
+      ...(fileMtime ? { mtime: fileMtime } : {}),
+      ...(fileTool ? { tool: fileTool } : {}),
+      ...(fileContent ? { content: fileContent } : {}),
+    };
+  }
+
+  const textContent =
+    stringValue(payloadRecord?.content) ??
+    stringValue(payloadRecord?.body) ??
+    (typeof payload === "string" ? payload : undefined);
+  if (textContent) {
+    return {
+      type: "report",
+      sections: [{ heading: "预览", body: textContent }],
+    };
+  }
+
+  return undefined;
+}
+
 function parseArtifactFromCustom(value: Record<string, unknown>): DataArtifact {
   const id =
     stringValue(value.id) ??
@@ -831,6 +1181,9 @@ function parseArtifactFromCustom(value: Record<string, unknown>): DataArtifact {
   const title =
     stringValue(value.title) ?? stringValue(value.name) ?? "Agent 产出物";
   const backendType = stringValue(value.type);
+  const fileId = stringValue(value.file_id) ?? stringValue(value.fileId);
+  const downloadUrl =
+    stringValue(value.download_url) ?? stringValue(value.downloadUrl);
   const preview = value.preview_json;
   const previewRecord = recordValue(preview);
   const rowCount = numberValue(previewRecord?.row_count);
@@ -859,6 +1212,7 @@ function parseArtifactFromCustom(value: Record<string, unknown>): DataArtifact {
   } else if (backendType === "chart") {
     type = "chart";
     kind = "chart";
+    detail = parseChartPreview(preview) ?? undefined;
     summary = summary ?? "图表产出";
   } else if (backendType === "markdown" || backendType === "html") {
     type = "report";
@@ -894,7 +1248,12 @@ function parseArtifactFromCustom(value: Record<string, unknown>): DataArtifact {
     type,
     summary: summary ?? "后端通过 AG-UI artifact 事件返回的产出物。",
     version: stringValue(value.version) ?? "v1",
+    ...(fileId ? { fileId } : {}),
+    ...(downloadUrl ? { downloadUrl } : {}),
     detail,
+    previewAvailable:
+      value.preview_available === true ||
+      (preview !== undefined && preview !== null),
     recordedAtMs: Date.now(),
   };
 }
@@ -965,7 +1324,13 @@ function findSqlToolForArtifact(
   return unlinked[0];
 }
 
-const FILE_ARTIFACT_TOOLS = new Set(["write_file", "edit_file", "execute_command"]);
+const FILE_ARTIFACT_TOOLS = new Set([
+  "write_file",
+  "edit_file",
+  "execute_command",
+  "publish_artifact",
+  "promote_workspace_file",
+]);
 
 type FileArtifactMeta = {
   path?: string;
@@ -1066,6 +1431,8 @@ function artifactValueFromDataArtifact(artifact: DataArtifact): Record<string, u
     summary: artifact.summary,
     type: artifact.type ?? artifact.kind,
   };
+  if (artifact.fileId) value.file_id = artifact.fileId;
+  if (artifact.downloadUrl) value.download_url = artifact.downloadUrl;
 
   if (artifact.detail?.type === "dataset") {
     value.type = "table";
@@ -1147,6 +1514,41 @@ function linkArtifactToToolCall(
       : artifact,
   );
   return { ...state, events, artifacts };
+}
+
+function applyInteractionToolIdentity(
+  state: LiveRun,
+  toolCallId: string,
+  toolName: string,
+): LiveRun {
+  const existingCall = state.toolCalls.find((item) => item.id === toolCallId);
+  const existingEvent = state.events.find((item) => item.id === toolCallId);
+  const title = toolDisplayTitle(toolName);
+  const kind = dataStepKindForTool(toolName);
+
+  let next = state;
+  if (existingCall) {
+    next = upsertToolCallRecord(next, { ...existingCall, name: toolName });
+  }
+  if (existingEvent) {
+    next = upsertTimelineEvent(next, {
+      ...existingEvent,
+      kind,
+      toolName,
+      title,
+    });
+  } else if (existingCall) {
+    next = upsertTimelineEvent(next, {
+      id: toolCallId,
+      kind,
+      toolName,
+      title,
+      summary: statusSummary(existingCall.status === "success" ? "completed" : existingCall.status),
+      thought: "Agent 正在与用户协作。",
+      payload: emptyStepPayload(kind),
+    });
+  }
+  return next;
 }
 
 function upsertTimelineEvent(
@@ -1332,6 +1734,77 @@ export function resolveToolCallForEvent(
   return findCorrelatedToolCall(liveRun.toolCalls, event.toolName, event.stepId);
 }
 
+const SANDBOX_TOOL_NAMES = new Set(["execute_command"]);
+
+export function resolveWorkspaceMetadataForToolCall(
+  liveRun: LiveRun,
+  toolCallId?: string,
+): LiveWorkspaceMetadata | undefined {
+  if (!toolCallId) return undefined;
+  return liveRun.workspaceMetadata.find((entry) => entry.toolCallId === toolCallId);
+}
+
+export function resolveSandboxOutputsForToolCall(
+  liveRun: LiveRun,
+  toolCall?: LiveToolCallRecord,
+): LiveSandboxOutput[] {
+  if (!toolCall || liveRun.sandboxOutputs.length === 0) {
+    return [];
+  }
+  const start = toolCall.startedAtMs ?? 0;
+  const end = toolCall.finishedAtMs ?? Date.now() + 60_000;
+  const windowed = liveRun.sandboxOutputs.filter(
+    (output) => output.receivedAt >= start - 500 && output.receivedAt <= end + 5_000,
+  );
+  if (windowed.length > 0) {
+    return windowed;
+  }
+  if (SANDBOX_TOOL_NAMES.has(toolCall.name)) {
+    return liveRun.sandboxOutputs;
+  }
+  return [];
+}
+
+export function formatSandboxOutputText(output: LiveSandboxOutput): string {
+  const record = recordValue(output.payload);
+  const text =
+    stringValue(record?.text) ??
+    stringValue(record?.output) ??
+    stringValue(record?.value);
+  if (text) return text;
+  const exitCode = numberValue(record?.code ?? record?.exitCode);
+  if (output.kind === "exit" && exitCode !== undefined) {
+    return `exit code: ${exitCode}`;
+  }
+  if (output.kind === "command") {
+    return stringValue(record?.command) ?? "";
+  }
+  try {
+    return JSON.stringify(output.payload, null, 2);
+  } catch {
+    return String(output.payload ?? "");
+  }
+}
+
+export function formatWorkspaceMetadataSummary(entry: LiveWorkspaceMetadata): string {
+  const record = recordValue(entry.payload);
+  const status = stringValue(record?.status);
+  const path = stringValue(record?.path);
+  const parts = [
+    entry.toolName ? `工具 ${entry.toolName}` : undefined,
+    status ? `状态 ${status}` : undefined,
+    path ? `路径 ${path}` : undefined,
+  ].filter(Boolean);
+  if (parts.length > 0) {
+    return parts.join(" · ");
+  }
+  try {
+    return JSON.stringify(entry.payload, null, 2);
+  } catch {
+    return String(entry.payload ?? "");
+  }
+}
+
 export function resolveTraceToolStatus(
   toolStatus: LiveToolCallRecord["status"],
   activityStatus?: TimelineEvent["activityStatus"],
@@ -1487,6 +1960,10 @@ function recordValue(value: unknown): Record<string, unknown> | null {
 
 function arrayValue(value: unknown): unknown[] {
   return Array.isArray(value) ? value : [];
+}
+
+function stringArrayValue(value: unknown): string[] {
+  return arrayValue(value).filter((item): item is string => typeof item === "string" && item.trim() !== "");
 }
 
 function stringValue(value: unknown): string | undefined {

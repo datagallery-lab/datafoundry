@@ -8,8 +8,10 @@ import {
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import type {
+  FileMentionResource,
   MentionResource,
   PerRunMentionKind,
+  PerRunFileSelection,
   PerRunSelection,
   WorkspaceConfigItem,
 } from "../../data-task-state";
@@ -36,6 +38,11 @@ type DataTaskChatInputProps = CopilotChatInputProps & {
   onTogglePerRunMention: (kind: PerRunMentionKind, id: string) => void;
   onRemovePerRunMention: (kind: PerRunMentionKind, id: string) => void;
   onClearPerRunMentions: () => void;
+  fileMentionResources: FileMentionResource[];
+  perRunFiles: PerRunFileSelection;
+  onTogglePerRunFileMention: (resource: FileMentionResource) => void;
+  onRemovePerRunFileMention: (resource: FileMentionResource) => void;
+  onClearPerRunFileMentions: () => void;
   workspaceConfig: WorkspaceConfigStore;
   activeSession: ChatSession | null;
   onToggleSessionResource: (kind: PerRunMentionKind, id: string) => void;
@@ -52,6 +59,11 @@ export function DataTaskChatInput({
   onTogglePerRunMention,
   onRemovePerRunMention,
   onClearPerRunMentions,
+  fileMentionResources,
+  perRunFiles,
+  onTogglePerRunFileMention,
+  onRemovePerRunFileMention,
+  onClearPerRunFileMentions,
   workspaceConfig,
   activeSession,
   onToggleSessionResource,
@@ -98,6 +110,11 @@ export function DataTaskChatInput({
           onTogglePerRunMention={onTogglePerRunMention}
           onRemovePerRunMention={onRemovePerRunMention}
           onClearPerRunMentions={onClearPerRunMentions}
+          fileMentionResources={fileMentionResources}
+          perRunFiles={perRunFiles}
+          onTogglePerRunFileMention={onTogglePerRunFileMention}
+          onRemovePerRunFileMention={onRemovePerRunFileMention}
+          onClearPerRunFileMentions={onClearPerRunFileMentions}
           workspaceConfig={workspaceConfig}
           activeSession={activeSession}
           onToggleSessionResource={onToggleSessionResource}
@@ -132,6 +149,11 @@ function DataTaskChatInputLayout({
   onTogglePerRunMention,
   onRemovePerRunMention,
   onClearPerRunMentions,
+  fileMentionResources,
+  perRunFiles,
+  onTogglePerRunFileMention,
+  onRemovePerRunFileMention,
+  onClearPerRunFileMentions,
   workspaceConfig,
   activeSession,
   onToggleSessionResource,
@@ -160,6 +182,11 @@ function DataTaskChatInputLayout({
   onTogglePerRunMention: (kind: PerRunMentionKind, id: string) => void;
   onRemovePerRunMention: (kind: PerRunMentionKind, id: string) => void;
   onClearPerRunMentions: () => void;
+  fileMentionResources: FileMentionResource[];
+  perRunFiles: PerRunFileSelection;
+  onTogglePerRunFileMention: (resource: FileMentionResource) => void;
+  onRemovePerRunFileMention: (resource: FileMentionResource) => void;
+  onClearPerRunFileMentions: () => void;
   workspaceConfig: WorkspaceConfigStore;
   activeSession: ChatSession | null;
   onToggleSessionResource: (kind: PerRunMentionKind, id: string) => void;
@@ -169,8 +196,11 @@ function DataTaskChatInputLayout({
   const chatInputWidth = resolveChatInputWidth(chatColumnWidth);
   const mention = useMentionAutocomplete({
     resources: mentionResources,
+    fileResources: fileMentionResources,
     selection: perRunSelection,
+    fileSelection: perRunFiles,
     onToggle: onTogglePerRunMention,
+    onToggleFile: onTogglePerRunFileMention,
     refreshToken: mode,
   });
   const autoresizeRef = useChatTextareaAutoresize(mode);
@@ -254,9 +284,13 @@ function DataTaskChatInputLayout({
                   />
                   <MentionChips
                     resources={mentionResources}
+                    fileResources={fileMentionResources}
                     selection={perRunSelection}
+                    fileSelection={perRunFiles}
                     onRemove={onRemovePerRunMention}
+                    onRemoveFile={onRemovePerRunFileMention}
                     onClear={onClearPerRunMentions}
+                    onClearFiles={onClearPerRunFileMentions}
                   />
                   <div
                     className={[
@@ -373,10 +407,8 @@ function ChatModelPicker({
         title="切换模型"
         onClick={() => setOpen((value) => !value)}
         className={[
-          "flex max-w-[168px] cursor-pointer items-center gap-0.5 px-1 py-1 text-xs font-medium transition-colors duration-200",
-          open
-            ? "text-foreground"
-            : "text-muted hover:text-foreground",
+          "chat-model-picker flex max-w-[168px] cursor-pointer items-center gap-0.5 px-1 py-1 text-xs font-medium transition-colors duration-200",
+          open ? "text-primary" : "text-foreground hover:text-primary",
         ].join(" ")}
       >
         <span className="truncate">{label}</span>
@@ -444,7 +476,7 @@ function ChatModelPicker({
                   setOpen(false);
                   onOpenLlmConfig();
                 }}
-                className="w-full cursor-pointer rounded-lg px-3 py-2 text-left text-xs font-medium text-muted transition-colors duration-200 hover:bg-surface-subtle hover:text-foreground"
+                className="chat-model-picker-footer w-full cursor-pointer rounded-lg px-3 py-2 text-left text-xs font-medium text-foreground transition-colors duration-200 hover:bg-surface-subtle hover:text-primary"
               >
                 管理模型配置…
               </button>
@@ -461,7 +493,7 @@ function ChevronDownIcon({ open }: { open: boolean }) {
     <svg
       viewBox="0 0 20 20"
       className={[
-        "h-3.5 w-3.5 shrink-0 text-muted-light transition-transform",
+        "h-3.5 w-3.5 shrink-0 transition-transform",
         open ? "rotate-180" : "",
       ].join(" ")}
       fill="none"

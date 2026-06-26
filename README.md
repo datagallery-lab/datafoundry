@@ -50,17 +50,43 @@ Current active workspace modules:
 
 ## Requirements
 
-- Node.js 22 or newer.
+- Node.js 22 or newer (use the same Node inside WSL — do not mix Windows and WSL `npm install`).
 - npm.
 
 Node's built-in `node:sqlite` is used by the local metadata store. On current Node versions it may print an
 `ExperimentalWarning`; that is expected for local MVP development.
+
+### WSL2 development (recommended)
+
+This repo is validated on **WSL2 Linux**. Treat the project directory as Linux-only for install and dev:
+
+```bash
+# Inside WSL (bash), not PowerShell/CMD
+export NVM_DIR="$HOME/.nvm" && . "$NVM_DIR/nvm.sh" && nvm use 22
+cd ~/project/dataagent
+npm install          # .npmrc enables legacy-peer-deps; postinstall runs tsc -b
+npm run dev          # builds packages, starts API + web
+```
+
+| Symptom | Cause | Fix |
+| --- | --- | --- |
+| `tsx` / `next` not found | `node_modules` missing or Windows npm used | Run `npm install` **in WSL** |
+| `resolveSessionWorkspaceDir` export missing | `packages/*/dist` stale after pull/rebase | `npm run build` (automatic via `predev:api` / `npm run dev`) |
+| Turbopack font module error | Monorepo + `next dev --turbopack` | Default `dev:web` uses webpack; optional `npm run dev:turbo -w @open-data-agent/web` |
+| Tailwind / lightningcss native error | npm install run from Windows | Reinstall in WSL; root pins `*-linux-x64-gnu` optional natives |
+| npm peer dependency ERESOLVE | CopilotKit pre-release peers | `.npmrc` sets `legacy-peer-deps=true` |
+
+**Do not** run `npm install` from Windows against `\\wsl$\\...\\dataagent` — it produces a Windows lockfile
+and breaks Linux native modules. If you see `package-lock.json.win.bak`, delete it and reinstall in WSL.
 
 ## Install
 
 ```bash
 npm install
 ```
+
+`postinstall` compiles workspace TypeScript packages into `dist/` so `npm run dev:api` can import them immediately
+after clone or rebase.
 
 Optional local environment:
 
@@ -154,6 +180,12 @@ Start the backend:
 
 ```bash
 npm run dev:api
+```
+
+Or start **both** API and web (recommended for local work):
+
+```bash
+npm run dev
 ```
 
 Default base URL:

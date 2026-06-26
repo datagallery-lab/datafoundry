@@ -12,6 +12,7 @@ import { deriveRunUsage, resolveTraceToolStatus } from "./live-run-state";
 export type TraceEntryKind =
   | "run_started"
   | "run_finished"
+  | "run_suspended"
   | "run_failed"
   | "tool"
   | "artifact";
@@ -403,6 +404,7 @@ function pushRunBoundaryEntries(
     errorMessage?: string;
   },
   idPrefix: string,
+  options?: { resumeAfterSuspend?: boolean },
 ): void {
   if (segment.startedAt !== undefined) {
     entries.push({
@@ -410,11 +412,22 @@ function pushRunBoundaryEntries(
       kind: "run_started",
       tsMs: segment.startedAt,
       ts: formatTraceTime(segment.startedAt),
-      title: "运行开始",
-      summary: "Agent 开始处理本轮请求。",
+      title: options?.resumeAfterSuspend ? "运行继续" : "运行开始",
+      summary: options?.resumeAfterSuspend
+        ? "Agent 已收到你的回答，继续执行。"
+        : "Agent 开始处理本轮请求。",
     });
   }
-  if (segment.status === "completed" && segment.finishedAt !== undefined) {
+  if (segment.status === "suspended" && segment.finishedAt !== undefined) {
+    entries.push({
+      id: `${idPrefix}-suspended`,
+      kind: "run_suspended",
+      tsMs: segment.finishedAt,
+      ts: formatTraceTime(segment.finishedAt),
+      title: "运行暂停",
+      summary: "Agent 等待你的回答后继续。",
+    });
+  } else if (segment.status === "completed" && segment.finishedAt !== undefined) {
     entries.push({
       id: `${idPrefix}-finished`,
       kind: "run_finished",
@@ -457,17 +470,24 @@ export function buildTraceTimeline(liveRun: LiveRun): TraceEntry[] {
   let sequenceFallbackMs = liveRun.runStartedAt ?? Date.now();
 
   for (const [index, segment] of liveRun.runHistory?.entries() ?? []) {
-    pushRunBoundaryEntries(entries, segment, `run-history-${index}`);
+    const resumeAfterSuspend =
+      index > 0 && liveRun.runHistory?.[index - 1]?.status === "suspended";
+    pushRunBoundaryEntries(entries, segment, `run-history-${index}`, {
+      resumeAfterSuspend,
+    });
   }
 
   if (liveRun.runStartedAt !== undefined) {
+    const resumeAfterSuspend = liveRun.runHistory?.at(-1)?.status === "suspended";
     entries.push({
       id: "run-started-current",
       kind: "run_started",
       tsMs: liveRun.runStartedAt,
       ts: formatTraceTime(liveRun.runStartedAt),
-      title: "运行开始",
-      summary: "Agent 开始处理本轮请求。",
+      title: resumeAfterSuspend ? "运行继续" : "运行开始",
+      summary: resumeAfterSuspend
+        ? "Agent 已收到你的回答，继续执行。"
+        : "Agent 开始处理本轮请求。",
     });
   }
 
@@ -499,7 +519,16 @@ export function buildTraceTimeline(liveRun: LiveRun): TraceEntry[] {
     entries.push(buildArtifactEntry(artifact, (sequenceFallbackMs += 1)));
   }
 
-  if (liveRun.runStatus === "completed" && liveRun.runFinishedAt !== undefined) {
+  if (liveRun.runStatus === "suspended" && liveRun.runFinishedAt !== undefined) {
+    entries.push({
+      id: "run-suspended-current",
+      kind: "run_suspended",
+      tsMs: liveRun.runFinishedAt,
+      ts: formatTraceTime(liveRun.runFinishedAt),
+      title: "运行暂停",
+      summary: "Agent 等待你的回答后继续。",
+    });
+  } else if (liveRun.runStatus === "completed" && liveRun.runFinishedAt !== undefined) {
     entries.push({
       id: "run-finished-current",
       kind: "run_finished",

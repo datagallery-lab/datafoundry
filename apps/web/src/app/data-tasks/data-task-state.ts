@@ -3,8 +3,14 @@ import {
   RIGHT_PANEL_DEFAULT_WIDTH,
 } from "./workspace-layout";
 
-export type ArtifactKind = "chart" | "csv" | "memo" | "dashboard";
-export type DataArtifactType = "dataset" | "chart" | "sql" | "report";
+export type ArtifactKind = "chart" | "csv" | "memo" | "dashboard" | "file";
+export type DataArtifactType = "dataset" | "chart" | "sql" | "report" | "file";
+export type ChartArtifactType = "bar" | "line" | "pie";
+export type ChartArtifactPoint = { label: string; value: number };
+export type ChartArtifactSeries = {
+  name: string;
+  points: ChartArtifactPoint[];
+};
 
 /**
  * Tool-agnostic data step kinds. The console is organized around the data-task
@@ -60,6 +66,25 @@ export function dataStepLabel(kind: DataStepKind): string {
   }
 }
 
+/** Human-readable title for a backend tool name (console / trace / progress). */
+export function toolDisplayTitle(toolName?: string): string {
+  switch (toolName) {
+    case "inspect_schema":
+      return "检查数据源 Schema";
+    case "run_sql_readonly":
+      return "生成并执行 SQL";
+    case "ask_user":
+      return "询问用户";
+    case "submit_plan":
+      return "提交计划";
+    default:
+      if (!toolName || toolName === "tool" || toolName === "unknown") {
+        return "执行工具";
+      }
+      return toolName;
+  }
+}
+
 export type ArtifactDetail =
   | {
       type: "sql";
@@ -74,12 +99,22 @@ export type ArtifactDetail =
     }
   | {
       type: "chart";
-      unit: string;
-      points: Array<{ label: string; value: number }>;
+      chartType?: ChartArtifactType;
+      unit?: string;
+      points: ChartArtifactPoint[];
+      series?: ChartArtifactSeries[];
     }
   | {
       type: "report";
       sections: Array<{ heading: string; body: string }>;
+    }
+  | {
+      type: "file";
+      path: string;
+      size?: number;
+      mtime?: string;
+      tool?: string;
+      content?: string;
     };
 
 export interface DataArtifact {
@@ -89,8 +124,14 @@ export interface DataArtifact {
   type?: DataArtifactType;
   summary: string;
   version?: string;
+  /** FileAssetRef id behind file-backed artifacts, when the backend provides one. */
+  fileId?: string;
+  /** Backend download URL for file-backed artifacts, when available. */
+  downloadUrl?: string;
   createdByEventId?: string;
   detail?: ArtifactDetail;
+  /** When true, full preview can be fetched via artifact REST API. */
+  previewAvailable?: boolean;
   /** Milliseconds since epoch when the artifact event was received. */
   recordedAtMs?: number;
 }
@@ -207,6 +248,23 @@ export function createChatSession(title = "新数据任务"): ChatSession {
   };
 }
 
+export function dedupeChatSessions(sessions: ChatSession[]): ChatSession[] {
+  const seenIds = new Set<string>();
+  const seenThreadIds = new Set<string>();
+  const unique: ChatSession[] = [];
+
+  for (const session of sessions) {
+    if (seenIds.has(session.id) || seenThreadIds.has(session.threadId)) {
+      continue;
+    }
+    seenIds.add(session.id);
+    seenThreadIds.add(session.threadId);
+    unique.push(session);
+  }
+
+  return unique;
+}
+
 export function loadChatSessions(): ChatSession[] {
   if (typeof window === "undefined") return [];
   try {
@@ -214,7 +272,7 @@ export function loadChatSessions(): ChatSession[] {
     if (!raw) return [];
     const parsed = JSON.parse(raw) as unknown;
     if (!Array.isArray(parsed)) return [];
-    return parsed.filter(isChatSession);
+    return dedupeChatSessions(parsed.filter(isChatSession));
   } catch {
     return [];
   }
@@ -436,7 +494,6 @@ export const DATA_SKILLS: DataSkill[] = [
 
 export const DEFAULT_SKILL_ID = DATA_SKILLS[0].id;
 
-const SKILL_STORAGE_KEY = "data-tasks:skill:v1";
 const ACTIVE_LLM_STORAGE_KEY = "data-tasks:active-llm:v1";
 const RIGHT_PANEL_WIDTH_STORAGE_KEY = "data-tasks:right-panel-width:v1";
 
@@ -467,30 +524,6 @@ export function persistRightPanelWidth(width: number): void {
   }
 }
 
-export function loadSelectedSkillId(): string {
-  if (typeof window === "undefined") return DEFAULT_SKILL_ID;
-  try {
-    const raw = window.localStorage.getItem(SKILL_STORAGE_KEY);
-    if (!raw) return DEFAULT_SKILL_ID;
-    return DATA_SKILLS.some((skill) => skill.id === raw) ? raw : DEFAULT_SKILL_ID;
-  } catch {
-    return DEFAULT_SKILL_ID;
-  }
-}
-
-export function persistSelectedSkillId(skillId: string): void {
-  if (typeof window === "undefined") return;
-  try {
-    window.localStorage.setItem(SKILL_STORAGE_KEY, skillId);
-  } catch {
-    // Ignore quota errors — selection stays in-memory.
-  }
-}
-
-export function getDataSkill(skillId: string): DataSkill {
-  return DATA_SKILLS.find((skill) => skill.id === skillId) ?? DATA_SKILLS[0];
-}
-
 export type WorkspaceConfigKind = "db" | "kb" | "mcp" | "llm" | "skill";
 
 /** Connectivity status; populated once backend `test`/`introspect` lands. */
@@ -515,7 +548,7 @@ export type ConfigFieldDef = {
   label: string;
   placeholder?: string;
   helpText?: string;
-  inputType?: "text" | "password" | "url" | "select" | "number" | "boolean";
+  inputType?: "text" | "password" | "url" | "select" | "number" | "boolean" | "textarea";
   options?: Array<{ value: string; label: string }>;
   /** Select option values rendered disabled until pendingCapability activates. */
   pendingOptionValues?: string[];
@@ -556,16 +589,22 @@ export type BackendCapability =
   | "datasource.queryPolicy" // per-datasource maxRows/timeout wired (#5)
   | "llm.samplingParams" // temperature/maxTokens consumed (#4)
   | "artifact.export" // artifact preview/download API (#9)
+  | "artifact.list" // session artifact list/restore API
+  | "artifact.promote" // promote artifact-backed file into workspace assets
   | "chat.imageInput" // chat multimodal image parts consumed (#13a)
-  | "chat.fileUpload"; // chat file upload endpoint to session workspace (#13b)
+  | "chat.fileUpload" // chat file upload endpoint to session workspace (#13b)
+  | "files"; // workspace FileAssetRef library API
 
 export const BACKEND_CAPABILITIES: Record<BackendCapability, boolean> = {
   "datasource.server": false,
   "datasource.queryPolicy": false,
   "llm.samplingParams": false,
-  "artifact.export": false,
+  "artifact.export": true,
+  "artifact.list": false,
+  "artifact.promote": false,
   "chat.imageInput": false,
   "chat.fileUpload": false,
+  files: false,
 };
 
 export function hasCapability(capability: BackendCapability): boolean {
@@ -899,6 +938,10 @@ export function normalizeMcpSettings(
   authType: string;
   toolAllowlist: string;
   timeoutMs: string;
+  command: string;
+  args: string;
+  cwd: string;
+  env: string;
 } {
   return {
     transport: settings?.transport ?? "sse",
@@ -907,7 +950,15 @@ export function normalizeMcpSettings(
     authType: settings?.authType ?? "none",
     toolAllowlist: settings?.toolAllowlist ?? "",
     timeoutMs: settings?.timeoutMs ?? "",
+    command: settings?.command ?? "",
+    args: settings?.args ?? "",
+    cwd: settings?.cwd ?? "",
+    env: settings?.env ?? "",
   };
+}
+
+export function isMcpStdioTransport(settings: Record<string, string>): boolean {
+  return settings.transport === "stdio";
 }
 
 export function normalizeKbSettings(
@@ -963,12 +1014,6 @@ export function summarizeMcpItems(
   return `${items.length} 项默认可用`;
 }
 
-export function getEnabledMcpItems(
-  workspaceConfig: WorkspaceConfigStore,
-): WorkspaceConfigItem[] {
-  return workspaceConfig.mcp;
-}
-
 export const WORKSPACE_CONFIG_FIELDS: Record<
   WorkspaceConfigKind,
   ConfigFieldDef[]
@@ -978,9 +1023,8 @@ export const WORKSPACE_CONFIG_FIELDS: Record<
       key: "datasourceId",
       label: "数据源 ID",
       placeholder: "my-dataset",
-      helpText: "传给 Agent 的稳定标识（forwardedProps.datasourceId）。内置项不可改。",
+      helpText: "传给 Agent 的稳定标识（forwardedProps.datasourceId）。",
       required: true,
-      readOnly: (item) => !!item.builtin,
       fullWidth: true,
     },
     {
@@ -992,15 +1036,13 @@ export const WORKSPACE_CONFIG_FIELDS: Record<
       helpText:
         "已实现：DuckDB / SQLite / CSV / Excel / PostgreSQL / MySQL / ClickHouse。未启用扩展类型标「待后端」。",
       required: true,
-      readOnly: (item) => !!item.builtin,
     },
     {
       key: "mode",
       label: "访问模式",
       inputType: "select",
       options: [...DB_MODE_OPTIONS],
-      helpText: "强制只读，写操作在 Data Gateway 层被拒绝。",
-      readOnly: () => true,
+      helpText: "当前后端仅支持只读查询（run_sql_readonly）。",
     },
     {
       key: "filePath",
@@ -1309,8 +1351,46 @@ export const WORKSPACE_CONFIG_FIELDS: Record<
       key: "serverUrl",
       label: "Endpoint / 启动命令",
       placeholder: "https://example.com/mcp/sse",
-      helpText: "远程传输填 MCP 服务 URL；stdio 填本地启动命令。",
+      helpText: "远程传输填 MCP 服务 URL；stdio 时也可填整行启动命令作为 fallback。",
+      visibleWhen: (settings) => !isMcpStdioTransport(settings),
       required: true,
+      fullWidth: true,
+    },
+    {
+      key: "command",
+      label: "可执行文件",
+      placeholder: "/usr/bin/npx",
+      helpText: "stdio 模式下优先使用 command + args；为空时回退到上方整行命令。",
+      visibleWhen: isMcpStdioTransport,
+      pendingCapability: "mcp.stdio",
+      required: true,
+      fullWidth: true,
+    },
+    {
+      key: "args",
+      label: "启动参数",
+      placeholder: "-y @modelcontextprotocol/server-filesystem /data",
+      helpText: "空格分隔；会写入后端 args 数组。",
+      visibleWhen: isMcpStdioTransport,
+      pendingCapability: "mcp.stdio",
+      fullWidth: true,
+    },
+    {
+      key: "cwd",
+      label: "工作目录",
+      placeholder: "/home/agent/workspace",
+      visibleWhen: isMcpStdioTransport,
+      pendingCapability: "mcp.stdio",
+      fullWidth: true,
+    },
+    {
+      key: "env",
+      label: "环境变量 (JSON)",
+      inputType: "textarea",
+      placeholder: '{ "NODE_ENV": "production" }',
+      helpText: "JSON object，键值均为字符串。",
+      visibleWhen: isMcpStdioTransport,
+      pendingCapability: "mcp.stdio",
       fullWidth: true,
     },
     {
@@ -1319,6 +1399,7 @@ export const WORKSPACE_CONFIG_FIELDS: Record<
       inputType: "select",
       options: [...MCP_AUTH_TYPE_OPTIONS],
       pendingOptionValues: ["custom-header"],
+      visibleWhen: (settings) => !isMcpStdioTransport(settings),
     },
     {
       key: "apiKey",
@@ -1326,7 +1407,8 @@ export const WORKSPACE_CONFIG_FIELDS: Record<
       inputType: "password",
       placeholder: "••••••",
       helpText: "Bearer 认证时写入 secretRef。",
-      visibleWhen: (s) => (s.authType ?? "none") !== "none",
+      visibleWhen: (settings) =>
+        !isMcpStdioTransport(settings) && (settings.authType ?? "none") !== "none",
       fullWidth: true,
     },
     {
@@ -1354,7 +1436,6 @@ export const WORKSPACE_CONFIG_FIELDS: Record<
       helpText:
         "openai-compatible / bailian 走 OpenAI 兼容路径；anthropic/google 等待集成验证。",
       required: true,
-      readOnly: (item) => !!item.builtin,
       fullWidth: true,
     },
     {
@@ -1364,7 +1445,6 @@ export const WORKSPACE_CONFIG_FIELDS: Record<
       placeholder: "https://dashscope.aliyuncs.com/compatible-mode/v1",
       helpText: "OpenAI 兼容 Chat Completions 根路径（不含 /chat/completions）。",
       required: true,
-      readOnly: (item) => !!item.builtin,
       fullWidth: true,
     },
     {
@@ -1373,7 +1453,6 @@ export const WORKSPACE_CONFIG_FIELDS: Record<
       inputType: "password",
       placeholder: "sk-...",
       helpText: "写入 secretRef；run 时不经 AG-UI 外发。",
-      readOnly: (item) => !!item.builtin,
       fullWidth: true,
     },
     {
@@ -1382,7 +1461,6 @@ export const WORKSPACE_CONFIG_FIELDS: Record<
       placeholder: "qwen-plus",
       helpText: "Chat model id（如 gpt-4o、qwen-plus、deepseek-chat）。",
       required: true,
-      readOnly: (item) => !!item.builtin,
       fullWidth: true,
     },
     {
@@ -1415,7 +1493,6 @@ export const WORKSPACE_CONFIG_FIELDS: Record<
       inputType: "number",
       placeholder: "0.2",
       requiresCapability: "llm.samplingParams",
-      readOnly: (item) => !!item.builtin,
     },
     {
       key: "maxTokens",
@@ -1423,7 +1500,6 @@ export const WORKSPACE_CONFIG_FIELDS: Record<
       inputType: "number",
       placeholder: "4096",
       requiresCapability: "llm.samplingParams",
-      readOnly: (item) => !!item.builtin,
     },
     {
       key: "topP",
@@ -1431,7 +1507,6 @@ export const WORKSPACE_CONFIG_FIELDS: Record<
       inputType: "number",
       placeholder: "1.0",
       requiresCapability: "llm.samplingParams",
-      readOnly: (item) => !!item.builtin,
     },
     {
       key: "frequencyPenalty",
@@ -1439,7 +1514,6 @@ export const WORKSPACE_CONFIG_FIELDS: Record<
       inputType: "number",
       placeholder: "0",
       requiresCapability: "llm.samplingParams",
-      readOnly: (item) => !!item.builtin,
     },
     {
       key: "presencePenalty",
@@ -1447,14 +1521,12 @@ export const WORKSPACE_CONFIG_FIELDS: Record<
       inputType: "number",
       placeholder: "0",
       requiresCapability: "llm.samplingParams",
-      readOnly: (item) => !!item.builtin,
     },
     {
       key: "reasoningModel",
       label: "Reasoning Model",
       inputType: "boolean",
       pendingCapability: "llm.advancedSampling",
-      readOnly: (item) => !!item.builtin,
     },
     {
       key: "contextLength",
@@ -1462,7 +1534,6 @@ export const WORKSPACE_CONFIG_FIELDS: Record<
       inputType: "number",
       placeholder: "128000",
       pendingCapability: "llm.advancedSampling",
-      readOnly: (item) => !!item.builtin,
     },
   ],
   skill: [
@@ -1544,6 +1615,10 @@ export function defaultSettingsForKind(
         serverUrl: name ? `https://${name}` : "",
         apiKey: "",
         authType: "none",
+        command: "",
+        args: "",
+        cwd: "",
+        env: "",
       };
     case "llm":
       return normalizeLlmSettingsExtended({
@@ -1571,7 +1646,7 @@ export function renderableConfigFields(
 ): ConfigFieldDef[] {
   return WORKSPACE_CONFIG_FIELDS[panel].filter(
     (field) =>
-      !isFieldHiddenByCapability(field) &&
+      (panel === "skill" ? !isFieldHiddenByCapability(field) : true) &&
       (!field.visibleWhen || field.visibleWhen(settings)),
   );
 }
@@ -1581,9 +1656,11 @@ export function visibleConfigFields(
   panel: WorkspaceConfigKind,
   settings: Record<string, string>,
 ): ConfigFieldDef[] {
-  return renderableConfigFields(panel, settings).filter(
-    (field) => !isFieldPending(field, settings),
-  );
+  const fields = renderableConfigFields(panel, settings);
+  if (panel !== "skill") {
+    return fields;
+  }
+  return fields.filter((field) => !isFieldPending(field, settings));
 }
 
 export function resolveConfigFieldOptions(
@@ -1636,12 +1713,29 @@ export function isWorkspaceConfigItemValid(
   });
 }
 
+/** Compare editable fields for save/cancel dirty detection (ignores revision/status). */
+export function workspaceConfigItemDraftEquals(
+  a: WorkspaceConfigItem,
+  b: WorkspaceConfigItem,
+): boolean {
+  if (a.name.trim() !== b.name.trim()) return false;
+  if (a.description.trim() !== b.description.trim()) return false;
+  if (a.enabled !== b.enabled) return false;
+  const aSettings = a.settings ?? {};
+  const bSettings = b.settings ?? {};
+  const keys = new Set([...Object.keys(aSettings), ...Object.keys(bSettings)]);
+  for (const key of keys) {
+    if ((aSettings[key] ?? "").trim() !== (bSettings[key] ?? "").trim()) {
+      return false;
+    }
+  }
+  return true;
+}
+
 export type WorkspaceConfigStore = Record<
   WorkspaceConfigKind,
   WorkspaceConfigItem[]
 >;
-
-const WORKSPACE_CONFIG_STORAGE_KEY = "data-tasks:workspace-config:v1";
 
 export function defaultWorkspaceConfig(): WorkspaceConfigStore {
   return {
@@ -1687,111 +1781,6 @@ export function defaultWorkspaceConfig(): WorkspaceConfigStore {
   };
 }
 
-function mergeWorkspaceConfig(stored: WorkspaceConfigStore): WorkspaceConfigStore {
-  const defaults = defaultWorkspaceConfig();
-  const mergeKind = (kind: WorkspaceConfigKind): WorkspaceConfigItem[] => {
-    const builtinIds = new Set(defaults[kind].map((item) => item.id));
-    const storedBuiltin = stored[kind].filter((item) => builtinIds.has(item.id));
-    const storedCustom = stored[kind].filter((item) => !builtinIds.has(item.id));
-    const mergedBuiltin = defaults[kind].map((item) => {
-      const hit = storedBuiltin.find((storedItem) => storedItem.id === item.id);
-      if (!hit) return item;
-      const mergedSettings =
-        kind === "llm"
-          ? {
-              ...item.settings,
-              ...normalizeLlmSettings(hit.settings),
-            }
-          : kind === "skill"
-            ? {
-                ...item.settings,
-                ...normalizeSkillSettings(hit.settings),
-              }
-            : { ...item.settings, ...hit.settings };
-      return {
-        ...item,
-        enabled: true,
-        name: hit.name || item.name,
-        description: hit.description || item.description,
-        settings: mergedSettings,
-      };
-    });
-    return [
-      ...mergedBuiltin,
-      ...storedCustom.map((item) => ({
-        ...item,
-        settings:
-          kind === "llm"
-            ? {
-                ...defaultSettingsForKind(kind, item.name),
-                ...normalizeLlmSettings(item.settings),
-              }
-            : kind === "skill"
-              ? {
-                  ...defaultSettingsForKind(kind, item.name),
-                  ...normalizeSkillSettings(item.settings),
-                }
-              : { ...defaultSettingsForKind(kind, item.name), ...item.settings },
-      })),
-    ];
-  };
-
-  return {
-    db: mergeKind("db"),
-    kb: mergeKind("kb"),
-    mcp: mergeKind("mcp"),
-    llm: mergeKind("llm"),
-    skill: mergeKind("skill"),
-  };
-}
-
-function isLegacyWorkspaceConfigStore(
-  value: unknown,
-): value is Omit<WorkspaceConfigStore, "mcp"> {
-  if (typeof value !== "object" || value === null) return false;
-  const record = value as Record<string, unknown>;
-  return (["db", "kb", "llm", "skill"] as const).every((kind) =>
-    Array.isArray(record[kind]),
-  );
-}
-
-function isWorkspaceConfigStore(value: unknown): value is WorkspaceConfigStore {
-  if (typeof value !== "object" || value === null) return false;
-  const record = value as Record<string, unknown>;
-  return (["db", "kb", "mcp", "llm", "skill"] as const).every((kind) =>
-    Array.isArray(record[kind]),
-  );
-}
-
-function normalizeStoredWorkspaceConfig(value: unknown): WorkspaceConfigStore {
-  if (isWorkspaceConfigStore(value)) return value;
-  if (isLegacyWorkspaceConfigStore(value)) {
-    return { ...value, mcp: [] };
-  }
-  return defaultWorkspaceConfig();
-}
-
-export function loadWorkspaceConfig(): WorkspaceConfigStore {
-  if (typeof window === "undefined") return defaultWorkspaceConfig();
-  try {
-    const raw = window.localStorage.getItem(WORKSPACE_CONFIG_STORAGE_KEY);
-    if (!raw) return defaultWorkspaceConfig();
-    const parsed = JSON.parse(raw) as unknown;
-    return mergeWorkspaceConfig(normalizeStoredWorkspaceConfig(parsed));
-  } catch {
-    return defaultWorkspaceConfig();
-  }
-}
-
-export function persistWorkspaceConfig(store: WorkspaceConfigStore): void {
-  if (typeof window === "undefined") return;
-  try {
-    window.localStorage.setItem(WORKSPACE_CONFIG_STORAGE_KEY, JSON.stringify(store));
-  } catch {
-    // Ignore quota errors.
-  }
-}
-
 export function summarizeConfigItems(
   items: WorkspaceConfigItem[],
   emptyLabel: string,
@@ -1828,10 +1817,6 @@ export function emptySessionDisabledMap(): SessionDisabledMap {
   return { db: [], kb: [], mcp: [], skill: [] };
 }
 
-export function emptySessionConfig(): SessionConfigOverride {
-  return { disabled: emptySessionDisabledMap() };
-}
-
 export function getSessionDisabled(
   session: ChatSession | null | undefined,
 ): SessionDisabledMap {
@@ -1853,14 +1838,6 @@ export function sessionEnabledIds(
   session: ChatSession | null | undefined,
 ): string[] {
   return sessionEnabledItems(store, kind, session).map((item) => item.id);
-}
-
-export function isSessionResourceEnabled(
-  session: ChatSession | null | undefined,
-  kind: PerRunMentionKind,
-  id: string,
-): boolean {
-  return !getSessionDisabled(session)[kind].includes(id);
 }
 
 export function toggleSessionResource(
@@ -2032,6 +2009,32 @@ export interface MentionResource {
   backendSupported: boolean;
 }
 
+export type FileMentionScope = "workspace" | "session";
+
+export interface FileMentionResource {
+  id: string;
+  fileId: string;
+  name: string;
+  description: string;
+  scope: FileMentionScope;
+  path?: string;
+  backendSupported: boolean;
+}
+
+export interface PerRunFileSelection {
+  fileIds: string[];
+  pinnedPaths: string[];
+}
+
+export type FileAssetRefLike = {
+  id: string;
+  filename: string;
+  source?: string;
+  sessionId?: string;
+  mimeType?: string;
+  sizeBytes?: number;
+};
+
 /** Lists session-enabled resources for the `@` picker. */
 export function buildMentionResources(
   store: WorkspaceConfigStore,
@@ -2050,6 +2053,91 @@ export function buildMentionResources(
     }
   }
   return resources;
+}
+
+export function emptyPerRunFileSelection(): PerRunFileSelection {
+  return { fileIds: [], pinnedPaths: [] };
+}
+
+export function filterWorkspaceAssetFiles<T extends FileAssetRefLike>(files: T[]): T[] {
+  return files.filter((file) =>
+    !file.sessionId && (file.source === "upload" || file.source === "workspace"),
+  );
+}
+
+export function fileMentionFromWorkspaceAsset(file: FileAssetRefLike): FileMentionResource {
+  return {
+    id: `workspace:${file.id}`,
+    fileId: file.id,
+    name: file.filename,
+    description: [file.mimeType, file.sizeBytes !== undefined ? `${file.sizeBytes} B` : ""]
+      .filter(Boolean)
+      .join(" · "),
+    scope: "workspace",
+    backendSupported: true,
+  };
+}
+
+export function fileMentionFromArtifact(artifact: DataArtifact): FileMentionResource | null {
+  if (!artifact.fileId) return null;
+  const path = artifact.detail?.type === "file" ? artifact.detail.path : undefined;
+  if (!path) return null;
+  return {
+    id: `session:${artifact.id}`,
+    fileId: artifact.fileId,
+    name: artifact.title,
+    description: artifact.summary,
+    scope: "session",
+    ...(path ? { path } : {}),
+    backendSupported: false,
+  };
+}
+
+export function togglePerRunFileMention(
+  selection: PerRunFileSelection,
+  resource: FileMentionResource,
+): PerRunFileSelection {
+  if (resource.scope === "workspace") {
+    const exists = selection.fileIds.includes(resource.fileId);
+    return {
+      ...selection,
+      fileIds: exists
+        ? selection.fileIds.filter((id) => id !== resource.fileId)
+        : [...selection.fileIds, resource.fileId],
+    };
+  }
+
+  const pinnedPath = resource.path;
+  if (!pinnedPath) return selection;
+  const exists = selection.pinnedPaths.includes(pinnedPath);
+  return {
+    ...selection,
+    pinnedPaths: exists
+      ? selection.pinnedPaths.filter((path) => path !== pinnedPath)
+      : [...selection.pinnedPaths, pinnedPath],
+  };
+}
+
+export function removePerRunFileMention(
+  selection: PerRunFileSelection,
+  resource: FileMentionResource,
+): PerRunFileSelection {
+  if (resource.scope === "workspace") {
+    return {
+      ...selection,
+      fileIds: selection.fileIds.filter((id) => id !== resource.fileId),
+    };
+  }
+  return {
+    ...selection,
+    pinnedPaths: resource.path
+      ? selection.pinnedPaths.filter((path) => path !== resource.path)
+      : selection.pinnedPaths,
+  };
+}
+
+export function countPerRunFileMentions(selection: PerRunFileSelection): number {
+  return selection.fileIds.length + selection.pinnedPaths.length;
 }
 
 export function togglePerRunMention(
@@ -2098,6 +2186,8 @@ export type RunConfigPayload = {
   activeLlmProfileId: string | null;
   activeSkillId: string;
   mentioned: PerRunSelection;
+  fileIds: string[];
+  pinnedPaths: string[];
 };
 
 export interface BuildRunConfigOptions {
@@ -2105,6 +2195,7 @@ export interface BuildRunConfigOptions {
   defaultDatasourceId: string;
   session?: ChatSession | null;
   perRunSelection?: PerRunSelection;
+  perRunFiles?: PerRunFileSelection;
   defaultSkillId?: string;
 }
 
@@ -2129,6 +2220,7 @@ export function buildRunConfig(
   options: BuildRunConfigOptions,
 ): RunConfigPayload {
   const selection = options.perRunSelection ?? emptyPerRunSelection();
+  const fileSelection = options.perRunFiles ?? emptyPerRunFileSelection();
   const session = options.session;
   const enabledDb = sessionEnabledIds(store, "db", session);
   const enabledKb = sessionEnabledIds(store, "kb", session);
@@ -2167,7 +2259,13 @@ export function buildRunConfig(
     activeLlmProfileId: options.activeLlmId,
     activeSkillId,
     mentioned,
+    fileIds: uniqueStrings(fileSelection.fileIds),
+    pinnedPaths: uniqueStrings(fileSelection.pinnedPaths),
   };
+}
+
+function uniqueStrings(values: readonly string[]): string[] {
+  return [...new Set(values.filter(Boolean))];
 }
 
 /** Honors a per-run `@db` mention within the session-enabled db set. */

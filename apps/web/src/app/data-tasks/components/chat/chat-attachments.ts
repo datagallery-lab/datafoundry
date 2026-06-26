@@ -1,5 +1,12 @@
-import type { Attachment, AttachmentUploadResult } from "@copilotkit/shared";
 import type { InputContent } from "@ag-ui/core";
+import { getBackendCapabilities } from "../../../../lib/config-api/capabilities";
+export type ChatAttachmentUploadResult = {
+  type: "data" | "url";
+  value: string;
+  mimeType?: string;
+  metadata?: Record<string, unknown>;
+};
+
 
 export const CHAT_ATTACHMENT_MAX_BYTES = 20 * 1024 * 1024;
 
@@ -28,7 +35,32 @@ export type ChatAttachmentCapabilities = {
   fileUpload: boolean;
 };
 
+export type ChatAttachment = {
+  id: string;
+  type: string;
+  source?: unknown;
+  filename?: string;
+  size?: number;
+  status?: string;
+  metadata?: Record<string, unknown>;
+};
+
 export const UNSUPPORTED_METADATA_KEY = "__chatUnsupported";
+
+export function formatFileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+export function readFileAsBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result).split(",")[1] ?? "");
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(file);
+  });
+}
 
 export function isImageMime(mimeType: string): boolean {
   return mimeType.startsWith("image/");
@@ -43,7 +75,7 @@ export function createChatOnUpload(deps: {
   readBase64: (file: File) => Promise<string>;
   uploadDataFile: UploadDataFile;
 }) {
-  return async (file: File): Promise<AttachmentUploadResult> => {
+  return async (file: File): Promise<ChatAttachmentUploadResult> => {
     const caps = deps.capabilities();
     if (isImageMime(file.type)) {
       const value = await deps.readBase64(file);
@@ -72,11 +104,19 @@ export function createChatOnUpload(deps: {
   };
 }
 
-export function isAttachmentUnsupported(att: Attachment): boolean {
-  return att.metadata?.[UNSUPPORTED_METADATA_KEY] === true;
+export function isAttachmentUnsupported(att: ChatAttachment): boolean {
+  if (att.metadata?.[UNSUPPORTED_METADATA_KEY] !== true) {
+    return false;
+  }
+  const caps = getBackendCapabilities();
+  const mimeType = att.type ?? "";
+  if (isImageMime(mimeType)) {
+    return !caps["chat.imageInput"];
+  }
+  return !caps["chat.fileUpload"];
 }
 
-export function attachmentToInputContent(att: Attachment): InputContent {
+export function attachmentToInputContent(att: ChatAttachment): InputContent {
   const metadata = {
     ...(att.filename ? { filename: att.filename } : {}),
     ...att.metadata,
@@ -86,7 +126,7 @@ export function attachmentToInputContent(att: Attachment): InputContent {
 
 export function buildMessageContent(
   text: string,
-  attachments: Attachment[],
+  attachments: ChatAttachment[],
 ): InputContent[] {
   const sendable = attachments.filter((att) => !isAttachmentUnsupported(att));
   return [

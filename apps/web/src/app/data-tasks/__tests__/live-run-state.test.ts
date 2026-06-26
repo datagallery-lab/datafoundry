@@ -1,11 +1,16 @@
 import { describe, expect, it } from "vitest";
 import {
   accumulateSessionUsage,
+  artifactDetailFromPreview,
   createInitialLiveRun,
   createInitialSessionUsage,
   deriveLiveSessionView,
   deriveRunUsage,
+  deriveSegmentRunUsage,
+  formatSandboxOutputText,
+  resolveSandboxOutputsForToolCall,
   resolveTokenUsageForEvent,
+  resolveWorkspaceMetadataForToolCall,
   reduceLiveRunEvent,
 } from "../live-run-state";
 
@@ -96,8 +101,35 @@ describe("live run state reducer", () => {
       title: "SQL result audit-1",
       type: "dataset",
       summary: "数据集，100 行",
+      previewAvailable: true,
     });
     expect(run.artifacts[0]?.detail).toBeUndefined();
+  });
+
+  it("keeps file artifact refs for download and @ file mentions", () => {
+    let run = createInitialLiveRun();
+    run = reduceLiveRunEvent(run, {
+      type: "CUSTOM",
+      name: "artifact",
+      value: {
+        id: "artifact-file-1",
+        type: "file",
+        name: "output/report.html",
+        file_id: "file-ref-1",
+        download_url: "/api/v1/artifacts/artifact-file-1/download",
+        preview_json: {
+          path: "output/report.html",
+          size: 128,
+        },
+      },
+    });
+
+    expect(run.artifacts[0]).toMatchObject({
+      id: "artifact-file-1",
+      fileId: "file-ref-1",
+      downloadUrl: "/api/v1/artifacts/artifact-file-1/download",
+      detail: { type: "file", path: "output/report.html", size: 128 },
+    });
   });
 
   it("parses table preview_json and links artifact to sql tool call", () => {
@@ -150,6 +182,28 @@ describe("live run state reducer", () => {
     ]);
     expect(run.toolCalls[0]?.startedAtMs).toBeTypeOf("number");
     expect(run.toolCalls[0]?.finishedAtMs).toBeUndefined();
+  });
+
+  it("parses REST preview envelopes for dataset artifacts", () => {
+    const artifact = {
+      type: "dataset" as const,
+      kind: "csv" as const,
+      title: "SQL result audit-1",
+    };
+    const preview = {
+      type: "table",
+      preview_json: {
+        columns: ["channel", "gmv"],
+        rows: [{ channel: "search", gmv: 1280 }],
+        row_count: 1,
+      },
+    };
+
+    expect(artifactDetailFromPreview(artifact, preview)).toEqual({
+      type: "dataset",
+      columns: ["channel", "gmv"],
+      rows: [["search", "1280"]],
+    });
   });
 
   it("links multiple sql artifacts to distinct tool calls", () => {
@@ -336,6 +390,176 @@ describe("live run state reducer", () => {
     expect(run.events.find((event) => event.id === "tool-write-1")?.artifactIds).toEqual([
       "artifact-file-1",
     ]);
+  });
+
+  it("links publish_artifact file outputs to the publish tool instead of leaving them orphaned", () => {
+    let run = reduceLiveRunEvent(createInitialLiveRun(), {
+      type: "TOOL_CALL_START",
+      toolCallId: "tool-write-1",
+      toolCallName: "write_file",
+    });
+    run = reduceLiveRunEvent(run, {
+      type: "TOOL_CALL_RESULT",
+      toolCallId: "tool-write-1",
+      toolCallName: "write_file",
+      result: JSON.stringify({ observation: "Wrote 2 bytes to test_file.txt" }),
+    });
+    run = reduceLiveRunEvent(run, {
+      type: "CUSTOM",
+      name: "artifact",
+      value: {
+        id: "artifact-write",
+        type: "file",
+        name: "test_file.txt",
+        preview_json: { path: "test_file.txt", size: 2, tool: "write_file" },
+      },
+    });
+    run = reduceLiveRunEvent(run, {
+      type: "TOOL_CALL_START",
+      toolCallId: "tool-publish-1",
+      toolCallName: "publish_artifact",
+    });
+    run = reduceLiveRunEvent(run, {
+      type: "TOOL_CALL_RESULT",
+      toolCallId: "tool-publish-1",
+      toolCallName: "publish_artifact",
+      result: JSON.stringify({ observation: "Published test_file.txt" }),
+    });
+    run = reduceLiveRunEvent(run, {
+      type: "CUSTOM",
+      name: "artifact",
+      value: {
+        id: "artifact-publish",
+        type: "file",
+        name: "test_file.txt",
+        preview_json: { path: "test_file.txt", size: 2, tool: "publish_artifact" },
+      },
+    });
+
+    expect(run.artifacts.find((artifact) => artifact.id === "artifact-publish")?.createdByEventId).toBe(
+      "tool-publish-1",
+    );
+    expect(run.events.find((event) => event.id === "tool-publish-1")?.artifactIds).toEqual([
+      "artifact-publish",
+    ]);
+  });
+
+  it("captures run diagnostic custom events for overview display", () => {
+    let run = createInitialLiveRun();
+    run = reduceLiveRunEvent(run, {
+      type: "CUSTOM",
+      name: "skill.selection",
+      value: {
+        mode: "auto",
+        selected: [{ id: "skill-sql", name: "SQL Analyst", revision: 3 }],
+        effective_tool_policy: { allowedTools: ["inspect_schema", "run_sql_readonly"] },
+        audit: [{ skillId: "skill-sql", decision: "selected", reasons: ["query:analysis"] }],
+      },
+    });
+    run = reduceLiveRunEvent(run, {
+      type: "CUSTOM",
+      name: "goal.updated",
+      value: { objective: "分析订单渠道", source: "user", status: "running" },
+    });
+    run = reduceLiveRunEvent(run, {
+      type: "CUSTOM",
+      name: "run.config.resolved",
+      value: {
+        activeDatasourceId: "orders-db",
+        enabledKnowledgeIds: ["kb-orders"],
+        enabledMcpServerIds: ["mcp-local"],
+        selectedSkills: [{ id: "skill-sql", name: "SQL Analyst" }],
+      },
+    });
+    run = reduceLiveRunEvent(run, {
+      type: "CUSTOM",
+      name: "context.compiled",
+      value: { step: "prepare", token_report: { total_tokens: 1200, budget_tokens: 8000 } },
+    });
+    run = reduceLiveRunEvent(run, {
+      type: "CUSTOM",
+      name: "context.prompt-verified",
+      value: { model: "qwen-plus", prompt_tokens: 900, remaining_tokens: 7100 },
+    });
+
+    expect((run as any).skillSelection).toMatchObject({
+      mode: "auto",
+      selected: [{ id: "skill-sql", name: "SQL Analyst", revision: 3 }],
+    });
+    expect((run as any).goal).toMatchObject({
+      objective: "分析订单渠道",
+      source: "user",
+      status: "running",
+    });
+    expect((run as any).resolvedRunConfig).toMatchObject({
+      activeDatasourceId: "orders-db",
+      enabledKnowledgeIds: ["kb-orders"],
+      enabledMcpServerIds: ["mcp-local"],
+    });
+    expect((run as any).contextReports).toHaveLength(2);
+    expect((run as any).contextReports[0]).toMatchObject({
+      name: "context.prompt-verified",
+      value: { model: "qwen-plus" },
+    });
+  });
+
+  it("parses snake_case run.config.resolved fields from backend events", () => {
+    const run = reduceLiveRunEvent(createInitialLiveRun(), {
+      type: "CUSTOM",
+      name: "run.config.resolved",
+      value: {
+        active_datasource_id: "orders-db",
+        requested_llm_profile_id: "qwen-plus",
+        enabled_knowledge_ids: ["kb-orders"],
+        enabled_mcp_server_ids: ["mcp-local"],
+        file_ids: ["file-1"],
+        selected_skill_ids: ["skill-sql"],
+      },
+    });
+
+    expect((run as any).resolvedRunConfig).toMatchObject({
+      activeDatasourceId: "orders-db",
+      activeLlmProfileId: "qwen-plus",
+      enabledKnowledgeIds: ["kb-orders"],
+      enabledMcpServerIds: ["mcp-local"],
+      fileIds: ["file-1"],
+      selectedSkills: [{ id: "skill-sql" }],
+    });
+  });
+
+  it("parses chart artifact preview_json into renderable chart detail", () => {
+    const run = reduceLiveRunEvent(createInitialLiveRun(), {
+      type: "CUSTOM",
+      name: "artifact",
+      value: {
+        id: "artifact-chart-1",
+        type: "chart",
+        title: "渠道订单量",
+        preview_json: {
+          chartType: "bar",
+          unit: "单",
+          points: [
+            { label: "search", value: 42 },
+            { label: "direct", value: 18 },
+          ],
+        },
+      },
+    });
+
+    expect(run.artifacts[0]).toMatchObject({
+      id: "artifact-chart-1",
+      type: "chart",
+      kind: "chart",
+      detail: {
+        type: "chart",
+        chartType: "bar",
+        unit: "单",
+        points: [
+          { label: "search", value: 42 },
+          { label: "direct", value: 18 },
+        ],
+      },
+    });
   });
 
   it("links write_file and edit_file artifacts to distinct tool calls", () => {
@@ -805,6 +1029,88 @@ describe("live run state reducer", () => {
     });
   });
 
+  it("applies token_usage.correlation to attach step_id for detail matching", () => {
+    let run = createInitialLiveRun();
+    run = reduceLiveRunEvent(run, { type: "RUN_STARTED" });
+    run = reduceLiveRunEvent(run, {
+      type: "TOOL_CALL_START",
+      toolCallId: "tool-sql-1",
+      toolCallName: "run_sql_readonly",
+    });
+    run = reduceLiveRunEvent(run, {
+      type: "ACTIVITY_SNAPSHOT",
+      activityType: "STEP",
+      content: {
+        step_id: "sql-1",
+        title: "执行只读 SQL",
+        tool_name: "run_sql_readonly",
+        status: "running",
+      },
+    });
+    run = reduceLiveRunEvent(run, {
+      type: "CUSTOM",
+      name: "token_usage",
+      value: {
+        tool_call_id: "tool-sql-1",
+        input_tokens: 800,
+        output_tokens: 120,
+      },
+    });
+    run = reduceLiveRunEvent(run, {
+      type: "CUSTOM",
+      name: "token_usage.correlation",
+      value: {
+        step_id: "sql-1",
+        tool_call_id: "tool-sql-1",
+        tool_name: "run_sql_readonly",
+      },
+    });
+
+    const stepUsage = resolveTokenUsageForEvent(run, run.events[0] ?? null);
+    expect(stepUsage).toMatchObject({
+      reported: true,
+      inputTokens: 800,
+      outputTokens: 120,
+      approximate: undefined,
+    });
+  });
+
+  it("resets token usage when a new run starts in the same thread", () => {
+    let run = createInitialLiveRun();
+    run = reduceLiveRunEvent(run, { type: "RUN_STARTED" });
+    run = reduceLiveRunEvent(run, {
+      type: "CUSTOM",
+      name: "token_usage",
+      value: { input_tokens: 1000, output_tokens: 200 },
+    });
+    run = reduceLiveRunEvent(run, { type: "RUN_FINISHED" });
+
+    const firstRunUsage = deriveRunUsage(run);
+    const session = accumulateSessionUsage(
+      createInitialSessionUsage(),
+      deriveSegmentRunUsage(run),
+      "completed",
+    );
+    expect(session.tokens.inputTokens).toBe(1000);
+
+    run = reduceLiveRunEvent(run, { type: "RUN_STARTED" });
+    run = reduceLiveRunEvent(run, {
+      type: "CUSTOM",
+      name: "token_usage",
+      value: { input_tokens: 300, output_tokens: 50 },
+    });
+    run = reduceLiveRunEvent(run, { type: "RUN_FINISHED" });
+
+    const secondSession = accumulateSessionUsage(
+      session,
+      deriveSegmentRunUsage(run),
+      "completed",
+    );
+    expect(deriveRunUsage(run).tokens.inputTokens).toBe(300);
+    expect(secondSession.tokens.inputTokens).toBe(1300);
+    expect(firstRunUsage.tokens.inputTokens).toBe(1000);
+  });
+
   it("preserves sql tool identity when bridged TOOL_CALL_RESULT omits toolCallName", () => {
     let run = createInitialLiveRun();
     run = reduceLiveRunEvent(run, { type: "RUN_STARTED" });
@@ -1008,6 +1314,43 @@ describe("live run state reducer", () => {
     expect(run.sandboxOutputs[0]).toMatchObject({ kind: "stdout" });
   });
 
+  it("resolves workspace metadata and sandbox outputs for a tool call", () => {
+    let run = createInitialLiveRun();
+    run = {
+      ...run,
+      toolCalls: [
+        {
+          id: "tc-exec",
+          name: "execute_command",
+          status: "success",
+          startedAtMs: 1000,
+          finishedAtMs: 2000,
+        },
+      ],
+      workspaceMetadata: [
+        {
+          toolCallId: "tc-exec",
+          toolName: "execute_command",
+          receivedAt: 1500,
+          payload: { status: "ready" },
+        },
+      ],
+      sandboxOutputs: [
+        {
+          kind: "stdout",
+          receivedAt: 1600,
+          payload: { text: "hello\n" },
+        },
+      ],
+    };
+
+    expect(resolveWorkspaceMetadataForToolCall(run, "tc-exec")?.toolName).toBe(
+      "execute_command",
+    );
+    expect(resolveSandboxOutputsForToolCall(run, run.toolCalls[0])).toHaveLength(1);
+    expect(formatSandboxOutputText(run.sandboxOutputs[0]!)).toBe("hello\n");
+  });
+
   it("keeps suspended status when RUN_FINISHED follows ask_user suspension", () => {
     let run = reduceLiveRunEvent(createInitialLiveRun(), { type: "RUN_STARTED" });
     run = reduceLiveRunEvent(run, {
@@ -1018,5 +1361,29 @@ describe("live run state reducer", () => {
 
     expect(run.runStatus).toBe("suspended");
     expect(run.runFinishedAt).toBeTypeOf("number");
+  });
+
+  it("names collaboration tools from interaction.requested", () => {
+    let run = createInitialLiveRun();
+    run = reduceLiveRunEvent(run, { type: "RUN_STARTED" });
+    run = reduceLiveRunEvent(run, {
+      type: "TOOL_CALL_START",
+      toolCallId: "call-ask-1",
+    });
+    run = reduceLiveRunEvent(run, {
+      type: "CUSTOM",
+      name: "interaction.requested",
+      value: {
+        tool_call_id: "call-ask-1",
+        tool_name: "ask_user",
+      },
+    });
+
+    expect(run.toolCalls[0]).toMatchObject({ id: "call-ask-1", name: "ask_user" });
+    expect(run.events[0]).toMatchObject({
+      id: "call-ask-1",
+      toolName: "ask_user",
+      title: "询问用户",
+    });
   });
 });

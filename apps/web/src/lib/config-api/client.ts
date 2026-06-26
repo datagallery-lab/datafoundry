@@ -4,6 +4,7 @@ import type {
   BackendCapabilitiesResponse,
   DatasourceDto,
   DatasourceTypeDto,
+  FileAssetRefDto,
   JobDto,
   KnowledgeBaseDto,
   McpServerDto,
@@ -91,15 +92,27 @@ export const configApi = {
     return requestEnvelope<WorkspaceConfigDto>("/api/v1/workspace-config");
   },
 
-  patchWorkspaceConfig(body: Record<string, unknown>): Promise<WorkspaceConfigDto> {
-    return requestEnvelope<WorkspaceConfigDto>("/api/v1/workspace-config", {
-      method: "PATCH",
-      body: JSON.stringify(body),
-    });
-  },
-
   getRunDefaults(): Promise<RunDefaultsDto> {
     return requestEnvelope<RunDefaultsDto>("/api/v1/run-defaults");
+  },
+
+  async uploadChatFile(
+    file: File,
+    sessionId?: string | null,
+  ): Promise<{ path: string; mimeType: string; size: number }> {
+    const form = new FormData();
+    form.append("file", file);
+    if (sessionId) {
+      form.append("sessionId", sessionId);
+      form.append("threadId", sessionId);
+    }
+    const response = await requestRaw("/api/v1/chat/uploads", {
+      method: "POST",
+      body: form,
+    });
+    return parseJsonResponse<{ path: string; mimeType: string; size: number }>(
+      response,
+    );
   },
 
   getSessionConversation(sessionId: string, limit?: number): Promise<SessionConversationDto> {
@@ -113,10 +126,6 @@ export const configApi = {
     );
   },
 
-  listDatasources(): Promise<DatasourceDto[]> {
-    return requestEnvelope<DatasourceDto[]>("/api/v1/datasources");
-  },
-
   listDatasourceTypes(): Promise<DatasourceTypeDto[]> {
     return requestEnvelope<DatasourceTypeDto[]>("/api/v1/datasource-types");
   },
@@ -126,10 +135,6 @@ export const configApi = {
       method: "POST",
       body: JSON.stringify(body),
     });
-  },
-
-  getDatasource(id: string): Promise<DatasourceDto> {
-    return requestEnvelope<DatasourceDto>(`/api/v1/datasources/${encodeURIComponent(id)}`);
   },
 
   patchDatasource(id: string, body: Record<string, unknown>): Promise<DatasourceDto> {
@@ -156,14 +161,6 @@ export const configApi = {
       method: "POST",
       headers: idempotencyKey ? { "Idempotency-Key": idempotencyKey } : undefined,
     });
-  },
-
-  getDatasourceSchema(id: string): Promise<Record<string, unknown>> {
-    return requestEnvelope(`/api/v1/datasources/${encodeURIComponent(id)}/schema`);
-  },
-
-  listKnowledgeBases(): Promise<KnowledgeBaseDto[]> {
-    return requestEnvelope<KnowledgeBaseDto[]>("/api/v1/knowledge-bases");
   },
 
   createKnowledgeBase(body: Record<string, unknown>): Promise<KnowledgeBaseDto> {
@@ -204,17 +201,6 @@ export const configApi = {
     });
   },
 
-  searchKnowledgeBase(
-    id: string,
-    query: string,
-    topK?: number,
-  ): Promise<Array<Record<string, unknown>>> {
-    return requestEnvelope(`/api/v1/knowledge-bases/${encodeURIComponent(id)}/search`, {
-      method: "POST",
-      body: JSON.stringify({ query, topK }),
-    });
-  },
-
   reindexKnowledgeBase(id: string, idempotencyKey?: string): Promise<JobDto> {
     return requestEnvelope<JobDto>(
       `/api/v1/knowledge-bases/${encodeURIComponent(id)}/reindex`,
@@ -223,10 +209,6 @@ export const configApi = {
         headers: idempotencyKey ? { "Idempotency-Key": idempotencyKey } : undefined,
       },
     );
-  },
-
-  listMcpServers(): Promise<McpServerDto[]> {
-    return requestEnvelope<McpServerDto[]>("/api/v1/mcp-servers");
   },
 
   createMcpServer(body: Record<string, unknown>): Promise<McpServerDto> {
@@ -259,10 +241,6 @@ export const configApi = {
     return requestEnvelope(`/api/v1/mcp-servers/${encodeURIComponent(id)}/tools`);
   },
 
-  listModelProfiles(): Promise<ModelProfileDto[]> {
-    return requestEnvelope<ModelProfileDto[]>("/api/v1/model-profiles");
-  },
-
   createModelProfile(body: Record<string, unknown>): Promise<ModelProfileDto> {
     return requestEnvelope<ModelProfileDto>("/api/v1/model-profiles", {
       method: "POST",
@@ -287,10 +265,6 @@ export const configApi = {
     return requestEnvelope(`/api/v1/model-profiles/${encodeURIComponent(id)}/test`, {
       method: "POST",
     });
-  },
-
-  listSkills(): Promise<SkillDto[]> {
-    return requestEnvelope<SkillDto[]>("/api/v1/skills");
   },
 
   createSkill(form: FormData): Promise<SkillDto> {
@@ -332,10 +306,6 @@ export const configApi = {
     });
   },
 
-  getSkillPackage(id: string): Promise<Record<string, unknown>> {
-    return requestEnvelope(`/api/v1/skills/${encodeURIComponent(id)}/package`);
-  },
-
   getJob(id: string): Promise<JobDto> {
     return requestEnvelope<JobDto>(`/api/v1/jobs/${encodeURIComponent(id)}`);
   },
@@ -354,6 +324,17 @@ export const configApi = {
     return requestEnvelope(`/api/v1/artifacts/${encodeURIComponent(id)}/preview`);
   },
 
+  listSessionArtifacts(sessionId: string): Promise<{ artifacts: ArtifactDto[] }> {
+    const params = new URLSearchParams({ sessionId });
+    return requestEnvelope<{ artifacts: ArtifactDto[] }>(`/api/v1/artifacts?${params.toString()}`);
+  },
+
+  promoteArtifact(id: string): Promise<FileAssetRefDto> {
+    return requestEnvelope<FileAssetRefDto>(`/api/v1/artifacts/${encodeURIComponent(id)}/promote`, {
+      method: "POST",
+    });
+  },
+
   async downloadArtifact(id: string): Promise<{ blob: Blob; filename: string }> {
     const response = await requestRaw(`/api/v1/artifacts/${encodeURIComponent(id)}/download`);
     const disposition = response.headers.get("Content-Disposition") ?? "";
@@ -361,6 +342,36 @@ export const configApi = {
     const filename = match?.[1] ?? `artifact-${id}`;
     const blob = await response.blob();
     return { blob, filename };
+  },
+
+  listWorkspaceFiles(): Promise<{ files: FileAssetRefDto[] }> {
+    return requestEnvelope<{ files: FileAssetRefDto[] }>("/api/v1/files");
+  },
+
+  async uploadWorkspaceFiles(files: File[]): Promise<{ files: FileAssetRefDto[] }> {
+    const form = new FormData();
+    for (const file of files) {
+      form.append("file", file);
+    }
+    return requestEnvelope<{ files: FileAssetRefDto[] }>("/api/v1/files", {
+      method: "POST",
+      body: form,
+    });
+  },
+
+  async downloadWorkspaceFile(id: string): Promise<{ blob: Blob; filename: string }> {
+    const response = await requestRaw(`/api/v1/files/${encodeURIComponent(id)}/download`);
+    const disposition = response.headers.get("Content-Disposition") ?? "";
+    const match = /filename="([^"]+)"/u.exec(disposition);
+    const filename = match?.[1] ?? `file-${id}`;
+    const blob = await response.blob();
+    return { blob, filename };
+  },
+
+  deleteWorkspaceFile(id: string): Promise<{ deleted: boolean; id: string }> {
+    return requestEnvelope(`/api/v1/files/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    });
   },
 };
 

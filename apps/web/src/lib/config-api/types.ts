@@ -36,6 +36,8 @@ export class ConfigApiError extends Error {
 
 export type BackendCapabilitiesResponse = {
   "artifact.export"?: boolean;
+  "artifact.list"?: boolean;
+  "artifact.promote"?: boolean;
   "chat.fileUpload"?: boolean;
   "chat.imageInput"?: boolean;
   "conversation.memory"?: boolean;
@@ -56,6 +58,21 @@ export type BackendCapabilitiesResponse = {
   knowledge?: boolean;
   mcp?: boolean;
   skills?: boolean;
+  files?: boolean;
+};
+
+export type FileAssetRefDto = {
+  id: string;
+  assetId?: string;
+  filename: string;
+  mimeType?: string;
+  sizeBytes?: number;
+  sha256?: string;
+  source?: string;
+  status?: string;
+  sessionId?: string;
+  runId?: string;
+  createdAt?: string;
 };
 
 export type DatasourceDto = {
@@ -129,6 +146,10 @@ export type McpServerDto = {
   toolManifest?: unknown[];
   toolAllowlist?: string[] | string;
   timeoutMs?: number;
+  command?: string;
+  args?: string[];
+  cwd?: string;
+  env?: Record<string, string>;
   secretRef?: string | null;
   hasSecret?: boolean;
   defaultEnabled?: boolean;
@@ -269,6 +290,8 @@ export type ArtifactDto = {
   id: string;
   type?: string;
   name?: string;
+  fileId?: string;
+  downloadUrl?: string;
   preview_json?: Record<string, unknown>;
   mimeType?: string;
   metadata?: Record<string, unknown>;

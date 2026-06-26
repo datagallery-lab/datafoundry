@@ -1,6 +1,10 @@
 "use client";
 
-import { useAgent, useInterrupt } from "@copilotkit/react-core/v2";
+import {
+  CopilotChatAssistantMessage,
+  useAgent,
+  useInterrupt,
+} from "@copilotkit/react-core/v2";
 import { useCallback, useState } from "react";
 import {
   btnPrimaryClass,
@@ -160,6 +164,14 @@ function readPlan(interrupt: MastraInterrupt): string {
   return "";
 }
 
+function PlanMarkdown({ content }: { content: string }) {
+  return (
+    <div className="mt-3 max-h-72 overflow-auto rounded-lg bg-surface-subtle p-3 text-sm leading-6 text-foreground [&_code]:rounded [&_code]:bg-surface [&_code]:px-1 [&_ol]:my-1 [&_ol]:list-decimal [&_ol]:pl-5 [&_p]:my-1 [&_ul]:my-1 [&_ul]:list-disc [&_ul]:pl-5">
+      <CopilotChatAssistantMessage.MarkdownRenderer content={content} />
+    </div>
+  );
+}
+
 function AskUserPrompt({
   interrupt,
   resolve,
@@ -281,6 +293,7 @@ function SubmitPlanPrompt({
         toolCallId: interrupt.toolCallId,
         toolName: "submit_plan",
         question: title,
+        plan,
         displayText: formatCollaborationResponseDisplay("submit_plan", response),
         assistantMessageId,
       });
@@ -292,14 +305,12 @@ function SubmitPlanPrompt({
     <div className={panelShellClass}>
       <p className="text-sm font-semibold text-foreground">{title}</p>
       {plan ? (
-        <pre className="mt-3 max-h-60 overflow-auto whitespace-pre-wrap rounded-lg bg-surface-subtle p-3 text-xs leading-5 text-muted">
-          {plan}
-        </pre>
+        <PlanMarkdown content={plan} />
       ) : null}
       <div className="mt-3 flex flex-wrap justify-end gap-2">
         <button
           type="button"
-          className={btnSecondaryClass}
+          className={`hitl-action-btn-secondary ${btnSecondaryClass}`}
           disabled={submitted}
           onClick={() => submit({ action: "rejected", feedback: "需要调整计划" })}
         >
