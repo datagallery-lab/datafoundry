@@ -9,9 +9,13 @@
   --surface-subtle: #f8fafc;
   --border: #e2e8f0;
   --foreground: #0f172a;
-  --muted: #475569;
-  --muted-light: #64748b;
-  --muted-foreground: var(--muted);
+  /* Text hierarchy — use --text-* (not --muted) so CopilotKit's [data-copilotkit] scope
+     cannot override secondary copy colors (it redefines --muted as a surface tone). */
+  --text-secondary: #334155;
+  --text-tertiary: #475569;
+  --muted: var(--text-secondary);
+  --muted-light: var(--text-tertiary);
+  --muted-foreground: var(--text-secondary);
   --code-bg: #0f172a;
 
   /* Semantic step tones */
@@ -40,8 +44,8 @@
   --color-surface: var(--surface);
   --color-surface-subtle: var(--surface-subtle);
   --color-border: var(--border);
-  --color-muted: var(--muted);
-  --color-muted-light: var(--muted-light);
+  --color-muted: var(--text-secondary);
+  --color-muted-light: var(--text-tertiary);
   --color-code-bg: var(--code-bg);
   --color-step-inspect: var(--step-inspect);
   --color-step-query: var(--step-query);
@@ -223,7 +227,7 @@ nextjs-portal {
 }
 
 [data-copilotkit] .chat-intelligence-indicator[data-status="finished"] .cpk-intelligence-indicator__content {
-  color: var(--muted);
+  color: var(--text-tertiary);
 }
 
 [data-copilotkit] .chat-intelligence-indicator .cpk-intelligence-indicator__label {
