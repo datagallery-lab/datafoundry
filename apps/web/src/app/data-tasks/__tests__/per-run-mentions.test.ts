@@ -5,11 +5,14 @@ import {
   countPerRunMentions,
   createChatSession,
   emptyPerRunSelection,
+  filterWorkspaceAssetFiles,
   removePerRunMention,
   resolveActiveDatasourceId,
   setLiveMentionSupport,
+  togglePerRunFileMention,
   togglePerRunMention,
   toggleSessionResource,
+  type FileMentionResource,
   type WorkspaceConfigStore,
 } from "../data-task-state";
 
@@ -110,6 +113,56 @@ describe("buildRunConfig", () => {
     });
     expect(config.enabledDatasourceIds).toEqual(["db-orders"]);
     expect(config.activeDatasourceId).toBe("db-orders");
+  });
+
+  it("splits file mentions into workspace fileIds and session pinnedPaths", () => {
+    const files: FileMentionResource[] = [
+      {
+        id: "workspace:file-ref-1",
+        fileId: "file-ref-1",
+        name: "shared.csv",
+        description: "工作区文件",
+        scope: "workspace",
+        backendSupported: true,
+      },
+      {
+        id: "session:artifact-1",
+        fileId: "artifact-file-ref",
+        name: "report.html",
+        description: "本对话产物",
+        scope: "session",
+        path: "output/report.html",
+        backendSupported: false,
+      },
+    ];
+    let fileSelection = togglePerRunFileMention(
+      { fileIds: [], pinnedPaths: [] },
+      files[0],
+    );
+    fileSelection = togglePerRunFileMention(fileSelection, files[1]);
+
+    const config = buildRunConfig(store, {
+      activeLlmId: "llm-1",
+      defaultDatasourceId: "db-default",
+      session,
+      perRunFiles: fileSelection,
+    });
+
+    expect(config.fileIds).toEqual(["file-ref-1"]);
+    expect(config.pinnedPaths).toEqual(["output/report.html"]);
+  });
+});
+
+describe("workspace file filtering", () => {
+  it("keeps only cross-session upload/workspace refs for the workspace asset list", () => {
+    const files = filterWorkspaceAssetFiles([
+      { id: "workspace", filename: "shared.csv", source: "workspace" },
+      { id: "upload", filename: "uploaded.csv", source: "upload" },
+      { id: "artifact", filename: "report.html", source: "artifact" },
+      { id: "session-upload", filename: "local.txt", source: "upload", sessionId: "s1" },
+    ]);
+
+    expect(files.map((file) => file.id)).toEqual(["workspace", "upload"]);
   });
 });
 

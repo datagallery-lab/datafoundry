@@ -15,6 +15,10 @@ async function collectNormalized(chunks, hooks = {}) {
 }
 
 async function* inputChunks() {
+  yield { type: "text-start", runId: "r1", from: "agent" };
+  yield { type: "tool-call-input-streaming-start", runId: "r1", from: "agent" };
+  yield { type: "tool-call-delta", runId: "r1", from: "agent" };
+  yield { type: "tool-call-input-streaming-end", runId: "r1", from: "agent" };
   yield { type: "text-delta", payload: { text: "hello" }, runId: "r1", from: "agent" };
   yield {
     type: "finish-step",

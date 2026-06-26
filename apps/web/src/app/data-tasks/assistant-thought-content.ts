@@ -12,6 +12,7 @@ export function messageTextContent(content: unknown): string {
       if (!part || typeof part !== "object" || !("type" in part)) return "";
       const typed = part as { type?: unknown; text?: unknown };
       if (typed.type === "text" && typeof typed.text === "string") return typed.text;
+      if (typed.type === "reasoning" && typeof typed.text === "string") return typed.text;
       return "";
     })
     .join("")

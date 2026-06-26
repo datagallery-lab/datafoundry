@@ -1,8 +1,5 @@
 import type { BackendCapabilitiesResponse } from "./types";
-import type {
-  BackendCapability,
-  PerRunMentionKind,
-} from "../../app/data-tasks/data-task-state";
+import type { BackendCapability } from "../../app/data-tasks/data-task-state";
 
 export type RuntimeCapability = "conversationMemory" | "knowledge" | "mcp" | "skills";
 
@@ -11,8 +8,11 @@ const DEFAULT_BACKEND_CAPABILITIES: Record<BackendCapability, boolean> = {
   "datasource.queryPolicy": false,
   "llm.samplingParams": false,
   "artifact.export": true,
+  "artifact.list": false,
+  "artifact.promote": false,
   "chat.imageInput": false,
   "chat.fileUpload": false,
+  files: false,
 };
 
 const DEFAULT_RUNTIME_CAPABILITIES: Record<RuntimeCapability, boolean> = {
@@ -38,8 +38,11 @@ export function applyBackendCapabilities(
     "datasource.queryPolicy": response["datasource.queryPolicy"] ?? false,
     "llm.samplingParams": response["llm.samplingParams"] ?? false,
     "artifact.export": response["artifact.export"] ?? true,
+    "artifact.list": response["artifact.list"] ?? false,
+    "artifact.promote": response["artifact.promote"] ?? false,
     "chat.imageInput": response["chat.imageInput"] ?? false,
     "chat.fileUpload": response["chat.fileUpload"] ?? false,
+    files: response.files ?? false,
   };
   runtimeCapabilities = {
     conversationMemory: response["conversation.memory"] ?? false,
@@ -61,13 +64,6 @@ export function getRuntimeCapabilities(): Record<RuntimeCapability, boolean> {
 export function resetCapabilitiesForTests(): void {
   backendCapabilities = { ...DEFAULT_BACKEND_CAPABILITIES };
   runtimeCapabilities = { ...DEFAULT_RUNTIME_CAPABILITIES };
-}
-
-export function isMentionBackendSupported(kind: PerRunMentionKind): boolean {
-  if (kind === "db") return true;
-  if (kind === "kb") return runtimeCapabilities.knowledge;
-  if (kind === "mcp") return runtimeCapabilities.mcp;
-  return runtimeCapabilities.skills;
 }
 
 export function isResourcePanelSupported(

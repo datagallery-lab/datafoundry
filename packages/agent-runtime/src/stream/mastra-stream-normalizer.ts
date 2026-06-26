@@ -13,6 +13,14 @@ export type MastraStreamNormalizerHooks = {
   onQuarantine?: (chunk: MastraStreamChunk) => void;
 };
 
+const PAYLOADLESS_CHUNK_TYPES = new Set([
+  "text-start",
+  "text-end",
+  "tool-call-input-streaming-start",
+  "tool-call-input-streaming-end",
+  "tool-call-delta"
+]);
+
 /** Normalize Mastra fullStream chunks before @ag-ui/mastra consumes them. */
 export async function* normalizeMastraFullStream(
   stream: AsyncIterable<MastraStreamChunk>,
@@ -37,6 +45,10 @@ export async function* normalizeMastraFullStream(
     }
 
     if (type === "finish-step") {
+      continue;
+    }
+
+    if (type && PAYLOADLESS_CHUNK_TYPES.has(type) && chunk.payload === undefined) {
       continue;
     }
 

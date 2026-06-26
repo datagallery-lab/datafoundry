@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { formatCollaborationResponseDisplay } from "../components/chat/collaboration-responses";
+import {
+  collaborationResponseLayout,
+  formatCollaborationResponseDisplay,
+} from "../components/chat/collaboration-response-display";
 
 describe("formatCollaborationResponseDisplay", () => {
   it("maps ask_user option values to labels", () => {
@@ -27,5 +30,21 @@ describe("formatCollaborationResponseDisplay", () => {
 
   it("preserves free-text ask_user answers", () => {
     expect(formatCollaborationResponseDisplay("ask_user", "  继续分析  ")).toBe("继续分析");
+  });
+
+  it("renders collaboration prompts as assistant-side recap and choices as user-side replies", () => {
+    expect(collaborationResponseLayout("ask_user")).toEqual({
+      recapSide: "assistant",
+      choiceSide: "user",
+      planRenderer: undefined,
+    });
+  });
+
+  it("renders submitted plans as assistant-side markdown recap", () => {
+    expect(collaborationResponseLayout("submit_plan")).toEqual({
+      recapSide: "assistant",
+      choiceSide: "user",
+      planRenderer: "markdown",
+    });
   });
 });

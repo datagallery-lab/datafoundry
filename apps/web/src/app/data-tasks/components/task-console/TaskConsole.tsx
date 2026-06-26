@@ -1,24 +1,44 @@
 import { useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
+import {
+  Bar,
+  BarChart,
+  Cell,
+  Line,
+  LineChart,
+  Pie,
+  PieChart,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from "recharts";
 import type {
   ArtifactDetail,
   DataArtifact,
   GenericStepPayload,
   TimelineEvent,
 } from "../../data-task-state";
-import { dataStepKindForTool, dataStepLabel, hasCapability } from "../../data-task-state";
+import { dataStepKindForTool, dataStepLabel, hasCapability, toolDisplayTitle } from "../../data-task-state";
 import { artifactExportClient } from "../../artifact-export-client";
 import {
+  artifactDetailFromPreview,
   deriveRunUsage,
+  formatSandboxOutputText,
+  formatWorkspaceMetadataSummary,
   resolveProducedArtifacts,
+  resolveSandboxOutputsForToolCall,
   resolveTokenUsageForEvent,
   resolveToolCallForEvent,
   resolveTraceToolStatus,
+  resolveWorkspaceMetadataForToolCall,
   type LiveRun,
   type LiveToolCallRecord,
   type SessionUsageStats,
 } from "../../live-run-state";
 import type { TaskSelection } from "../../page";
+import { overviewSectionPlan } from "../../task-console-layout";
+import { RunConfigurationPanel } from "./RunConfigurationPanel";
 import { TraceList } from "./TraceList";
 import {
   consoleCodeBlockBaseClass,
@@ -57,8 +77,11 @@ type TaskConsoleProps = {
   onArtifactFocusHandled?: () => void;
   onClearSelection: () => void;
   onClose?: () => void;
+  onMentionArtifact?: (artifact: DataArtifact) => void;
   onOpenTrace: () => void;
+  onPromoteArtifact?: (artifact: DataArtifact) => Promise<void> | void;
   onSelectEvent: (eventId: string) => void;
+  promotedArtifactIds?: ReadonlySet<string>;
 };
 
 function runStatusLabel(status: LiveRun["runStatus"]): string {
@@ -118,12 +141,21 @@ export function TaskConsole({
   onArtifactFocusHandled,
   onClearSelection,
   onClose,
+  onMentionArtifact,
   onOpenTrace,
+  onPromoteArtifact,
   onSelectEvent,
+  promotedArtifactIds,
 }: TaskConsoleProps) {
   const [activeTab, setActiveTab] = useState<ConsoleTab>("overview");
   const [outputsExpandedId, setOutputsExpandedId] = useState<string | null>(null);
   const runUsage = useMemo(() => deriveRunUsage(liveRun), [liveRun]);
+  const workspaceHasSignals =
+    liveRun.workspaceMetadata.length > 0 || liveRun.sandboxOutputs.length > 0;
+  const overviewSections = overviewSectionPlan({
+    hasWorkspaceSignals: workspaceHasSignals,
+    hasToolDistribution: Object.keys(runUsage.toolCalls.byTool).length > 0,
+  });
 
   // Only step/action selection drives the detail tab; artifacts expand in-place on 产出.
   useEffect(() => {
@@ -227,17 +259,32 @@ export function TaskConsole({
       <div className="min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden p-4">
         {activeTab === "overview" ? (
           <div className="grid gap-4">
-            <ConclusionZone
-              currentQuestion={currentQuestion}
-              liveRun={liveRun}
-              sessionUsage={sessionUsage}
-            />
-            <DynamicStepsList
-              toolCalls={liveRun.toolCalls}
-              events={visibleEvents}
-              onSelectEvent={onSelectEvent}
-            />
-            <ToolDistributionZone liveRun={liveRun} />
+            {overviewSections.map((section) => {
+              if (section.id === "conclusion") {
+                return (
+                  <ConclusionZone
+                    key={section.id}
+                    currentQuestion={currentQuestion}
+                    liveRun={liveRun}
+                    sessionUsage={sessionUsage}
+                  />
+                );
+              }
+              if (section.id === "progress") {
+                return (
+                  <DynamicStepsList
+                    key={section.id}
+                    toolCalls={liveRun.toolCalls}
+                    events={visibleEvents}
+                    onSelectEvent={onSelectEvent}
+                  />
+                );
+              }
+              if (section.id === "workspace-signals") {
+                return <WorkspaceRunSignalsSummary key={section.id} liveRun={liveRun} />;
+              }
+              return <ToolDistributionZone key={section.id} liveRun={liveRun} />;
+            })}
           </div>
         ) : null}
 
@@ -257,7 +304,10 @@ export function TaskConsole({
             events={visibleEvents}
             expandedId={outputsExpandedId}
             onExpandedIdChange={setOutputsExpandedId}
+            onMentionArtifact={onMentionArtifact}
+            onPromoteArtifact={onPromoteArtifact}
             onSelectEvent={onSelectEvent}
+            promotedArtifactIds={promotedArtifactIds}
           />
         ) : null}
 
@@ -321,37 +371,65 @@ function TabButton({
   );
 }
 
-function StatusBadge({ status }: { status: LiveRun["runStatus"] }) {
-  const tone =
-    status === "completed"
-      ? "bg-step-success/10 text-step-success"
-      : status === "running"
-        ? "bg-primary-light/10 text-primary"
-        : status === "suspended"
-          ? "bg-accent/10 text-step-warning"
-        : status === "failed"
-          ? "bg-step-error/10 text-step-error"
-          : "bg-surface-subtle text-muted-light";
-  const dot =
-    status === "completed"
-      ? "bg-step-success"
-      : status === "running"
-        ? "bg-primary-light"
-        : status === "suspended"
-          ? "bg-accent"
-        : status === "failed"
-          ? "bg-step-error"
-          : "bg-muted-light";
+function ConsoleSection({
+  title,
+  badge,
+  collapsible = false,
+  defaultExpanded = true,
+  children,
+}: {
+  title: string;
+  badge?: ReactNode;
+  collapsible?: boolean;
+  defaultExpanded?: boolean;
+  children: ReactNode;
+}) {
+  const [expanded, setExpanded] = useState(defaultExpanded);
+
+  useEffect(() => {
+    if (defaultExpanded) setExpanded(true);
+  }, [defaultExpanded]);
+
+  const headerContent = (
+    <>
+      <h3 className={panelTitleClass}>{title}</h3>
+      <span className="flex min-w-0 shrink-0 items-center gap-2">
+        {badge}
+        {collapsible ? (
+          <span
+            aria-hidden="true"
+            className={[
+              "inline-flex h-6 w-6 items-center justify-center rounded-md text-muted-light transition-transform duration-200",
+              expanded ? "rotate-180" : "",
+            ].join(" ")}
+          >
+            <svg viewBox="0 0 16 16" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+              <path d="m4 6 4 4 4-4" />
+            </svg>
+          </span>
+        ) : null}
+      </span>
+    </>
+  );
+
   return (
-    <span
-      className={[
-        "inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold",
-        tone,
-      ].join(" ")}
-    >
-      <span className={["h-1.5 w-1.5 rounded-full", dot].join(" ")} />
-      {runStatusLabel(status)}
-    </span>
+    <section className={panelShellClass}>
+      {collapsible ? (
+        <button
+          type="button"
+          aria-expanded={expanded}
+          onClick={() => setExpanded((value) => !value)}
+          className="flex w-full cursor-pointer items-center justify-between gap-3 rounded-lg text-left transition-colors duration-200 hover:bg-surface-subtle focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-light/50"
+        >
+          <span className="flex min-w-0 flex-1 items-center justify-between gap-3 px-1 py-1">
+            {headerContent}
+          </span>
+        </button>
+      ) : (
+        <div className="flex items-center justify-between gap-3">{headerContent}</div>
+      )}
+      {expanded ? <div className="mt-3">{children}</div> : null}
+    </section>
   );
 }
 
@@ -386,21 +464,14 @@ function ConclusionZone({
       ? `$${displayTokens.costUsd.toFixed(4)}`
       : "待上报";
   const tokenLine = tokenReported
-    ? `整轮 Token：输入 ${formatCount(displayTokens.inputTokens)} · 输出 ${formatCount(
+    ? `入 ${formatCount(displayTokens.inputTokens)} / 出 ${formatCount(
         displayTokens.outputTokens,
-      )}${displayModels.length > 0 ? ` · ${displayModels.join(" / ")}` : ""}`
-    : "整轮 Token 用量待后端通过 token_usage 事件上报";
+      )}${displayModels.length > 0 ? ` · ${displayModels.slice(0, 2).join(" / ")}` : ""}`
+    : costKpi;
 
   return (
-    <section className={`${panelShellClass} overflow-hidden`}>
-      <div className="flex items-center justify-between gap-3">
-        <StatusBadge status={liveRun.runStatus} />
-        <span className="rounded-full border border-border bg-surface-subtle px-2 py-0.5 text-[11px] font-medium text-muted-light">
-          概览
-        </span>
-      </div>
-
-      <div className="mt-3">
+    <ConsoleSection title="结论">
+      <div>
         <div className={sectionLabelClass}>当前问题</div>
         <p className="mt-1 text-sm leading-6 text-foreground">
           {currentQuestion ?? (
@@ -436,22 +507,59 @@ function ConclusionZone({
         <KpiMetric
           label="Token / 成本"
           value={tokenKpi}
-          meta={costKpi}
+          meta={tokenLine}
           accentClass={tokenReported ? "text-step-knowledge" : "text-muted-light"}
         />
       </div>
+    </ConsoleSection>
+  );
+}
 
-      <p
-        className={[
-          "mt-2 rounded-lg px-2.5 py-2 text-[11px] leading-4",
-          tokenReported
-            ? "bg-step-knowledge/10 text-muted"
-            : "border border-dashed border-border bg-surface-subtle text-muted-light",
-        ].join(" ")}
-      >
-        {tokenLine}
+function WorkspaceRunSignalsSummary({ liveRun }: { liveRun: LiveRun }) {
+  const metadata = liveRun.workspaceMetadata.slice(0, 4);
+  const sandbox = liveRun.sandboxOutputs.slice(0, 4);
+
+  return (
+    <ConsoleSection title="工作区信号" collapsible defaultExpanded={false}>
+      <p className="mt-1 text-[11px] leading-4 text-muted-light">
+        来自 AG-UI CUSTOM 事件：workspace.metadata（文件/工作区操作）与 sandbox.output（命令输出）。
       </p>
-    </section>
+      {metadata.length > 0 ? (
+        <div className="mt-3">
+          <div className="text-[11px] font-semibold text-foreground">工作区元数据</div>
+          <ul className="mt-1 grid gap-1.5">
+            {metadata.map((entry, index) => (
+              <li
+                key={`${entry.toolCallId ?? "meta"}-${entry.receivedAt}-${index}`}
+                className="rounded-lg border border-border bg-surface px-2.5 py-2 text-[11px] leading-4 text-muted"
+              >
+                {formatWorkspaceMetadataSummary(entry)}
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+      {sandbox.length > 0 ? (
+        <div className="mt-3">
+          <div className="text-[11px] font-semibold text-foreground">沙箱输出</div>
+          <ul className="mt-1 grid gap-1.5">
+            {sandbox.map((entry, index) => (
+              <li
+                key={`${entry.kind}-${entry.receivedAt}-${index}`}
+                className="rounded-lg border border-border bg-surface px-2.5 py-2"
+              >
+                <div className="text-[10px] font-semibold uppercase tracking-wide text-muted-light">
+                  {entry.kind}
+                </div>
+                <pre className="mt-1 max-h-24 overflow-auto whitespace-pre-wrap font-mono text-[11px] leading-4 text-muted">
+                  {formatSandboxOutputText(entry)}
+                </pre>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+    </ConsoleSection>
   );
 }
 
@@ -469,17 +577,14 @@ function DynamicStepsList({
     () => new Map(events.map((event) => [event.id, event] as const)),
     [events],
   );
+  const badge = toolCalls.length > 0 ? (
+    <span className="tabular text-xs font-medium text-muted-light">
+      {toolCalls.filter((call) => call.status === "success").length}/{toolCalls.length}
+    </span>
+  ) : null;
 
   return (
-    <section className={panelShellClass}>
-      <div className="mb-3 flex items-center justify-between">
-        <h3 className={panelTitleClass}>进展</h3>
-        {toolCalls.length > 0 ? (
-          <span className="tabular text-xs font-medium text-muted-light">
-            {toolCalls.filter((call) => call.status === "success").length}/{toolCalls.length}
-          </span>
-        ) : null}
-      </div>
+    <ConsoleSection title="进展" badge={badge}>
       {toolCalls.length === 0 ? (
         <EmptyState
           title="尚无步骤"
@@ -489,8 +594,12 @@ function DynamicStepsList({
         <ol className="grid gap-1.5">
           {toolCalls.map((call) => {
             const event = eventById.get(call.id);
-            const title = event?.title ?? call.name;
-            const kind = dataStepKindForTool(call.name);
+            const rawName = event?.toolName ?? call.name;
+            const title =
+              event?.title && event.title !== "tool" && event.title !== "unknown"
+                ? event.title
+                : toolDisplayTitle(rawName);
+            const kind = dataStepKindForTool(rawName);
             const kindLabel = dataStepLabel(kind);
             const tone = stepKindTone(kind);
             const body = (
@@ -545,7 +654,7 @@ function DynamicStepsList({
           })}
         </ol>
       )}
-    </section>
+    </ConsoleSection>
   );
 }
 
@@ -556,8 +665,7 @@ function ToolDistributionZone({ liveRun }: { liveRun: LiveRun }) {
   if (entries.length === 0) return null;
 
   return (
-    <section className={panelShellClass}>
-      <h3 className={`mb-3 ${panelTitleClass}`}>按工具分布</h3>
+    <ConsoleSection title="按工具分布" collapsible defaultExpanded={false}>
       <div className="grid gap-1.5">
         {entries.map(([name, bucket]) => {
           const kind = dataStepKindForTool(name);
@@ -590,7 +698,7 @@ function ToolDistributionZone({ liveRun }: { liveRun: LiveRun }) {
           );
         })}
       </div>
-    </section>
+    </ConsoleSection>
   );
 }
 
@@ -636,24 +744,28 @@ function EvidenceZone({
   onSelectEvent: (eventId: string) => void;
 }) {
   return (
-    <section className={panelShellClass}>
-      <div className="mb-3 flex items-center justify-between">
-        <h3 className={panelTitleClass}>数据足迹 · 证据链</h3>
-        <button
-          type="button"
-          onClick={onOpenTrace}
-          className={btnSecondaryClass}
-        >
-          放大全屏
-        </button>
-      </div>
-      <TraceList
-        artifacts={artifacts}
-        liveRun={liveRun}
-        onSelectArtifact={onSelectArtifact}
-        onSelectEvent={onSelectEvent}
-      />
-    </section>
+    <div className="grid gap-4">
+      <RunConfigurationPanel liveRun={liveRun} />
+      <ConsoleSection
+        title="数据足迹 · 证据链"
+        badge={
+          <button
+            type="button"
+            onClick={onOpenTrace}
+            className={btnSecondaryClass}
+          >
+            放大全屏
+          </button>
+        }
+      >
+        <TraceList
+          artifacts={artifacts}
+          liveRun={liveRun}
+          onSelectArtifact={onSelectArtifact}
+          onSelectEvent={onSelectEvent}
+        />
+      </ConsoleSection>
+    </div>
   );
 }
 
@@ -663,105 +775,219 @@ function DeliverablesZone({
   events,
   expandedId,
   onExpandedIdChange,
+  onMentionArtifact,
+  onPromoteArtifact,
   onSelectEvent,
+  promotedArtifactIds,
 }: {
   artifacts: DataArtifact[];
   events: TimelineEvent[];
   expandedId: string | null;
   onExpandedIdChange: (artifactId: string | null) => void;
+  onMentionArtifact?: (artifact: DataArtifact) => void;
+  onPromoteArtifact?: (artifact: DataArtifact) => Promise<void> | void;
   onSelectEvent: (eventId: string) => void;
+  promotedArtifactIds?: ReadonlySet<string>;
 }) {
   const exportReady = hasCapability("artifact.export");
+  const badge = artifacts.length > 0 ? (
+    <span className="tabular rounded-full bg-primary-light/15 px-1.5 text-[10px] font-bold leading-4 text-primary">
+      {artifacts.length}
+    </span>
+  ) : null;
 
   return (
-    <section className={panelShellClass}>
-      <div className="mb-3 flex items-center justify-between">
-        <h3 className={panelTitleClass}>产物</h3>
-        {artifacts.length > 0 ? (
-          <span className="tabular rounded-full bg-primary-light/15 px-1.5 text-[10px] font-bold leading-4 text-primary">
-            {artifacts.length}
+    <div className="grid gap-4">
+      <ConsoleSection title="产物" badge={badge}>
+        {artifacts.length === 0 ? (
+          <EmptyState
+            title="暂无产出"
+            description="发送问题后，SQL、数据集、图表和报告会在这里显示，可点击展开查看完整内容。"
+          />
+        ) : (
+          <div className="grid gap-3">
+            {artifacts.map((artifact) => {
+              const expanded = expandedId === artifact.id;
+              const sourceEvent = artifact.createdByEventId
+                ? events.find((event) => event.id === artifact.createdByEventId)
+                : null;
+              return (
+                <div
+                  key={artifact.id}
+                  className={[
+                    "overflow-hidden rounded-xl border transition-colors duration-200",
+                    expanded
+                      ? "border-primary-light/40 bg-surface shadow-sm"
+                      : "border-border bg-surface-subtle",
+                  ].join(" ")}
+                >
+                  <button
+                    type="button"
+                    onClick={() =>
+                      onExpandedIdChange(
+                        expandedId === artifact.id ? null : artifact.id,
+                      )
+                    }
+                    className="w-full cursor-pointer p-3 text-left transition-colors duration-200 hover:bg-surface focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-light/50"
+                  >
+                    <ArtifactCardHeader
+                      artifact={artifact}
+                      expanded={expanded}
+                      sourceEvent={sourceEvent}
+                    />
+                  </button>
+                  {isFileBackedArtifact(artifact) ? (
+                    <ArtifactFileActions
+                      artifact={artifact}
+                      exportReady={exportReady}
+                      promoted={promotedArtifactIds?.has(artifact.id) ?? false}
+                      onMentionArtifact={onMentionArtifact}
+                      onPromoteArtifact={onPromoteArtifact}
+                    />
+                  ) : null}
+                  {expanded ? (
+                    <div className="border-t border-border px-3 pb-3 pt-2">
+                      {sourceEvent ? (
+                        <div className="mb-3 rounded-lg border border-border bg-surface-subtle p-2.5">
+                          <div className={sectionLabelClass}>来源步骤</div>
+                          <button
+                            type="button"
+                            onClick={() => onSelectEvent(sourceEvent.id)}
+                            className="mt-1 cursor-pointer rounded-sm text-left text-xs font-semibold text-primary underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-light/50"
+                          >
+                            {sourceEvent.title} → 在详情中查看
+                          </button>
+                        </div>
+                      ) : null}
+                      <ArtifactExpandedDetail
+                        artifact={artifact}
+                        exportReady={exportReady}
+                      />
+                      {exportReady ? (
+                        <ArtifactExportActions artifact={artifact} />
+                      ) : (
+                        <p className="mt-3 text-[11px] leading-4 text-muted-light">
+                          连接配置 API 后可预览与下载完整产物。
+                        </p>
+                      )}
+                    </div>
+                  ) : null}
+                </div>
+              );
+            })}
+            <p className="text-[11px] leading-4 text-muted-light">
+              {exportReady
+                ? "展开产物后可查看或下载完整内容。"
+                : "预览与下载需后端 artifact 接口可用。"}
+            </p>
+          </div>
+        )}
+      </ConsoleSection>
+    </div>
+  );
+}
+
+function isFileBackedArtifact(artifact: DataArtifact): boolean {
+  return Boolean(
+    artifact.fileId &&
+      (artifact.type === "file" ||
+        artifact.kind === "file" ||
+        artifact.detail?.type === "file"),
+  );
+}
+
+function ArtifactFileActions({
+  artifact,
+  exportReady,
+  promoted,
+  onMentionArtifact,
+  onPromoteArtifact,
+}: {
+  artifact: DataArtifact;
+  exportReady: boolean;
+  promoted: boolean;
+  onMentionArtifact?: (artifact: DataArtifact) => void;
+  onPromoteArtifact?: (artifact: DataArtifact) => Promise<void> | void;
+}) {
+  const [busy, setBusy] = useState<"download" | "promote" | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const promoteReady = hasCapability("artifact.promote");
+  const canMention = artifact.detail?.type === "file" && Boolean(artifact.detail.path);
+
+  const handleDownload = async () => {
+    if (!exportReady) return;
+    setBusy("download");
+    setError(null);
+    try {
+      const { blob, filename } = await artifactExportClient.download(artifact.id);
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = filename || artifact.title;
+      anchor.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "下载失败");
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const handlePromote = async () => {
+    if (!promoteReady || promoted || !onPromoteArtifact) return;
+    setBusy("promote");
+    setError(null);
+    try {
+      await onPromoteArtifact(artifact);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "加入工作区失败");
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  return (
+    <div className="border-t border-border bg-surface px-3 py-2">
+      <div className="flex flex-wrap items-center gap-2">
+        <button
+          type="button"
+          onClick={handleDownload}
+          disabled={!exportReady || busy === "download"}
+          className={`${btnSecondaryClass} disabled:cursor-not-allowed disabled:opacity-60`}
+          title={exportReady ? "下载产物文件" : "后端未支持 artifact.export"}
+        >
+          {busy === "download" ? "下载中" : "下载"}
+        </button>
+        <button
+          type="button"
+          onClick={() => onMentionArtifact?.(artifact)}
+          disabled={!canMention}
+          className={`${btnSecondaryClass} disabled:cursor-not-allowed disabled:opacity-60`}
+          title={canMention ? "引用本对话产物路径" : "缺少可 pin 的工作区路径"}
+        >
+          @ 引用
+        </button>
+        <button
+          type="button"
+          onClick={handlePromote}
+          disabled={!promoteReady || promoted || busy === "promote"}
+          className={`${btnSecondaryClass} disabled:cursor-not-allowed disabled:opacity-60`}
+          title={promoteReady ? "加入跨会话工作区文件" : "后端未支持 artifact.promote"}
+        >
+          {promoted ? "已加入工作区" : busy === "promote" ? "加入中" : "加入工作区"}
+        </button>
+        {!promoteReady ? (
+          <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-400">
+            加入工作区后端未支持
           </span>
         ) : null}
       </div>
-      {artifacts.length === 0 ? (
-        <EmptyState
-          title="暂无产出"
-          description="发送问题后，SQL、数据集、图表和报告会在这里显示，可点击展开查看完整内容。"
-        />
-      ) : (
-        <div className="grid gap-3">
-          {artifacts.map((artifact) => {
-            const expanded = expandedId === artifact.id;
-            const sourceEvent = artifact.createdByEventId
-              ? events.find((event) => event.id === artifact.createdByEventId)
-              : null;
-            return (
-              <div
-                key={artifact.id}
-                className={[
-                  "overflow-hidden rounded-xl border transition-colors duration-200",
-                  expanded
-                    ? "border-primary-light/40 bg-surface shadow-sm"
-                    : "border-border bg-surface-subtle",
-                ].join(" ")}
-              >
-                <button
-                  type="button"
-                  onClick={() =>
-                    onExpandedIdChange(
-                      expandedId === artifact.id ? null : artifact.id,
-                    )
-                  }
-                  className="w-full cursor-pointer p-3 text-left transition-colors duration-200 hover:bg-surface"
-                >
-                  <ArtifactCardHeader
-                    artifact={artifact}
-                    expanded={expanded}
-                    sourceEvent={sourceEvent}
-                  />
-                </button>
-                {expanded ? (
-                  <div className="border-t border-border px-3 pb-3 pt-2">
-                    {sourceEvent ? (
-                      <div className="mb-3 rounded-lg border border-border bg-surface-subtle p-2.5">
-                        <div className={sectionLabelClass}>来源步骤</div>
-                        <button
-                          type="button"
-                          onClick={() => onSelectEvent(sourceEvent.id)}
-                          className="mt-1 cursor-pointer text-left text-xs font-semibold text-primary underline-offset-2 hover:underline"
-                        >
-                          {sourceEvent.title} → 在详情中查看
-                        </button>
-                      </div>
-                    ) : null}
-                    {artifact.detail ? (
-                      <ArtifactDetailView detail={artifact.detail} />
-                    ) : (
-                      <EmptyState
-                        title="暂无详情"
-                        description="该产出物尚未包含可查看的详细内容。"
-                      />
-                    )}
-                    {exportReady ? (
-                      <ArtifactExportActions artifact={artifact} />
-                    ) : (
-                      <p className="mt-3 text-[11px] leading-4 text-muted-light">
-                        连接配置 API 后可预览与下载完整产物。
-                      </p>
-                    )}
-                  </div>
-                ) : null}
-              </div>
-            );
-          })}
-          <p className="text-[11px] leading-4 text-muted-light">
-            {exportReady
-              ? "展开产物后可查看或下载完整内容。"
-              : "预览与下载需后端 artifact 接口可用。"}
-          </p>
-        </div>
-      )}
-    </section>
+      {error ? (
+        <p className="mt-2 rounded bg-step-error/10 px-2 py-1.5 text-[11px] text-step-error">
+          {error}
+        </p>
+      ) : null}
+    </div>
   );
 }
 
@@ -791,6 +1017,7 @@ function DetailView({
   return (
     <ActionDetail
       event={event}
+      liveRun={liveRun}
       producedArtifacts={producedArtifacts}
       tokenUsage={tokenUsage}
       toolCall={toolCall}
@@ -860,14 +1087,7 @@ function ArtifactDetailPanel({
         </div>
       )}
 
-      {artifact.detail ? (
-        <ArtifactDetailView detail={artifact.detail} />
-      ) : (
-        <EmptyState
-          title="暂无详情"
-          description="该产出物尚未包含可查看的详细内容。"
-        />
-      )}
+      <ArtifactExpandedDetail artifact={artifact} />
     </div>
   );
 }
@@ -887,12 +1107,14 @@ function detailStatusLabel(
 
 function ActionDetail({
   event,
+  liveRun,
   producedArtifacts,
   tokenUsage,
   toolCall,
   onBack,
 }: {
   event: TimelineEvent | null;
+  liveRun: LiveRun;
   producedArtifacts: DataArtifact[];
   tokenUsage: ReturnType<typeof resolveTokenUsageForEvent>;
   toolCall?: LiveToolCallRecord;
@@ -901,6 +1123,11 @@ function ActionDetail({
   const [expandedArtifactId, setExpandedArtifactId] = useState<string | null>(
     null,
   );
+  const workspaceMetadata = resolveWorkspaceMetadataForToolCall(
+    liveRun,
+    toolCall?.id,
+  );
+  const sandboxOutputs = resolveSandboxOutputsForToolCall(liveRun, toolCall);
 
   if (!event) {
     return (
@@ -951,8 +1178,47 @@ function ActionDetail({
       )}
 
       <Panel title="动作详情">
-        <EventPayloadView event={event} toolCall={toolCall} />
+        <EventPayloadView
+          event={event}
+          producedArtifacts={producedArtifacts}
+          toolCall={toolCall}
+        />
       </Panel>
+
+      {workspaceMetadata ? (
+        <Panel title="工作区元数据">
+          <p className="text-xs leading-5 text-muted">
+            {formatWorkspaceMetadataSummary(workspaceMetadata)}
+          </p>
+          <div className={consoleScrollXShellClass}>
+            <pre className={[consoleCodeBlockBaseClass, "max-h-48"].join(" ")}>
+              <code className={consoleCodeInnerClass}>
+                {JSON.stringify(workspaceMetadata.payload, null, 2)}
+              </code>
+            </pre>
+          </div>
+        </Panel>
+      ) : null}
+
+      {sandboxOutputs.length > 0 ? (
+        <Panel title="沙箱输出">
+          <div className="grid gap-2">
+            {sandboxOutputs.map((output, index) => (
+              <div
+                key={`${output.kind}-${output.receivedAt}-${index}`}
+                className="rounded-lg border border-border bg-surface-subtle p-2.5"
+              >
+                <div className="text-[10px] font-semibold uppercase tracking-wide text-muted-light">
+                  {output.kind}
+                </div>
+                <pre className="mt-1 max-h-48 overflow-auto whitespace-pre-wrap font-mono text-[11px] leading-4 text-muted">
+                  {formatSandboxOutputText(output)}
+                </pre>
+              </div>
+            ))}
+          </div>
+        </Panel>
+      ) : null}
 
       <Panel title="用量">
         <TokenUsagePanel usage={tokenUsage} />
@@ -984,12 +1250,16 @@ function ActionDetail({
                       {artifact.summary}
                     </p>
                     <span className="mt-1 inline-block text-[10px] font-medium text-muted">
-                      {expanded ? "收起" : artifact.detail ? "展开内容" : "无详情"}
+                      {expanded
+                        ? "收起"
+                        : artifact.detail || artifact.previewAvailable
+                          ? "展开内容"
+                          : "无详情"}
                     </span>
                   </button>
-                  {expanded && artifact.detail ? (
+                  {expanded ? (
                     <div className="border-t border-border px-3 pb-3 pt-2">
-                      <ArtifactDetailView detail={artifact.detail} />
+                      <ArtifactExpandedDetail artifact={artifact} />
                     </div>
                   ) : null}
                 </div>
@@ -1108,11 +1378,27 @@ function TokenUsageBar({
   );
 }
 
+function SchemaFieldChip({ field }: { field: string }) {
+  const [name, type] = field.split(" · ");
+  return (
+    <span className="inline-flex overflow-hidden rounded border border-border bg-surface font-mono text-[10px]">
+      <span className="px-1.5 py-0.5 text-muted">{name}</span>
+      {type ? (
+        <span className="border-l border-border bg-surface-subtle px-1.5 py-0.5 text-muted-light">
+          {type}
+        </span>
+      ) : null}
+    </span>
+  );
+}
+
 function EventPayloadView({
   event,
+  producedArtifacts = [],
   toolCall,
 }: {
   event: TimelineEvent;
+  producedArtifacts?: DataArtifact[];
   toolCall?: LiveToolCallRecord;
 }) {
   if (event.kind === "inspect") {
@@ -1138,12 +1424,7 @@ function EventPayloadView({
             </p>
             <div className="mt-2 flex flex-wrap gap-1">
               {table.fields.map((field) => (
-                <span
-                  key={field}
-                  className="rounded border border-border bg-surface px-1.5 py-0.5 font-mono text-[10px] text-muted"
-                >
-                  {field}
-                </span>
+                <SchemaFieldChip key={field} field={field} />
               ))}
             </div>
           </div>
@@ -1162,6 +1443,9 @@ function EventPayloadView({
     };
     const failed = event.activityStatus === "failed" || toolCall?.status === "failed";
     const errorMessage = payload.errorMessage;
+    const datasetDetail = producedArtifacts.find(
+      (artifact) => artifact.detail?.type === "dataset",
+    )?.detail;
     return (
       <div className="grid gap-3">
         {payload.question && <Metric label="问题" value={payload.question} />}
@@ -1191,6 +1475,16 @@ function EventPayloadView({
             <span>·</span>
             <span>{payload.durationMs}ms</span>
           </div>
+        )}
+        {datasetDetail?.type === "dataset" ? (
+          <div className="grid gap-2">
+            <div className={sectionLabelClass}>结果预览</div>
+            <ArtifactDetailView detail={datasetDetail} />
+          </div>
+        ) : (
+          <p className="rounded-lg border border-dashed border-border bg-surface-subtle px-2.5 py-2 text-[11px] leading-4 text-muted-light">
+            SQL 结果表将从关联的 dataset artifact 展示；当前步骤尚未返回可预览结果行。
+          </p>
         )}
       </div>
     );
@@ -1308,6 +1602,99 @@ function ArtifactExportActions({ artifact }: { artifact: DataArtifact }) {
   );
 }
 
+function ArtifactExpandedDetail({
+  artifact,
+  exportReady = hasCapability("artifact.export"),
+}: {
+  artifact: DataArtifact;
+  exportReady?: boolean;
+}) {
+  const [detail, setDetail] = useState<ArtifactDetail | undefined>(artifact.detail);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setDetail(artifact.detail);
+    setError(null);
+  }, [artifact.detail, artifact.id]);
+
+  useEffect(() => {
+    if (detail || !artifact.previewAvailable || !exportReady) {
+      return;
+    }
+
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+
+    void artifactExportClient
+      .fetchPreview(artifact.id)
+      .then((preview) => {
+        if (cancelled) {
+          return;
+        }
+        const loaded = artifactDetailFromPreview(artifact, preview);
+        if (loaded) {
+          setDetail(loaded);
+          return;
+        }
+        setError("预览数据为空或格式暂不支持。");
+      })
+      .catch((fetchError: unknown) => {
+        if (cancelled) {
+          return;
+        }
+        setError(
+          fetchError instanceof Error ? fetchError.message : "预览加载失败",
+        );
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setLoading(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    artifact.id,
+    artifact.kind,
+    artifact.previewAvailable,
+    artifact.title,
+    artifact.type,
+    detail,
+    exportReady,
+  ]);
+
+  if (detail) {
+    return <ArtifactDetailView detail={detail} />;
+  }
+
+  if (loading) {
+    return <p className="text-xs text-muted-light">正在加载预览…</p>;
+  }
+
+  if (error) {
+    return (
+      <p className="rounded-lg bg-step-error/10 px-2.5 py-2 text-xs text-step-error">
+        {error}
+      </p>
+    );
+  }
+
+  return (
+    <EmptyState
+      title="暂无详情"
+      description={
+        artifact.previewAvailable && exportReady
+          ? "展开时未能加载预览，请稍后重试。"
+          : "该产出物尚未包含可查看的详细内容。"
+      }
+    />
+  );
+}
+
 function ArtifactDetailView({ detail }: { detail: ArtifactDetail }) {
   if (detail.type === "sql") {
     return (
@@ -1372,30 +1759,83 @@ function ArtifactDetailView({ detail }: { detail: ArtifactDetail }) {
   }
 
   if (detail.type === "chart") {
-    const maxValue = Math.max(...detail.points.map((point) => point.value));
+    const points = detail.points.length > 0
+      ? detail.points
+      : detail.series?.[0]?.points ?? [];
+
+    if (points.length === 0) {
+      return (
+        <EmptyState
+          title="暂无图表数据"
+          description="后端已声明 chart artifact，但尚未上报 points/series 预览数据。"
+        />
+      );
+    }
+
+    const chartType = detail.chartType ?? "bar";
+    const unit = detail.unit ?? "";
+    const chartData = points.map((point) => ({
+      label: point.label,
+      value: point.value,
+    }));
 
     return (
       <div className="grid gap-3 rounded-xl border border-border bg-surface-subtle p-3">
-        {detail.points.map((point) => (
-          <div
-            key={point.label}
-            className="grid grid-cols-[42px_1fr_56px] items-center gap-3"
-          >
-            <span className="text-xs font-medium text-muted-light">
-              {point.label}
-            </span>
-            <div className="h-3 overflow-hidden rounded-full bg-white">
-              <div
-                className="h-full rounded-full bg-step-visualize"
-                style={{ width: `${(point.value / maxValue) * 100}%` }}
-              />
-            </div>
-            <span className="text-right text-xs font-semibold text-foreground">
-              {detail.unit}
-              {point.value.toFixed(1)}
-            </span>
+        <div className="h-64 min-w-0">
+          <ResponsiveContainer width="100%" height="100%">
+            {chartType === "line" ? (
+              <LineChart data={chartData} margin={{ top: 8, right: 8, bottom: 8, left: 0 }}>
+                <XAxis dataKey="label" tick={{ fontSize: 11 }} />
+                <YAxis tick={{ fontSize: 11 }} />
+                <Tooltip formatter={(value) => [`${unit}${value}`, "value"]} />
+                <Line
+                  type="monotone"
+                  dataKey="value"
+                  stroke="var(--step-visualize)"
+                  strokeWidth={2}
+                  dot={{ r: 3 }}
+                />
+              </LineChart>
+            ) : chartType === "pie" ? (
+              <PieChart>
+                <Tooltip formatter={(value) => [`${unit}${value}`, "value"]} />
+                <Pie
+                  data={chartData}
+                  dataKey="value"
+                  nameKey="label"
+                  outerRadius={86}
+                  label={(entry) => String((entry as { name?: unknown }).name ?? "")}
+                >
+                  {chartData.map((point, index) => (
+                    <Cell
+                      key={point.label}
+                      fill={index % 2 === 0 ? "var(--step-visualize)" : "var(--primary-light)"}
+                    />
+                  ))}
+                </Pie>
+              </PieChart>
+            ) : (
+              <BarChart data={chartData} margin={{ top: 8, right: 8, bottom: 8, left: 0 }}>
+                <XAxis dataKey="label" tick={{ fontSize: 11 }} />
+                <YAxis tick={{ fontSize: 11 }} />
+                <Tooltip formatter={(value) => [`${unit}${value}`, "value"]} />
+                <Bar dataKey="value" fill="var(--step-visualize)" radius={[6, 6, 0, 0]} />
+              </BarChart>
+            )}
+          </ResponsiveContainer>
+        </div>
+        {detail.series && detail.series.length > 0 ? (
+          <div className="flex flex-wrap gap-1">
+            {detail.series.map((series) => (
+              <span
+                key={series.name}
+                className="rounded-full border border-border bg-surface px-2 py-0.5 text-[10px] font-medium text-muted"
+              >
+                {series.name}
+              </span>
+            ))}
           </div>
-        ))}
+        ) : null}
       </div>
     );
   }
@@ -1501,7 +1941,7 @@ function ArtifactCardHeader({
       <div className="mt-3 flex items-center justify-between text-[11px] text-muted-light">
         <span>{artifact.version ?? "v1"}</span>
         <span className="font-medium text-muted">
-          {expanded ? "收起 ↑" : artifact.detail ? "展开内容 ↓" : "无详情"}
+          {expanded ? "收起 ↑" : artifact.detail || artifact.previewAvailable ? "展开内容 ↓" : "无详情"}
         </span>
       </div>
     </>

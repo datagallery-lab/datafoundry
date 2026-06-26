@@ -9,7 +9,30 @@ import { SQL_MAX_SQL_CHARS } from "../context/inventory/context-limits.js";
 import { toolObservationActivityFromPackage } from "../context/tool-observation/tool-observation-projection-items.js";
 import { createActivitySnapshot, createArtifactEvent, createCustomEvent } from "../events.js";
 import { SQL_MAX_EXECUTION_COUNT } from "../runtime-limits.js";
+import { createTokenUsageCorrelationStore } from "../stream/token-usage-correlation.js";
 import type { AgentRunContext, AgUiEventEmitter } from "../types.js";
+
+type DataToolExecutionOptions = {
+  toolCallId?: string;
+};
+
+type MastraToolExecuteOptions = {
+  agent?: { toolCallId?: string };
+};
+
+const toolCallIdFromOptions = (options?: MastraToolExecuteOptions): string | undefined =>
+  typeof options?.agent?.toolCallId === "string" && options.agent.toolCallId.length > 0
+    ? options.agent.toolCallId
+    : undefined;
+
+const executionOptionsFromMastra = (
+  options?: MastraToolExecuteOptions,
+): DataToolExecutionOptions | undefined => {
+  const toolCallId = toolCallIdFromOptions(options);
+  return toolCallId ? { toolCallId } : undefined;
+};
+
+type TokenUsageCorrelationStore = ReturnType<typeof createTokenUsageCorrelationStore>;
 
 type SchemaCapability = {
   datasource_id: string;
@@ -32,7 +55,10 @@ type GovernedResultInput = {
 };
 
 export type ToolRegistry = {
-  inspectSchema(input?: { datasource_id?: string; table_names?: string[] }): Promise<InspectSchemaResult>;
+  inspectSchema(
+    input?: { datasource_id?: string; table_names?: string[] },
+    options?: DataToolExecutionOptions,
+  ): Promise<InspectSchemaResult>;
   listDataSources(input?: { enabled_only?: boolean }): Promise<unknown>;
   mastraTools: {
     inspect_schema: ReturnType<typeof createTool>;
@@ -43,12 +69,15 @@ export type ToolRegistry = {
   onGovernedResult(input: GovernedResultInput): void;
   onGovernanceError(input: { error: unknown; rawResult: unknown; toolName: string }): void;
   previewTable(input: { schema_id: string; table: string; limit?: number }): Promise<unknown>;
-  runSqlReadonly(input: {
-    schema_id: string;
-    sql: string;
-    limit?: number;
-    timeout_ms?: number;
-  }): Promise<RawSqlToolResult>;
+  runSqlReadonly(
+    input: {
+      schema_id: string;
+      sql: string;
+      limit?: number;
+      timeout_ms?: number;
+    },
+    options?: DataToolExecutionOptions,
+  ): Promise<RawSqlToolResult>;
   state: {
     artifact_ids: string[];
     schema_capabilities: Map<string, SchemaCapability>;
@@ -61,6 +90,7 @@ type CreateDataAgentToolRegistryInput = {
   dataGateway: DataGateway;
   emitter: AgUiEventEmitter;
   runContext: AgentRunContext;
+  tokenUsageCorrelation?: TokenUsageCorrelationStore;
 };
 
 /** Create the run-local data tool registry and concurrency-safe execution state. */
@@ -82,11 +112,26 @@ export const createDataAgentToolRegistry = (input: CreateDataAgentToolRegistryIn
     return { datasources: results.filter((datasource) => allowedIds.has(datasource.id)) };
   };
 
+  const emitStepCorrelation = (
+    stepId: string,
+    toolName: string,
+    toolCallId?: string,
+  ): void => {
+    if (!toolCallId || !input.tokenUsageCorrelation) return;
+    input.tokenUsageCorrelation.emitCorrelation(input.emitter, {
+      stepId,
+      toolCallId,
+      toolName,
+    });
+  };
+
   const inspectSchema = async (
-    toolInput: { datasource_id?: string; table_names?: string[] } = {}
+    toolInput: { datasource_id?: string; table_names?: string[] } = {},
+    options?: DataToolExecutionOptions,
   ): Promise<InspectSchemaResult> => {
     const datasourceId = resolveDatasourceId(input.runContext, toolInput.datasource_id);
     const stepId = `schema-${randomUUID()}`;
+    emitStepCorrelation(stepId, "inspect_schema", options?.toolCallId);
     input.emitter.emit(createActivitySnapshot(input.runContext, "STEP", {
       step_id: stepId,
       title: "检查数据源 schema",
@@ -114,12 +159,15 @@ export const createDataAgentToolRegistry = (input: CreateDataAgentToolRegistryIn
     }
   };
 
-  const runSqlReadonly = async (toolInput: {
-    schema_id: string;
-    sql: string;
-    limit?: number;
-    timeout_ms?: number;
-  }): Promise<RawSqlToolResult> => {
+  const runSqlReadonly = async (
+    toolInput: {
+      schema_id: string;
+      sql: string;
+      limit?: number;
+      timeout_ms?: number;
+    },
+    options?: DataToolExecutionOptions,
+  ): Promise<RawSqlToolResult> => {
     const capability = state.schema_capabilities.get(toolInput.schema_id);
     if (!capability) {
       throw new Error("SCHEMA_REQUIRED_BEFORE_SQL");
@@ -134,6 +182,7 @@ export const createDataAgentToolRegistry = (input: CreateDataAgentToolRegistryIn
     }
 
     const stepId = `sql-${state.sql_execution_count}`;
+    emitStepCorrelation(stepId, "run_sql_readonly", options?.toolCallId);
     const sqlActivityPreview = truncateContextText(toolInput.sql, SQL_MAX_SQL_CHARS);
     input.emitter.emit(createActivitySnapshot(input.runContext, "STEP", {
       step_id: stepId,
@@ -258,10 +307,14 @@ const createMastraDataTools = (executors: DataToolExecutors): ToolRegistry["mast
       datasource_id: z.string().optional(),
       table_names: z.array(z.string()).optional()
     }),
-    execute: (toolInput) => executors.inspectSchema({
-      ...(toolInput.datasource_id ? { datasource_id: toolInput.datasource_id } : {}),
-      ...(toolInput.table_names ? { table_names: toolInput.table_names } : {})
-    })
+    execute: (toolInput, options) =>
+      executors.inspectSchema(
+        {
+          ...(toolInput.datasource_id ? { datasource_id: toolInput.datasource_id } : {}),
+          ...(toolInput.table_names ? { table_names: toolInput.table_names } : {}),
+        },
+        executionOptionsFromMastra(options),
+      ),
   }),
   preview_table: createTool({
     id: "preview_table",
@@ -286,12 +339,16 @@ const createMastraDataTools = (executors: DataToolExecutors): ToolRegistry["mast
       limit: z.number().int().positive().max(1000).optional(),
       timeout_ms: z.number().int().positive().max(30000).optional()
     }),
-    execute: (toolInput) => executors.runSqlReadonly({
-      schema_id: toolInput.schema_id,
-      sql: toolInput.sql,
-      ...(toolInput.limit ? { limit: toolInput.limit } : {}),
-      ...(toolInput.timeout_ms ? { timeout_ms: toolInput.timeout_ms } : {})
-    })
+    execute: (toolInput, options) =>
+      executors.runSqlReadonly(
+        {
+          schema_id: toolInput.schema_id,
+          sql: toolInput.sql,
+          ...(toolInput.limit ? { limit: toolInput.limit } : {}),
+          ...(toolInput.timeout_ms ? { timeout_ms: toolInput.timeout_ms } : {}),
+        },
+        executionOptionsFromMastra(options),
+      ),
   })
 });
 

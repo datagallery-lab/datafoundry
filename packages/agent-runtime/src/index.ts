@@ -53,6 +53,7 @@ import { GovernedToolFactory } from "./tools/governed-tool-factory.js";
 import { createRunWorkspace, resolveSessionWorkspaceDir } from "./tools/workspace-factory.js";
 import { wrapWorkspaceToolsWithArtifactRecording } from "./tools/workspace-artifact-recorder.js";
 import { createMastraStreamNormalizerHooks } from "./stream/mastra-stream-hooks.js";
+import { createTokenUsageCorrelationStore } from "./stream/token-usage-correlation.js";
 import { wrapAgentForAgUi } from "./stream/mastra-stream-normalizer.js";
 import type { AgentRunContext, AgentRunContextInput, AgUiEventEmitter } from "./types.js";
 import { createArtifactEvent, createCustomEvent } from "./events.js";
@@ -107,7 +108,11 @@ export {
   type MastraStreamChunk,
   type MastraStreamNormalizerHooks
 } from "./stream/mastra-stream-normalizer.js";
-export { createMastraStreamNormalizerHooks } from "./stream/mastra-stream-hooks.js";
+export { createMastraStreamNormalizerHooks, tokenUsageEventFromChunk } from "./stream/mastra-stream-hooks.js";
+export {
+  createTokenUsageCorrelationStore,
+  type TokenUsageCorrelationPayload,
+} from "./stream/token-usage-correlation.js";
 export {
   resolveRunWorkspaceDir,
   resolveSessionWorkspaceDir,
@@ -228,10 +233,12 @@ export const createDataAgent = async (
 
   const governedMessages = normalizeIngressMessages(input.messages);
 
+  const tokenUsageCorrelation = createTokenUsageCorrelationStore();
   const registry = createDataAgentToolRegistry({
     dataGateway: input.dataGateway,
     emitter: input.emitter,
-    runContext: input.runContext
+    runContext: input.runContext,
+    tokenUsageCorrelation,
   });
   const dispatcher = new ToolObservationDispatcher(toolObservationBoundary.packager, {
     modelName: input.runContext.model_name,
@@ -383,7 +390,10 @@ export const createDataAgent = async (
       }
     }
   });
-  const agentForAgUi = wrapAgentForAgUi(agent, createMastraStreamNormalizerHooks(input.emitter));
+  const agentForAgUi = wrapAgentForAgUi(
+    agent,
+    createMastraStreamNormalizerHooks(input.emitter),
+  );
   const mastra = input.taskStateRuntime
     ? new Mastra({
         agents: { dataAgent: agentForAgUi },

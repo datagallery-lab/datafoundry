@@ -16,6 +16,15 @@ describe("assistant-thought-content", () => {
     ).toBe("ab");
   });
 
+  it("extracts explicit reasoning parts from model reasoning messages", () => {
+    expect(
+      messageTextContent([
+        { type: "reasoning", text: "inspect schema" },
+        { type: "text", text: " then query" },
+      ]),
+    ).toBe("inspect schema then query");
+  });
+
   it("dedupes exact repeated assistant text", () => {
     const thought =
       "我需要分析不同品类的销售额数据。首先，让我查看可用的数据源，然后检查数据库模式以了解表结构。";

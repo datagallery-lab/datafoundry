@@ -107,6 +107,14 @@ export function useLiveRun(): LiveRunContextValue {
   return ctx;
 }
 
+export function useLiveRunSetters(): LiveRunSetters {
+  const setters = useContext(LiveRunSettersContext);
+  if (!setters) {
+    throw new Error("useLiveRunSetters must be used within LiveRunProvider");
+  }
+  return setters;
+}
+
 /**
  * Subscribes to AG-UI events for the active thread. Must render as a sibling
  * **before** `<CopilotChat>` inside `<CopilotChatConfigurationProvider>` so

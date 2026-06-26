@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   createChatSession,
+  dedupeChatSessions,
   emptyPerRunSelection,
   getSessionDisabled,
   prunePerRunSelection,
@@ -73,5 +74,17 @@ describe("session config disabled map", () => {
     selection = togglePerRunMention(selection, "db", "db-default");
     const pruned = prunePerRunSelection(store, session, selection);
     expect(pruned.db).toEqual(["db-default"]);
+  });
+
+  it("deduplicates stored sessions by session and thread id", () => {
+    const first = { ...createChatSession("A"), id: "same", threadId: "same" };
+    const duplicateId = { ...createChatSession("B"), id: "same", threadId: "thread-b" };
+    const duplicateThread = { ...createChatSession("C"), id: "id-c", threadId: "same" };
+    const unique = { ...createChatSession("D"), id: "id-d", threadId: "thread-d" };
+
+    expect(dedupeChatSessions([first, duplicateId, duplicateThread, unique])).toEqual([
+      first,
+      unique,
+    ]);
   });
 });

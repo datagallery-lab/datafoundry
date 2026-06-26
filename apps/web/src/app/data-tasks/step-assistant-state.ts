@@ -63,38 +63,16 @@ export function inferCollaborationFromLiveRun(
 
 export function findLinkedCollaborationResponse(
   message: MessageLike,
-  messages: MessageLike[],
+  _messages: MessageLike[],
   responses: CollaborationResponseRecord[],
 ): CollaborationResponseRecord | undefined {
   if (!message.id) return undefined;
 
-  const direct = responses.find(
+  return responses.find(
     (response) =>
       response.assistantMessageId === message.id ||
       messageHasToolCall(message, response.toolCallId),
   );
-  if (direct) return direct;
-
-  const unlinked = responses.filter(
-    (response) =>
-      !messages.some(
-        (item) =>
-          item.role === "assistant" &&
-          (messageHasToolCall(item, response.toolCallId) ||
-            response.assistantMessageId === item.id),
-      ),
-  );
-  if (unlinked.length === 0) return undefined;
-
-  const messageIndex = messages.findIndex((item) => item.id === message.id);
-  if (messageIndex < 0) return undefined;
-
-  const laterAssistants = messages
-    .slice(messageIndex + 1)
-    .filter((item) => item.role === "assistant");
-  if (laterAssistants.length > 0) return undefined;
-
-  return unlinked[unlinked.length - 1];
 }
 
 export function resolveStepAssistantFlags(input: {

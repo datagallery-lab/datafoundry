@@ -14,8 +14,10 @@ import {
   PER_RUN_MENTION_META,
 } from "../../data-task-state";
 import type {
+  FileMentionResource,
   MentionResource,
   PerRunMentionKind,
+  PerRunFileSelection,
   PerRunSelection,
 } from "../../data-task-state";
 import { scheduleChatTextareaResize } from "./use-chat-textarea-autoresize";
@@ -48,6 +50,9 @@ function setNativeTextareaValue(
 }
 
 type MentionMenuState = { query: string; tokenStart: number; caret: number };
+type MentionMenuItem =
+  | { type: "resource"; resource: MentionResource }
+  | { type: "file"; resource: FileMentionResource };
 
 export interface MentionAutocomplete {
   /** Attach to the element that wraps the CopilotChat textarea. */
@@ -60,13 +65,19 @@ export interface MentionAutocomplete {
 
 export function useMentionAutocomplete({
   resources,
+  fileResources,
   selection,
+  fileSelection,
   onToggle,
+  onToggleFile,
   refreshToken,
 }: {
   resources: MentionResource[];
+  fileResources?: FileMentionResource[];
   selection: PerRunSelection;
+  fileSelection?: PerRunFileSelection;
   onToggle: (kind: PerRunMentionKind, id: string) => void;
+  onToggleFile?: (resource: FileMentionResource) => void;
   /** Change this (e.g. the input `mode`) to re-bind after the textarea remounts. */
   refreshToken?: string;
 }): MentionAutocomplete {
@@ -78,19 +89,32 @@ export function useMentionAutocomplete({
   const filtered = useMemo(() => {
     if (!menuState) return [];
     const query = menuState.query.trim().toLowerCase();
-    if (query.length === 0) return resources;
-    return resources.filter((resource) => {
-      const haystack = [
-        resource.name,
-        resource.description,
-        PER_RUN_MENTION_META[resource.kind].token,
-        PER_RUN_MENTION_META[resource.kind].label,
-      ]
-        .join(" ")
-        .toLowerCase();
-      return haystack.includes(query);
+    const items: MentionMenuItem[] = [
+      ...resources.map((resource) => ({ type: "resource" as const, resource })),
+      ...(fileResources ?? []).map((resource) => ({
+        type: "file" as const,
+        resource,
+      })),
+    ];
+    if (query.length === 0) return items;
+    return items.filter((item) => {
+      const resource = item.resource;
+      const haystack = item.type === "resource"
+        ? [
+            resource.name,
+            resource.description,
+            PER_RUN_MENTION_META[resource.kind].token,
+            PER_RUN_MENTION_META[resource.kind].label,
+          ]
+        : [
+            resource.name,
+            resource.description,
+            "file",
+            resource.scope === "workspace" ? "工作区" : "本对话",
+          ];
+      return haystack.join(" ").toLowerCase().includes(query);
     });
-  }, [menuState, resources]);
+  }, [fileResources, menuState, resources]);
 
   useEffect(() => {
     setHighlight(0);
@@ -116,7 +140,7 @@ export function useMentionAutocomplete({
   }, []);
 
   const selectResource = useCallback(
-    (resource: MentionResource) => {
+    (item: MentionMenuItem) => {
       const el = textareaRef.current;
       const state = menuState;
       if (el && state) {
@@ -124,10 +148,14 @@ export function useMentionAutocomplete({
           el.value.slice(0, state.tokenStart) + el.value.slice(state.caret);
         setNativeTextareaValue(el, next, state.tokenStart);
       }
-      onToggle(resource.kind, resource.id);
+      if (item.type === "resource") {
+        onToggle(item.resource.kind, item.resource.id);
+      } else {
+        onToggleFile?.(item.resource);
+      }
       setMenuState(null);
     },
-    [menuState, onToggle],
+    [menuState, onToggle, onToggleFile],
   );
 
   const filteredRef = useRef(filtered);
@@ -245,6 +273,7 @@ export function useMentionAutocomplete({
         items={filtered}
         highlight={highlight}
         selection={selection}
+        fileSelection={fileSelection}
         onHover={setHighlight}
         onPick={selectResource}
         onClose={closeMenu}
@@ -258,15 +287,17 @@ function MentionMenu({
   items,
   highlight,
   selection,
+  fileSelection,
   onHover,
   onPick,
   onClose,
 }: {
-  items: MentionResource[];
+  items: MentionMenuItem[];
   highlight: number;
   selection: PerRunSelection;
+  fileSelection?: PerRunFileSelection;
   onHover: (index: number) => void;
-  onPick: (resource: MentionResource) => void;
+  onPick: (item: MentionMenuItem) => void;
   onClose: () => void;
 }) {
   const optionRefs = useRef<Array<HTMLButtonElement | null>>([]);
@@ -300,13 +331,23 @@ function MentionMenu({
         </p>
       ) : (
         <ul className="max-h-72 overflow-y-auto py-1">
-          {items.map((resource, index) => {
+          {items.map((item, index) => {
+            const resource = item.resource;
             const active = index === highlight;
-            const selected = selection[resource.kind].includes(resource.id);
-            const meta = PER_RUN_MENTION_META[resource.kind];
-            const appearance = PER_RUN_MENTION_APPEARANCE[resource.kind];
+            const selected =
+              item.type === "resource"
+                ? selection[item.resource.kind].includes(item.resource.id)
+                : isFileMentionSelected(item.resource, fileSelection);
+            const label =
+              item.type === "resource"
+                ? `@${PER_RUN_MENTION_META[item.resource.kind].token}`
+                : "@file";
+            const badgeClass =
+              item.type === "resource"
+                ? PER_RUN_MENTION_APPEARANCE[item.resource.kind].badge
+                : "bg-indigo-50 text-indigo-700";
             return (
-              <li key={`${resource.kind}:${resource.id}`}>
+              <li key={`${item.type}:${resource.id}`}>
                 <button
                   type="button"
                   role="option"
@@ -315,7 +356,7 @@ function MentionMenu({
                     optionRefs.current[index] = node;
                   }}
                   onMouseEnter={() => onHover(index)}
-                  onClick={() => onPick(resource)}
+                  onClick={() => onPick(item)}
                   className={[
                     "flex w-full items-center gap-2 px-3 py-2 text-left transition",
                     active ? "bg-surface-subtle" : "",
@@ -324,10 +365,10 @@ function MentionMenu({
                   <span
                     className={[
                       "inline-flex shrink-0 items-center rounded-md px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide",
-                      appearance.badge,
+                      badgeClass,
                     ].join(" ")}
                   >
-                    @{meta.token}
+                    {label}
                   </span>
                   <span className="min-w-0 flex-1">
                     <span className="flex items-center gap-1.5">
@@ -337,7 +378,9 @@ function MentionMenu({
                     </span>
                     {resource.description && (
                       <span className="mt-0.5 block truncate text-xs text-muted-light">
-                        {resource.description}
+                        {item.type === "file"
+                          ? `${item.resource.scope === "workspace" ? "工作区" : "本对话"} · ${resource.description}`
+                          : resource.description}
                       </span>
                     )}
                   </span>
@@ -358,14 +401,22 @@ function MentionMenu({
 
 export function MentionChips({
   resources,
+  fileResources,
   selection,
+  fileSelection,
   onRemove,
+  onRemoveFile,
   onClear,
+  onClearFiles,
 }: {
   resources: MentionResource[];
+  fileResources?: FileMentionResource[];
   selection: PerRunSelection;
+  fileSelection?: PerRunFileSelection;
   onRemove: (kind: PerRunMentionKind, id: string) => void;
+  onRemoveFile?: (resource: FileMentionResource) => void;
   onClear: () => void;
+  onClearFiles?: () => void;
 }) {
   const byId = useMemo(() => {
     const map = new Map<string, MentionResource>();
@@ -382,7 +433,10 @@ export function MentionChips({
       if (resource) chips.push(resource);
     }
   }
-  if (chips.length === 0) return null;
+  const fileChips = (fileResources ?? []).filter((resource) =>
+    isFileMentionSelected(resource, fileSelection),
+  );
+  if (chips.length === 0 && fileChips.length === 0) return null;
 
   return (
     <div
@@ -423,15 +477,55 @@ export function MentionChips({
           </span>
         );
       })}
+      {fileChips.map((resource) => (
+        <span
+          key={`file:${resource.id}`}
+          className="inline-flex items-center gap-1 rounded-full border border-indigo-200 bg-indigo-50 py-0.5 pl-2 pr-1 text-xs text-indigo-700"
+          title={`文件：${resource.name}`}
+        >
+          <span className="rounded bg-white/70 px-1 py-px text-[10px] font-semibold uppercase tracking-wide">
+            @file
+          </span>
+          <span className="max-w-[140px] truncate font-medium">
+            {resource.name}
+          </span>
+          {!resource.backendSupported ? (
+            <span className="rounded bg-white/70 px-1 py-px text-[10px]">
+              后端未支持
+            </span>
+          ) : null}
+          <button
+            type="button"
+            aria-label={`移除 ${resource.name}`}
+            onClick={() => onRemoveFile?.(resource)}
+            className="ml-0.5 grid h-4 w-4 place-items-center rounded-full text-indigo-400 transition hover:bg-white/70 hover:text-indigo-700"
+          >
+            <CloseIcon />
+          </button>
+        </span>
+      ))}
       <button
         type="button"
-        onClick={onClear}
+        onClick={() => {
+          onClear();
+          onClearFiles?.();
+        }}
         className="ml-0.5 rounded-full px-2 py-0.5 text-[11px] text-muted-light transition hover:bg-surface-subtle hover:text-muted"
       >
         清除
       </button>
     </div>
   );
+}
+
+function isFileMentionSelected(
+  resource: FileMentionResource,
+  selection?: PerRunFileSelection,
+): boolean {
+  if (!selection) return false;
+  return resource.scope === "workspace"
+    ? selection.fileIds.includes(resource.fileId)
+    : Boolean(resource.path && selection.pinnedPaths.includes(resource.path));
 }
 
 function CheckIcon() {

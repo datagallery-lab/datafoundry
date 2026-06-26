@@ -4,6 +4,7 @@ import {
   getRuntimeCapabilities,
   resetCapabilitiesForTests,
 } from "../../../lib/config-api/capabilities";
+import { shouldRestoreConversation } from "../conversation-restore";
 import {
   hasPendingCapability,
   isSelectOptionPending,
@@ -18,17 +19,28 @@ describe("chat attachment capabilities", () => {
     const mapped = applyBackendCapabilities({});
     expect(mapped["chat.imageInput"]).toBe(false);
     expect(mapped["chat.fileUpload"]).toBe(false);
+    expect(mapped.files).toBe(false);
   });
 
   it("maps backend response flags through", () => {
     const mapped = applyBackendCapabilities({
       "chat.imageInput": true,
       "chat.fileUpload": true,
+      files: true,
       "conversation.memory": true,
     });
     expect(mapped["chat.imageInput"]).toBe(true);
     expect(mapped["chat.fileUpload"]).toBe(true);
+    expect(mapped.files).toBe(true);
     expect(getRuntimeCapabilities().conversationMemory).toBe(true);
+    expect(
+      shouldRestoreConversation({
+        conversationMemoryEnabled: getRuntimeCapabilities().conversationMemory,
+        messageCount: 0,
+        isRunning: false,
+        alreadyRestored: false,
+      }),
+    ).toBe(true);
   });
 
   it("updates pending capability flags from backend response mappings", () => {

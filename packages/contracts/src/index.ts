@@ -232,6 +232,12 @@ export const ENV_VARIABLE_SPECS: EnvVariableSpec[] = [
   { name: "LLM_PROVIDER", required: false, default_value: "bailian", description: "Chat model provider." },
   { name: "LLM_MODEL", required: false, default_value: "qwen-plus", description: "Chat model name." },
   { name: "LLM_BASE_URL", required: true, description: "OpenAI-compatible chat completions base URL." },
+  {
+    name: "AGENT_MODEL_CONTEXT_WINDOW",
+    required: false,
+    default_value: "128000",
+    description: "Model total context window (tokens) used for prompt budget planning. Set to match the chat model."
+  },
   { name: "LLM_API_KEY", required: true, description: "Chat provider API key." },
   { name: "EMBEDDING_PROVIDER", required: false, default_value: "bailian", description: "Embedding provider." },
   {

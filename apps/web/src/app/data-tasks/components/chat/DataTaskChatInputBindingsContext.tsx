@@ -3,8 +3,10 @@
 import { createContext, useContext, type ReactNode } from "react";
 import type {
   ChatSession,
+  FileMentionResource,
   MentionResource,
   PerRunMentionKind,
+  PerRunFileSelection,
   PerRunSelection,
   WorkspaceConfigItem,
   WorkspaceConfigStore,
@@ -20,12 +22,18 @@ export type DataTaskChatInputBindings = {
   onTogglePerRunMention: (kind: PerRunMentionKind, id: string) => void;
   onRemovePerRunMention: (kind: PerRunMentionKind, id: string) => void;
   onClearPerRunMentions: () => void;
+  fileMentionResources: FileMentionResource[];
+  perRunFiles: PerRunFileSelection;
+  onTogglePerRunFileMention: (resource: FileMentionResource) => void;
+  onRemovePerRunFileMention: (resource: FileMentionResource) => void;
+  onClearPerRunFileMentions: () => void;
   workspaceConfig: WorkspaceConfigStore;
   activeSession: ChatSession | null;
   onToggleSessionResource: (kind: PerRunMentionKind, id: string) => void;
   chatColumnWidth: number;
   agentId: string;
   activeThreadId: string | null;
+  capabilitiesReady: boolean;
 };
 
 const DataTaskChatInputBindingsContext =

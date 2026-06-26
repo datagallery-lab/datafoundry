@@ -103,6 +103,13 @@ export function resolveResponsiveSidebars({
       rightPanelWidth,
     }) > viewportWidth;
 
+  // Prefer collapsing the left sidebar before closing the console when the user
+  // wants it open — keeps dock mode reachable on medium-width viewports (e.g.
+  // 16" laptops with OS scaling).
+  if (userRightPanelOpen && overflows() && !sidebarCollapsed) {
+    sidebarCollapsed = true;
+  }
+
   if (overflows() && rightPanelOpen) {
     rightPanelOpen = false;
   }
@@ -135,4 +142,5 @@ export function canDockRightPanel({
   );
 }
 
-export const chatPaneClassName = "min-h-0 w-full flex-1";
+export const chatPaneClassName =
+  "min-h-0 w-full flex-1 [&_[data-testid='copilot-scrollable']]:pb-32";

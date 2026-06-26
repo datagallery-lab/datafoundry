@@ -1,6 +1,10 @@
 "use client";
 
-import { useCopilotChatConfiguration, useCopilotKit } from "@copilotkit/react-core/v2";
+import {
+  CopilotChatAssistantMessage,
+  useCopilotChatConfiguration,
+  useCopilotKit,
+} from "@copilotkit/react-core/v2";
 import {
   createContext,
   useCallback,
@@ -11,8 +15,11 @@ import {
   type ReactNode,
 } from "react";
 import type { Message } from "@ag-ui/core";
-
-export type CollaborationToolName = "ask_user" | "submit_plan";
+import {
+  collaborationResponseLayout,
+  formatCollaborationResponseDisplay,
+  type CollaborationToolName,
+} from "./collaboration-response-display";
 
 export type CollaborationResponseRecord = {
   id: string;
@@ -20,13 +27,13 @@ export type CollaborationResponseRecord = {
   toolCallId: string;
   toolName: CollaborationToolName;
   question?: string;
+  /** Original plan text shown for submit_plan, kept for read-only recap. */
+  plan?: string;
   displayText: string;
   createdAt: number;
   /** Assistant message that streamed before the collaboration tool suspended. */
   assistantMessageId?: string;
 };
-
-type ChoiceOption = { label: string; value: string; description?: string };
 
 type StoreState = Record<string, CollaborationResponseRecord[]>;
 
@@ -64,52 +71,8 @@ function recordResponse(entry: CollaborationResponseRecord) {
   emitChange();
 }
 
-export function clearCollaborationResponses(threadId: string) {
-  if (!storeState[threadId]) return;
-  const next = { ...storeState };
-  delete next[threadId];
-  storeState = next;
-  emitChange();
-}
+export { formatCollaborationResponseDisplay };
 
-export function formatCollaborationResponseDisplay(
-  toolName: CollaborationToolName,
-  response: unknown,
-  options: ChoiceOption[] = [],
-): string {
-  if (toolName === "submit_plan") {
-    if (response && typeof response === "object") {
-      const record = response as { action?: string; feedback?: string };
-      if (record.action === "approved") return "已批准执行计划";
-      if (record.action === "rejected") {
-        return record.feedback?.trim()
-          ? `已拒绝计划：${record.feedback.trim()}`
-          : "已拒绝执行计划";
-      }
-    }
-    return "已提交计划审批结果";
-  }
-
-  if (typeof response === "string") {
-    const trimmed = response.trim();
-    const matched = options.find((option) => option.value === trimmed);
-    return matched?.label ?? trimmed;
-  }
-
-  if (typeof response === "number" || typeof response === "boolean") {
-    return String(response);
-  }
-
-  if (response && typeof response === "object") {
-    try {
-      return JSON.stringify(response);
-    } catch {
-      return "已提交回答";
-    }
-  }
-
-  return "已提交回答";
-}
 
 function messageHasToolCall(message: Message, toolCallId: string): boolean {
   const toolCalls = (message as { toolCalls?: Array<{ id?: string }> }).toolCalls;
@@ -174,6 +137,14 @@ function looksLikeToolName(label: string): boolean {
   return /^[a-z][a-z0-9]*(_[a-z0-9]+)+$/u.test(label.trim());
 }
 
+function PlanMarkdown({ content }: { content: string }) {
+  return (
+    <div className="mt-2 max-h-60 overflow-auto rounded-lg bg-surface p-2.5 text-sm leading-6 text-foreground [&_code]:rounded [&_code]:bg-surface-subtle [&_code]:px-1 [&_ol]:my-1 [&_ol]:list-decimal [&_ol]:pl-5 [&_p]:my-1 [&_ul]:my-1 [&_ul]:list-disc [&_ul]:pl-5">
+      <CopilotChatAssistantMessage.MarkdownRenderer content={content} />
+    </div>
+  );
+}
+
 export function CollaborationChoiceBubble({
   response,
   inline = false,
@@ -182,6 +153,16 @@ export function CollaborationChoiceBubble({
   inline?: boolean;
 }) {
   const mono = looksLikeToolName(response.displayText);
+  const recapLabel = response.toolName === "submit_plan" ? "审批的计划" : "回答的问题";
+  const layout = collaborationResponseLayout(response.toolName);
+  const recapClass =
+    layout.recapSide === "assistant"
+      ? "copilotKitMessage copilotKitAssistantMessage flex flex-col items-start"
+      : "copilotKitMessage copilotKitUserMessage flex flex-col items-end";
+  const choiceClass =
+    layout.choiceSide === "user"
+      ? "copilotKitMessage copilotKitUserMessage flex flex-col items-end"
+      : "copilotKitMessage copilotKitAssistantMessage flex flex-col items-start";
 
   if (inline) {
     return (
@@ -197,15 +178,31 @@ export function CollaborationChoiceBubble({
   }
 
   return (
-    <div
-      data-copilotkit
-      className="copilotKitMessage copilotKitUserMessage mb-4 flex flex-col items-end pt-2"
-    >
-      <div className="max-w-[85%] rounded-2xl border border-primary/20 bg-primary/10 px-3.5 py-2.5 text-sm leading-6 text-foreground shadow-sm">
-        <div className="mb-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-primary">
-          我的选择
+    <div data-copilotkit className="mb-4 grid gap-2 pt-2">
+      {response.question || response.plan ? (
+        <div className={recapClass}>
+          <div className="max-w-[85%] rounded-2xl border border-border bg-surface-subtle px-3.5 py-2.5 text-left shadow-sm">
+            <div className="mb-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted">
+              {recapLabel}
+            </div>
+            {response.question ? (
+              <div className="text-sm font-medium leading-6 text-foreground">
+                {response.question}
+              </div>
+            ) : null}
+            {response.plan && layout.planRenderer === "markdown" ? (
+              <PlanMarkdown content={response.plan} />
+            ) : null}
+          </div>
         </div>
-        <div className={mono ? "font-mono tracking-tight" : ""}>{response.displayText}</div>
+      ) : null}
+      <div className={choiceClass}>
+        <div className="max-w-[85%] rounded-2xl border border-primary/20 bg-primary/10 px-3.5 py-2.5 text-sm leading-6 text-foreground shadow-sm">
+          <div className="mb-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-primary">
+            我的选择
+          </div>
+          <div className={mono ? "font-mono tracking-tight" : ""}>{response.displayText}</div>
+        </div>
       </div>
     </div>
   );
@@ -232,10 +229,11 @@ export function CollaborationResponseAfterMessage({
     return null;
   }
 
-  const matching = responses.filter((response) => {
-    if (response.assistantMessageId) return false;
-    return messageHasToolCall(message, response.toolCallId);
-  });
+  const matching = responses.filter(
+    (response) =>
+      response.assistantMessageId === message.id ||
+      messageHasToolCall(message, response.toolCallId),
+  );
   if (matching.length === 0) {
     return null;
   }
@@ -268,7 +266,7 @@ export function CollaborationResponseBridge() {
     ]);
 
     return () => {
-      copilotkit.setRenderCustomMessages(existing);
+      copilotkit.setRenderCustomMessages([...existing]);
     };
   }, [copilotkit]);
 

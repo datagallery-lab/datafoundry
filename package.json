@@ -3,6 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
   "workspaces": [
     "apps/*",
     "packages/*"
@@ -10,6 +13,9 @@
   "scripts": {
     "build": "tsc -b tsconfig.build.json",
     "typecheck": "tsc -b tsconfig.build.json --pretty",
+    "postinstall": "node scripts/postinstall.mjs",
+    "predev:api": "node scripts/ensure-dev-environment.mjs",
+    "dev": "node scripts/dev.mjs",
     "dev:api": "npm --workspace @open-data-agent/api run dev",
     "start:api": "npm --workspace @open-data-agent/api run start",
     "dev:web": "npm --workspace @open-data-agent/web run dev",

@@ -76,7 +76,7 @@ function ParamScalar({ name, value }: { name: string; value: unknown }) {
   return (
     <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 rounded-lg border border-border bg-surface/80 px-2 py-1.5 text-xs">
       <span className="font-mono text-[10px] font-semibold text-muted-light">{name}</span>
-      <span className="font-mono text-muted">{text}</span>
+      <span className="font-mono text-foreground">{text}</span>
     </div>
   );
 }
@@ -312,7 +312,7 @@ function ResultDataTable({
                       ? "font-medium text-foreground"
                       : "",
                     row[cellIndex] === null || row[cellIndex] === undefined
-                      ? "text-muted-light/70"
+                      ? "text-muted-light"
                       : "",
                   ].join(" ")}
                 >
@@ -630,10 +630,6 @@ function renderKnowledge(record: Record<string, unknown>, variant: ToolResultVar
       })}
     </div>
   );
-}
-
-export function hasFormattedToolView(toolName: string, result: unknown): boolean {
-  return renderFormattedToolResult(toolName, result, "chat") !== null;
 }
 
 export function renderFormattedToolResult(

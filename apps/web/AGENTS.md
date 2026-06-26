@@ -20,6 +20,8 @@ Primary UI: `/data-tasks` — design doc at
 3. [`docs/engineering/config-management-api.md`](../../docs/engineering/config-management-api.md) (when wiring config REST)
 4. [`docs/engineering/2026-06-25-frontend-capability-status.md`](../../docs/engineering/2026-06-25-frontend-capability-status.md) (前端现状自述)
 5. [`docs/engineering/2026-06-25-backend-requirements.md`](../../docs/engineering/2026-06-25-backend-requirements.md) (对后端要求 / gap tracking)
+6. [`docs/engineering/2026-06-26-frontend-capability-status.md`](../../docs/engineering/2026-06-26-frontend-capability-status.md) (最新前端增量)
+7. [`docs/engineering/2026-06-26-backend-requirements.md`](../../docs/engineering/2026-06-26-backend-requirements.md) (最新后端增量)
 
 ## Code conventions
 
@@ -36,4 +38,4 @@ npm run test:web
 npm run build:web
 ```
 
-Live check: start `npm run dev:api`, then `npm run dev:web` → http://localhost:3000/data-tasks
+Live check: start `npm run dev` (or `npm run dev:api` then `npm run dev:web`) → http://localhost:3000/data-tasks

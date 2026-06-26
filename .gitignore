@@ -14,3 +14,5 @@ storage/
 .env.*
 !.env.example
 *.tsbuildinfo
+package-lock.json.win.bak
+package-lock.json.*.bak

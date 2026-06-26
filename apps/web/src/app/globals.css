@@ -9,8 +9,13 @@
   --surface-subtle: #f8fafc;
   --border: #e2e8f0;
   --foreground: #0f172a;
-  --muted: #475569;
-  --muted-light: #64748b;
+  /* Text hierarchy — use --text-* (not --muted) so CopilotKit's [data-copilotkit] scope
+     cannot override secondary copy colors (it redefines --muted as a surface tone). */
+  --text-secondary: #334155;
+  --text-tertiary: #475569;
+  --muted: var(--text-secondary);
+  --muted-light: var(--text-tertiary);
+  --muted-foreground: var(--text-secondary);
   --code-bg: #0f172a;
 
   /* Semantic step tones */
@@ -39,8 +44,8 @@
   --color-surface: var(--surface);
   --color-surface-subtle: var(--surface-subtle);
   --color-border: var(--border);
-  --color-muted: var(--muted);
-  --color-muted-light: var(--muted-light);
+  --color-muted: var(--text-secondary);
+  --color-muted-light: var(--text-tertiary);
   --color-code-bg: var(--code-bg);
   --color-step-inspect: var(--step-inspect);
   --color-step-query: var(--step-query);
@@ -155,4 +160,122 @@ nextjs-portal {
 [data-copilotkit] button.hitl-choice-option:focus-visible {
   outline: none;
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--primary-light) 45%, transparent);
+}
+
+/* CopilotKit preflight resets [data-copilotkit] button — restore HITL secondary actions */
+[data-copilotkit] button.hitl-action-btn-secondary {
+  appearance: none;
+  box-sizing: border-box;
+  margin: 0;
+  border: 1px solid var(--border);
+  background-color: var(--surface);
+  color: var(--foreground);
+}
+
+[data-copilotkit] button.hitl-action-btn-secondary:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--primary-light) 40%, var(--border));
+  background-color: var(--surface-subtle);
+}
+
+[data-copilotkit] button.hitl-action-btn-secondary:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--primary-light) 50%, transparent);
+}
+
+/* CopilotKit preflight resets [data-copilotkit] button — restore chat model picker label */
+[data-copilotkit] button.chat-model-picker {
+  appearance: none;
+  box-sizing: border-box;
+  margin: 0;
+  color: var(--foreground);
+}
+
+[data-copilotkit] button.chat-model-picker:hover:not(:disabled) {
+  color: var(--primary);
+}
+
+[data-copilotkit] button.chat-model-picker-footer {
+  appearance: none;
+  box-sizing: border-box;
+  margin: 0;
+  color: var(--foreground);
+}
+
+[data-copilotkit] button.chat-model-picker-footer:hover:not(:disabled) {
+  color: var(--primary);
+}
+
+/* CopilotKit preflight resets [data-copilotkit] button — restore reasoning header label */
+[data-copilotkit] button.chat-reasoning-header {
+  appearance: none;
+  box-sizing: border-box;
+  margin: 0;
+  color: var(--foreground);
+}
+
+[data-copilotkit] button.chat-reasoning-header:hover:not(:disabled) {
+  color: var(--primary);
+}
+
+[data-copilotkit] button.chat-reasoning-header span[class*="rounded-full"] {
+  background-color: var(--primary-light);
+}
+
+/* CopilotKit intelligence pill — strengthen in-progress label/icon contrast */
+[data-copilotkit] .chat-intelligence-indicator .cpk-intelligence-indicator__content {
+  color: var(--primary);
+}
+
+[data-copilotkit] .chat-intelligence-indicator[data-status="finished"] .cpk-intelligence-indicator__content {
+  color: var(--text-tertiary);
+}
+
+[data-copilotkit] .chat-intelligence-indicator .cpk-intelligence-indicator__label {
+  color: inherit;
+}
+
+/* CopilotKit stream cursor between assistant turns */
+[data-copilotkit] .chat-stream-cursor {
+  background-color: var(--primary-light);
+}
+
+/* Inline assistant loading row (avatar + pill dots) */
+[data-copilotkit] .chat-assistant-loading-pill {
+  color: var(--foreground);
+  border: 1px solid var(--border);
+  background-color: var(--surface-subtle);
+}
+
+.chat-assistant-loading-dot {
+  background-color: var(--primary-light);
+  animation: chat-loading-dot 1.2s ease-in-out infinite;
+}
+
+.chat-assistant-loading-dot:nth-child(2) {
+  animation-delay: 0.15s;
+}
+
+.chat-assistant-loading-dot:nth-child(3) {
+  animation-delay: 0.3s;
+}
+
+@keyframes chat-loading-dot {
+  0%,
+  80%,
+  100% {
+    opacity: 0.35;
+    transform: translateY(0);
+  }
+
+  40% {
+    opacity: 1;
+    transform: translateY(-1px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-assistant-loading-dot {
+    animation: none;
+    opacity: 0.85;
+  }
 }

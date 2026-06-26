@@ -26,7 +26,8 @@ config-panel-open: 320px minmax(400px, 1fr)
 ```
 
 - **Left — `SessionPane`**: workspace default config rows (DB/KB/MCP/LLM/Skill,
-  opening `WorkspaceConfigPanel`) + client-side session list.
+  opening `WorkspaceConfigPanel`), the cross-session「工作区文件」asset entry,
+  and the client-side session list.
 - **Middle — `ChatPane`**: a stock `CopilotChat` bound to the active session's
   `threadId`, the inline tool-call trace cards, the HITL interrupt renderer, and
   the data-task welcome screen for an empty thread.
@@ -95,10 +96,13 @@ effectiveRunConfig = merge(workspaceDefaults, sessionEnabled, perRunMentioned, s
    `localStorage` (`data-tasks:sessions:v1`). See
    [§Session config pills](#session-config-pills-layer-2).
 3. **Per-run `@` mentions (chips above textarea)** — Cursor-style `@` to **name**
-   resources for this single run. Pickable only from the session-enabled set.
-   `@` sets `active*` + `mentioned` in `run_config`; it does **not** narrow
-   `enabled*Ids` (other session-enabled resources remain available). Cleared after
-   send. See [§Per-run `@` mentions](#per-run--mentions-layer-3).
+   resources/files for this single run. DB/KB/MCP/Skill are pickable only from the
+   session-enabled set. The unified `@file` menu includes current-session
+   file-backed artifacts and cross-session workspace files. Resource `@` sets
+   `active*` + `mentioned` in `run_config`; workspace-file `@` sets `fileIds`;
+   current-session artifact `@` sets `pinnedPaths` (forward-compatible, currently
+   labeled「后端未支持」until backend support lands). Cleared after send. See
+   [§Per-run `@` mentions](#per-run--mentions-layer-3).
 4. **Server policy (backend)** — the final authority; merges the above with
    permission/policy. The frontend always sends the forward-compatible
    `run_config`; backend support is discovered through runtime capabilities and
@@ -224,9 +228,11 @@ Two `useAgentContext` items (+ `forwardedProps.datasourceId`):
   "activeDatasourceId": "...",     // first @db mention, else default
   "activeLlmProfileId": "...",
   "activeSkillId": "...",
-  "mentioned": {                   // this run's @ picks (subset of session-enabled)
+  "mentioned": {                   // this run's @ resource picks (subset of session-enabled)
     "db": [...], "kb": [...], "mcp": [...], "skill": [...]
-  }
+  },
+  "fileIds": [...],                // @ 工作区文件：backend already materializes to input/
+  "pinnedPaths": [...]             // @ 本对话产物：backend pending; prompt-only pin
 }
 ```
 
@@ -258,7 +264,7 @@ A Cursor-style `@` picker lets one run **name** resources from the session-enabl
 set. `@` is **specify / prioritize**, not **restrict** — other session-enabled
 resources stay in `enabled*Ids` and remain available to the agent.
 
-- **Scope**: `@db` / `@kb` / `@mcp` / `@skill`. LLM excluded (`ChatModelPicker`).
+- **Scope**: `@db` / `@kb` / `@mcp` / `@skill` / `@file`. LLM excluded (`ChatModelPicker`).
   (`/` commands reserved; CopilotKit owns `/` for `toolsMenu`.)
 - **Trigger**: typing `@` at a word boundary, or the `@` toolbar button
   (`openAtCaret`). Menu lists **session-enabled** resources only; ↑/↓, Enter/Tab,
@@ -267,9 +273,12 @@ resources stay in `enabled*Ids` and remain available to the agent.
   text rewrite via native value setter + `input` event.
 - **State**: `perRunSelection` in `page.tsx`; chips above textarea; pruned when
   workspace items are deleted or session-disabled.
-- **Effect**: `enabled*Ids` = session set (unchanged by `@`). `activeDatasourceId`
+- **Effect**: `enabled*Ids` = session set (unchanged by resource `@`). `activeDatasourceId`
   / `activeSkillId` = first `@` mention for that kind, else default.
-  `mentioned` = full `@` pick list. Runtime effect is capability-driven; a kind
+  `mentioned` = full resource `@` pick list. `@file` splits by scope: workspace
+  files write `run_config.fileIds` and are already consumed by the backend; current
+  session artifacts write `run_config.pinnedPaths` and are labeled「后端未支持」
+  until backend consumes the pin list. Runtime effect is capability-driven; a kind
   that the backend cannot honor remains a labeled, forward-compatible selection
   per [§Build ahead of the backend](#build-ahead-of-the-backend--but-label-it-honestly).
 - **Lifetime**: per-run only; cleared after send via `BoundDataTaskChatInput`.
@@ -379,13 +388,14 @@ entry) auto-switches to the Detail tab via a `useEffect`; clicking any non-Detai
 tab clears the selection. Artifact clicks stay on **产出** and expand in-place.
 
 - **Overview tab** —
-  - `ConclusionZone`: run status, current question (the latest user message via
-    `useDataAgentRun().latestQuestion`), and **tool-agnostic** KPI cards:
-    步骤数 / 成功率 / 产出 / Token·成本. Runtime duration moved to the console
-    header so it stays visible across tabs. The Token/成本 KPI is only lit when
-    the backend emits `CUSTOM(name="token_usage")`; otherwise it keeps a
-    「待上报 / 后端未支持」 hint. No SQL-specific headline numbers are shown here
-    (those are per-step, shown in Trace/Detail).
+  - `ConclusionZone`: current question (the latest user message via
+    `useDataAgentRun().latestQuestion`), error state when present, and
+    **tool-agnostic** KPI cards: 步骤数 / 成功率 / 产出 / Token·成本. Runtime
+    status and duration live only in the console header so the Overview does not
+    repeat chrome-level state. The Token/成本 KPI is only lit when the backend
+    emits `CUSTOM(name="token_usage")`; otherwise it keeps a compact
+    「待上报」 hint. No SQL-specific headline numbers are shown here (those are
+    per-step, shown in Trace/Detail).
   - `DynamicStepsList`: the progress checklist is derived from the **real**
     executed `liveRun.toolCalls` (not the hardcoded backend `ACTIVITY` plan), so
     new backend tools appear automatically. Each step shows `dataStepLabel`, a
@@ -393,19 +403,29 @@ tab clears the selection. Artifact clicks stay on **产出** and expand in-place
     and single-step duration; running rows use the existing `.step-streaming`
     pulse. Clicking a step opens its Detail. The reducer still keeps
     `liveRun.plan`, but the UI no longer renders it.
-  - `ToolDistributionZone`: per-tool call counts (`byTool`) plus a CSS mini bar
-    showing each tool's share of all calls. Failed counts use the `step-error`
-    tone.
+  - Low-frequency diagnostics use the shared collapsible `ConsoleSection`
+    pattern instead of staying fully expanded in the default view:
+    `RunConfigurationZone` is collapsed when the backend has not emitted
+    `run.config.resolved`, `skill.selection`, `goal.updated`, or `context.*`
+    signals, then auto-opens when those signals arrive; `WorkspaceRunSignalsSummary`
+    appears only when `workspace.metadata` / `sandbox.output` events exist and is
+    collapsed by default; `ToolDistributionZone` remains hidden with no tool
+    calls and is collapsed by default when present.
 - **Trace tab (`EvidenceZone`)** — the chronological evidence chain rendered by
   the shared `TraceList` from `buildTraceTimeline`; each card carries that step's
   duration/rows inline (per-step granularity). A `放大全屏` button opens the same
   content in `TraceOverlay`.
-- **Outputs tab (`DeliverablesZone`)** — the artifact shelf, fed by
+- **Outputs tab (`DeliverablesZone`)** — the current-session artifact shelf, fed by
   `CUSTOM(artifact)` (tab badge = artifact count). Clicking a card **expands
   inline** in this tab (dataset/SQL/chart/report preview via `ArtifactDetailView`);
   it does not jump to Detail. When `createdByEventId` is known, an optional
   「来源步骤 → 在详情中查看」 link opens the producing step in Detail. Export/download
-  is gated behind `artifact.export` (#9) as a labeled placeholder.
+  is gated behind `artifact.export` (#9) as a labeled placeholder. File-backed
+  artifacts also expose inline actions: download, `@ 引用`, and「加入工作区」.
+  「加入工作区」is gated behind `artifact.promote`; once supported it creates the
+  right-to-left bridge from temporary session output to cross-session workspace
+  asset. Cross-session workspace files no longer live in Outputs; they are managed
+  from the left「工作区文件」resource entry.
 - **Detail tab** — selection-driven for **steps/actions only**. For an action it
   shows single-step duration + status (from the matching `toolCall`), reasoning,
   action detail (inspect/query/generic), per-step usage, and produced-artifact
@@ -474,6 +494,10 @@ console usage hint) when runtime capabilities say the backend cannot honor them:
   Detail usage panel shows 「后端未支持」 and the Overview KPI stays in `待上报`.
 - **Artifact export/download** — the Deliverables zone reserves the affordance
   behind the `artifact.export` flag; backend support is tracked by #9.
+- **Artifact list/promote and pinned paths** — session artifact restore,
+  「加入工作区」, and current-session `@file` pinning are forward-compatible UI.
+  They are labeled or no-op until `artifact.list`, `artifact.promote`, and
+  `runConfig.pinnedPaths` land in the backend.
 - **Chat file attachments** — UI is complete (select/drag/paste/chips). Image inline
   and data-file upload require `chat.imageInput` / `chat.fileUpload` (R-007).
   Until then, unsupported attachments are labeled and excluded from the run payload.
