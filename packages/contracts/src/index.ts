@@ -50,11 +50,12 @@ export type ToolName =
   | "preview_table"
   | "run_sql_readonly"
   | "profile_dataset"
-  | "create_chart"
   | "generate_report"
   | "export_artifact"
   | "publish_artifact"
-  | "promote_workspace_file";
+  | "promote_workspace_file"
+  | "list_workspace_files"
+  | "read_workspace_file";
 
 export type RetrieveKnowledgeToolInput = {
   collection_id: string;
@@ -90,13 +91,24 @@ export type ProfileDatasetToolInput = {
   file_id?: string;
 };
 
-export type CreateChartToolInput = {
-  source_artifact_id?: string;
-  table_data?: unknown;
-  chart_type: "bar" | "line" | "pie" | "scatter" | "table";
-  x?: string;
-  y?: string;
-  title?: string;
+/**
+ * Chart artifact `preview_json` contract (R-015). The backend produces a chart artifact
+ * whose `preview_json` is a `ChartPreview`; the frontend renders it (bar/line/pie). This
+ * is a backend-owned rule-based structure — there is no agent `create_chart` tool; the
+ * model never assembles chart data.
+ */
+export type ChartPreviewPoint = { label: string; value: number };
+export type ChartPreviewSeries = { name: string; points: ChartPreviewPoint[] };
+export type ChartPreviewType = "bar" | "line" | "pie";
+export type ChartPreview = {
+  /** Chart kind; the frontend falls back to `bar` when absent/unknown. */
+  chartType: ChartPreviewType;
+  /** Optional unit label rendered on the value axis (e.g. "单", "元"). */
+  unit?: string;
+  /** Single-series data. At least one of `points`/`series` must be non-empty. */
+  points: ChartPreviewPoint[];
+  /** Multi-series data. When non-empty, takes precedence over `points`. */
+  series?: ChartPreviewSeries[];
 };
 
 export type GenerateReportToolInput = {
@@ -120,9 +132,20 @@ export type PublishArtifactToolInput = {
 };
 
 export type PromoteWorkspaceFileToolInput = {
+  /** Session-relative path of the file to promote into the cross-session workspace root. */
   path: string;
   filename?: string;
   description?: string;
+};
+
+export type ListWorkspaceFilesToolInput = {
+  /** Optional subdirectory under the workspace root to list; defaults to the root. */
+  path?: string;
+};
+
+export type ReadWorkspaceFileToolInput = {
+  /** Workspace-root-relative path of the cross-session file to read (read-only). */
+  path: string;
 };
 
 export type ToolInputMap = {
@@ -132,11 +155,12 @@ export type ToolInputMap = {
   preview_table: PreviewTableToolInput;
   run_sql_readonly: RunSqlReadonlyToolInput;
   profile_dataset: ProfileDatasetToolInput;
-  create_chart: CreateChartToolInput;
   generate_report: GenerateReportToolInput;
   export_artifact: ExportArtifactToolInput;
   publish_artifact: PublishArtifactToolInput;
   promote_workspace_file: PromoteWorkspaceFileToolInput;
+  list_workspace_files: ListWorkspaceFilesToolInput;
+  read_workspace_file: ReadWorkspaceFileToolInput;
 };
 
 export type ArtifactType = "table" | "chart" | "markdown" | "html" | "file" | "image" | "citation_bundle";

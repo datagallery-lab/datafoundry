@@ -1,8 +1,10 @@
 import { LocalArtifactService, type CreateArtifactInput } from "@open-data-agent/artifacts";
 import type { ArtifactSummary, DataSourceSummary } from "@open-data-agent/contracts";
 import type { DataSourceRecord, MetadataStore } from "@open-data-agent/metadata";
+import type { FileAssetService } from "@open-data-agent/files";
 import { randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { createConnection, type Connection, type RowDataPacket } from "mysql2/promise";
 import { Pool, type PoolClient } from "pg";
@@ -42,30 +44,47 @@ export type RegisterDataSourceInput = {
 };
 
 export type TestConnectInput = {
+  signal?: AbortSignal | undefined;
   user_id: string;
+  workspace_id?: string;
   datasource_id: string;
 };
 
 export type InspectSchemaInput = {
+  signal?: AbortSignal | undefined;
   user_id: string;
+  workspace_id?: string;
   datasource_id: string;
   table_names?: string[];
 };
 
 export type PreviewTableInput = {
+  signal?: AbortSignal | undefined;
   user_id: string;
+  workspace_id?: string;
   datasource_id: string;
   table: string;
   limit?: number;
 };
 
 export type RunSqlReadonlyInput = {
+  signal?: AbortSignal | undefined;
   user_id: string;
+  workspace_id?: string;
   datasource_id: string;
   sql: string;
   run_id?: string;
   limit?: number;
   timeout_ms?: number;
+  /**
+   * Optional correlation handles (R-018). When provided, the produced table artifact
+   * records them in `metadata_json` so the frontend Detail view can link the SQL result
+   * back to the originating tool_call / step.
+   */
+  correlation?: {
+    tool_call_id?: string;
+    step_id?: string;
+  };
 };
 
 export type SchemaSummary = {
@@ -131,9 +150,10 @@ export class LocalDataGateway implements DataGateway {
 
   constructor(
     private readonly metadataStore: MetadataStore,
-    private readonly policy: DataGatewayPolicy = DEFAULT_DATA_GATEWAY_POLICY
+    private readonly policy: DataGatewayPolicy = DEFAULT_DATA_GATEWAY_POLICY,
+    fileAssetService?: FileAssetService
   ) {
-    this.artifactService = new LocalArtifactService(metadataStore);
+    this.artifactService = new LocalArtifactService(metadataStore, fileAssetService);
   }
 
   async listDataSources(input: ListDataSourcesInput): Promise<DataSourceSummary[]> {
@@ -158,9 +178,10 @@ export class LocalDataGateway implements DataGateway {
   }
 
   async testConnect(input: TestConnectInput): Promise<{ ok: boolean; message: string }> {
+    throwIfAborted(input.signal);
     const dataSource = this.metadataStore.dataSources.get(input);
-    const adapter = this.createAdapter(dataSource);
-    await adapter.inspectSchema();
+    const adapter = this.createAdapter(dataSource, input.workspace_id);
+    await adapter.inspectSchema({ signal: input.signal });
     this.metadataStore.dataSources.touchTest({
       user_id: input.user_id,
       datasource_id: input.datasource_id,
@@ -171,10 +192,11 @@ export class LocalDataGateway implements DataGateway {
   }
 
   async inspectSchema(input: InspectSchemaInput): Promise<SchemaSummary> {
+    throwIfAborted(input.signal);
     const dataSource = this.metadataStore.dataSources.get(input);
-    const adapter = this.createAdapter(dataSource);
+    const adapter = this.createAdapter(dataSource, input.workspace_id);
     const resourcePolicy = dataSourcePolicy(dataSource);
-    const schema = await adapter.inspectSchema();
+    const schema = await adapter.inspectSchema({ signal: input.signal });
     const tableNames = allowedTableSet(input.table_names, resourcePolicy.tableAllowlist);
 
     return {
@@ -184,6 +206,7 @@ export class LocalDataGateway implements DataGateway {
   }
 
   async previewTable(input: PreviewTableInput): Promise<TableResult> {
+    throwIfAborted(input.signal);
     const dataSource = this.metadataStore.dataSources.get(input);
     const adapter = this.createAdapter(dataSource);
     const resourcePolicy = dataSourcePolicy(dataSource);
@@ -198,12 +221,14 @@ export class LocalDataGateway implements DataGateway {
         this.policy.maxLimit,
         resourcePolicy.maxRows ?? this.policy.maxLimit,
         resourcePolicy.maxSampleRows ?? this.policy.maxLimit
-      )
+      ),
+      signal: input.signal
     });
     return maskTableResult(result, resourcePolicy.maskFields);
   }
 
   async runSqlReadonly(input: RunSqlReadonlyInput): Promise<SqlExecutionResult> {
+    throwIfAborted(input.signal);
     const startedAt = Date.now();
     const auditLogId = randomUUID();
     const dataSource = this.metadataStore.dataSources.get(input);
@@ -237,13 +262,16 @@ export class LocalDataGateway implements DataGateway {
     );
 
     try {
-      const adapter = this.createAdapter(dataSource);
+      const workspaceId = input.workspace_id ?? this.policy.workspaceId ?? "default";
+      const adapter = this.createAdapter(dataSource, workspaceId);
       const result = await withTimeout(
         adapter.runSqlReadonly({
           sql: applyLimit(guard.normalized_sql, limit),
-          limit
+          limit,
+          signal: input.signal
         }),
-        timeoutMs
+        timeoutMs,
+        input.signal
       );
       const maskedResult = maskTableResult(result, resourcePolicy.maskFields);
       const elapsedMs = Date.now() - startedAt;
@@ -260,16 +288,27 @@ export class LocalDataGateway implements DataGateway {
       const run = input.run_id
         ? this.metadataStore.runs.get({ user_id: input.user_id, run_id: input.run_id })
         : undefined;
-      const artifact = run
-        ? await this.artifactService.createArtifact({
-            user_id: input.user_id,
-            session_id: run.session_id,
-            run_id: run.id,
-            type: "table",
-            name: `SQL result ${audit.id}`,
-            preview_json: maskedResult
-          })
-        : undefined;
+      const artifact = run ? await this.createSqlResultArtifact({
+        auditId: audit.id,
+        correlation: input.correlation,
+        datasourceId: input.datasource_id,
+        result: maskedResult,
+        run,
+        userId: input.user_id,
+        workspaceId
+      }) : undefined;
+      if (run) {
+        this.metadataStore.queryHistory.create({
+          user_id: input.user_id,
+          workspace_id: workspaceId,
+          session_id: run.session_id,
+          run_id: run.id,
+          datasource_id: input.datasource_id,
+          sql_text: guard.normalized_sql,
+          row_count: maskedResult.row_count,
+          elapsed_ms: elapsedMs
+        });
+      }
 
       return {
         ...maskedResult,
@@ -280,12 +319,13 @@ export class LocalDataGateway implements DataGateway {
     } catch (error) {
       const elapsedMs = Date.now() - startedAt;
       const isTimeout = error instanceof Error && error.message === "SQL_TIMEOUT";
+      const isCancelled = error instanceof Error && isAbortError(error);
       this.metadataStore.sqlAuditLogs.create({
         user_id: input.user_id,
         id: auditLogId,
         datasource_id: input.datasource_id,
         sql_text: guard.normalized_sql,
-        status: isTimeout ? "timeout" : "failed",
+        status: isCancelled ? "canceled" : isTimeout ? "timeout" : "failed",
         blocked_reason: error instanceof Error ? error.message : "Unknown SQL execution error",
         elapsed_ms: elapsedMs,
         ...(input.run_id ? { run_id: input.run_id } : {})
@@ -298,11 +338,55 @@ export class LocalDataGateway implements DataGateway {
     return this.artifactService.createArtifact(input);
   }
 
-  private createAdapter(dataSource: DataSourceRecord): DataSourceAdapter {
+  private async createSqlResultArtifact(input: {
+    auditId: string;
+    correlation?: RunSqlReadonlyInput["correlation"];
+    datasourceId: string;
+    result: TableResult;
+    run: { id: string; session_id: string };
+    userId: string;
+    workspaceId?: string;
+  }): Promise<ArtifactSummary> {
+    const metadata = {
+      audit_log_id: input.auditId,
+      datasource_id: input.datasourceId,
+      full_result: true,
+      row_count: input.result.row_count,
+      ...(input.correlation?.tool_call_id ? { tool_call_id: input.correlation.tool_call_id } : {}),
+      ...(input.correlation?.step_id ? { step_id: input.correlation.step_id } : {})
+    };
+    const name = `SQL result ${input.auditId}.csv`;
+    try {
+      const path = writeSqlResultCsv(input.auditId, input.result);
+      return await this.artifactService.createArtifactFromFile({
+        user_id: input.userId,
+        workspace_id: input.workspaceId ?? this.policy.workspaceId ?? "default",
+        session_id: input.run.session_id,
+        run_id: input.run.id,
+        type: "table",
+        name,
+        source_path: path,
+        preview_json: input.result,
+        metadata
+      });
+    } catch {
+      return this.artifactService.createArtifact({
+        user_id: input.userId,
+        session_id: input.run.session_id,
+        run_id: input.run.id,
+        type: "table",
+        name,
+        preview_json: input.result,
+        metadata_json: { ...metadata, full_result: false }
+      });
+    }
+  }
+
+  private createAdapter(dataSource: DataSourceRecord, workspaceId = this.policy.workspaceId ?? "default"): DataSourceAdapter {
     const credentials = dataSource.credential_ref
       ? this.metadataStore.secrets.get({
           ref: dataSource.credential_ref,
-          workspace_id: this.policy.workspaceId ?? "default",
+          workspace_id: workspaceId,
           user_id: dataSource.user_id
         })
       : {};
@@ -314,9 +398,23 @@ export class LocalDataGateway implements DataGateway {
 }
 
 type DataSourceAdapter = {
-  inspectSchema(): Promise<Omit<SchemaSummary, "datasource_id">>;
-  previewTable(input: { table: string; limit: number }): Promise<TableResult>;
-  runSqlReadonly(input: { sql: string; limit: number }): Promise<TableResult>;
+  inspectSchema(input?: AdapterExecutionInput): Promise<Omit<SchemaSummary, "datasource_id">>;
+  previewTable(input: AdapterPreviewInput): Promise<TableResult>;
+  runSqlReadonly(input: AdapterSqlInput): Promise<TableResult>;
+};
+
+type AdapterExecutionInput = {
+  signal?: AbortSignal | undefined;
+};
+
+type AdapterPreviewInput = AdapterExecutionInput & {
+  limit: number;
+  table: string;
+};
+
+type AdapterSqlInput = AdapterExecutionInput & {
+  limit: number;
+  sql: string;
 };
 
 const SUPPORTED_DATA_SOURCE_TYPES: SupportedDataSourceType[] = [
@@ -419,30 +517,39 @@ const createAdapter = (
 class PostgreSqlAdapter implements DataSourceAdapter {
   constructor(private readonly config: Record<string, unknown>) {}
 
-  async inspectSchema(): Promise<Omit<SchemaSummary, "datasource_id">> {
+  async inspectSchema(input: AdapterExecutionInput = {}): Promise<Omit<SchemaSummary, "datasource_id">> {
+    throwIfAborted(input.signal);
     const schema = stringConfig(this.config, "schema", "public");
     const rows = await this.query(`
       SELECT table_name, column_name, data_type, is_nullable
       FROM information_schema.columns
       WHERE table_schema = $1
       ORDER BY table_name, ordinal_position
-    `, [schema]);
+    `, [schema], input.signal);
     return schemaRowsToSummary(rows, "table_name", "column_name", "data_type", "is_nullable");
   }
 
-  async previewTable(input: { table: string; limit: number }): Promise<TableResult> {
+  async previewTable(input: AdapterPreviewInput): Promise<TableResult> {
+    throwIfAborted(input.signal);
     const schema = stringConfig(this.config, "schema", "public");
     return rowsToTableResult(await this.query(
       `SELECT * FROM ${quoteIdentifier(schema)}.${quoteIdentifier(input.table)} LIMIT $1`,
-      [input.limit]
+      [input.limit],
+      input.signal
     ));
   }
 
-  async runSqlReadonly(input: { sql: string }): Promise<TableResult> {
-    return rowsToTableResult(await this.query(input.sql));
+  async runSqlReadonly(input: AdapterSqlInput): Promise<TableResult> {
+    throwIfAborted(input.signal);
+    return rowsToTableResult(await this.query(input.sql, [], input.signal));
   }
 
-  private async query(sql: string, values: unknown[] = []): Promise<Record<string, unknown>[]> {
+  private async query(
+    sql: string,
+    values: unknown[] = [],
+    signal?: AbortSignal | undefined
+  ): Promise<Record<string, unknown>[]> {
+    throwIfAborted(signal);
     const pool = new Pool({
       host: stringConfig(this.config, "host"),
       port: numberConfig(this.config, "port", 5432),
@@ -453,14 +560,25 @@ class PostgreSqlAdapter implements DataSourceAdapter {
       statement_timeout: numberConfig(this.config, "timeoutMs", 30000)
     });
     let client: PoolClient | undefined;
+    let aborted = false;
+    const abort = (): void => {
+      aborted = true;
+      client?.release(true);
+    };
     try {
+      signal?.addEventListener("abort", abort, { once: true });
       client = await pool.connect();
+      throwIfAborted(signal);
       await client.query("BEGIN READ ONLY");
       const result = await client.query(sql, values);
+      throwIfAborted(signal);
       await client.query("ROLLBACK");
       return result.rows.filter(isRecord);
     } finally {
-      client?.release();
+      signal?.removeEventListener("abort", abort);
+      if (client) {
+        client.release(aborted);
+      }
       await pool.end();
     }
   }
@@ -469,31 +587,44 @@ class PostgreSqlAdapter implements DataSourceAdapter {
 class MySqlAdapter implements DataSourceAdapter {
   constructor(private readonly config: Record<string, unknown>) {}
 
-  async inspectSchema(): Promise<Omit<SchemaSummary, "datasource_id">> {
+  async inspectSchema(input: AdapterExecutionInput = {}): Promise<Omit<SchemaSummary, "datasource_id">> {
+    throwIfAborted(input.signal);
     const database = stringConfig(this.config, "database");
     const rows = await this.query(`
       SELECT table_name, column_name, data_type, is_nullable
       FROM information_schema.columns
       WHERE table_schema = ?
       ORDER BY table_name, ordinal_position
-    `, [database]);
+    `, [database], input.signal);
     return schemaRowsToSummary(rows, "TABLE_NAME", "COLUMN_NAME", "DATA_TYPE", "IS_NULLABLE");
   }
 
-  async previewTable(input: { table: string; limit: number }): Promise<TableResult> {
+  async previewTable(input: AdapterPreviewInput): Promise<TableResult> {
+    throwIfAborted(input.signal);
     return rowsToTableResult(await this.query(
       `SELECT * FROM ${quoteMysqlIdentifier(input.table)} LIMIT ?`,
-      [input.limit]
+      [input.limit],
+      input.signal
     ));
   }
 
-  async runSqlReadonly(input: { sql: string }): Promise<TableResult> {
-    return rowsToTableResult(await this.query(input.sql));
+  async runSqlReadonly(input: AdapterSqlInput): Promise<TableResult> {
+    throwIfAborted(input.signal);
+    return rowsToTableResult(await this.query(input.sql, [], input.signal));
   }
 
-  private async query(sql: string, values: unknown[] = []): Promise<Record<string, unknown>[]> {
+  private async query(
+    sql: string,
+    values: unknown[] = [],
+    signal?: AbortSignal | undefined
+  ): Promise<Record<string, unknown>[]> {
+    throwIfAborted(signal);
     let connection: Connection | undefined;
+    const abort = (): void => {
+      connection?.destroy();
+    };
     try {
+      signal?.addEventListener("abort", abort, { once: true });
       connection = await createConnection({
         host: stringConfig(this.config, "host"),
         port: numberConfig(this.config, "port", 3306),
@@ -502,16 +633,23 @@ class MySqlAdapter implements DataSourceAdapter {
         password: stringConfig(this.config, "password"),
         connectTimeout: numberConfig(this.config, "timeoutMs", 30000)
       });
+      throwIfAborted(signal);
       await connection.query("SET TRANSACTION READ ONLY");
       await connection.beginTransaction();
       const [rows] = await connection.query<RowDataPacket[]>({
         sql,
         timeout: numberConfig(this.config, "timeoutMs", 30000)
       }, values);
+      throwIfAborted(signal);
       await connection.rollback();
       return rows.filter(isRecord);
     } finally {
-      await connection?.end();
+      signal?.removeEventListener("abort", abort);
+      if (signal?.aborted) {
+        connection?.destroy();
+      } else {
+        await connection?.end();
+      }
     }
   }
 }
@@ -519,7 +657,8 @@ class MySqlAdapter implements DataSourceAdapter {
 class ClickHouseAdapter implements DataSourceAdapter {
   constructor(private readonly config: Record<string, unknown>) {}
 
-  async inspectSchema(): Promise<Omit<SchemaSummary, "datasource_id">> {
+  async inspectSchema(input: AdapterExecutionInput = {}): Promise<Omit<SchemaSummary, "datasource_id">> {
+    throwIfAborted(input.signal);
     const database = stringConfig(this.config, "database");
     const rows = await this.query(`
       SELECT
@@ -530,27 +669,31 @@ class ClickHouseAdapter implements DataSourceAdapter {
       FROM system.columns
       WHERE database = ${clickHouseLiteral(database)}
       ORDER BY table, position
-    `);
+    `, input.signal);
     return schemaRowsToSummary(rows, "table_name", "column_name", "data_type", "is_nullable");
   }
 
-  async previewTable(input: { table: string; limit: number }): Promise<TableResult> {
+  async previewTable(input: AdapterPreviewInput): Promise<TableResult> {
+    throwIfAborted(input.signal);
     const database = stringConfig(this.config, "database");
     return rowsToTableResult(await this.query(
-      `SELECT * FROM ${quoteClickHouseIdentifier(database)}.${quoteClickHouseIdentifier(input.table)} LIMIT ${input.limit}`
+      `SELECT * FROM ${quoteClickHouseIdentifier(database)}.${quoteClickHouseIdentifier(input.table)} LIMIT ${input.limit}`,
+      input.signal
     ));
   }
 
-  async runSqlReadonly(input: { sql: string }): Promise<TableResult> {
-    return rowsToTableResult(await this.query(input.sql));
+  async runSqlReadonly(input: AdapterSqlInput): Promise<TableResult> {
+    throwIfAborted(input.signal);
+    return rowsToTableResult(await this.query(input.sql, input.signal));
   }
 
-  private async query(sql: string): Promise<Record<string, unknown>[]> {
+  private async query(sql: string, signal?: AbortSignal | undefined): Promise<Record<string, unknown>[]> {
+    const requestSignal = combineAbortSignals(signal, AbortSignal.timeout(numberConfig(this.config, "timeoutMs", 30000)));
     const response = await fetch(this.endpointUrl(), {
       method: "POST",
       headers: this.headers(),
       body: `${withClickHouseJsonFormat(sql)}\n`,
-      signal: AbortSignal.timeout(numberConfig(this.config, "timeoutMs", 30000))
+      ...(requestSignal ? { signal: requestSignal } : {})
     });
     const body = await response.text();
     if (!response.ok) {
@@ -592,7 +735,8 @@ class ClickHouseAdapter implements DataSourceAdapter {
 class SQLiteAdapter implements DataSourceAdapter {
   constructor(private readonly config: Record<string, unknown>) {}
 
-  async inspectSchema(): Promise<Omit<SchemaSummary, "datasource_id">> {
+  async inspectSchema(input: AdapterExecutionInput = {}): Promise<Omit<SchemaSummary, "datasource_id">> {
+    throwIfAborted(input.signal);
     const database = this.open();
 
     try {
@@ -619,7 +763,8 @@ class SQLiteAdapter implements DataSourceAdapter {
     }
   }
 
-  async previewTable(input: { table: string; limit: number }): Promise<TableResult> {
+  async previewTable(input: AdapterPreviewInput): Promise<TableResult> {
+    throwIfAborted(input.signal);
     const database = this.open();
 
     try {
@@ -630,7 +775,10 @@ class SQLiteAdapter implements DataSourceAdapter {
     }
   }
 
-  async runSqlReadonly(input: { sql: string }): Promise<TableResult> {
+  async runSqlReadonly(input: AdapterSqlInput): Promise<TableResult> {
+    throwIfAborted(input.signal);
+    // node:sqlite DatabaseSync is synchronous; cancellation is cooperative before
+    // statement execution. Hard cancel would require worker-thread isolation.
     const database = this.open();
 
     try {
@@ -650,7 +798,8 @@ class SQLiteAdapter implements DataSourceAdapter {
 class DuckDbDemoAdapter implements DataSourceAdapter {
   constructor(private readonly config: Record<string, unknown>) {}
 
-  async inspectSchema(): Promise<Omit<SchemaSummary, "datasource_id">> {
+  async inspectSchema(input: AdapterExecutionInput = {}): Promise<Omit<SchemaSummary, "datasource_id">> {
+    throwIfAborted(input.signal);
     const tables = demoTables(this.config);
 
     return {
@@ -661,7 +810,8 @@ class DuckDbDemoAdapter implements DataSourceAdapter {
     };
   }
 
-  async previewTable(input: { table: string; limit: number }): Promise<TableResult> {
+  async previewTable(input: AdapterPreviewInput): Promise<TableResult> {
+    throwIfAborted(input.signal);
     const table = demoTables(this.config).find((candidate) => candidate.name === input.table);
 
     if (!table) {
@@ -671,7 +821,8 @@ class DuckDbDemoAdapter implements DataSourceAdapter {
     return objectRowsToTableResult(table.rows.slice(0, input.limit), table.columns);
   }
 
-  async runSqlReadonly(input: { sql: string; limit: number }): Promise<TableResult> {
+  async runSqlReadonly(input: AdapterSqlInput): Promise<TableResult> {
+    throwIfAborted(input.signal);
     return executeSimpleSelectOnTables(demoTables(this.config), input.sql, input.limit);
   }
 }
@@ -679,8 +830,9 @@ class DuckDbDemoAdapter implements DataSourceAdapter {
 class CsvAdapter implements DataSourceAdapter {
   constructor(private readonly config: Record<string, unknown>) {}
 
-  async inspectSchema(): Promise<Omit<SchemaSummary, "datasource_id">> {
-    const table = this.readTable(100);
+  async inspectSchema(input: AdapterExecutionInput = {}): Promise<Omit<SchemaSummary, "datasource_id">> {
+    throwIfAborted(input.signal);
+    const table = this.readTable(100, input.signal);
 
     return {
       tables: [
@@ -692,8 +844,9 @@ class CsvAdapter implements DataSourceAdapter {
     };
   }
 
-  async previewTable(input: { table: string; limit: number }): Promise<TableResult> {
-    const table = this.readTable(input.limit);
+  async previewTable(input: AdapterPreviewInput): Promise<TableResult> {
+    throwIfAborted(input.signal);
+    const table = this.readTable(input.limit, input.signal);
 
     if (input.table !== table.name) {
       throw new Error(`Table not found: ${input.table}`);
@@ -702,13 +855,16 @@ class CsvAdapter implements DataSourceAdapter {
     return objectRowsToTableResult(table.rows, table.columns);
   }
 
-  async runSqlReadonly(input: { sql: string; limit: number }): Promise<TableResult> {
-    return executeSimpleSelectOnTables([this.readTable(input.limit)], input.sql, input.limit);
+  async runSqlReadonly(input: AdapterSqlInput): Promise<TableResult> {
+    throwIfAborted(input.signal);
+    return executeSimpleSelectOnTables([this.readTable(input.limit, input.signal)], input.sql, input.limit);
   }
 
-  private readTable(limit: number): DatasetTable {
+  private readTable(limit: number, signal?: AbortSignal | undefined): DatasetTable {
+    throwIfAborted(signal);
     const filePath = stringConfig(this.config, "file_path");
     const raw = readFileSync(filePath, "utf8");
+    throwIfAborted(signal);
     const parsedRows = parseCsv(raw, limit + 1);
     const columns = parsedRows[0] ?? [];
     const rows = parsedRows.slice(1).map((row) => columnsToObject(columns, row));
@@ -724,8 +880,9 @@ class CsvAdapter implements DataSourceAdapter {
 class XlsxAdapter implements DataSourceAdapter {
   constructor(private readonly config: Record<string, unknown>) {}
 
-  async inspectSchema(): Promise<Omit<SchemaSummary, "datasource_id">> {
-    const table = await this.readTable(100);
+  async inspectSchema(input: AdapterExecutionInput = {}): Promise<Omit<SchemaSummary, "datasource_id">> {
+    throwIfAborted(input.signal);
+    const table = await this.readTable(100, input.signal);
 
     return {
       tables: [
@@ -737,8 +894,9 @@ class XlsxAdapter implements DataSourceAdapter {
     };
   }
 
-  async previewTable(input: { table: string; limit: number }): Promise<TableResult> {
-    const table = await this.readTable(input.limit);
+  async previewTable(input: AdapterPreviewInput): Promise<TableResult> {
+    throwIfAborted(input.signal);
+    const table = await this.readTable(input.limit, input.signal);
 
     if (input.table !== table.name) {
       throw new Error(`Table not found: ${input.table}`);
@@ -747,13 +905,16 @@ class XlsxAdapter implements DataSourceAdapter {
     return objectRowsToTableResult(table.rows, table.columns);
   }
 
-  async runSqlReadonly(input: { sql: string; limit: number }): Promise<TableResult> {
-    return executeSimpleSelectOnTables([await this.readTable(input.limit)], input.sql, input.limit);
+  async runSqlReadonly(input: AdapterSqlInput): Promise<TableResult> {
+    throwIfAborted(input.signal);
+    return executeSimpleSelectOnTables([await this.readTable(input.limit, input.signal)], input.sql, input.limit);
   }
 
-  private async readTable(limit: number): Promise<DatasetTable> {
+  private async readTable(limit: number, signal?: AbortSignal | undefined): Promise<DatasetTable> {
+    throwIfAborted(signal);
     const filePath = stringConfig(this.config, "file_path");
     const rows = normalizeXlsxRows(await readXlsxFile(filePath, { dateFormat: "yyyy-mm-dd" }));
+    throwIfAborted(signal);
     const columns = (rows[0] ?? []).map((value: unknown) => String(value ?? ""));
     const objectRows = rows.slice(1, limit + 1).map((row) => columnsToObject(columns, row));
 
@@ -962,6 +1123,22 @@ const objectRowsToTableResult = (rows: Record<string, unknown>[], columns: strin
   rows: rows.map((row) => columns.map((column) => row[column] ?? null)),
   row_count: rows.length
 });
+
+const writeSqlResultCsv = (auditId: string, result: TableResult): string => {
+  const root = process.env.SQL_RESULT_EXPORT_ROOT ?? join(process.env.STORAGE_ROOT_DIR ?? "storage", "sql-results");
+  mkdirSync(root, { recursive: true });
+  const path = join(root, `${auditId}.csv`);
+  const escape = (value: unknown): string => {
+    const text = value === null || value === undefined ? "" : String(value);
+    return /[",\n\r]/u.test(text) ? `"${text.replace(/"/gu, '""')}"` : text;
+  };
+  const lines = [
+    result.columns.map(escape).join(","),
+    ...result.rows.map((row) => row.map(escape).join(","))
+  ];
+  writeFileSync(path, `${lines.join("\n")}\n`, "utf8");
+  return path;
+};
 
 const quoteIdentifier = (identifier: string): string => `"${identifier.replaceAll('"', '""')}"`;
 
@@ -1233,13 +1410,73 @@ const applyLimit = (sql: string, limit: number): string => {
   return `SELECT * FROM (${sql}) AS readonly_query LIMIT ${limit}`;
 };
 
-const withTimeout = async <T>(promise: Promise<T>, timeoutMs: number): Promise<T> =>
-  Promise.race([
-    promise,
-    new Promise<T>((_, reject) => {
-      setTimeout(() => reject(new Error("SQL_TIMEOUT")), timeoutMs);
-    })
-  ]);
+const withTimeout = async <T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  signal?: AbortSignal | undefined
+): Promise<T> => {
+  throwIfAborted(signal);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let abortListener: (() => void) | undefined;
+  try {
+    const timeout = new Promise<T>((_, reject) => {
+      timer = setTimeout(() => reject(new Error("SQL_TIMEOUT")), timeoutMs);
+    });
+    const aborted = signal
+      ? new Promise<T>((_, reject) => {
+          abortListener = () => reject(signal.reason instanceof Error ? signal.reason : new Error("RUN_CANCELLED"));
+          signal.addEventListener("abort", abortListener, { once: true });
+        })
+      : undefined;
+    return await Promise.race(aborted ? [promise, timeout, aborted] : [promise, timeout]);
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
+    if (signal && abortListener) {
+      signal.removeEventListener("abort", abortListener);
+    }
+  }
+};
+
+const throwIfAborted = (signal?: AbortSignal | undefined): void => {
+  if (signal?.aborted) {
+    throw signal.reason instanceof Error ? signal.reason : new Error("RUN_CANCELLED");
+  }
+};
+
+const isAbortError = (error: Error): boolean =>
+  error.name === "AbortError"
+  || error.message === "RUN_CANCELLED"
+  || error.message.startsWith("RUN_CANCELLED")
+  || error.message.startsWith("RUN_TIMEOUT:")
+  || error.message === "RUN_SUBSCRIBER_CLOSED";
+
+const combineAbortSignals = (
+  first?: AbortSignal | undefined,
+  second?: AbortSignal | undefined
+): AbortSignal | undefined => {
+  const signals = [first, second].filter((signal): signal is AbortSignal => Boolean(signal));
+  if (signals.length === 0) {
+    return undefined;
+  }
+  if (signals.length === 1) {
+    return signals[0];
+  }
+  if (signals.some((signal) => signal.aborted)) {
+    const controller = new AbortController();
+    const aborted = signals.find((signal) => signal.aborted);
+    controller.abort(aborted?.reason ?? new Error("RUN_CANCELLED"));
+    return controller.signal;
+  }
+  const controller = new AbortController();
+  const abort = (event: Event): void => {
+    const signal = event.target instanceof AbortSignal ? event.target : undefined;
+    controller.abort(signal?.reason ?? new Error("RUN_CANCELLED"));
+  };
+  signals.forEach((signal) => signal.addEventListener("abort", abort, { once: true }));
+  return controller.signal;
+};
 
 const executeSimpleSelectOnTables = (tables: DatasetTable[], sql: string, limit: number): TableResult => {
   const parsed = parseSimpleSelect(sql);

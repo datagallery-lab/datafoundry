@@ -30,20 +30,20 @@ Artifact preview/download REST —— 详见
 
 | ID                                     | 需求                                 | 优先级    | 前端能力位                                 | 状态   |
 | -------------------------------------- | ---------------------------------- | ------ | ------------------------------------- | ---- |
-| [R-001](#r-001-session-级-workspace-隔离) | Session 级 Workspace 隔离             | **P1** | （无需翻位，后端调整）                           | 待验收  |
-| [R-002](#r-002-llm-token-用量上报)         | LLM Token 用量上报（AG-UI）              | **P1** | 前端 reducer 已就绪                        | 待验收  |
-| [R-003](#r-003-pg--mysql-真实环境验收)       | PG / MySQL 真实环境 E2E 验收             | P1     | `datasource.server`                   | 本轮完成 |
-| [R-004](#r-004-artifact-北向协议收敛)        | Artifact 北向协议收敛                    | P2     | `artifact.export`                     | 待验收  |
-| [R-005](#r-005-conversation-memory)    | Conversation Memory 服务端权威历史        | P2     | —                                     | 待验收  |
-| [R-006](#r-006-多用户认证)                  | 多用户认证 / 租户隔离                       | P3     | —                                     | 待验收  |
-| [R-007](#r-007-对话框文件上传)                | 对话框文件上传 + 多模态图片                    | **P1** | `chat.imageInput` / `chat.fileUpload` | 待验收  |
+| [R-001](#r-001-session-级-workspace-隔离) | Session 级 Workspace 隔离             | **P1** | （无需翻位，后端调整）                           | 已完成  |
+| [R-002](#r-002-llm-token-用量上报)         | LLM Token 用量上报（AG-UI）              | **P1** | 前端 reducer 已就绪                        | 已完成  |
+| [R-003](#r-003-pg--mysql-真实环境验收)       | PG / MySQL 真实环境 E2E 验收             | P1     | `datasource.server`                   | 已完成  |
+| [R-004](#r-004-artifact-北向协议收敛)        | Artifact 北向协议收敛                    | P2     | `artifact.export`                     | 已完成  |
+| [R-005](#r-005-conversation-memory)    | Conversation Memory 服务端权威历史        | P2     | —                                     | 已完成  |
+| [R-006](#r-006-多用户认证)                  | 多用户认证 / 租户隔离                       | P3     | —                                     | 已完成  |
+| [R-007](#r-007-对话框文件上传)                | 对话框文件上传 + 多模态图片                    | **P1** | `chat.imageInput` / `chat.fileUpload` | 已完成  |
 | [R-008](#r-008-db-扩展类型-adapter)        | DB 扩展类型 adapter（DB-GPT）            | P1     | `datasource.extendedTypes`            | 部分完成 |
-| [R-009](#r-009-db-高级策略)                | DB 高级策略（introspection/sample/mask） | P2     | `datasource.queryPolicy` 等            | 待验收  |
+| [R-009](#r-009-db-高级策略)                | DB 高级策略（introspection/sample/mask） | P2     | `datasource.queryPolicy` 等            | 已完成  |
 | [R-010](#r-010-kb-高级-rag)              | KB 高级 RAG + 半生效字段补齐                | P2     | `kb.`*                                | 部分完成 |
-| [R-011](#r-011-llm-高级采样)               | LLM 高级采样 + run timeout             | P2     | `llm.advancedSampling`                | 待验收  |
-| [R-012](#r-012-mcp-stdio--tool-policy) | MCP stdio + tool policy            | P2     | `mcp.stdio` / `mcp.toolPolicy`        | 待验收  |
-| [R-013](#r-013-skill-资源默认绑定)           | Skill 资源默认绑定                       | P3     | `skill.resourceBinding`               | 待验收  |
-| [R-014](#r-014-动态-schema-api)          | 动态 datasource-types schema API     | P2     | （由 API `enabled` 驱动占位）                | 待验收  |
+| [R-011](#r-011-llm-高级采样)               | LLM 高级采样 + run timeout             | P2     | `llm.advancedSampling`                | 已完成  |
+| [R-012](#r-012-mcp-stdio--tool-policy) | MCP stdio + tool policy            | P2     | `mcp.stdio` / `mcp.toolPolicy`        | 已完成  |
+| [R-013](#r-013-skill-资源默认绑定)           | Skill 资源默认绑定                       | P3     | `skill.resourceBinding`               | 已完成  |
+| [R-014](#r-014-动态-schema-api)          | 动态 datasource-types schema API     | P2     | （由 API `enabled` 驱动占位）                | 已完成  |
 
 
 ---
@@ -79,7 +79,7 @@ Artifact preview/download REST —— 详见
 
 | 项             | 内容                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | ------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 状态            | 待验收                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| 状态            | 已完成                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | 负责人           | 研发 B                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | 方案摘要          | Workspace path 已改为 `{workspaceRoot}/{user_id}/{workspace_id}/{session_id}`；`run_id` 保留在 run context / audit / artifact metadata，不参与物理目录；system prompt 改为 session 持久语义。`createRunWorkspace` 仍负责 Mastra Workspace 生命周期，但目录不随 terminal run 删除；同 `(user_id, session_id)` 仅允许一个 queued/running active run，completed run replay 不受影响；workspace smoke 覆盖同 session 跨 run 可读、跨 session / 跨 workspace 目录隔离，run identity smoke 覆盖 session active-run 互斥。 |
 | 验证            | `npm run smoke:workspace`、`npm run smoke:run-identity` 通过。                                                                                                                                                                                                                                                                                                                                                                                    |
@@ -118,7 +118,7 @@ provider `usage` 一致。
 
 | 项             | 内容                                                                                                                                                                                                                                               |
 | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| 状态            | 待验收                                                                                                                                                                                                                                              |
+| 状态            | 已完成                                                                                                                                                                                                                                              |
 | 负责人           | 研发 B                                                                                                                                                                                                                                             |
 | 方案摘要（emit 位置） | 在 Mastra fullStream normalizer hook 中捕获 provider `usage`，投影为 AG-UI `CUSTOM(name="token_usage")`；字段包含 `input_tokens` / `output_tokens` 及 `prompt_tokens` / `completion_tokens` 别名。只使用 provider usage，不使用 context budget，也不把累计 `totalUsage` 当增量上报。 |
 | 验证            | `npm run smoke:agui-stream` 覆盖 provider usage chunk 到 `token_usage` custom event；`npm --workspace @open-data-agent/web run test -- live-run-state` 覆盖前端 reducer 消费。                                                                              |
@@ -146,7 +146,7 @@ provider `usage` 一致。
 
 | 项    | 内容                                                                                                                                                                                                     |
 | ---- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| 状态   | 本轮完成（真实外部库 E2E 不纳入本轮验收）                                                                                                                                                                                |
+| 状态   | 已完成（真实外部库 E2E 不纳入本轮验收）                                                                                                                                                                                |
 | 已完成  | REST 创建/测试入口、`postgresql` / `mysql` datasource type、Data Gateway adapter 代码和 `datasource.server` capability 已存在；配置面已可保存连接参数与 secretRef。                                                                |
 | 本轮边界 | 真实 PG / MySQL 实例 smoke 保留为可选入口：配置 `ODA_E2E_PG_`* / `ODA_E2E_MYSQL_*` 后，`npm run smoke:server-datasources` 会执行 `create → test → introspect → schema → inspectSchema → runSqlReadonly`。本轮交付不要求真实外部库 E2E。 |
 | 验证   | `npm run smoke:config-api` 覆盖 REST / capability / secretRef 配置面；`npm run smoke:data-gateway` 覆盖本地 adapter 基础链路。                                                                                        |
@@ -177,7 +177,7 @@ provider `usage` 一致。
 
 | 项    | 内容                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | ---- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 状态   | 待验收                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| 状态   | 已完成（新链路已收敛；legacy run 级记录迁移另列后续）                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | 已完成  | `LocalArtifactService` 已支持 artifact preview / content / download REST；agent `publish_artifact`、SQL result artifact 与 workspace artifact recorder 都统一 emit 瘦身后的 AG-UI `CUSTOM(name="artifact")`。事件只携带 `id`、`type`、`name`、`title`、`summary`、`preview_available`，以及可选 `download_url` / `file_id`，不再携带 `preview_json` 大字段；GUI/TUI 需要展示完整 preview 时调用 `/api/v1/artifacts/:id/preview`，下载调用 `/api/v1/artifacts/:id/download`。物理 workspace 已随 R-001 改为 session 级，文件资产继续由 FileAssetRef 统一去重/引用。 |
 | 兼容边界 | REST `GET /api/v1/artifacts/:id` 仍返回 artifact summary 与可选 `preview_json`，用于详情页和调试；北向实时 AG-UI event 已收敛为 id + 摘要引用。前端 reducer 可继续兼容历史 run events 中带 `preview_json` 的旧事件。                                                                                                                                                                                                                                                                                                                 |
 | 后续事项 | Phase 2 只剩 legacy run 级 `storage_path` artifact 的迁移/兼容清理；完整文件 copy + hash 已由 FileAsset / FileAssetRef 底座承担，后续如需强制所有 artifact 都关联 FileAssetRef，可另开迁移任务。                                                                                                                                                                                                                                                                                                                                  |
@@ -205,7 +205,7 @@ Knowledge 职责边界文档化。
 
 | 项    | 内容                                                                                                                                                                                                                                                                                                                                                                                                                   |
 | ---- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 状态   | 待验收                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| 状态   | 已完成                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | 方案摘要 | 普通新 run 不再把客户端回传的全量 `messages` 当权威历史；`run-memory-assembly` 会先持久化当前 user message，再从 metadata `conversation_messages` / `conversation_summaries` 构建本轮模型输入窗口。assistant 文本在 completed flush 时写回 metadata，summary 与 Mastra WorkingMemory 采用 one-source-only 策略。新增 `GET /api/v1/sessions/:sessionId/conversation`，前端可读取服务端权威 messages、latest summary、run event refs，以及从持久化 AG-UI `TOOL_CALL_`* 事件配对出的 tool-call/result 列表。 |
 | 验证   | `npm run smoke:config-api` 覆盖 conversation REST；conversation memory 纯服务逻辑由 `npm run smoke:conversation-memory` 覆盖。                                                                                                                                                                                                                                                                                                   |
 
@@ -230,7 +230,7 @@ Knowledge 职责边界文档化。
 
 | 项    | 内容                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | ---- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 状态   | 待验收                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| 状态   | 已完成（local-first 验收口径；正式 auth provider 后续接入）                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | 当前实现 | local-first 认证已接入：无认证头默认 `dev-user/default`；`Authorization: Bearer <dev_token>` 或 `X-Dev-Token` 按 metadata `users.dev_token` 解析用户；`X-Workspace-Id` 选择 workspace。配置 API、CopilotKit run、run-config-resolver、AgentRunContext、workspace 物理目录、FileAssetRef、Artifact、Skill package materialization、Knowledge policy/retrieval 均显式携带 `workspaceId`。`data_sources` 已迁移为 `(user_id,id)` 复合主键，同名 datasource id 可跨用户复用且互不可见。无效 token 返回 401。 |
 | 认证方案 | 当前为本地优先方案，不绑定第三方 auth。产品化时可由上层 BFF/session auth 解析用户，再把 `(workspaceId, userId)` 注入同一 API context；后端内部隔离边界已按该模型贯穿。                                                                                                                                                                                                                                                                                                                 |
 | 验收覆盖 | `smoke-config-api` 覆盖无效 token 401、tenant token 创建 datasource、dev-user 不可见 tenant datasource、同 user 不同 workspace 不可见 KB；`smoke-workspace-tools` 覆盖同 user 跨 workspace 物理目录隔离。真实 403/401 语义后续可随正式 auth 网关调整。                                                                                                                                                                                                                         |
@@ -266,7 +266,7 @@ Knowledge 职责边界文档化。
 
 | 项          | 内容                                                                                                                                                                                                                                                                                                                                                                                           |
 | ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 状态         | 待验收                                                                                                                                                                                                                                                                                                                                                                                          |
+| 状态         | 已完成                                                                                                                                                                                                                                                                                                                                                                                          |
 | 与 R-001 联动 | `POST /api/v1/chat/uploads` 写入同一 session workspace 的 `uploads/`；前端上传请求带 `sessionId/threadId`，返回 `{ path, mimeType, size }` 后 agent 可通过 workspace `read_file` 读取。Ingress message normalization 会把 `uploads/...` 的 AG-UI document/url part 投影为模型可见的 read_file path 提示，同时保留原始 part。Capabilities 已翻 `chat.fileUpload` / `chat.imageInput`。图片 part 继续按 AG-UI multimodal content 透传给 Mastra/model。 |
 | 验证         | `npm run smoke:config-api` 覆盖 chat upload；`npm run test:ingress-messages` 覆盖 ingress part normalization。                                                                                                                                                                                                                                                                                     |
 
@@ -331,7 +331,7 @@ BigQuery / Snowflake 可第二批。类型启用后 `supportTypes()` / capabilit
 
 | 项    | 内容                                                                                                                                                                                                                                                                                                                                                                                                      |
 | ---- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 状态   | 待验收                                                                                                                                                                                                                                                                                                                                                                                                     |
+| 状态   | 已完成                                                                                                                                                                                                                                                                                                                                                                                                     |
 | 实现入口 | `config-api` 同时接受 datasource 策略字段位于 `config` 内或 PATCH 顶层，并对策略对象做浅合并，避免局部更新误删其他策略字段；`LocalDataGateway` 在 `inspectSchema` / `previewTable` / `runSqlReadonly` 统一读取并执行 table allowlist、sample policy、maskFields。`GET /datasources/:id/schema` 在快照不存在或超过 `introspection.refreshIntervalSec` 时自动刷新。Capabilities 已翻 `datasource.introspectionPolicy` / `datasource.samplePolicy` / `datasource.fieldMasking`。 |
 | 验证   | `npm run smoke:config-api` 覆盖配置 API 字段保存/回显；`npm run smoke:data-gateway` 覆盖 Gateway 策略执行。                                                                                                                                                                                                                                                                                                               |
 
@@ -397,7 +397,7 @@ BigQuery / Snowflake 可第二批。类型启用后 `supportTypes()` / capabilit
 
 | 项    | 内容                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | ---- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 状态   | 待验收                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| 状态   | 已完成                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | 方案摘要 | `run-config-resolver` 从 model-profile payload 读取采样字段并夹取到 Mastra/AI SDK 合法区间，`agent-runtime` 通过 `defaultOptions.modelSettings` 透传。`timeoutMs` 解析为 run 级超时，超时后取消 Mastra stream 并发 `runStatus=failed` / `RUN_ERROR`。`contextLength` 转成 run-scoped `ModelContextProfile` 注入现有 ContextPackage / planner / prompt guard 通路，`context.compiled` 预算使用该窗口。`reasoningModel` 作为 profile 标记保存、回显，并进入 `run.config.resolved` 诊断元数据；当前不切换独立 reasoning provider。Capabilities 已翻 `llm.samplingParams` / `llm.advancedSampling`。 |
 | 验证   | `npm run smoke:config-api` 覆盖 model profile 字段、effective run config 与 run timeout；`npm run smoke:copilotkit-run` 覆盖 run timeout AG-UI 终态。                                                                                                                                                                                                                                                                                                                                                                     |
 
@@ -434,7 +434,7 @@ MCP envelope；result-size 治理只作用于下一轮模型可见 context，不
 
 | 项    | 内容                                                                                                                                                                                                                                                                  |
 | ---- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 状态   | 待验收                                                                                                                                                                                                                                                                 |
+| 状态   | 已完成                                                                                                                                                                                                                                                                 |
 | 方案摘要 | 新增 `PolicyMcpMiddleware`，保持北向 AG-UI `TOOL_CALL_`* / continuation 语义不变，补齐当前 `@ag-ui/mcp-middleware@0.0.1` 缺失的 stdio、tool allowlist、单调用 timeout。MCP tool observation 统一走 ContextPackage/tool observation 预算治理。配置 API capabilities 已翻开 `mcp.stdio` / `mcp.toolPolicy`。 |
 | 验证   | `npm run smoke:config-api` 覆盖 MCP 配置/test/tools allowlist；MCP observation 预算由 `npm run smoke:context-compilation` 覆盖。                                                                                                                                               |
 
@@ -458,7 +458,7 @@ MCP envelope；result-size 治理只作用于下一轮模型可见 context，不
 
 | 项    | 内容                                                                                                                                                                                                                                                                                                    |
 | ---- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 状态   | 待验收                                                                                                                                                                                                                                                                                                   |
+| 状态   | 已完成                                                                                                                                                                                                                                                                                                   |
 | 实现入口 | Skill DTO payload 保留 `defaultDbIds` / `defaultKbIds` / `defaultMcpIds` / `modelProfileId`；选中 skill 后 `run-config-resolver` 将默认资源并入 effective run config。未显式指定 active datasource / LLM 时，skill 的第一个 `defaultDbIds` / `modelProfileId` 成为 active 项；显式 run 选择优先。Capabilities 已翻 `skill.resourceBinding`。 |
 | 验证   | `npm run smoke:config-api` 覆盖 skill 默认资源绑定、显式 run 选择优先和 resource revision。                                                                                                                                                                                                                            |
 
@@ -485,26 +485,34 @@ MCP envelope；result-size 治理只作用于下一轮模型可见 context，不
 
 | 项        | 内容                                                                                                                                                                                                                                                                                                      |
 | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 状态       | 待验收                                                                                                                                                                                                                                                                                                     |
+| 状态       | 已完成                                                                                                                                                                                                                                                                                                     |
 | API 草案链接 | `GET /api/v1/datasource-types` 已实现，返回 Data Gateway `supportTypes()` 的 `name` / `label` / `enabled` / `description` / `parameters[]`。当前已实现 adapter 才标 enabled：DuckDB / SQLite / CSV / XLSX / PostgreSQL / MySQL / ClickHouse；其他扩展类型不标 enabled。详见 [config-management-api.md](./config-management-api.md)。 |
 | 验证       | `npm run smoke:config-api` 覆盖 `/api/v1/datasource-types`；`npm --workspace @open-data-agent/web run test -- config-api-adapter chat-capabilities` 覆盖前端 adapter / capability 映射。                                                                                                                          |
 
 
 ---
 
+## 当前收口
+
+本快照中 R-001、R-002、R-004、R-005、R-006、R-007、R-009、R-011、R-012、R-013、R-014
+均已按当前后端/前端联调口径完成。R-003 的真实外部 PG/MySQL E2E 不纳入本轮强制验收，
+但 adapter、REST、capability 与可选 E2E 入口已就绪。
+
+仍保留为部分完成的只有 R-008 与 R-010：R-008 当前只启用 ClickHouse，Oracle / SQL Server /
+Hive / Spark / Vertica / BigQuery / Snowflake 不在本轮；R-010 已补齐半生效字段与 chunk policy，
+外部 vectorStore、rerank、graphRAG 暂缓。
+
 ## 建议排期顺序
 
-1. **第一波（体验阻塞）**：R-001 Session Workspace → R-007 对话框上传（依赖 R-001）→ R-002 Token 用量。
-2. **第二波（配置可信度）**：R-003 PG/MySQL 真实验收 → R-010 KB 半生效字段 → R-011 run timeout。
-3. **第三波（DB-GPT 扩展）**：R-008 扩展 DB 类型 → R-014 动态 schema → R-009 DB 高级策略 →
-  R-010 KB B 档 → R-011 LLM B 档 → R-012 MCP stdio → R-013 Skill 绑定。
-4. **第四波（产品化）**：R-004 Artifact 北向收敛 → R-005 Conversation Memory → R-006 多用户认证。
+旧排期已完成收口，后续只保留两个方向：
+
+1. **DB 扩展 adapter**：按产品优先级继续实现 Oracle / SQL Server / Hive / Spark / Vertica 等。
+2. **KB B 档能力**：外部 vectorStore、rerank、graphRAG 等高级 RAG 能力后续单独排期。
 
 ## 变更记录
 
 
 | 日期         | 变更                                                                                                                           |
 | ---------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| 2026-06-27 | 按当前实现与前端联调口径刷新老需求状态；补充收口说明，保留 R-008 / R-010 的后续边界。 |
 | 2026-06-25 | 从原 `frontend-backend-capability-requests.md` / `backend-pending-requirements.md` 拆出「对后端的要求」独立快照；O-00x 重编为 R-00x；前端现状移入前端自述文档 |
-
-

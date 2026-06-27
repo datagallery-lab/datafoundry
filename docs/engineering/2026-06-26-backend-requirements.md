@@ -14,19 +14,19 @@
 
 | ID | 需求 | 优先级 | 前端状态 | 状态 |
 | --- | --- | --- | --- | --- |
-| [R-015](#r-015-图表-artifact-真实数据) | 图表 artifact 真实数据 | P2 | 前端已可渲染 `bar` / `line` / `pie` | 未排期 |
-| [R-016](#r-016-诊断事件字段稳定契约) | 诊断事件字段稳定契约 | P2 | 前端已展示 | 待验收 |
-| [R-017](#r-017-context-预算契约) | Context 预算契约 | P3 | 前端已展示最近事件摘要 | 待验收 |
-| [R-018](#r-018-sql-结果在-detail-复用) | SQL 结果在 Detail 复用 | P2 | 前端已复用 dataset artifact | 待验收 |
-| [R-019](#r-019-消费-per-run--mentions点名) | 消费 per-run @ mentions（点名） | P1 | 前端已发送 `run_config.mentioned` + `active*` | 未排期 |
-| [R-020](#r-020-资源启用校验与-session-默认集对齐) | 资源启用校验与 session 默认集对齐 | P2 | 前端 session 默认全量启用 | 未排期 |
-| [R-021](#r-021-fileassetref-统一过滤与标签) | FileAssetRef 统一过滤与标签 | P1 | 前端已客户端过滤兜底 | 未排期 |
-| [R-022](#r-022-artifact-加入工作区-promote) | artifact 加入工作区 promote | P1 | 前端已门控按钮 | 未排期 |
-| [R-023](#r-023-session-artifact-列表恢复) | session artifact 列表恢复 | P1 | 前端已门控恢复组件 | 未排期 |
-| [R-024](#r-024-run_configpinnedpaths-消费) | `run_config.pinnedPaths` 消费 | P2 | 前端已发送/标注未支持 | 未排期 |
-| [R-025](#r-025-对话框上传登记-session-级-fileassetref可选) | 对话框上传登记 session 级 FileAssetRef（可选） | P3 | 前端暂保持附件 chips | 未排期 |
-| [R-026](#r-026-agent-工作区资产工具与-promote-语义) | agent 工作区资产工具与 promote 语义 | P2 | 前端不阻塞 | 未排期 |
-| [R-027](#r-027-token-usagecorrelation-与-interaction-事件) | `token_usage.correlation` 与 interaction 事件 | P2 | 前端已消费 | 待验收 |
+| [R-015](#r-015-图表-artifact-真实数据) | 图表 artifact 真实数据 | P2 | 前端已可渲染 `bar` / `line` / `pie` | 已完成 |
+| [R-016](#r-016-诊断事件字段稳定契约) | 诊断事件字段稳定契约 | P2 | 前端已展示 | 已完成 |
+| [R-017](#r-017-context-预算契约) | Context 预算契约 | P3 | 前端已展示最近事件摘要 | 已完成 |
+| [R-018](#r-018-sql-结果在-detail-复用) | SQL 结果在 Detail 复用 | P2 | 前端已复用 dataset artifact | 已完成 |
+| [R-019](#r-019-消费-per-run--mentions点名) | 消费 per-run @ mentions（点名） | P1 | 前端已发送 `run_config.mentioned` + `active*` | 已完成 |
+| [R-020](#r-020-资源启用校验与-session-默认集对齐) | 资源启用校验与 session 默认集对齐 | P2 | 前端 session 默认全量启用 | 已完成 |
+| [R-021](#r-021-fileassetref-统一过滤与标签) | FileAssetRef 统一过滤与标签 | P1 | 前端已客户端过滤兜底 | 已完成 |
+| [R-022](#r-022-artifact-加入工作区-promote) | artifact 加入工作区 promote | P1 | 前端已门控按钮 | 已完成 |
+| [R-023](#r-023-session-artifact-列表恢复) | session artifact 列表恢复 | P1 | 前端已门控恢复组件 | 已完成 |
+| [R-024](#r-024-run_configpinnedpaths-消费) | `run_config.pinnedPaths` 消费 | P2 | 前端已发送/标注未支持 | 已完成 |
+| [R-025](#r-025-对话框上传登记-session-级-fileassetref可选) | 对话框上传登记 session 级 FileAssetRef（可选） | P3 | 前端暂保持附件 chips | 已完成 |
+| [R-026](#r-026-agent-工作区资产工具与-promote-语义) | agent 工作区资产工具与 promote 语义 | P2 | 前端不阻塞 | 第 3 点已完成；第 1、2 点不做（不提供 agent 工具，有可用端点即可） |
+| [R-027](#r-027-token-usagecorrelation-与-interaction-事件) | `token_usage.correlation` 与 interaction 事件 | P2 | 前端已消费 | 已完成 |
 
 ---
 
@@ -80,6 +80,14 @@
 4. 后端如新增 `visualize` 类工具，应将该步骤映射为图表 artifact；大数据量仍走 REST preview，不塞入大事件。
 
 **验收：** 一次数据分析 run 产生 chart artifact 后，前端「产出」Tab 能直接渲染图表；缺少 `points` / `series` 时显示「待后端上报图表数据」。
+
+**后端答复区**
+
+| 项 | 内容 |
+| --- | --- |
+| 状态 | 已完成 |
+| 方案摘要 | **不新增 agent 工具**——chart 数据不由 LLM 组装。后端在 `@open-data-agent/artifacts` 暴露规则式产图入口：`ArtifactService.createChartArtifact({chartType, points?, series?, unit?, ...})` + 包级 `buildChartPreview(...)` 验证/规整器。contracts 新增 `ChartPreview` / `ChartPreviewType` (`"bar"|"line"|"pie"`) / `ChartPreviewPoint` (`{label,value}`) / `ChartPreviewSeries` (`{name,points[]}`) 作为 `preview_json` 契约。`buildChartPreview` 规整：丢弃非有限 value / 空 label 的点、空名或无有效点的 series，要求至少留一个有效 point 或一个有效 series，否则 `createChartArtifact` 抛 `CHART_DATA_REQUIRED`。产出的 `type="chart"` artifact `preview_json = {chartType, unit?, points, series?}`，字段名与前端 `parseChartPreview` 对齐（前端也读 `chart_type`/`kind` 别名兜底）。前端据该结构渲染 bar/line/pie，未知/缺失 chartType 按 bar 兜底。北向 AG-UI `CUSTOM(name="artifact")` 事件仍走现有 `createArtifactEvent`（瘦身，只带 id+摘要），完整 preview 经 REST 读取。SQL 结果仍产出 `type="table"` artifact（R-018），不自动转 chart——chart 由后端规则式产图入口按需产出。 |
+| 验证 | `npm run smoke:files` 覆盖 `createChartArtifact` 单序列（`chartType`/`unit`/`points`，含坏点被丢弃）、多序列（`series[]`）、空数据抛 `CHART_DATA_REQUIRED`。 |
 
 ---
 
@@ -138,6 +146,14 @@
 
 **验收：** 前端概览区能展示本轮生效资源、技能选择和目标状态；字段缺失时只显示「未指定」或「待后端上报」，不出现运行时错误。
 
+**后端答复区**
+
+| 项 | 内容 |
+| --- | --- |
+| 状态 | 已完成 |
+| 方案摘要 | 三事件字段契约已稳定并与前端对齐。(1) `skill.selection`（`server.ts`）原有 `mode`/`selected[]`/`effective_tool_policy`/`audit[]`，未改。(2) `goal.updated`（`agent-runtime/src/index.ts`）原发 `{goal, source}`，现补齐 spec 的 `objective`（主键）+ `status`（Mastra `active/paused/done` → spec `running/paused/done`），`goal` 作为别名保留。(3) `run.config.resolved`（`server.ts`）原发 `active_datasource_id`/`enabled_*_ids`/`file_ids`/`selected_skill_ids`/`skill_mode`/`requested_llm_profile_id`/`workspace(_id)`/`context_window?`/`input_budget?`/`reasoning_model?`/`run_timeout_ms?`；本轮新增 `active_llm_profile_id`（spec 键名别名，与 `requested_llm_profile_id` 并存）、`mentioned`（R-019）、`pinned_paths`（R-024）、`disabled_by_policy`（R-020）。 |
+| 验证 | `npm run smoke:context-compilation`、`npm run smoke:api-context`、`npm run smoke:agui-stream` 通过。 |
+
 ---
 
 ## R-017 Context 预算契约
@@ -166,6 +182,14 @@
 
 **验收：** 前端能展示模型、已用 token、预算或剩余 token；缺失字段时显示「已上报」而不展示虚假数字。
 
+**后端答复区**
+
+| 项 | 内容 |
+| --- | --- |
+| 状态 | 已完成 |
+| 方案摘要 | 两事件在保留原有嵌套结构（`budget`/`token_report`）的同时，补齐 spec 的稳定顶层字段。(1) `context.compiled`（`mastra-context-compiled-event.ts` + `mastra-context-budget-processor.ts`）：新增顶层 `model`（来自 `options.modelName`）、`total_tokens`（=`token_report.totalInputTokens`）、`budget_tokens`（=`budget.inputBudget`）、`prompt_tokens`（=`token_report.totalInputTokens`）、`remaining_tokens`（=`token_report.remainingTokens`）。(2) `context.prompt-verified`（`mastra-provider-prompt-guard-processor.ts`）：原有 `prompt_tokens`/`input_budget`/`remaining_tokens`，新增顶层 `model`（`options.modelName`）、`total_tokens`（=prompt_tokens，验证阶段无 completion）、`budget_tokens`（=`input_budget` 别名）。嵌套字段保持不变，前端可任选。 |
+| 验证 | `npm run smoke:context-compilation` 覆盖两事件的 `total_tokens`/`budget_tokens`/`prompt_tokens`/`remaining_tokens` 顶层字段。 |
+
 ---
 
 ## R-018 SQL 结果在 Detail 复用
@@ -182,6 +206,14 @@
 3. artifact 能通过 `audit_log_id`、`tool_call_id`、`step_id` 或顺序规则与 SQL 工具调用关联。
 
 **验收：** 点击控制台 Detail 中的 SQL 步骤时，前端能展示 SQL、扫描行数、耗时和结果表预览。
+
+**后端答复区**
+
+| 项 | 内容 |
+| --- | --- |
+| 状态 | 已完成 |
+| 方案摘要 | `runSqlReadonly` 成功后已生成 `type="table"` artifact，`preview_json` 为脱敏后的 `TableResult`（`columns` / `rows` / `row_count`），`SqlExecutionResult` 同时返回 `audit_log_id` / `elapsed_ms` / `artifact_id` / `artifact`。R-018 补齐**关联**：`RunSqlReadonlyInput` 新增可选 `correlation: { tool_call_id?, step_id? }`；gateway 创建 artifact 时把 `audit_log_id` + `datasource_id` + 可选 `tool_call_id`/`step_id` 写入 `metadata_json`（`CreateArtifactInput` 新增 `metadata_json` 字段，`LocalArtifactService.createArtifact` 用 `mergeArtifactMetadata` 与 `citations` 合并）。agent-runtime 的 `run_sql_readonly` 执行器把本轮 `stepId`（`sql-${n}`）与 `options.toolCallId` 作为 `correlation` 传入 gateway。前端 Detail 可经 `metadata_json.tool_call_id` / `step_id` / `audit_log_id` 把结果表与 SQL 步骤配对，SQL 文本/扫描行数/耗时走 `sql_audit` CUSTOM 事件与 `SqlExecutionResult`。 |
+| 验证 | `npm run smoke:sql` 覆盖 `correlation` 写入 artifact `metadata_json`（`tool_call_id`/`step_id`/`audit_log_id` 三字段）。 |
 
 ---
 
@@ -249,6 +281,14 @@
 - `run.config.resolved` 事件携带 `mentioned`，前端概览区可回显「本轮点名」。
 - 不点名时与现有行为逐字节一致（回归测试通过）。
 
+**后端答复区**
+
+| 项 | 内容 |
+| --- | --- |
+| 状态 | 已完成 |
+| 方案摘要 | `extractEffectiveRunConfig`（`apps/api/src/run-input.ts`）现解析 `run_config.mentioned`（蛇形/驼峰双别名），新增 `perRunSelectionFromAliases` 提取 `{db,kb,mcp,skill}`。`EffectiveRunConfig` 新增 `mentioned` 字段，经 `clampMentioned` 收敛到各 `enabled*Ids` 子集——**聚焦而非收窄**：越界 ID 被静默剔除并收集到 `mentioned.excluded[]`（含 `kind`/`id`），不使 run 失败。`mentioned` 经 `run-agent-assembly.createRunAgentContext` → `AgentRunContext.mentioned`（`packages/agent-runtime/src/types.ts` 新增字段）传入 agent；`buildAgentInstructions` 新增一段「User focus this run (via @ mentions)」提示，告知 agent 优先使用被点名的 datasource/KB/MCP/skill，其余启用集仍可用。`run.config.resolved` CUSTOM 事件回传 `mentioned`（含 `excluded`），供前端概览回显与诊断。`@db` 维持 `activeDatasourceId`、`@skill` 维持 `activeSkillId` 行为不变。省略 `mentioned` 时该字段为 `undefined`，行为与今日逐字节一致。 |
+| 验证 | `npm run smoke:api-context` 覆盖 mentioned 解析、clamp、excluded 收集、省略时 undefined（向后兼容）。 |
+
 ---
 
 ## R-020 资源启用校验与 session 默认集对齐
@@ -280,6 +320,14 @@ if (kind !== "skill" && !resource.default_enabled) {
 - 左侧停用某 DB/KB/MCP 后，未在 session 关闭它的情况下发起 run 不再整体失败。
 - 被剔除/拒绝的资源有结构化诊断或友好错误，前端可展示。
 
+**后端答复区**
+
+| 项 | 内容 |
+| --- | --- |
+| 状态 | 已完成（方案 1：降级而非失败） |
+| 方案摘要 | `run-config-resolver.ts` 的 `validateConfigIds` 对**非 skill** 资源不再因 `default_enabled=false` 抛 `CONFIG_RESOURCE_NOT_ENABLED`，改为返回 `dropped[]`；`validateEffectiveResources` 据此把被剔除 ID 从 `enabledKnowledgeIds`/`enabledMcpServerIds` 中移除，并写入 `effectiveRunConfig.disabledByPolicy`（`{kind, id}` 列表，`disabled_by_policy`）。`run.config.resolved` CUSTOM 事件回传 `disabled_by_policy` 供前端展示。**skill 的 `disabled`/`archived` 状态仍 fail-closed**（抛错），datasource 的 `status !== ready` 仍抛 `DATASOURCE_NOT_ENABLED`——这两类是状态/就绪问题，与 `default_enabled` 策略不同。显式 `activeLlmProfileId` 即使 `default_enabled=false` 也尊重用户显式选择（不从 active 项剔除）。`EffectiveRunConfig` 新增 `disabledByPolicy` 字段。`default_enabled` 的现状：`workspace-config`/resource DTO 已暴露 `defaultEnabled`，`run-defaults` 暴露其后果（过滤后的启用集）；前端可据此在 SessionConfigBar 对停用资源置灰。 |
+| 验证 | `npm run smoke:run-config-disabled` 覆盖 `default_enabled=false` KB 被静默剔除、run 继续、`disabledByPolicy` 上报。 |
+
 ---
 
 ## R-021 FileAssetRef 统一过滤与标签
@@ -305,6 +353,14 @@ if (kind !== "skill" && !resource.default_enabled) {
 
 **验收：** 前端请求 `scope=workspace&origin=uploaded,saved` 时只得到跨 session 资产；请求 `scope=session&sessionId=...` 时只得到该 session 文件。
 
+**后端答复区**
+
+| 项 | 内容 |
+| --- | --- |
+| 状态 | 已完成 |
+| 方案摘要 | `GET /api/v1/files` 现支持三组正交过滤（均向后兼容，省略即不限制）：`source`/`sources`（内部枚举逗号分隔，原有）；`origin`/`origins`（展示标签逗号分隔，经 `originToSource` 1:1 映射到内部枚举：`uploaded→upload`、`generated→artifact`、`saved→workspace`）；`scope`（`session`/`workspace`）与 `sessionId`/`session_id`。底层 `FileAssetRefRepository.list` 新增 `session_id` 与 `has_session` 过滤维度（`session_id=null` ⇒ `IS NULL`，字符串 ⇒ `=`，`has_session=true` ⇒ `IS NOT NULL`），`FileAssetService.listRefs` 透传。DTO `fileAssetRefDto` 新增推导标签 `origin`（source→origin）与 `scope`（有 `session_id`→`session`，否则 `workspace`），原字段 `source`/`sessionId`/`runId` 等保持不变。`scope=workspace&origin=uploaded,saved` ⇒ `session_id IS NULL AND source IN (upload,workspace)`；`scope=session&sessionId=X` ⇒ `session_id = X`。 |
+| 验证 | `npm run smoke:files` 覆盖 scope/workspace/sessionId/origin 维度与 DTO 推导标签。 |
+
 ---
 
 ## R-022 Artifact 加入工作区 promote
@@ -324,6 +380,14 @@ if (kind !== "skill" && !resource.default_enabled) {
 5. 返回 `FileAssetRefDto`。
 
 **验收：** 前端点击「加入工作区」后，左栏「工作区文件」刷新即可看到该文件；重复点击不会生成重复资产。
+
+**后端答复区**
+
+| 项 | 内容 |
+| --- | --- |
+| 状态 | 已完成 |
+| 方案摘要 | 新增 `POST /api/v1/artifacts/:id/promote`。handler 取 artifact 记录，无 `file_asset_ref_id` 时抛结构化错误 `ARTIFACT_PROMOTE_NO_FILE`（覆盖 table/chart 纯 preview 类型）；有则调用 `FileAssetService.promoteArtifactFile`。该方法解析源 ref 的 `file_asset_id`，按 `filename`（`safeWorkspacePath` 规整）在跨 session workspace ref（`source=workspace AND session_id IS NULL`）中查重：命中且同 asset → 原样返回；命中但不同 asset → `reassignAsset`（file_id 稳定）；未命中 → 新建 `source=workspace`、`session_id IS NULL` 的 ref，`metadata_json.promoted_from` 记录来源 ref。**不做字节拷贝**——asset store 内容寻址已去重，新 ref 直接指向同一 asset。返回 `FileAssetRefDto` + `downloadUrl`。幂等：重复 promote 同 artifact 返回同一 ref id。 |
+| 验证 | `npm run smoke:files` 覆盖 promote 幂等、source=workspace、session_id 为空、与源 asset 同 id（零拷贝）。 |
 
 ---
 
@@ -357,6 +421,14 @@ if (kind !== "skill" && !resource.default_enabled) {
 
 **验收：** 刷新同一 session 页面后，前端右栏「产出」可恢复历史 artifact；无 artifact 时返回空数组。
 
+**后端答复区**
+
+| 项 | 内容 |
+| --- | --- |
+| 状态 | 已完成 |
+| 方案摘要 | 新增 `GET /api/v1/artifacts?sessionId=<threadId>`（亦接受 `session_id` 别名）。`handleArtifactRequest` 在无 id 分支处理：缺 `sessionId` 抛 `ARTIFACT_LIST_SESSION_ID_REQUIRED`；有则调用新方法 `ArtifactRepository.listBySession({user_id, session_id})`，`SELECT … WHERE user_id=? AND session_id=? ORDER BY created_at ASC`（新增 `idx_artifacts_user_session` 索引）。返回 `{ artifacts: [...] }`，每项经 `sessionArtifactDto` 映射为 `{id, type, name, fileId(可空), downloadUrl(仅文件型), mimeType?, preview_json(解析后对象或 null), createdAt}`。`fileId` 对纯 preview 的 table/chart 为 `null`，字段名稳定。无 artifact 返回空数组。 |
+| 验证 | `npm run smoke:files` 覆盖 `listBySession` 返回正确 artifact、空 session 返回 `[]`。 |
+
 ---
 
 ## R-024 `run_config.pinnedPaths` 消费
@@ -379,6 +451,14 @@ if (kind !== "skill" && !resource.default_enabled) {
 
 **验收：** `@` 本对话产物后，agent 提示中包含该路径；session workspace 内不产生重复 `input/` 副本。
 
+**后端答复区**
+
+| 项 | 内容 |
+| --- | --- |
+| 状态 | 已完成 |
+| 方案摘要 | `extractEffectiveRunConfig` 新增 `pinnedPathsFromAliases` 解析 `run_config.pinnedPaths`/`pinned_paths`：仅接受 session 相对路径，拒绝绝对路径、NUL 字节、含 `..` 的遍历路径（静默剔除，不失败 run）。结果存入 `EffectiveRunConfig.pinnedPaths`，经 `AgentRunContext.pinned_paths` 传入 agent。`buildAgentInstructions` 新增一段「Pinned workspace files to read/reference this run」提示，列出路径并明确「已存在于 session workspace，用 read_file 读取，不要重建或复制进 input/」。`run.config.resolved` CUSTOM 事件回传 `pinned_paths`。**不复制文件**——pinned path 只是提示，与 `workspaceAttachments`（`fileIds`→`input/` 物化）是两条独立路径。 |
+| 验证 | `npm run smoke:api-context` 覆盖 pinnedPaths 解析与绝对/遍历/NUL 剔除。 |
+
 ---
 
 ## R-025 对话框上传登记 session 级 FileAssetRef（可选）
@@ -392,6 +472,14 @@ if (kind !== "skill" && !resource.default_enabled) {
 **需求：** `POST /api/v1/chat/uploads` 在写入 session workspace `uploads/` 的同时，可选创建一条 `source=upload` 且带 `session_id` 的 FileAssetRef，使未来「本对话文件」管理视图可以统一展示对话框上传文件。
 
 **验收：** 上传文件仍可作为聊天附件进入 run；同时 `GET /api/v1/files?scope=session&sessionId=...&origin=uploaded` 能列出该文件。
+
+**后端答复区**
+
+| 项 | 内容 |
+| --- | --- |
+| 状态 | 已完成 |
+| 方案摘要 | `POST /api/v1/chat/uploads` 在 `writeFileSync` 写入 session workspace `uploads/` 之后，补建一条 session 级 FileAssetRef：`createRef({source: "upload", session_id, run_id: "chat-upload", filename, content, declared_mime_type, metadata: {kind: "chat-upload", session_id}})`。ref 登记为 best-effort（失败不影响上传，磁盘文件仍在）。返回体新增 `fileId`（ref id）供前端追踪。上传文件仍作为聊天附件进入 run（ingress 把 `uploads/...` part 投影为 read_file path 提示）；`GET /api/v1/files?scope=session&sessionId=...&origin=uploaded` 经 R-021 过滤（`session_id = ?` + `source = upload`）能列出该文件。 |
+| 验证 | `npm run smoke:files` 覆盖 `source=upload` + `session_id` 的 ref 经 R-021 过滤可查。 |
 
 ---
 
@@ -410,6 +498,16 @@ if (kind !== "skill" && !resource.default_enabled) {
 3. 收窄 `promote_workspace_file` 描述：它的语义是「提升为跨 session 可复用工作区资产」，不是「同 session 后续 run 复用」（同 session 文件已天然保留）。
 
 **验收：** agent 能主动查看/附加跨 session 工作区资产；`promote_workspace_file` 不再鼓励为同 session 复用而重复晋升。
+
+**后端答复区**
+
+| 项 | 内容 |
+| --- | --- |
+| 状态 | 第 3 点已完成；第 1、2 点**不做**——不提供这类 agent 工具，有可用端点即可 |
+| 方案摘要 | **不提供 `list_workspace_assets` / `attach_workspace_asset` agent 工具**（spec 第 1、2 项）。理由：这两个工具以 `file_id` 为句柄，会把 `file_id` / `source` / `origin` 这些 REST/FileAssetRef 系统的概念泄漏进 agent 工具层，与「agent 用路径句柄」的抽象冲突。跨 session 工作区资产的访问需求由两条非工具路径满足：(a) **REST 端点**——`GET /api/v1/files?scope=workspace`（R-021）列出跨 session 资产、`POST /api/v1/files/:id/promote` 把 session 文件提升为跨 session 资产、`POST /api/v1/artifacts/:id/promote`（R-022）提升 artifact 文件；(b) **agent 路径句柄只读工具**——`list_workspace_files` / `read_workspace_file` 以工作区根相对**路径**（非 file_id）只读访问跨 session 资产，agent 写新文件默认落 sessionDir（session 私有），要共享用 `promote_workspace_file`。**(3) 收窄 `promote_workspace_file` 描述与 policy**：描述改为「提升为跨 session 可复用工作区资产」，system prompt 的 tool-group 说明与 policy 句明确「同 session 文件已跨 run 保留，勿仅为同 session 复用而 promote」。 |
+| 验证 | `npm run smoke:workspace`（session 默认写 + 跨 session 隔离 + 路径只读工具）、`npm run smoke:files`（REST 跨 session ref 查询 + promote 端点幂等）。 |
+
+---
 
 ---
 
@@ -449,4 +547,14 @@ if (kind !== "skill" && !resource.default_enabled) {
 - 含 LLM + 工具调用的 run，Detail 中对应 step 显示 Token 用量（非仅 run 级累加）。
 - `ask_user` / `submit_plan` HITL 流程 Trace 显示正确工具名与 suspend/resume 时间线。
 - 刷新 session 后历史 tool-call 步骤 UI 可恢复。
+
+**后端答复区**
+
+| 项 | 内容 |
+| --- | --- |
+| 状态 | 已完成 |
+| 方案摘要 | (1) `token_usage.correlation`（`stream/token-usage-correlation.ts`）原有 `{step_id, tool_call_id, tool_name}`，未改；由 data-tools 在 `inspect_schema`/`run_sql_readonly` 等工具调用时经 `emitStepCorrelation` emit。(2) `token_usage` 本体（`stream/mastra-stream-hooks.ts`）原有 `input_tokens`/`output_tokens`/`prompt_tokens`/`completion_tokens`/`tool_call_id`/`tool_name`/`model`/`step_number`，优先 provider `usage`、不报累计 `totalUsage`——`step_number` 作为 `step_id` 的兜底近似（spec 允许），精确 `step_id` 经 `token_usage.correlation` 单独 emit。(3) `interaction.requested`/`interaction.resolved`（`interaction-runtime-adapter.ts`）原有 `tool_name`/`interrupt_event`/`resume_schema`/`tool_call_id`，HITL suspend/resume 路径必 emit，未改。(4) `GET /api/v1/sessions/:sessionId/conversation` 的 `toolCalls[]`（`config-api.ts` `toolCallPairDtos`）原仅 `{toolCallId, toolName, resultPreview, ...}`；本轮补齐 spec 的稳定字段：`id`（=toolCallId 别名）、`name`（=toolName 别名）、`args`（从 passthrough `args`/`input`/`argsText` 提取）、`result`（完整结果，前端按需截断），同时保留 `toolCallId`/`toolName`/`resultPreview` 向后兼容。 |
+| 验证 | `npm run smoke:agui-stream` 覆盖 `token_usage` CUSTOM；`npm run smoke:conversation-memory` 覆盖 conversation REST toolCalls[]；`npm run smoke:collaboration` 覆盖 HITL interaction 事件。 |
+
+---
 

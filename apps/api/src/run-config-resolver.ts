@@ -292,14 +292,31 @@ const validateEffectiveResources = (
       throw new Error(`DATASOURCE_NOT_ENABLED:${id}`);
     }
   });
-  validateConfigIds(metadataStore, userId, workspaceId, "knowledge-base", config.enabledKnowledgeIds);
-  validateConfigIds(metadataStore, userId, workspaceId, "mcp-server", config.enabledMcpServerIds);
+  // R-020: non-skill resources with default_enabled=false are silently dropped (not thrown).
+  // Each dropped ID is removed from its enabled set and recorded for run.config.resolved.
+  const disabledByPolicy: { kind: "knowledge-base" | "mcp-server" | "model-profile"; id: string }[] = [];
+  const droppedKb = validateConfigIds(metadataStore, userId, workspaceId, "knowledge-base", config.enabledKnowledgeIds).dropped;
+  const droppedMcp = validateConfigIds(metadataStore, userId, workspaceId, "mcp-server", config.enabledMcpServerIds).dropped;
+  // Skills keep fail-closed semantics (status disabled/archived throws inside validateConfigIds).
   validateConfigIds(metadataStore, userId, workspaceId, "skill", [...config.enabledSkillIds, ...config.skillIds]);
   if (config.activeSkillId) {
     validateConfigIds(metadataStore, userId, workspaceId, "skill", [config.activeSkillId]);
   }
   if (config.activeLlmProfileId && config.activeLlmProfileId !== "server-default") {
+    // An explicitly requested LLM profile that is default_enabled=false is still honored
+    // (the user asked for it); we only drop from the *enabled* passive sets above.
     validateConfigIds(metadataStore, userId, workspaceId, "model-profile", [config.activeLlmProfileId]);
+  }
+  if (droppedKb.length > 0) {
+    config.enabledKnowledgeIds = config.enabledKnowledgeIds.filter((id) => !droppedKb.includes(id));
+    droppedKb.forEach((id) => disabledByPolicy.push({ kind: "knowledge-base", id }));
+  }
+  if (droppedMcp.length > 0) {
+    config.enabledMcpServerIds = config.enabledMcpServerIds.filter((id) => !droppedMcp.includes(id));
+    droppedMcp.forEach((id) => disabledByPolicy.push({ kind: "mcp-server", id }));
+  }
+  if (disabledByPolicy.length > 0) {
+    config.disabledByPolicy = disabledByPolicy;
   }
 };
 
@@ -563,13 +580,21 @@ const hasAnyKey = (record: Record<string, unknown>, keys: string[]): boolean =>
 
 const unique = <T>(values: T[]): T[] => [...new Set(values)];
 
+/**
+ * Validate config resource IDs. For skills, a `disabled`/`archived` status still throws
+ * (fail-closed). For non-skill resources, `default_enabled=false` no longer throws —
+ * instead the ID is returned in `dropped` so the caller can silently remove it from the
+ * enabled set and report it as `disabled_by_policy` (R-020). Existence of the resource
+ * record is still required (a missing record throws `CONFIG_RESOURCE_NOT_FOUND`).
+ */
 const validateConfigIds = (
   metadataStore: MetadataStore,
   userId: string,
   workspaceId: string,
   kind: "knowledge-base" | "mcp-server" | "model-profile" | "skill",
   ids: string[]
-): void => {
+): { dropped: string[] } => {
+  const dropped: string[] = [];
   ids.forEach((id) => {
     const resource = metadataStore.configResources.get({
       id,
@@ -581,9 +606,11 @@ const validateConfigIds = (
       throw new Error(`CONFIG_RESOURCE_NOT_ENABLED:${kind}:${id}`);
     }
     if (kind !== "skill" && !resource.default_enabled) {
-      throw new Error(`CONFIG_RESOURCE_NOT_ENABLED:${kind}:${id}`);
+      // R-020: degrade instead of failing the whole run.
+      dropped.push(id);
     }
   });
+  return { dropped };
 };
 
 const stringRecordValue = (record: Record<string, unknown>, key: string): string | undefined => {

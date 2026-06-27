@@ -9,10 +9,11 @@ import {
   createModelProviderFromProfile,
   probeModelProvider,
   resolveSessionWorkspaceDir,
+  resolveWorkspaceDir,
   STATIC_AGENT_TOOL_NAMES
 } from "@open-data-agent/agent-runtime";
 import type { LocalDataGateway } from "@open-data-agent/data-gateway";
-import { fileAssetRefDto, type FileAssetService, mimeTypeForFilename } from "@open-data-agent/files";
+import { fileAssetRefDto, type FileAssetService, mimeTypeForFilename, safeFilename } from "@open-data-agent/files";
 import type { LocalKnowledgeService } from "@open-data-agent/knowledge";
 import {
   buildSkillResourcePayload,
@@ -26,30 +27,57 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import {
   artifactRecordToSummary,
+  type ArtifactRecord,
   type ConfigResourceKind,
   type ConfigResourceRecord,
   type ConversationMessageRecord,
   type ConversationSummaryRecord,
   type DataSourceRecord,
+  type FileAssetRefSource,
+  type JobRecord,
   type MetadataStore,
-  type RunEventRecord
+  type QueryHistoryRecord,
+  type RunEventRecord,
+  type SessionRecord
 } from "@open-data-agent/metadata";
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import type { IncomingMessage } from "node:http";
 import { basename, join, resolve, sep } from "node:path";
+import writeXlsxFile, { type SheetData } from "write-excel-file/node";
 
 import { resolveEffectiveRunConfig } from "./run-input.js";
+import type { RunCancelRegistry } from "./run-cancel-registry.js";
+import { sessionTitleDto } from "./session-title.js";
 import { readMultipartFiles, readMultipartUpload } from "./upload-parser.js";
 
 const MAX_JSON_BODY_BYTES = 1024 * 1024;
 const DEFAULT_WORKSPACE_ID = "default";
+
+/**
+ * Map the user-facing `origin` label (R-021) to the internal FileAssetRefSource enum
+ * so the files panel can filter by display label without coupling to the enum.
+ * Unknown labels map to undefined and are dropped.
+ */
+const originToSource = (origin: string): string | undefined => {
+  switch (origin.toLowerCase()) {
+    case "uploaded":
+      return "upload";
+    case "generated":
+      return "artifact";
+    case "saved":
+      return "workspace";
+    default:
+      return undefined;
+  }
+};
 
 export type ConfigApiContext = {
   dataGateway: LocalDataGateway;
   fileAssetService: FileAssetService;
   knowledgeService: LocalKnowledgeService;
   metadataStore: MetadataStore;
+  runCancelRegistry: RunCancelRegistry;
   userId: string;
   workspaceId?: string;
 };
@@ -68,10 +96,11 @@ const RESOURCE_PATHS: Record<string, ConfigResourceKind> = {
 };
 const CHAT_UPLOAD_MAX_FILES = 1;
 const CHAT_UPLOAD_MAX_FILE_BYTES = 20 * 1024 * 1024;
+const XLSX_MIME_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
 const CHAT_UPLOAD_TYPES = new Set([
   "application/json",
   "application/pdf",
-  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  XLSX_MIME_TYPE,
   "text/csv",
   "text/plain",
   "text/tab-separated-values"
@@ -129,6 +158,7 @@ const routeConfigRequest = async (
       "chat.fileUpload": true,
       "chat.imageInput": true,
       "conversation.memory": true,
+      "conversation.title": true,
       "datasource.fieldMasking": true,
       "datasource.extendedTypes": true,
       "datasource.introspectionPolicy": true,
@@ -160,6 +190,12 @@ const routeConfigRequest = async (
   }
   if (root === "jobs") {
     return handleJobRequest(request, segments.slice(1), context);
+  }
+  if (root === "runs") {
+    return handleRunRequest(request, segments.slice(1), context);
+  }
+  if (root === "query-history") {
+    return handleQueryHistoryRequest(request, segments.slice(1), context);
   }
   if (root === "artifacts") {
     return handleArtifactRequest(request, segments.slice(1), context);
@@ -231,25 +267,74 @@ const handleChatUpload = async (
     throw new Error("WORKSPACE_PATH_ESCAPE");
   }
   writeFileSync(targetPath, file.content);
+  // R-025: register a session-scoped FileAssetRef (source=upload, session_id set) so the
+  // uploaded file is listed by GET /api/v1/files?scope=session&sessionId=...&origin=uploaded.
+  // Best-effort: a failure to register must not fail the upload (the file is already on disk).
+  let fileId: string | undefined;
+  try {
+    const resolved = context.fileAssetService.createRef({
+      user_id: context.userId,
+      workspace_id: context.workspaceId,
+      session_id: sessionId,
+      run_id: "chat-upload",
+      filename,
+      content: file.content,
+      declared_mime_type: file.mimeType || mimeTypeForFilename(filename),
+      source: "upload",
+      metadata: { kind: "chat-upload", session_id: sessionId }
+    });
+    fileId = resolved.ref.id;
+  } catch {
+    // best-effort; the on-disk file remains usable as a chat attachment
+  }
   return {
     body: {
       mimeType: file.mimeType || mimeTypeForFilename(filename),
       path: `uploads/${filename}`,
-      size: file.content.length
+      size: file.content.length,
+      ...(fileId ? { fileId } : {})
     },
     status: 200
   };
 };
 
-const handleSessionRequest = (
+const handleSessionRequest = async (
   request: IncomingMessage,
   segments: string[],
   context: Required<ConfigApiContext>
-): ConfigApiResponse => {
+): Promise<ConfigApiResponse> => {
   const sessionId = segments[0];
   const action = segments[1];
+  if (!sessionId && request.method === "GET") {
+    const requestUrl = new URL(request.url ?? "/", "http://127.0.0.1");
+    const limit = clampInteger(Number.parseInt(requestUrl.searchParams.get("limit") ?? "", 10), 1, 200, 50);
+    const cursor = requestUrl.searchParams.get("cursor");
+    const records = context.metadataStore.sessions.list({
+      user_id: context.userId,
+      limit,
+      ...(cursor ? { cursor } : {})
+    });
+    return ok({
+      sessions: records.map(sessionListDto),
+      ...(records.length === limit ? { nextCursor: encodeSessionCursor(records.at(-1) as SessionRecord) } : {})
+    });
+  }
   if (!sessionId) {
     return fail(400, "BAD_REQUEST", "Session id is required.");
+  }
+  if (!action && request.method === "PATCH") {
+    const body = await readJsonBody(request);
+    const title = stringValue(body.title)?.trim();
+    if (!title) {
+      throw new Error("SESSION_TITLE_REQUIRED");
+    }
+    const session = context.metadataStore.sessions.updateTitle({
+      user_id: context.userId,
+      session_id: sessionId,
+      title: title.slice(0, 80),
+      title_source: "user"
+    });
+    return ok(sessionTitleDto(session));
   }
   if (action !== "conversation") {
     return methodNotAllowed();
@@ -258,7 +343,7 @@ const handleSessionRequest = (
     return methodNotAllowed();
   }
 
-  context.metadataStore.sessions.get({ user_id: context.userId, session_id: sessionId });
+  const session = context.metadataStore.sessions.get({ user_id: context.userId, session_id: sessionId });
   const requestUrl = new URL(request.url ?? "/", "http://127.0.0.1");
   const limit = clampInteger(Number.parseInt(requestUrl.searchParams.get("limit") ?? "", 10), 1, 200, 80);
   const messages = context.metadataStore.conversationMessages.listRecent({
@@ -281,6 +366,9 @@ const handleSessionRequest = (
 
   return ok({
     sessionId,
+    title: session.title ?? "",
+    titleSource: session.title_source ?? "fallback",
+    updatedAt: session.updated_at,
     messages: messages.map(conversationMessageDto),
     ...(latestSummary ? { summary: conversationSummaryDto(latestSummary) } : {}),
     runEventRefs: runEventGroups.map(({ runId, events }) => runEventRefDto(runId, events)),
@@ -309,7 +397,11 @@ const handleDatasourceRequest = async (
   if (action === "test" && request.method === "POST") {
     const startedAt = Date.now();
     try {
-      const result = await context.dataGateway.testConnect({ user_id: context.userId, datasource_id: id });
+      const result = await context.dataGateway.testConnect({
+        user_id: context.userId,
+        workspace_id: context.workspaceId,
+        datasource_id: id
+      });
       return ok({ ...result, latencyMs: Date.now() - startedAt, status: "connected" });
     } catch (error) {
       context.metadataStore.dataSources.touchTest({ user_id: context.userId, datasource_id: id, status: "failed" });
@@ -360,7 +452,11 @@ const handleDatasourceRequest = async (
   }
   if (action === "schema" && request.method === "GET") {
     const snapshot = await resolveDatasourceSchemaSnapshot(id, context);
-    return ok(snapshot.payload);
+    const requestUrl = new URL(request.url ?? "/", "http://127.0.0.1");
+    return ok(schemaBrowserDto(snapshot.payload, {
+      includeStats: requestUrl.searchParams.get("includeStats") === "true",
+      query: requestUrl.searchParams.get("q") ?? undefined
+    }));
   }
   if (request.method === "GET") {
     return ok(dataSourceDto(context.metadataStore.dataSources.get({ user_id: context.userId, datasource_id: id })));
@@ -412,7 +508,11 @@ const refreshDatasourceSchemaSnapshot = async (
   datasourceId: string,
   context: Required<ConfigApiContext>
 ): Promise<ConfigResourceRecord> => {
-  const schema = await context.dataGateway.inspectSchema({ user_id: context.userId, datasource_id: datasourceId });
+  const schema = await context.dataGateway.inspectSchema({
+    user_id: context.userId,
+    workspace_id: context.workspaceId,
+    datasource_id: datasourceId
+  });
   return context.metadataStore.configResources.upsert({
     id: datasourceId,
     workspace_id: context.workspaceId,
@@ -423,6 +523,61 @@ const refreshDatasourceSchemaSnapshot = async (
     status: "ready"
   });
 };
+
+const schemaBrowserDto = (
+  payload: Record<string, unknown>,
+  options: { includeStats: boolean; query?: string | undefined }
+): Record<string, unknown> => {
+  const schema = recordValue(payload.schema) ?? payload;
+  const datasourceId = stringValue(schema.datasource_id);
+  const query = options.query?.trim().toLowerCase();
+  const rawTables = Array.isArray(schema.tables) ? schema.tables : [];
+  const tables = rawTables.map((table) => schemaBrowserTableDto(table, options.includeStats))
+    .filter((table) => {
+      if (!query) {
+        return true;
+      }
+      const tableName = stringValue(table.name)?.toLowerCase() ?? "";
+      const columns = Array.isArray(table.columns) ? table.columns : [];
+      return tableName.includes(query) || columns.some((column) =>
+        isRecord(column) && typeof column.name === "string" && column.name.toLowerCase().includes(query)
+      );
+    });
+  return {
+    ...(datasourceId ? { datasourceId, datasource_id: datasourceId } : {}),
+    tables,
+    inspectedAt: stringValue(payload.inspectedAt),
+    adapterSchemaVersion: payload.adapterSchemaVersion ?? 1
+  };
+};
+
+const schemaBrowserTableDto = (value: unknown, includeStats: boolean): Record<string, unknown> => {
+  const table = recordValue(value) ?? {};
+  const columns = Array.isArray(table.columns) ? table.columns : [];
+  return {
+    name: stringValue(table.name) ?? "",
+    table: stringValue(table.name) ?? "",
+    description: stringValue(table.description) ?? "",
+    sampleAvailable: true,
+    columns: columns.map(schemaBrowserColumnDto),
+    ...(includeStats ? { stats: schemaStatsDto(table) } : {})
+  };
+};
+
+const schemaBrowserColumnDto = (value: unknown): Record<string, unknown> => {
+  const column = recordValue(value) ?? {};
+  return {
+    name: stringValue(column.name) ?? "",
+    type: stringValue(column.type) ?? "unknown",
+    nullable: column.nullable === undefined ? undefined : Boolean(column.nullable),
+    description: stringValue(column.description) ?? ""
+  };
+};
+
+const schemaStatsDto = (table: Record<string, unknown>): Record<string, unknown> => ({
+  rowCount: numberValue(table.row_count) ?? numberValue(table.rowCount),
+  sizeBytes: numberValue(table.size_bytes) ?? numberValue(table.sizeBytes)
+});
 
 const isDatasourceSchemaExpired = (
   datasourceId: string,
@@ -967,15 +1122,110 @@ const handleJobRequest = (
     return fail(400, "BAD_REQUEST", "Job id is required.");
   }
   if (request.method === "GET") {
-    return ok(context.metadataStore.configJobs.get({ id, workspace_id: context.workspaceId, user_id: context.userId }));
+    return ok(artifactExportJobDto(context.metadataStore.configJobs.get({
+      id,
+      workspace_id: context.workspaceId,
+      user_id: context.userId
+    })));
   }
   if (request.method === "POST" && segments[1] === "cancel") {
-    return ok(context.metadataStore.configJobs.update({
+    const current = context.metadataStore.configJobs.get({ id, workspace_id: context.workspaceId, user_id: context.userId });
+    if (current.status !== "queued" && current.status !== "running") {
+      return ok(artifactExportJobDto(current));
+    }
+    return ok(artifactExportJobDto(context.metadataStore.configJobs.update({
       id,
       workspace_id: context.workspaceId,
       user_id: context.userId,
       status: "canceled"
-    }));
+    })));
+  }
+  return methodNotAllowed();
+};
+
+const handleRunRequest = async (
+  request: IncomingMessage,
+  segments: string[],
+  context: Required<ConfigApiContext>
+): Promise<ConfigApiResponse> => {
+  const id = segments[0];
+  if (!id) {
+    return fail(400, "BAD_REQUEST", "Run id is required.");
+  }
+  if (segments[1] !== "cancel" || request.method !== "POST") {
+    return methodNotAllowed();
+  }
+  const body = await readJsonBody(request);
+  const reason = stringValue(body.reason);
+  const result = context.runCancelRegistry.cancel({
+    userId: context.userId,
+    runId: id,
+    ...(reason ? { reason } : {})
+  });
+  if (result.canceled) {
+    return ok({ canceled: true, runId: result.runId, sessionId: result.sessionId });
+  }
+  const run = context.metadataStore.runs.find({ user_id: context.userId, run_id: id });
+  if (run && (run.status === "queued" || run.status === "running" || run.status === "suspended")) {
+    context.metadataStore.runs.updateStatus({
+      user_id: context.userId,
+      run_id: id,
+      status: "canceled"
+    });
+    return ok({ canceled: true, runId: id, persistedOnly: true });
+  }
+  return ok({ canceled: false, reason: result.reason, runId: id }, 404);
+};
+
+const handleQueryHistoryRequest = async (
+  request: IncomingMessage,
+  segments: string[],
+  context: Required<ConfigApiContext>
+): Promise<ConfigApiResponse> => {
+  const id = segments[0];
+  if (!id && request.method === "GET") {
+    const requestUrl = new URL(request.url ?? "/", "http://127.0.0.1");
+    const limit = clampInteger(Number.parseInt(requestUrl.searchParams.get("limit") ?? "", 10), 1, 200, 50);
+    const favorite = requestUrl.searchParams.get("favorite");
+    const records = context.metadataStore.queryHistory.list({
+      user_id: context.userId,
+      workspace_id: context.workspaceId,
+      limit,
+      ...(requestUrl.searchParams.get("sessionId") ? { session_id: requestUrl.searchParams.get("sessionId") ?? "" } : {}),
+      ...(requestUrl.searchParams.get("session_id") ? { session_id: requestUrl.searchParams.get("session_id") ?? "" } : {}),
+      ...(requestUrl.searchParams.get("datasourceId")
+        ? { datasource_id: requestUrl.searchParams.get("datasourceId") ?? "" }
+        : {}),
+      ...(requestUrl.searchParams.get("datasource_id")
+        ? { datasource_id: requestUrl.searchParams.get("datasource_id") ?? "" }
+        : {}),
+      ...(favorite === "true" ? { favorite: true } : favorite === "false" ? { favorite: false } : {})
+    });
+    return ok({ queries: records.map(queryHistoryDto) });
+  }
+  if (!id) {
+    return methodNotAllowed();
+  }
+  if ((segments[1] === "favorite" || segments[1] === "unfavorite") && request.method === "POST") {
+    const record = context.metadataStore.queryHistory.setFavorite({
+      user_id: context.userId,
+      workspace_id: context.workspaceId,
+      id,
+      favorite: segments[1] === "favorite"
+    });
+    return ok(queryHistoryDto(record));
+  }
+  if (request.method === "PATCH") {
+    const body = await readJsonBody(request);
+    if (typeof body.favorite !== "boolean") {
+      throw new Error("QUERY_HISTORY_FAVORITE_REQUIRED");
+    }
+    return ok(queryHistoryDto(context.metadataStore.queryHistory.setFavorite({
+      user_id: context.userId,
+      workspace_id: context.workspaceId,
+      id,
+      favorite: body.favorite
+    })));
   }
   return methodNotAllowed();
 };
@@ -987,12 +1237,49 @@ const handleFileRequest = async (
 ): Promise<ConfigApiResponse> => {
   const id = segments[0];
   if (!id && request.method === "GET") {
-    return ok({
-      files: context.fileAssetService.listRefs({
-        user_id: context.userId,
-        workspace_id: context.workspaceId
-      }).map(fileAssetRefDto)
+    const requestUrl = new URL(request.url ?? "/", "http://127.0.0.1");
+    // Filtering (R-021). Three orthogonal dimensions, all backward compatible:
+    //  - `source`/`sources`: comma-separated internal source enum
+    //    (artifact|knowledge|run-attachment|upload|workspace).
+    //  - `origin`: comma-separated display label (uploaded|generated|saved), mapped
+    //    1:1 to the internal source enum. Lets the frontend ask for "files the user
+    //    can reuse across sessions" without knowing the internal enum.
+    //  - `scope`: `session` | `workspace`. `session` ⇒ refs with a session_id;
+    //    `workspace` ⇒ refs with session_id IS NULL (cross-session assets).
+    //  - `sessionId`: restrict to one session's refs (implies scope=session).
+    const sourceParam = requestUrl.searchParams.get("source") ?? requestUrl.searchParams.get("sources");
+    const originParam = requestUrl.searchParams.get("origin") ?? requestUrl.searchParams.get("origins");
+    const scopeParam = requestUrl.searchParams.get("scope");
+    const sessionIdParam = requestUrl.searchParams.get("sessionId") ?? requestUrl.searchParams.get("session_id");
+    const sourcesFromOrigin = originParam
+      ? originParam.split(",").map((s) => s.trim()).filter(Boolean).map(originToSource).filter(Boolean)
+      : [];
+    const sources = sourceParam
+      ? sourceParam.split(",").map((s) => s.trim()).filter(Boolean)
+      : (sourcesFromOrigin.length ? sourcesFromOrigin : undefined);
+    // Resolve the session filter: an explicit sessionId wins; otherwise scope=session
+    // without a sessionId returns all refs that have any session_id; scope=workspace
+    // maps to session_id=null (cross-session assets only).
+    let sessionIdFilter: string | null | undefined;
+    let hasSessionFilter: boolean | undefined;
+    if (sessionIdParam) {
+      sessionIdFilter = sessionIdParam;
+    } else if (scopeParam === "workspace") {
+      sessionIdFilter = null;
+    } else if (scopeParam === "session") {
+      hasSessionFilter = true;
+    }
+    const listOne = (source?: string) => context.fileAssetService.listRefs({
+      user_id: context.userId,
+      workspace_id: context.workspaceId,
+      ...(source ? { source: source as FileAssetRefSource } : {}),
+      ...(sessionIdFilter !== undefined ? { session_id: sessionIdFilter } : {}),
+      ...(hasSessionFilter ? { has_session: true } : {})
     });
+    const all = sources
+      ? sources.map((source) => listOne(source)).flat()
+      : listOne();
+    return ok({ files: all.map(fileAssetRefDto) });
   }
   if (!id && request.method === "POST") {
     if (!isMultipart(request)) {
@@ -1003,19 +1290,118 @@ const handleFileRequest = async (
       maxFileBytes: numberFromEnv("FILE_UPLOAD_MAX_BYTES", 25 * 1024 * 1024),
       maxTotalBytes: numberFromEnv("FILE_UPLOAD_MAX_TOTAL_BYTES", 100 * 1024 * 1024)
     });
-    const files = upload.files.map((file) => context.fileAssetService.createRef({
-      user_id: context.userId,
-      workspace_id: context.workspaceId,
-      filename: file.filename,
-      content: file.content,
-      declared_mime_type: file.mimeType || mimeTypeForFilename(file.filename),
-      source: "upload",
-      metadata: { fields: upload.fields }
-    })).map(fileAssetRefDto);
+    // New files default to the session scope: the upload lands in the per-session
+    // directory so only this session sees it until promoted. A sessionId is required
+    // (header or multipart field), mirroring the chat-upload contract.
+    const sessionId = stringValue(upload.fields.sessionId)
+      ?? stringValue(upload.fields.session_id)
+      ?? stringValue(upload.fields.threadId)
+      ?? stringValue(upload.fields.thread_id)
+      ?? stringHeader(request.headers["x-session-id"])
+      ?? stringHeader(request.headers["x-thread-id"]);
+    if (!sessionId) {
+      throw new Error("FILE_UPLOAD_SESSION_REQUIRED");
+    }
+    const workspaceRoot = process.env.WORKSPACE_ROOT
+      ?? join(process.env.STORAGE_ROOT_DIR ?? "storage", "workspaces");
+    const sessionDir = resolveSessionWorkspaceDir({
+      runContext: {
+        user_id: context.userId,
+        workspace_id: context.workspaceId,
+        session_id: sessionId,
+        run_id: "file-upload",
+        selected_datasource_id: "",
+        enabled_datasource_ids: [],
+        user_input: "",
+        chat_mode: "config",
+        model_name: "file-upload"
+      },
+      workspaceRoot
+    });
+    const files = upload.files.map((file) => {
+      const resolved = context.fileAssetService.createRef({
+        user_id: context.userId,
+        workspace_id: context.workspaceId,
+        session_id: sessionId,
+        run_id: "file-upload",
+        filename: file.filename,
+        content: file.content,
+        declared_mime_type: file.mimeType || mimeTypeForFilename(file.filename),
+        source: "upload",
+        metadata: { fields: upload.fields }
+      });
+      // Materialize into the per-session directory (session-scoped). The asset store is
+      // the source of truth; this hardlink/copy makes the file visible to the agent's
+      // list_files. Best-effort: a failure to materialize must not fail the upload.
+      try {
+        const targetPath = resolve(sessionDir, safeFilename(resolved.ref.filename));
+        if (targetPath.startsWith(`${sessionDir}${sep}`)) {
+          context.fileAssetService.materializeRefToPath({
+            ref: resolved.ref,
+            targetPath,
+            linkStrategy: "hardlink"
+          });
+        }
+      } catch {
+        // session materialization is best-effort; the ref is already persisted
+      }
+      return fileAssetRefDto(resolved);
+    });
     return ok({ files }, 201);
   }
   if (!id) {
     return methodNotAllowed();
+  }
+  // POST /api/v1/files/:id/promote — promote a session-scoped file ref into the
+  // cross-session workspace root (R-026 / file promote). Accepts the file_id (ref id),
+  // reuses promoteFileToWorkspace (idempotent, no byte copy), and materializes the file
+  // into the workspace root so other sessions can read it.
+  if (segments[1] === "promote" && request.method === "POST") {
+    const source = context.fileAssetService.getRef({
+      user_id: context.userId,
+      workspace_id: context.workspaceId,
+      id
+    });
+    const workspaceRoot = process.env.WORKSPACE_ROOT
+      ?? join(process.env.STORAGE_ROOT_DIR ?? "storage", "workspaces");
+    const workspaceDir = resolveWorkspaceDir({
+      runContext: {
+        user_id: context.userId,
+        workspace_id: context.workspaceId,
+        session_id: "promote",
+        run_id: "promote",
+        selected_datasource_id: "",
+        enabled_datasource_ids: [],
+        user_input: "",
+        chat_mode: "config",
+        model_name: "promote"
+      },
+      workspaceRoot
+    });
+    // Materialize the file into the workspace root (best-effort hardlink/copy).
+    try {
+      const targetPath = resolve(workspaceDir, safeFilename(source.ref.filename));
+      if (targetPath.startsWith(`${workspaceDir}${sep}`)) {
+        context.fileAssetService.materializeRefToPath({
+          ref: source.ref,
+          targetPath,
+          linkStrategy: "hardlink"
+        });
+      }
+    } catch {
+      // best-effort; the ref promotion below is the source of truth
+    }
+    const resolved = context.fileAssetService.promoteFileToWorkspace({
+      user_id: context.userId,
+      workspace_id: context.workspaceId,
+      file_asset_ref_id: id,
+      filename: source.ref.filename,
+      ...(source.ref.declared_mime_type ? { declared_mime_type: source.ref.declared_mime_type } : {})
+    });
+    return ok({
+      ...fileAssetRefDto(resolved),
+      downloadUrl: `/api/v1/files/${resolved.ref.id}/download`
+    });
   }
   if (request.method === "GET" && segments[1] === "download") {
     const resolved = context.fileAssetService.getRef({
@@ -1055,13 +1441,95 @@ const handleFileRequest = async (
   return methodNotAllowed();
 };
 
-const handleArtifactRequest = (
+/**
+ * DTO for the session artifact list (R-023). Mirrors the shape the frontend
+ * `SessionArtifactsRestore` expects: stable `fileId` (nullable for pure-preview
+ * table/chart), `downloadUrl` only when there is a backing file, parsed `preview_json`.
+ */
+const sessionArtifactDto = (artifact: ArtifactRecord): Record<string, unknown> => ({
+  id: artifact.id,
+  type: artifact.type,
+  name: artifact.name,
+  ...(artifact.file_asset_ref_id ? { fileId: artifact.file_asset_ref_id } : { fileId: null }),
+  ...(artifact.file_asset_ref_id
+    ? { downloadUrl: `/api/v1/artifacts/${artifact.id}/download` }
+    : {}),
+  ...(artifact.mime_type ? { mimeType: artifact.mime_type } : {}),
+  preview_json: artifact.preview_json ? JSON.parse(artifact.preview_json) as unknown : null,
+  createdAt: artifact.created_at
+});
+
+const handleArtifactRequest = async (
   request: IncomingMessage,
   segments: string[],
   context: Required<ConfigApiContext>
-): ConfigApiResponse => {
+): Promise<ConfigApiResponse> => {
   const id = segments[0];
-  if (!id || request.method !== "GET") {
+  // R-023: list artifacts for a session (session-restore). No id, GET, ?sessionId=.
+  if (!id) {
+    if (request.method !== "GET") {
+      return methodNotAllowed();
+    }
+    const requestUrl = new URL(request.url ?? "/", "http://127.0.0.1");
+    const sessionId = requestUrl.searchParams.get("sessionId") ?? requestUrl.searchParams.get("session_id");
+    if (!sessionId) {
+      throw new Error("ARTIFACT_LIST_SESSION_ID_REQUIRED");
+    }
+    const records = context.metadataStore.artifacts.listBySession({
+      user_id: context.userId,
+      session_id: sessionId
+    });
+    return ok({ artifacts: records.map(sessionArtifactDto) });
+  }
+  // R-022: promote a file-type artifact into a cross-session workspace asset.
+  if (segments[1] === "promote") {
+    if (request.method !== "POST") {
+      return methodNotAllowed();
+    }
+    const artifact = context.metadataStore.artifacts.get({ user_id: context.userId, artifact_id: id });
+    if (!artifact.file_asset_ref_id) {
+      // Only file-backed artifacts (table/chart preview-only types) can be promoted.
+      throw new Error("ARTIFACT_PROMOTE_NO_FILE");
+    }
+    const resolved = context.fileAssetService.promoteFileToWorkspace({
+      user_id: context.userId,
+      workspace_id: context.workspaceId,
+      file_asset_ref_id: artifact.file_asset_ref_id,
+      filename: artifact.name,
+      ...(artifact.mime_type ? { declared_mime_type: artifact.mime_type } : {})
+    });
+    return ok({
+      ...fileAssetRefDto(resolved),
+      downloadUrl: `/api/v1/files/${resolved.ref.id}/download`
+    });
+  }
+  if (segments[1] === "export") {
+    if (request.method !== "POST") {
+      return methodNotAllowed();
+    }
+    const artifact = context.metadataStore.artifacts.get({ user_id: context.userId, artifact_id: id });
+    const body = await readJsonBody(request);
+    const format = (stringValue(body.format) ?? "csv").toLowerCase();
+    if (format !== "csv" && format !== "xlsx") {
+      throw new Error(`ARTIFACT_EXPORT_FORMAT_UNSUPPORTED:${format}`);
+    }
+    const idempotencyKey = stringValue(body.idempotencyKey);
+    const job = context.metadataStore.configJobs.create({
+      workspace_id: context.workspaceId,
+      user_id: context.userId,
+      type: "artifact-export",
+      resource_id: artifact.id,
+      ...(idempotencyKey ? { idempotency_key: idempotencyKey } : {})
+    });
+    queueArtifactExportJob({
+      artifact,
+      context,
+      format,
+      job
+    });
+    return ok(artifactExportJobDto(job), 202);
+  }
+  if (request.method !== "GET") {
     return methodNotAllowed();
   }
   const artifact = context.metadataStore.artifacts.get({ user_id: context.userId, artifact_id: id });
@@ -1069,6 +1537,11 @@ const handleArtifactRequest = (
     return ok(artifact.preview_json ? JSON.parse(artifact.preview_json) as unknown : null);
   }
   if (segments[1] === "content" || segments[1] === "download") {
+    const requestUrl = new URL(request.url ?? "/", "http://127.0.0.1");
+    const format = requestUrl.searchParams.get("format")?.toLowerCase();
+    if (format && format !== "csv" && format !== "xlsx") {
+      throw new Error(`ARTIFACT_EXPORT_FORMAT_UNSUPPORTED:${format}`);
+    }
     const file = artifact.file_asset_ref_id
       ? context.fileAssetService.readRef({
           user_id: context.userId,
@@ -1077,8 +1550,16 @@ const handleArtifactRequest = (
         })
       : artifactFileContent(artifact.storage_path);
     const preview = artifact.preview_json ? JSON.parse(artifact.preview_json) as unknown : null;
-    const content = file ?? serializeArtifactPreview(preview, segments[1] === "download");
-    const filename = safeDownloadName(artifact.name, content.mimeType);
+    const content = format === "xlsx"
+      ? await serializeArtifactXlsx(artifact.name, file, preview)
+      : format === "csv"
+        ? serializeArtifactCsv(artifact.name, file, preview)
+        : file ?? serializeArtifactPreview(preview, segments[1] === "download");
+    const filename = format === "xlsx"
+      ? safeDownloadNameWithExtension(artifact.name, "xlsx")
+      : format === "csv"
+        ? safeDownloadNameWithExtension(artifact.name, "csv")
+        : safeDownloadName(artifact.name, content.mimeType);
     return {
       body: content.body,
       headers: {
@@ -1107,6 +1588,47 @@ const conversationMessageDto = (message: ConversationMessageRecord): Record<stri
   createdAt: message.created_at
 });
 
+const sessionListDto = (session: SessionRecord): Record<string, unknown> => ({
+  id: session.id,
+  threadId: session.id,
+  title: session.title ?? "",
+  titleSource: session.title_source ?? "fallback",
+  createdAt: session.created_at,
+  updatedAt: session.updated_at,
+  lastMessageAt: session.last_message_at ?? session.updated_at
+});
+
+const queryHistoryDto = (record: QueryHistoryRecord): Record<string, unknown> => ({
+  id: record.id,
+  sessionId: record.session_id,
+  runId: record.run_id,
+  datasourceId: record.datasource_id,
+  sql: record.sql_text,
+  rowCount: record.row_count,
+  elapsedMs: record.elapsed_ms,
+  favorite: record.favorite,
+  createdAt: record.created_at,
+  updatedAt: record.updated_at
+});
+
+const artifactExportJobDto = (job: JobRecord): Record<string, unknown> => ({
+  id: job.id,
+  type: job.type,
+  artifactId: job.resource_id,
+  status: job.status,
+  progress: job.progress,
+  ...(job.result !== undefined ? { result: job.result } : {}),
+  ...(job.error !== undefined ? { error: job.error } : {}),
+  createdAt: job.created_at,
+  ...(job.started_at ? { startedAt: job.started_at } : {}),
+  ...(job.finished_at ? { finishedAt: job.finished_at } : {})
+});
+
+const encodeSessionCursor = (session: SessionRecord): string => Buffer.from(JSON.stringify({
+  id: session.id,
+  sort_at: session.last_message_at ?? session.updated_at
+}), "utf8").toString("base64url");
+
 const conversationSummaryDto = (summary: ConversationSummaryRecord): Record<string, unknown> => ({
   id: summary.id,
   ...(summary.source_run_id ? { sourceRunId: summary.source_run_id } : {}),
@@ -1125,8 +1647,10 @@ const runEventRefDto = (runId: string, events: RunEventRecord[]): Record<string,
 
 const toolCallPairDtos = (runId: string, events: RunEventRecord[]): Array<Record<string, unknown>> => {
   const calls = new Map<string, {
+    args?: unknown;
     callEventSeq?: number;
     endEventSeq?: number;
+    result?: unknown;
     resultEventSeq?: number;
     resultMessageId?: string;
     resultPreview?: string;
@@ -1146,9 +1670,13 @@ const toolCallPairDtos = (runId: string, events: RunEventRecord[]): Array<Record
     const toolName = stringValue(event.toolCallName) ?? existing.toolName;
 
     if (type === "TOOL_CALL_START" || type === "TOOL_CALL_END") {
+      // AG-UI tool-call events are passthrough; capture args if the middleware populated
+      // `args` / `input` / `argsText` (R-027 conversation-restore wants stable args).
+      const args = existing.args ?? toolCallArgs(event);
       calls.set(toolCallId, {
         ...existing,
         ...(toolName ? { toolName } : {}),
+        ...(args !== undefined ? { args } : {}),
         ...(type === "TOOL_CALL_START" ? { callEventSeq: eventRecord.seq } : {}),
         ...(type === "TOOL_CALL_END" ? { endEventSeq: eventRecord.seq } : {})
       });
@@ -1164,6 +1692,8 @@ const toolCallPairDtos = (runId: string, events: RunEventRecord[]): Array<Record
         resultEventSeq: eventRecord.seq,
         ...(resultMessageId ? { resultMessageId } : {}),
         ...(resultPreview ? { resultPreview } : {}),
+        // R-027: full result (may be large; frontend truncates as needed).
+        result: event.content,
         status: isToolResultError(event.content) ? "failed" : "completed"
       });
     }
@@ -1171,15 +1701,37 @@ const toolCallPairDtos = (runId: string, events: RunEventRecord[]): Array<Record
 
   return [...calls.values()].map((call) => ({
     runId,
+    // R-027: stable id/name/args/result fields plus the legacy toolCallId/toolName aliases.
+    id: call.toolCallId,
     toolCallId: call.toolCallId,
     status: call.status,
-    ...(call.toolName ? { toolName: call.toolName } : {}),
+    ...(call.toolName ? { name: call.toolName, toolName: call.toolName } : {}),
+    ...(call.args !== undefined ? { args: call.args } : {}),
+    ...(call.result !== undefined ? { result: call.result } : {}),
     ...(call.callEventSeq !== undefined ? { callEventSeq: call.callEventSeq } : {}),
     ...(call.endEventSeq !== undefined ? { endEventSeq: call.endEventSeq } : {}),
     ...(call.resultEventSeq !== undefined ? { resultEventSeq: call.resultEventSeq } : {}),
     ...(call.resultMessageId ? { resultMessageId: call.resultMessageId } : {}),
     ...(call.resultPreview ? { resultPreview: call.resultPreview } : {})
   }));
+};
+
+/**
+ * Extract tool-call args from a passthrough AG-UI tool-call event (R-027). The schema is
+ * passthrough, so args may appear as a structured `args`/`input` object or as `argsText`.
+ * Returns undefined when none is present.
+ */
+const toolCallArgs = (event: Record<string, unknown>): unknown => {
+  if (event.args !== undefined) {
+    return event.args;
+  }
+  if (event.input !== undefined) {
+    return event.input;
+  }
+  if (typeof event.argsText === "string" && event.argsText.length > 0) {
+    return event.argsText;
+  }
+  return undefined;
 };
 
 const previewToolResult = (value: unknown): string | undefined => {
@@ -1196,6 +1748,108 @@ const isToolResultError = (value: unknown): boolean => {
   const parsed = typeof value === "string" ? tryParseRecord(value) : recordValue(value);
   return Boolean(parsed && (parsed.isError === true || typeof parsed.error === "string"));
 };
+
+const queueArtifactExportJob = (input: {
+  artifact: ArtifactRecord;
+  context: Required<ConfigApiContext>;
+  format: "csv" | "xlsx";
+  job: JobRecord;
+}): void => {
+  void Promise.resolve().then(async () => {
+    const { artifact, context, format, job } = input;
+    try {
+      if (isJobCanceled(context, job.id)) {
+        return;
+      }
+      context.metadataStore.configJobs.update({
+        id: job.id,
+        workspace_id: context.workspaceId,
+        user_id: context.userId,
+        status: "running",
+        progress: 10
+      });
+      const file = artifact.file_asset_ref_id
+        ? context.fileAssetService.readRef({
+            user_id: context.userId,
+            workspace_id: context.workspaceId,
+            id: artifact.file_asset_ref_id
+          })
+        : artifactFileContent(artifact.storage_path);
+      const preview = artifact.preview_json ? JSON.parse(artifact.preview_json) as unknown : null;
+      const content = format === "xlsx"
+        ? await serializeArtifactXlsx(artifact.name, file, preview)
+        : serializeArtifactCsv(artifact.name, file, preview);
+      const filename = format === "xlsx"
+        ? safeDownloadNameWithExtension(artifact.name, "xlsx")
+        : safeDownloadNameWithExtension(artifact.name, "csv");
+      if (isJobCanceled(context, job.id)) {
+        return;
+      }
+      context.metadataStore.configJobs.update({
+        id: job.id,
+        workspace_id: context.workspaceId,
+        user_id: context.userId,
+        status: "running",
+        progress: 80
+      });
+      const resolved = context.fileAssetService.createRef({
+        user_id: context.userId,
+        workspace_id: context.workspaceId,
+        filename,
+        content: content.body,
+        declared_mime_type: content.mimeType,
+        source: "artifact",
+        ...(artifact.session_id ? { session_id: artifact.session_id } : {}),
+        ...(artifact.run_id ? { run_id: artifact.run_id } : {}),
+        metadata: {
+          artifact_id: artifact.id,
+          export_format: format,
+          job_id: job.id
+        }
+      });
+      if (isJobCanceled(context, job.id)) {
+        return;
+      }
+      context.metadataStore.configJobs.update({
+        id: job.id,
+        workspace_id: context.workspaceId,
+        user_id: context.userId,
+        status: "completed",
+        progress: 100,
+        result: {
+          artifactId: artifact.id,
+          downloadUrl: `/api/v1/files/${resolved.ref.id}/download`,
+          fileId: resolved.ref.id,
+          filename: resolved.ref.filename,
+          format,
+          mimeType: content.mimeType,
+          sizeBytes: resolved.asset.size_bytes
+        }
+      });
+    } catch (error) {
+      if (isJobCanceled(input.context, input.job.id)) {
+        return;
+      }
+      input.context.metadataStore.configJobs.update({
+        id: input.job.id,
+        workspace_id: input.context.workspaceId,
+        user_id: input.context.userId,
+        status: "failed",
+        progress: 100,
+        error: {
+          message: error instanceof Error ? error.message : "ARTIFACT_EXPORT_FAILED"
+        }
+      });
+    }
+  });
+};
+
+const isJobCanceled = (context: Required<ConfigApiContext>, jobId: string): boolean =>
+  context.metadataStore.configJobs.get({
+    id: jobId,
+    workspace_id: context.workspaceId,
+    user_id: context.userId
+  }).status === "canceled";
 
 const artifactFileContent = (storagePath: string | undefined): { body: Buffer; mimeType: string } | undefined => {
   if (!storagePath) {
@@ -1223,6 +1877,50 @@ const serializeArtifactPreview = (
   };
 };
 
+const serializeArtifactCsv = (
+  artifactName: string,
+  file: { body: Buffer; mimeType: string } | undefined,
+  preview: unknown
+): { body: Buffer; mimeType: string } => {
+  if (file && (file.mimeType.startsWith("text/csv") || artifactName.toLowerCase().endsWith(".csv"))) {
+    return { body: file.body, mimeType: "text/csv; charset=utf-8" };
+  }
+  const csv = previewCsv(preview);
+  if (csv !== undefined) {
+    return { body: Buffer.from(csv, "utf8"), mimeType: "text/csv; charset=utf-8" };
+  }
+  const sheetData = file ? sheetDataFromFileContent(artifactName, file) : sheetDataFromPreview(preview);
+  const rows = sheetData.map((row) => row.map((cell) => {
+    if (cell === null || cell === undefined) {
+      return "";
+    }
+    if (typeof cell === "object" && "value" in cell) {
+      return csvCellValue(cell.value);
+    }
+    return csvCellValue(cell);
+  }));
+  const body = `${rows.map((row) => row.map(escapeCsvCell).join(",")).join("\n")}\n`;
+  return { body: Buffer.from(body, "utf8"), mimeType: "text/csv; charset=utf-8" };
+};
+
+const serializeArtifactXlsx = async (
+  artifactName: string,
+  file: { body: Buffer; mimeType: string } | undefined,
+  preview: unknown
+): Promise<{ body: Buffer; mimeType: string }> => {
+  if (file && isXlsxContent(artifactName, file.mimeType)) {
+    return { body: file.body, mimeType: XLSX_MIME_TYPE };
+  }
+  const sheetData = file
+    ? sheetDataFromFileContent(artifactName, file)
+    : sheetDataFromPreview(preview);
+  const body = await writeXlsxFile(sheetData, {
+    sheet: safeSheetName(artifactName),
+    columns: inferSheetColumns(sheetData)
+  }).toBuffer();
+  return { body, mimeType: XLSX_MIME_TYPE };
+};
+
 const previewCsv = (preview: unknown): string | undefined => {
   if (!isRecord(preview) || !Array.isArray(preview.columns) || !Array.isArray(preview.rows)) {
     return undefined;
@@ -1246,12 +1944,189 @@ const previewCsv = (preview: unknown): string | undefined => {
   return `${lines.join("\n")}\n`;
 };
 
+const csvCellValue = (value: unknown): string => {
+  if (value === null || value === undefined) {
+    return "";
+  }
+  if (value instanceof Date) {
+    return value.toISOString();
+  }
+  return typeof value === "object" ? JSON.stringify(value) : String(value);
+};
+
+const escapeCsvCell = (value: string): string =>
+  /[",\n\r]/u.test(value) ? `"${value.replace(/"/gu, '""')}"` : value;
+
+const sheetDataFromFileContent = (artifactName: string, file: { body: Buffer; mimeType: string }): SheetData => {
+  const lowerName = artifactName.toLowerCase();
+  const mimeType = file.mimeType.toLowerCase();
+  if (mimeType.startsWith("text/csv") || lowerName.endsWith(".csv")) {
+    return csvToSheetData(file.body.toString("utf8"));
+  }
+  if (mimeType.includes("json") || lowerName.endsWith(".json")) {
+    return sheetDataFromJsonText(file.body.toString("utf8"));
+  }
+  if (mimeType.startsWith("text/") || lowerName.endsWith(".txt") || lowerName.endsWith(".md")) {
+    return file.body.toString("utf8").split(/\r?\n/u).map((line) => [line]);
+  }
+  return [["content"], [`Binary artifact cannot be converted to tabular XLSX: ${artifactName}`]];
+};
+
+const sheetDataFromPreview = (preview: unknown): SheetData => {
+  if (isRecord(preview) && Array.isArray(preview.columns) && Array.isArray(preview.rows)) {
+    const columns = preview.columns.map((column) => String(column));
+    const rows = preview.rows.map((row) => {
+      if (Array.isArray(row)) {
+        return row.map(spreadsheetCellValue);
+      }
+      if (isRecord(row)) {
+        return columns.map((column) => spreadsheetCellValue(row[column]));
+      }
+      return [spreadsheetCellValue(row)];
+    });
+    return [columns, ...rows];
+  }
+  return unknownToSheetData(preview);
+};
+
+const sheetDataFromJsonText = (text: string): SheetData => {
+  try {
+    return unknownToSheetData(JSON.parse(text) as unknown);
+  } catch {
+    return [["content"], [text]];
+  }
+};
+
+const unknownToSheetData = (value: unknown): SheetData => {
+  if (Array.isArray(value)) {
+    if (value.length === 0) {
+      return [["value"]];
+    }
+    if (value.every(isRecord)) {
+      const columns = [...new Set(value.flatMap((entry) => Object.keys(entry)))];
+      return [columns, ...value.map((entry) => columns.map((column) => spreadsheetCellValue(entry[column])))];
+    }
+    return [["value"], ...value.map((entry) => [spreadsheetCellValue(entry)])];
+  }
+  if (isRecord(value)) {
+    return [["key", "value"], ...Object.entries(value).map(([key, entry]) => [key, spreadsheetCellValue(entry)])];
+  }
+  return [["value"], [spreadsheetCellValue(value)]];
+};
+
+const csvToSheetData = (text: string): SheetData => {
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let cell = "";
+  let inQuotes = false;
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    const next = text[index + 1];
+    if (char === '"' && inQuotes && next === '"') {
+      cell += '"';
+      index += 1;
+      continue;
+    }
+    if (char === '"') {
+      inQuotes = !inQuotes;
+      continue;
+    }
+    if (char === "," && !inQuotes) {
+      row.push(cell);
+      cell = "";
+      continue;
+    }
+    if ((char === "\n" || char === "\r") && !inQuotes) {
+      if (char === "\r" && next === "\n") {
+        index += 1;
+      }
+      row.push(cell);
+      rows.push(row);
+      row = [];
+      cell = "";
+      continue;
+    }
+    cell += char;
+  }
+  if (cell.length > 0 || row.length > 0) {
+    row.push(cell);
+    rows.push(row);
+  }
+  return rows.length > 0 ? rows.map((cells) => cells.map(spreadsheetCellValue)) : [["value"]];
+};
+
+const spreadsheetCellValue = (value: unknown): string | number | boolean | Date | null => {
+  if (value === undefined || value === null) {
+    return null;
+  }
+  if (typeof value === "number" || typeof value === "boolean") {
+    return value;
+  }
+  if (value instanceof Date) {
+    return value;
+  }
+  if (typeof value !== "string") {
+    return JSON.stringify(value);
+  }
+  const trimmed = value.trim();
+  if (trimmed === "") {
+    return "";
+  }
+  if (trimmed === "true") {
+    return true;
+  }
+  if (trimmed === "false") {
+    return false;
+  }
+  if (/^-?(?:0|[1-9]\d*)(?:\.\d+)?$/u.test(trimmed) && !/^0\d/u.test(trimmed)) {
+    const numberValue = Number(trimmed);
+    if (Number.isFinite(numberValue)) {
+      return numberValue;
+    }
+  }
+  return value;
+};
+
+const inferSheetColumns = (sheetData: SheetData): Array<{ width: number }> => {
+  const columnCount = sheetData.reduce((max, row) => Math.max(max, row.length), 0);
+  return Array.from({ length: columnCount }, (_, columnIndex) => {
+    const maxLength = sheetData.reduce((max, row) => {
+      const cell = row[columnIndex];
+      const text = cell === null || cell === undefined
+        ? ""
+        : typeof cell === "object" && "value" in cell
+          ? String(cell.value ?? "")
+          : String(cell);
+      return Math.max(max, text.length);
+    }, 8);
+    return { width: Math.min(Math.max(maxLength + 2, 10), 40) };
+  });
+};
+
+const isXlsxContent = (artifactName: string, mimeType: string): boolean =>
+  mimeType === XLSX_MIME_TYPE || artifactName.toLowerCase().endsWith(".xlsx");
+
+const safeSheetName = (name: string): string => {
+  const sheet = basename(name).replace(/[:\\/?*[\]]/gu, " ").trim();
+  return (sheet || "Artifact").slice(0, 31);
+};
+
 const safeDownloadName = (name: string, mimeType: string): string => {
   const safe = basename(name).replace(/[^a-zA-Z0-9._-]+/gu, "-") || "artifact";
   if (safe.includes(".")) {
     return safe;
   }
+  if (mimeType === XLSX_MIME_TYPE) {
+    return `${safe}.xlsx`;
+  }
   return `${safe}.${mimeType.startsWith("text/csv") ? "csv" : "json"}`;
+};
+
+const safeDownloadNameWithExtension = (name: string, extension: string): string => {
+  const safe = basename(name).replace(/[^a-zA-Z0-9._-]+/gu, "-") || "artifact";
+  const extensionWithDot = extension.startsWith(".") ? extension : `.${extension}`;
+  const dot = safe.lastIndexOf(".");
+  return `${dot > 0 ? safe.slice(0, dot) : safe}${extensionWithDot}`;
 };
 
 const textContentFromFile = (filename: string, mimeType: string, body: Buffer): string => {

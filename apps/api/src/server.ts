@@ -34,8 +34,10 @@ import { resolveRunIdentity } from "./run-identity-orchestrator.js";
 import { createRunMemoryAssembly } from "./run-memory-assembly.js";
 import { extractLastUserText } from "./run-input.js";
 import { extractInteractionResume, InteractionRuntimeAdapter } from "./interaction-runtime-adapter.js";
+import { RunCancelRegistry } from "./run-cancel-registry.js";
 import { RunEventPipeline } from "./run-event-pipeline.js";
 import { RunFinalizer } from "./run-finalizer.js";
+import { startSessionTitleTask } from "./session-title.js";
 import { TaskPlanProjector } from "./task-plan-projector.js";
 import { ToolCallResultBridge } from "./tool-call-result-bridge.js";
 
@@ -72,14 +74,15 @@ export const createServer = async (options: CreateServerOptions = {}): Promise<S
         dev_token: "dev-token"
       }
     });
-  const dataGateway = new LocalDataGateway(metadataStore, {
-    defaultLimit: envConfig.sql.default_limit,
-    maxLimit: envConfig.sql.max_limit,
-    timeoutMs: envConfig.sql.timeout_ms
-  });
   const fileAssetService = new LocalFileAssetService(metadataStore, {
     storageRoot: process.env.FILE_ASSET_STORAGE_ROOT ?? join(envConfig.storage.root_dir, "files")
   });
+  const dataGateway = new LocalDataGateway(metadataStore, {
+    defaultLimit: envConfig.sql.default_limit,
+    maxLimit: envConfig.sql.max_limit,
+    timeoutMs: envConfig.sql.timeout_ms,
+    workspaceId: DEFAULT_WORKSPACE_ID
+  }, fileAssetService);
   const artifactService = new LocalArtifactService(metadataStore, fileAssetService);
   const knowledgeService = new LocalKnowledgeService(metadataStore, {
     embedding: {
@@ -96,6 +99,7 @@ export const createServer = async (options: CreateServerOptions = {}): Promise<S
       process.env.MASTRA_STORAGE_PATH ?? join(envConfig.storage.root_dir, "mastra", "agent-state.sqlite"),
       { conversationMemoryMode }
     );
+  const runCancelRegistry = new RunCancelRegistry();
   ensureDevUser(metadataStore);
   ensureDemoDataSource(metadataStore, DEV_USER.id, "api-duckdb-demo");
   ensureBuiltinConfigResources(metadataStore, DEV_USER.id, DEFAULT_WORKSPACE_ID);
@@ -125,6 +129,7 @@ export const createServer = async (options: CreateServerOptions = {}): Promise<S
         fileAssetService,
         knowledgeService,
         metadataStore,
+        runCancelRegistry,
         userId: authContext.user.id,
         workspaceId: authContext.workspaceId
       });
@@ -159,6 +164,7 @@ export const createServer = async (options: CreateServerOptions = {}): Promise<S
           conversationMemoryMode,
           memoryExtractionTimeoutMs: options.memoryExtractionTimeoutMs
             ?? envConfig.memory.completed_extraction_timeout_ms,
+          runCancelRegistry,
           user: authContext.user,
           workspaceId: authContext.workspaceId
         });
@@ -202,6 +208,7 @@ type HandleCopilotKitRequestInput = {
   fileAssetService: LocalFileAssetService;
   knowledgeService: LocalKnowledgeService;
   memoryExtractionTimeoutMs: number;
+  runCancelRegistry: RunCancelRegistry;
   taskStateRuntime: TaskStateRuntime;
   user: MeResponse;
   workspaceId: string;
@@ -217,6 +224,7 @@ const handleCopilotKitRequest = async ({
   conversationMemoryMode,
   knowledgeService,
   memoryExtractionTimeoutMs,
+  runCancelRegistry,
   taskStateRuntime,
   user,
   workspaceId
@@ -232,6 +240,7 @@ const handleCopilotKitRequest = async ({
         memoryExtractionTimeoutMs,
         defaultDatasourceId: "api-duckdb-demo",
         metadataStore,
+        runCancelRegistry,
         taskStateRuntime,
         user,
         workspaceId,
@@ -264,6 +273,7 @@ type DataAgentAgUiAgentInput = {
   metadataStore: MetadataStore;
   knowledgeService: LocalKnowledgeService;
   memoryExtractionTimeoutMs: number;
+  runCancelRegistry: RunCancelRegistry;
   taskStateRuntime: TaskStateRuntime;
   user: MeResponse;
   workspaceId: string;
@@ -366,6 +376,7 @@ class DataAgentAgUiAgent extends AbstractAgent {
         });
         const taskPlanProjector = new TaskPlanProjector(runContext);
         const toolCallResultBridge = new ToolCallResultBridge();
+        const runAbortController = new AbortController();
         const interactionRuntime = new InteractionRuntimeAdapter(
           this.input.metadataStore,
           this.input.user.id,
@@ -386,6 +397,7 @@ class DataAgentAgUiAgent extends AbstractAgent {
           eventPipeline.emit(event);
         };
         const agentAssembly = await createRunAgentAssembly({
+          abortSignal: runAbortController.signal,
           dataGateway: this.input.dataGateway,
           artifactService: this.input.artifactService,
           effectiveRunConfig,
@@ -411,17 +423,24 @@ class DataAgentAgUiAgent extends AbstractAgent {
         const finalizer = new RunFinalizer({
           destroyWorkspace: agentAssembly.destroyWorkspace,
           emit,
+          fileAssetService: this.input.fileAssetService,
           flushCompletedMemory: (flushInput) => memoryAssembly.flushCompletedMemory(flushInput),
           memoryExtractionTimeoutMs: this.input.memoryExtractionTimeoutMs,
           metadataStore: this.input.metadataStore,
           runId,
-          userId: this.input.user.id
+          sessionId,
+          userId: this.input.user.id,
+          sessionDir: agentAssembly.sessionDir,
+          workspaceId: this.input.workspaceId
         });
+        let subscription: { unsubscribe(): void } | undefined;
         let suspended = false;
         let resumeResolved = false;
         let finalization: Promise<void> | undefined;
+        let unregisterCancel = (): void => undefined;
         let runTimeout: ReturnType<typeof setTimeout> | undefined;
         let terminalStarted = false;
+        let sessionTitleStarted = false;
         const clearRunTimeout = (): void => {
           if (runTimeout) {
             clearTimeout(runTimeout);
@@ -433,7 +452,9 @@ class DataAgentAgUiAgent extends AbstractAgent {
             return;
           }
           terminalStarted = true;
+          runAbortController.abort(new Error(message));
           clearRunTimeout();
+          unregisterCancel();
           finalizer.fail({
             errorMessage: message,
             terminalEvent: terminalEvent ?? {
@@ -443,7 +464,34 @@ class DataAgentAgUiAgent extends AbstractAgent {
             }
           });
         };
-        const subscription = agentAssembly.mastraAgent.run({
+        const cancelRun = (reason = "RUN_CANCELLED"): void => {
+          if (terminalStarted) {
+            return;
+          }
+          terminalStarted = true;
+          runAbortController.abort(new Error(reason));
+          clearRunTimeout();
+          unregisterCancel();
+          subscription?.unsubscribe();
+          finalization = finalizer.cancelRun({
+            reason,
+            terminalEvent: {
+              type: EventType.RUN_FINISHED,
+              status: "cancelled",
+              timestamp: Date.now()
+            } as BaseEvent
+          });
+          void finalization.then(() => subscriber.complete(), (error: unknown) => subscriber.error(error));
+        };
+        unregisterCancel = this.input.runCancelRegistry.register({
+          cancel: cancelRun,
+          runId,
+          sessionId,
+          userId: this.input.user.id
+        });
+        subscriber.add(() => unregisterCancel());
+
+        subscription = agentAssembly.mastraAgent.run({
           ...normalizedRunInput,
           runId,
           messages: agentAssembly.governedMessages
@@ -456,6 +504,7 @@ class DataAgentAgUiAgent extends AbstractAgent {
             if (interactionRequested) {
               terminalStarted = true;
               clearRunTimeout();
+              unregisterCancel();
               suspended = true;
               emit(interactionRequested);
               finalizer.suspend();
@@ -477,6 +526,7 @@ class DataAgentAgUiAgent extends AbstractAgent {
             if (event.type === EventType.RUN_FINISHED && interactionResume?.response === false) {
               terminalStarted = true;
               clearRunTimeout();
+              unregisterCancel();
               finalization = finalizer.cancel({
                 interactionResolvedEvent: interactionRuntime.cancel(interactionResume),
                 terminalEvent: event
@@ -486,6 +536,7 @@ class DataAgentAgUiAgent extends AbstractAgent {
             if (event.type === EventType.RUN_FINISHED) {
               terminalStarted = true;
               clearRunTimeout();
+              unregisterCancel();
               finalization = finalizer.complete({ goalRuntime: agentAssembly.goalRuntime, terminalEvent: event });
               return;
             }
@@ -525,6 +576,7 @@ class DataAgentAgUiAgent extends AbstractAgent {
                 selected_skill_ids: selectedSkills.map((skill) => skill.id),
                 skill_mode: effectiveRunConfig.skillMode,
                 requested_llm_profile_id: effectiveRunConfig.activeLlmProfileId,
+                active_llm_profile_id: effectiveRunConfig.activeLlmProfileId,
                 workspace_id: this.input.workspaceId,
                 workspace: agentAssembly.workspace,
                 ...(modelContextProfile
@@ -539,7 +591,26 @@ class DataAgentAgUiAgent extends AbstractAgent {
                     }
                   : {}),
                 ...(reasoningModel !== undefined ? { reasoning_model: reasoningModel } : {}),
-                ...(runTimeoutMs !== undefined ? { run_timeout_ms: runTimeoutMs } : {})
+                ...(runTimeoutMs !== undefined ? { run_timeout_ms: runTimeoutMs } : {}),
+                ...(effectiveRunConfig.mentioned
+                  ? {
+                      mentioned: {
+                        db: effectiveRunConfig.mentioned.db,
+                        kb: effectiveRunConfig.mentioned.kb,
+                        mcp: effectiveRunConfig.mentioned.mcp,
+                        skill: effectiveRunConfig.mentioned.skill,
+                        ...(effectiveRunConfig.mentioned.excluded && effectiveRunConfig.mentioned.excluded.length > 0
+                          ? { excluded: effectiveRunConfig.mentioned.excluded }
+                          : {})
+                      }
+                    }
+                  : {}),
+                ...((effectiveRunConfig.pinnedPaths?.length ?? 0) > 0
+                  ? { pinned_paths: effectiveRunConfig.pinnedPaths }
+                  : {}),
+                ...(effectiveRunConfig.disabledByPolicy && effectiveRunConfig.disabledByPolicy.length > 0
+                  ? { disabled_by_policy: effectiveRunConfig.disabledByPolicy }
+                  : {})
               }));
               emit(createCustomEvent("skill.selection", {
                 audit: skillSelection.audit,
@@ -562,6 +633,22 @@ class DataAgentAgUiAgent extends AbstractAgent {
                 },
                 timestamp: Date.now()
               });
+              if (!isResume && !sessionTitleStarted) {
+                sessionTitleStarted = true;
+                startSessionTitleTask({
+                  emit: (titleEvent) => {
+                    if (!terminalStarted) {
+                      emit(titleEvent);
+                    }
+                  },
+                  metadataStore: this.input.metadataStore,
+                  model: modelProvider.model,
+                  modelTemperature: modelSettings?.temperature,
+                  sessionId,
+                  userId: this.input.user.id,
+                  userInput
+                });
+              }
             }
 
           },
@@ -577,6 +664,7 @@ class DataAgentAgUiAgent extends AbstractAgent {
           },
           complete: () => {
             clearRunTimeout();
+            unregisterCancel();
             if (finalization) {
               void finalization.then(() => subscriber.complete(), (error: unknown) => subscriber.error(error));
               return;
@@ -587,15 +675,20 @@ class DataAgentAgUiAgent extends AbstractAgent {
 
         if (runTimeoutMs !== undefined) {
           runTimeout = setTimeout(() => {
-            subscription.unsubscribe();
+            runAbortController.abort(new Error(`RUN_TIMEOUT:${runTimeoutMs}`));
+            subscription?.unsubscribe();
             failRun(`RUN_TIMEOUT:${runTimeoutMs}`);
             subscriber.complete();
           }, runTimeoutMs);
         }
 
         subscriber.add(() => {
+          if (!terminalStarted) {
+            runAbortController.abort(new Error("RUN_SUBSCRIBER_CLOSED"));
+          }
           clearRunTimeout();
-          subscription.unsubscribe();
+          unregisterCancel();
+          subscription?.unsubscribe();
         });
       };
 

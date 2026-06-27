@@ -33,6 +33,8 @@ export type SessionRecord = {
   id: string;
   user_id: string;
   title?: string;
+  title_source?: "llm" | "fallback" | "user";
+  last_message_at?: string;
   selected_datasource_id?: string;
   selected_collection_id?: string;
   created_at: string;
@@ -54,6 +56,21 @@ export type RunRecord = {
   started_at: string;
   finished_at?: string;
   error_message?: string;
+};
+
+export type QueryHistoryRecord = {
+  id: string;
+  user_id: string;
+  workspace_id: string;
+  session_id: string;
+  run_id?: string;
+  datasource_id: string;
+  sql_text: string;
+  row_count: number;
+  elapsed_ms: number;
+  favorite: boolean;
+  created_at: string;
+  updated_at: string;
 };
 
 export type InteractionRecord = {
@@ -200,7 +217,7 @@ export type SqlAuditLogRecord = {
   run_id?: string;
   datasource_id: string;
   sql_text: string;
-  status: "succeeded" | "blocked" | "failed" | "timeout";
+  status: "succeeded" | "blocked" | "failed" | "timeout" | "canceled";
   blocked_reason?: string;
   row_count?: number;
   elapsed_ms?: number;
@@ -222,6 +239,7 @@ export type CreateSessionInput = {
   user_id: string;
   id: string;
   title?: string;
+  title_source?: "llm" | "fallback" | "user";
   selected_datasource_id?: string;
   selected_collection_id?: string;
 };
@@ -355,6 +373,17 @@ export type CreateSqlAuditLogInput = {
   elapsed_ms?: number;
 };
 
+export type CreateQueryHistoryInput = {
+  user_id: string;
+  workspace_id: string;
+  session_id: string;
+  datasource_id: string;
+  sql_text: string;
+  row_count: number;
+  elapsed_ms: number;
+  run_id?: string;
+};
+
 const DEFAULT_DEV_USER = {
   id: "dev-user",
   email: "dev@example.com",
@@ -373,6 +402,7 @@ export class MetadataStore {
   readonly fileAssets: FileAssetRepository;
   readonly interactions: InteractionRepository;
   readonly longTermMemories: LongTermMemoryRepository;
+  readonly queryHistory: QueryHistoryRepository;
   readonly runEvents: RunEventRepository;
   readonly runs: RunRepository;
   readonly sessions: SessionRepository;
@@ -395,6 +425,7 @@ export class MetadataStore {
     this.fileAssetRefs = new FileAssetRefRepository(db);
     this.interactions = new InteractionRepository(db);
     this.longTermMemories = new LongTermMemoryRepository(db);
+    this.queryHistory = new QueryHistoryRepository(db);
     this.secrets = new EncryptedSecretStore(db, secretMasterKey);
     this.sqlAuditLogs = new SqlAuditLogRepository(db);
   }
@@ -547,11 +578,13 @@ export class SessionRepository {
       .prepare(
         `
         INSERT INTO sessions (
-          id, user_id, title, selected_datasource_id, selected_collection_id, created_at, updated_at
+          id, user_id, title, title_source, selected_datasource_id, selected_collection_id,
+          created_at, updated_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(user_id, id) DO UPDATE SET
           title = COALESCE(excluded.title, sessions.title),
+          title_source = COALESCE(excluded.title_source, sessions.title_source),
           selected_datasource_id = COALESCE(excluded.selected_datasource_id, sessions.selected_datasource_id),
           selected_collection_id = COALESCE(excluded.selected_collection_id, sessions.selected_collection_id),
           updated_at = excluded.updated_at
@@ -561,6 +594,7 @@ export class SessionRepository {
         input.id,
         input.user_id,
         input.title ?? null,
+        input.title_source ?? null,
         input.selected_datasource_id ?? null,
         input.selected_collection_id ?? null,
         now,
@@ -582,11 +616,91 @@ export class SessionRepository {
     return session;
   }
 
-  list(input: { user_id: string }): SessionRecord[] {
+  list(input: { cursor?: string; limit?: number; user_id: string }): SessionRecord[] {
+    const limit = Math.max(1, Math.min(input.limit ?? 50, 200));
+    if (input.cursor) {
+      const cursor = decodeSessionCursor(input.cursor);
+      if (cursor) {
+        return this.db
+          .prepare(`
+            SELECT * FROM sessions
+            WHERE user_id = ?
+              AND (
+                COALESCE(last_message_at, updated_at) < ?
+                OR (COALESCE(last_message_at, updated_at) = ? AND id < ?)
+              )
+            ORDER BY COALESCE(last_message_at, updated_at) DESC, id DESC
+            LIMIT ?
+          `)
+          .all(input.user_id, cursor.sort_at, cursor.sort_at, cursor.id, limit)
+          .map(mapRequiredSessionRow);
+      }
+    }
     return this.db
-      .prepare("SELECT * FROM sessions WHERE user_id = ? ORDER BY updated_at DESC")
-      .all(input.user_id)
+      .prepare(`
+        SELECT * FROM sessions
+        WHERE user_id = ?
+        ORDER BY COALESCE(last_message_at, updated_at) DESC, id DESC
+        LIMIT ?
+      `)
+      .all(input.user_id, limit)
       .map(mapRequiredSessionRow);
+  }
+
+  touchLastMessage(input: { last_message_at?: string; session_id: string; user_id: string }): SessionRecord {
+    const now = new Date().toISOString();
+    const lastMessageAt = input.last_message_at ?? now;
+    this.db
+      .prepare(`
+        UPDATE sessions
+        SET last_message_at = ?, updated_at = ?
+        WHERE user_id = ? AND id = ?
+      `)
+      .run(lastMessageAt, now, input.user_id, input.session_id);
+    return this.get({ user_id: input.user_id, session_id: input.session_id });
+  }
+
+  updateTitle(input: {
+    session_id: string;
+    title: string;
+    title_source: "llm" | "fallback" | "user";
+    user_id: string;
+  }): SessionRecord {
+    const title = input.title.trim();
+    if (!title) {
+      throw new Error("SESSION_TITLE_REQUIRED");
+    }
+    const now = new Date().toISOString();
+    this.db
+      .prepare(`
+        UPDATE sessions
+        SET title = ?, title_source = ?, updated_at = ?
+        WHERE user_id = ? AND id = ?
+      `)
+      .run(title, input.title_source, now, input.user_id, input.session_id);
+    return this.get({ user_id: input.user_id, session_id: input.session_id });
+  }
+
+  updateAutoTitleIfAllowed(input: {
+    session_id: string;
+    title: string;
+    title_source: "llm" | "fallback";
+    user_id: string;
+  }): Optional<SessionRecord> {
+    const title = input.title.trim();
+    if (!title) {
+      return undefined;
+    }
+    const now = new Date().toISOString();
+    const result = this.db
+      .prepare(`
+        UPDATE sessions
+        SET title = ?, title_source = ?, updated_at = ?
+        WHERE user_id = ? AND id = ? AND COALESCE(title_source, '') != 'user'
+          AND (title IS NULL OR title = '' OR COALESCE(title_source, '') != 'llm')
+      `)
+      .run(title, input.title_source, now, input.user_id, input.session_id);
+    return result.changes === 1 ? this.get({ user_id: input.user_id, session_id: input.session_id }) : undefined;
   }
 }
 
@@ -1305,6 +1419,14 @@ export class ArtifactRepository {
       .all(input.user_id, input.run_id)
       .map(mapRequiredArtifactRow);
   }
+
+  /** List artifacts for a session (R-023 session-restore). Stable ASC by created_at. */
+  listBySession(input: { user_id: string; session_id: string }): ArtifactRecord[] {
+    return this.db
+      .prepare("SELECT * FROM artifacts WHERE user_id = ? AND session_id = ? ORDER BY created_at ASC")
+      .all(input.user_id, input.session_id)
+      .map(mapRequiredArtifactRow);
+  }
 }
 
 export class FileAssetRepository {
@@ -1353,6 +1475,27 @@ export class FileAssetRepository {
     `).get(input.id);
     return isRecord(row) && typeof row.count === "number" ? row.count : 0;
   }
+
+  /**
+   * List assets with zero non-deleted refs — orphaned content that can be GC'd.
+   * A reassignAsset leaves the previous asset orphaned; this surfaces them so the
+   * file asset service can delete their on-disk content and records.
+   */
+  listOrphans(): FileAssetRecord[] {
+    const rows = this.db.prepare(`
+      SELECT a.* FROM file_assets a
+      WHERE NOT EXISTS (
+        SELECT 1 FROM file_asset_refs r
+        WHERE r.file_asset_id = a.id AND r.status != 'deleted'
+      )
+    `).all();
+    return rows.map(mapFileAssetRow).filter((asset): asset is FileAssetRecord => Boolean(asset));
+  }
+
+  /** Hard-delete an asset record (use only after confirming it is orphaned). */
+  hardDelete(input: { id: string }): void {
+    this.db.prepare("DELETE FROM file_assets WHERE id = ?").run(input.id);
+  }
 }
 
 export class FileAssetRefRepository {
@@ -1396,21 +1539,37 @@ export class FileAssetRefRepository {
     workspace_id: string;
     limit?: number;
     source?: FileAssetRefSource;
+    /**
+     * Session filter. Pass a session_id to match refs scoped to that session;
+     * pass `null` to match only cross-session (workspace-scoped) refs where
+     * session_id IS NULL; omit to return refs regardless of session.
+     */
+    session_id?: string | null;
+    /** When true, match only refs that HAVE a session_id (scope=session w/o a id). */
+    has_session?: boolean;
   }): FileAssetRefRecord[] {
     const limit = Math.max(1, Math.min(input.limit ?? 100, 500));
-    const rows = input.source
-      ? this.db.prepare(`
-          SELECT * FROM file_asset_refs
-          WHERE user_id = ? AND workspace_id = ? AND source = ? AND status != 'deleted'
-          ORDER BY created_at DESC
-          LIMIT ?
-        `).all(input.user_id, input.workspace_id, input.source, limit)
-      : this.db.prepare(`
-          SELECT * FROM file_asset_refs
-          WHERE user_id = ? AND workspace_id = ? AND status != 'deleted'
-          ORDER BY created_at DESC
-          LIMIT ?
-        `).all(input.user_id, input.workspace_id, limit);
+    const where: string[] = ["user_id = ?", "workspace_id = ?", "status != 'deleted'"];
+    const params: (string | number)[] = [input.user_id, input.workspace_id];
+    if (input.source) {
+      where.push("source = ?");
+      params.push(input.source);
+    }
+    if (input.session_id === null) {
+      where.push("session_id IS NULL");
+    } else if (input.session_id) {
+      where.push("session_id = ?");
+      params.push(input.session_id);
+    } else if (input.has_session) {
+      where.push("session_id IS NOT NULL");
+    }
+    params.push(limit);
+    const rows = this.db.prepare(`
+      SELECT * FROM file_asset_refs
+      WHERE ${where.join(" AND ")}
+      ORDER BY created_at DESC
+      LIMIT ?
+    `).all(...params);
     return rows.map(mapRequiredFileAssetRefRow);
   }
 
@@ -1423,6 +1582,26 @@ export class FileAssetRefRepository {
       SELECT * FROM file_asset_refs WHERE user_id = ? AND workspace_id = ? AND id = ?
     `).get(input.user_id, input.workspace_id, input.id));
     if (!ref) {
+      throw new Error(`FILE_ASSET_REF_NOT_FOUND:${input.id}`);
+    }
+    return ref;
+  }
+
+  /**
+   * Reassign a ref to point at a different asset (by asset id). Used when a workspace
+   * file's content changed (e.g. agent edit_file): the ref id stays stable (so external
+   * file_id references remain valid) but its file_asset_id moves to the new content's
+   * asset. The previously-pointed asset becomes an orphan candidate for GC.
+   */
+  reassignAsset(input: { user_id: string; workspace_id: string; id: string; file_asset_id: string }): FileAssetRefRecord {
+    this.db.prepare(`
+      UPDATE file_asset_refs SET file_asset_id = ?
+      WHERE user_id = ? AND workspace_id = ? AND id = ? AND status != 'deleted'
+    `).run(input.file_asset_id, input.user_id, input.workspace_id, input.id);
+    const ref = mapFileAssetRefRow(this.db.prepare(`
+      SELECT * FROM file_asset_refs WHERE user_id = ? AND workspace_id = ? AND id = ?
+    `).get(input.user_id, input.workspace_id, input.id));
+    if (!ref || ref.status === "deleted") {
       throw new Error(`FILE_ASSET_REF_NOT_FOUND:${input.id}`);
     }
     return ref;
@@ -1490,6 +1669,99 @@ export class SqlAuditLogRepository {
   }
 }
 
+export class QueryHistoryRepository {
+  constructor(private readonly db: DatabaseSync) {}
+
+  create(input: CreateQueryHistoryInput): QueryHistoryRecord {
+    const now = new Date().toISOString();
+    const id = createHash("sha256")
+      .update(JSON.stringify({
+        user_id: input.user_id,
+        workspace_id: input.workspace_id,
+        session_id: input.session_id,
+        datasource_id: input.datasource_id,
+        sql_text: input.sql_text
+      }))
+      .digest("hex");
+    this.db.prepare(`
+      INSERT INTO query_history (
+        id, user_id, workspace_id, session_id, run_id, datasource_id, sql_text,
+        row_count, elapsed_ms, favorite, created_at, updated_at
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
+      ON CONFLICT(user_id, workspace_id, id) DO UPDATE SET
+        run_id = excluded.run_id,
+        row_count = excluded.row_count,
+        elapsed_ms = excluded.elapsed_ms,
+        updated_at = excluded.updated_at
+    `).run(
+      id,
+      input.user_id,
+      input.workspace_id,
+      input.session_id,
+      input.run_id ?? null,
+      input.datasource_id,
+      input.sql_text,
+      input.row_count,
+      input.elapsed_ms,
+      now,
+      now
+    );
+    return this.get({ user_id: input.user_id, workspace_id: input.workspace_id, id });
+  }
+
+  get(input: { id: string; user_id: string; workspace_id: string }): QueryHistoryRecord {
+    const record = mapQueryHistoryRow(this.db.prepare(`
+      SELECT * FROM query_history WHERE user_id = ? AND workspace_id = ? AND id = ?
+    `).get(input.user_id, input.workspace_id, input.id));
+    if (!record) {
+      throw new Error(`QUERY_HISTORY_NOT_FOUND:${input.id}`);
+    }
+    return record;
+  }
+
+  list(input: {
+    datasource_id?: string;
+    favorite?: boolean;
+    limit?: number;
+    session_id?: string;
+    user_id: string;
+    workspace_id: string;
+  }): QueryHistoryRecord[] {
+    const limit = Math.max(1, Math.min(input.limit ?? 50, 200));
+    const where = ["user_id = ?", "workspace_id = ?"];
+    const params: Array<string | number> = [input.user_id, input.workspace_id];
+    if (input.session_id) {
+      where.push("session_id = ?");
+      params.push(input.session_id);
+    }
+    if (input.datasource_id) {
+      where.push("datasource_id = ?");
+      params.push(input.datasource_id);
+    }
+    if (input.favorite !== undefined) {
+      where.push("favorite = ?");
+      params.push(input.favorite ? 1 : 0);
+    }
+    params.push(limit);
+    return this.db.prepare(`
+      SELECT * FROM query_history
+      WHERE ${where.join(" AND ")}
+      ORDER BY updated_at DESC, created_at DESC
+      LIMIT ?
+    `).all(...params).map(mapRequiredQueryHistoryRow);
+  }
+
+  setFavorite(input: { favorite: boolean; id: string; user_id: string; workspace_id: string }): QueryHistoryRecord {
+    const now = new Date().toISOString();
+    this.db.prepare(`
+      UPDATE query_history SET favorite = ?, updated_at = ?
+      WHERE user_id = ? AND workspace_id = ? AND id = ?
+    `).run(input.favorite ? 1 : 0, now, input.user_id, input.workspace_id, input.id);
+    return this.get(input);
+  }
+}
+
 export class RunEventWriter {
   constructor(private readonly repository: RunEventRepository) {}
 
@@ -1550,6 +1822,8 @@ const runMigrations = (db: DatabaseSync): void => {
       id TEXT NOT NULL,
       user_id TEXT NOT NULL,
       title TEXT,
+      title_source TEXT,
+      last_message_at TEXT,
       selected_datasource_id TEXT,
       selected_collection_id TEXT,
       created_at TEXT NOT NULL,
@@ -1738,6 +2012,7 @@ const runMigrations = (db: DatabaseSync): void => {
       FOREIGN KEY (file_asset_ref_id) REFERENCES file_asset_refs(id)
     );
     CREATE INDEX IF NOT EXISTS idx_artifacts_user_run ON artifacts(user_id, run_id);
+    CREATE INDEX IF NOT EXISTS idx_artifacts_user_session ON artifacts(user_id, session_id, created_at);
 
     CREATE TABLE IF NOT EXISTS sql_audit_logs (
       id TEXT PRIMARY KEY,
@@ -1756,6 +2031,31 @@ const runMigrations = (db: DatabaseSync): void => {
     );
     CREATE INDEX IF NOT EXISTS idx_sql_audit_logs_user_run ON sql_audit_logs(user_id, run_id);
     CREATE INDEX IF NOT EXISTS idx_sql_audit_logs_user_datasource ON sql_audit_logs(user_id, datasource_id);
+
+    CREATE TABLE IF NOT EXISTS query_history (
+      id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      workspace_id TEXT NOT NULL,
+      session_id TEXT NOT NULL,
+      run_id TEXT,
+      datasource_id TEXT NOT NULL,
+      sql_text TEXT NOT NULL,
+      row_count INTEGER NOT NULL,
+      elapsed_ms INTEGER NOT NULL,
+      favorite INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY (user_id, workspace_id, id),
+      FOREIGN KEY (user_id, session_id) REFERENCES sessions(user_id, id),
+      FOREIGN KEY (user_id, run_id) REFERENCES runs(user_id, id),
+      FOREIGN KEY (user_id, datasource_id) REFERENCES data_sources(user_id, id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_query_history_user_workspace
+      ON query_history(user_id, workspace_id, updated_at);
+    CREATE INDEX IF NOT EXISTS idx_query_history_user_session
+      ON query_history(user_id, workspace_id, session_id, updated_at);
+    CREATE INDEX IF NOT EXISTS idx_query_history_user_datasource
+      ON query_history(user_id, workspace_id, datasource_id, updated_at);
 
     CREATE TABLE IF NOT EXISTS interactions (
       id TEXT NOT NULL,
@@ -1780,6 +2080,7 @@ const runMigrations = (db: DatabaseSync): void => {
 
   ensureDataSourceRevision(db);
   ensureArtifactFileAssetRefColumn(db);
+  ensureSessionTitleColumns(db);
 
   if (requiresUserScopedIdentityMigration(db)) {
     migrateUserScopedIdentity(db);
@@ -1830,6 +2131,18 @@ const ensureArtifactFileAssetRefColumn = (db: DatabaseSync): void => {
   }
 };
 
+const ensureSessionTitleColumns = (db: DatabaseSync): void => {
+  const columns = db.prepare("PRAGMA table_info(sessions)").all();
+  const hasTitleSource = columns.some((row) => isRecord(row) && row.name === "title_source");
+  const hasLastMessageAt = columns.some((row) => isRecord(row) && row.name === "last_message_at");
+  if (!hasTitleSource) {
+    db.exec("ALTER TABLE sessions ADD COLUMN title_source TEXT");
+  }
+  if (!hasLastMessageAt) {
+    db.exec("ALTER TABLE sessions ADD COLUMN last_message_at TEXT");
+  }
+};
+
 const migrateUserScopedIdentity = (db: DatabaseSync): void => {
   db.exec("PRAGMA foreign_keys = OFF");
 
@@ -1841,6 +2154,8 @@ const migrateUserScopedIdentity = (db: DatabaseSync): void => {
         id TEXT NOT NULL,
         user_id TEXT NOT NULL,
         title TEXT,
+        title_source TEXT,
+        last_message_at TEXT,
         selected_datasource_id TEXT,
         selected_collection_id TEXT,
         created_at TEXT NOT NULL,
@@ -1919,7 +2234,14 @@ const migrateUserScopedIdentity = (db: DatabaseSync): void => {
         FOREIGN KEY (datasource_id) REFERENCES data_sources(id)
       );
 
-      INSERT INTO sessions_user_scoped SELECT * FROM sessions;
+      INSERT INTO sessions_user_scoped (
+        id, user_id, title, title_source, last_message_at, selected_datasource_id,
+        selected_collection_id, created_at, updated_at
+      )
+      SELECT
+        id, user_id, title, title_source, last_message_at, selected_datasource_id,
+        selected_collection_id, created_at, updated_at
+      FROM sessions;
       INSERT INTO runs_user_scoped (
         id, user_id, session_id, status, user_input, model_provider, model_name,
         datasource_id, collection_id, started_at, finished_at, error_message
@@ -2075,6 +2397,7 @@ const createMetadataIndexes = (db: DatabaseSync): void => {
     CREATE INDEX IF NOT EXISTS idx_file_asset_refs_asset
       ON file_asset_refs(file_asset_id, status);
     CREATE INDEX IF NOT EXISTS idx_artifacts_user_run ON artifacts(user_id, run_id);
+    CREATE INDEX IF NOT EXISTS idx_artifacts_user_session ON artifacts(user_id, session_id, created_at);
     CREATE INDEX IF NOT EXISTS idx_sql_audit_logs_user_run ON sql_audit_logs(user_id, run_id);
     CREATE INDEX IF NOT EXISTS idx_sql_audit_logs_user_datasource ON sql_audit_logs(user_id, datasource_id);
   `);
@@ -2166,6 +2489,8 @@ const mapSessionRow = (row: unknown): Optional<SessionRecord> => {
   }
 
   const title = optionalString(row.title);
+  const titleSource = sessionTitleSource(row.title_source);
+  const lastMessageAt = optionalString(row.last_message_at);
   const selectedDatasourceId = optionalString(row.selected_datasource_id);
   const selectedCollectionId = optionalString(row.selected_collection_id);
 
@@ -2173,11 +2498,59 @@ const mapSessionRow = (row: unknown): Optional<SessionRecord> => {
     id: requiredString(row, "id"),
     user_id: requiredString(row, "user_id"),
     ...(title ? { title } : {}),
+    ...(titleSource ? { title_source: titleSource } : {}),
+    ...(lastMessageAt ? { last_message_at: lastMessageAt } : {}),
     ...(selectedDatasourceId ? { selected_datasource_id: selectedDatasourceId } : {}),
     ...(selectedCollectionId ? { selected_collection_id: selectedCollectionId } : {}),
     created_at: requiredString(row, "created_at"),
     updated_at: requiredString(row, "updated_at")
   };
+};
+
+const mapQueryHistoryRow = (row: unknown): Optional<QueryHistoryRecord> => {
+  if (!isRecord(row)) {
+    return undefined;
+  }
+  const runId = optionalString(row.run_id);
+  return {
+    id: requiredString(row, "id"),
+    user_id: requiredString(row, "user_id"),
+    workspace_id: requiredString(row, "workspace_id"),
+    session_id: requiredString(row, "session_id"),
+    ...(runId ? { run_id: runId } : {}),
+    datasource_id: requiredString(row, "datasource_id"),
+    sql_text: requiredString(row, "sql_text"),
+    row_count: requiredNumber(row, "row_count"),
+    elapsed_ms: requiredNumber(row, "elapsed_ms"),
+    favorite: Boolean(requiredNumber(row, "favorite")),
+    created_at: requiredString(row, "created_at"),
+    updated_at: requiredString(row, "updated_at")
+  };
+};
+
+const mapRequiredQueryHistoryRow = (row: unknown): QueryHistoryRecord => {
+  const record = mapQueryHistoryRow(row);
+  if (!record) {
+    throw new Error("Expected query history row");
+  }
+  return record;
+};
+
+const sessionTitleSource = (value: unknown): Optional<SessionRecord["title_source"]> =>
+  value === "llm" || value === "fallback" || value === "user" ? value : undefined;
+
+const decodeSessionCursor = (cursor: string): Optional<{ id: string; sort_at: string }> => {
+  try {
+    const decoded = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8")) as unknown;
+    if (!isRecord(decoded)) {
+      return undefined;
+    }
+    const sortAt = optionalString(decoded.sort_at);
+    const id = optionalString(decoded.id);
+    return sortAt && id ? { id, sort_at: sortAt } : undefined;
+  } catch {
+    return undefined;
+  }
 };
 
 const mapRequiredSessionRow = (row: unknown): SessionRecord => {

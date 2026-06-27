@@ -1,5 +1,8 @@
 import { EventType, type BaseEvent } from "@ag-ui/client";
 import { createCustomEvent, type GoalRuntimeAdapter } from "@open-data-agent/agent-runtime";
+import type { FileAssetService } from "@open-data-agent/files";
+import { readdirSync, statSync } from "node:fs";
+import { join, relative, sep } from "node:path";
 import type { MetadataStore } from "@open-data-agent/metadata";
 
 export type RunStatus = "running" | "suspended" | "completed" | "failed" | "canceled";
@@ -7,11 +10,16 @@ export type RunStatus = "running" | "suspended" | "completed" | "failed" | "canc
 type RunFinalizerInput = {
   destroyWorkspace(): Promise<void>;
   emit(event: BaseEvent): void;
+  fileAssetService: FileAssetService;
   flushCompletedMemory(input: { emit(event: BaseEvent): void; signal: AbortSignal }): Promise<void>;
   memoryExtractionTimeoutMs: number;
   metadataStore: MetadataStore;
   runId: string;
+  /** Per-session directory; agent outputs here are synced to session-scoped file_asset_refs. */
+  sessionDir: string;
+  sessionId: string;
   userId: string;
+  workspaceId: string;
 };
 
 /** Owns terminal run state transitions and their externally visible AG-UI event order. */
@@ -43,6 +51,19 @@ export class RunFinalizer {
     this.input.emit(input.terminalEvent);
   }
 
+  async cancelRun(input: { reason?: string | undefined; terminalEvent: BaseEvent }): Promise<void> {
+    await this.syncSessionOutputs().catch(() => undefined);
+    this.input.metadataStore.runs.updateStatus({
+      user_id: this.input.userId,
+      run_id: this.input.runId,
+      status: "canceled",
+      ...(input.reason ? { error_message: input.reason } : {})
+    });
+    this.input.emit(createRunStatusDelta("canceled", input.reason));
+    await this.input.destroyWorkspace().catch(() => undefined);
+    this.input.emit(input.terminalEvent);
+  }
+
   async complete(input: { goalRuntime?: GoalRuntimeAdapter | undefined; terminalEvent: BaseEvent }): Promise<void> {
     if (input.goalRuntime) {
       this.input.emit(createCustomEvent("goal.updated", {
@@ -51,6 +72,13 @@ export class RunFinalizer {
       }));
     }
     await this.flushCompletedMemoryWithTimeout();
+    // Sync durable agent outputs (write_file / execute_command / edit_file / mkdir, etc.)
+    // into the asset store so they get a file_id and become @-referenceable / restorable.
+    // Scans the per-session directory and registers session-scoped refs (session_id set)
+    // so the frontend can restore this session's files (R-023/R-025). The cross-session
+    // workspace root is NOT scanned here — promoted files already have workspace refs.
+    // Best-effort: never blocks run completion on failure.
+    await this.syncSessionOutputs().catch(() => undefined);
     this.input.metadataStore.runs.updateStatus({
       user_id: this.input.userId,
       run_id: this.input.runId,
@@ -71,6 +99,62 @@ export class RunFinalizer {
     this.input.emit(createRunStatusDelta("failed", input.errorMessage));
     void this.input.destroyWorkspace().catch(() => undefined);
     this.input.emit(input.terminalEvent);
+  }
+
+  /**
+   * Walk the per-session directory and ensure every durable file has a file_id via
+   * syncWorkspaceFile (session-scoped ref). Then GC orphaned assets left by content
+   * edits (reassignAsset orphans the previous asset). The session directory remains the
+   * active working copy; refs point into the content-addressed asset store, so files that
+   * were synced here remain downloadable / restorable by the frontend.
+   */
+  private async syncSessionOutputs(): Promise<void> {
+    const sessionDir = this.input.sessionDir;
+    const walk = (dir: string): string[] => {
+      let entries: string[];
+      try {
+        entries = readdirSync(dir);
+      } catch {
+        return [];
+      }
+      const files: string[] = [];
+      for (const entry of entries) {
+        const full = join(dir, entry);
+        let st;
+        try {
+          st = statSync(full);
+        } catch {
+          continue;
+        }
+        if (st.isDirectory()) {
+          files.push(...walk(full));
+        } else if (st.isFile()) {
+          files.push(full);
+        }
+      }
+      return files;
+    };
+
+    for (const file of walk(sessionDir)) {
+      const rel = relative(sessionDir, file).split(sep).join("/");
+      try {
+        this.input.fileAssetService.syncWorkspaceFile({
+          user_id: this.input.userId,
+          workspace_id: this.input.workspaceId,
+          filename: rel,
+          path: file,
+          session_id: this.input.sessionId,
+          run_id: this.input.runId
+        });
+      } catch {
+        // best-effort per file
+      }
+    }
+    try {
+      this.input.fileAssetService.gcOrphanAssets();
+    } catch {
+      // best-effort
+    }
   }
 
   private async flushCompletedMemoryWithTimeout(): Promise<void> {

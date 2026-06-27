@@ -84,6 +84,53 @@ assert(effectiveConfig.activeDatasourceId === "orders-db", "run_config active da
 assert(effectiveConfig.enabledDatasourceIds.length === 2, "run_config enabled datasources should be preserved");
 assert(effectiveConfig.goal?.maxRuns === 4, "trusted goal config should be parsed and bounded");
 
+// R-019: mentioned is parsed, clamped to enabled*Ids, and out-of-scope IDs are excluded.
+const mentionedConfig = extractEffectiveRunConfig({
+  ...baseInput,
+  forwardedProps: {
+    run_config: {
+      activeDatasourceId: "orders-db",
+      enabledDatasourceIds: ["orders-db", "warehouse"],
+      enabledKnowledgeIds: ["kb-orders", "kb-faq"],
+      enabledMcpServerIds: ["mcp-local"],
+      enabledSkillIds: ["data-analysis"],
+      mentioned: {
+        db: ["orders-db", "ghost-db"],
+        kb: ["kb-faq", "kb-ghost"],
+        mcp: ["mcp-ghost"],
+        skill: ["data-analysis"]
+      }
+    }
+  }
+}, "default-db");
+assert(mentionedConfig.mentioned, "mentioned should be parsed into EffectiveRunConfig");
+assert(JSON.stringify(mentionedConfig.mentioned.db) === JSON.stringify(["orders-db"]), "mentioned.db should clamp to enabled datasources");
+assert(JSON.stringify(mentionedConfig.mentioned.kb) === JSON.stringify(["kb-faq"]), "mentioned.kb should clamp to enabled knowledge bases");
+assert(JSON.stringify(mentionedConfig.mentioned.mcp) === JSON.stringify([]), "mentioned.mcp should clamp to enabled MCP servers (all out-of-scope dropped)");
+assert(JSON.stringify(mentionedConfig.mentioned.skill) === JSON.stringify(["data-analysis"]), "mentioned.skill should clamp to enabled skills");
+const excluded = mentionedConfig.mentioned.excluded ?? [];
+assert(excluded.length === 3, "three out-of-scope mentioned IDs should be collected as excluded (ghost-db, kb-ghost, mcp-ghost)");
+
+// R-019 backward compat: no mentioned field ⇒ mentioned is undefined (no regression).
+const noMentionConfig = extractEffectiveRunConfig({
+  ...baseInput,
+  forwardedProps: { run_config: { activeDatasourceId: "orders-db", enabledDatasourceIds: ["orders-db"] } }
+}, "default-db");
+assert(noMentionConfig.mentioned === undefined, "omitted mentioned should yield undefined (backward compat)");
+
+// R-024: pinnedPaths parsed, traversal/absolute/NUL dropped.
+const pinnedConfig = extractEffectiveRunConfig({
+  ...baseInput,
+  forwardedProps: {
+    run_config: {
+      activeDatasourceId: "orders-db",
+      enabledDatasourceIds: ["orders-db"],
+      pinnedPaths: ["output/report.html", "/etc/passwd", "../escape", "ok/file.csv", "a\0b"]
+    }
+  }
+}, "default-db");
+assert(JSON.stringify(pinnedConfig.pinnedPaths) === JSON.stringify(["output/report.html", "ok/file.csv"]), "pinnedPaths should drop absolute/traversal/NUL entries");
+
 const projector = new TaskPlanProjector({
   user_id: "dev-user",
   session_id: "thread-smoke",

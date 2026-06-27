@@ -79,6 +79,11 @@ export const createRunMemoryAssembly = async (
       runId: input.runId,
       runInput: input.runInput
     });
+    input.metadataStore.sessions.touchLastMessage({
+      user_id: input.userId,
+      session_id: input.sessionId,
+      last_message_at: currentUserRecord.created_at
+    });
     if (input.conversationMemoryMode === "working-memory-readonly") {
       await conversationMemory.syncLatestSummaryToMemory().catch(() => false);
     }
@@ -111,6 +116,14 @@ export const createRunMemoryAssembly = async (
     longTermMemories,
     flushCompletedMemory: async ({ emit, signal }) => {
       const assistantRecords = await conversationMemoryObserver.flushCompleted({ signal });
+      const lastAssistantRecord = assistantRecords.at(-1);
+      if (lastAssistantRecord) {
+        input.metadataStore.sessions.touchLastMessage({
+          user_id: input.userId,
+          session_id: input.sessionId,
+          last_message_at: lastAssistantRecord.created_at
+        });
+      }
       throwIfAborted(signal);
       const extractedMemories = await longTermMemoryWriter.extractAndPersist({
         assistantRecords,

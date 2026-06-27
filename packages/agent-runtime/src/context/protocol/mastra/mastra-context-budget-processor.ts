@@ -90,7 +90,7 @@ export class MastraContextBudgetProcessor implements Processor<"context-budget">
     this.options.runState.recordPlan(result.plan);
     this.options.eventSink.emitContextEvent(
       "context.compiled",
-      createMastraContextCompiledEventPayload(contextPackage, result.plan)
+      createMastraContextCompiledEventPayload(contextPackage, result.plan, this.options.modelName)
     );
     const protocolOutput = this.protocolAdapter.toProtocol(promptView);
 
