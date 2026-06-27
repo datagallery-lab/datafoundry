@@ -34,6 +34,7 @@ export type DataTaskChatInputBindings = {
   agentId: string;
   activeThreadId: string | null;
   capabilitiesReady: boolean;
+  onUserMessageSubmitted: (text: string) => void;
 };
 
 const DataTaskChatInputBindingsContext =

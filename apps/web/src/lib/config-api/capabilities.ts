@@ -12,6 +12,7 @@ const DEFAULT_BACKEND_CAPABILITIES: Record<BackendCapability, boolean> = {
   "artifact.promote": false,
   "chat.imageInput": false,
   "chat.fileUpload": false,
+  "conversation.title": false,
   files: false,
 };
 
@@ -42,6 +43,7 @@ export function applyBackendCapabilities(
     "artifact.promote": response["artifact.promote"] ?? false,
     "chat.imageInput": response["chat.imageInput"] ?? false,
     "chat.fileUpload": response["chat.fileUpload"] ?? false,
+    "conversation.title": response["conversation.title"] ?? false,
     files: response.files ?? false,
   };
   runtimeCapabilities = {

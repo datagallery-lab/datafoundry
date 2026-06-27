@@ -41,6 +41,7 @@ export type BackendCapabilitiesResponse = {
   "chat.fileUpload"?: boolean;
   "chat.imageInput"?: boolean;
   "conversation.memory"?: boolean;
+  "conversation.title"?: boolean;
   "datasource.fieldMasking"?: boolean;
   "datasource.extendedTypes"?: boolean;
   "datasource.introspectionPolicy"?: boolean;

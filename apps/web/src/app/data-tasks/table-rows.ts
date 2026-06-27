@@ -64,3 +64,63 @@ export function normalizeSqlTable(
   normalized = normalizeTableRows(inferredColumns, rows);
   return { columns: inferredColumns, rows: normalized };
 }
+
+export type TableSortState = {
+  columnIndex: number;
+  direction: "asc" | "desc";
+};
+
+function tableCellText(value: unknown): string {
+  if (value === null || value === undefined) return "";
+  if (typeof value === "object") {
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return String(value);
+    }
+  }
+  return String(value);
+}
+
+export function filterTableRows(rows: unknown[][], query: string): unknown[][] {
+  const normalized = query.trim().toLowerCase();
+  if (!normalized) return rows;
+  return rows.filter((row) =>
+    row.some((cell) => tableCellText(cell).toLowerCase().includes(normalized)),
+  );
+}
+
+export function sortTableRows(
+  rows: unknown[][],
+  sort: TableSortState | null,
+): unknown[][] {
+  if (!sort) return rows;
+  const direction = sort.direction === "asc" ? 1 : -1;
+  return [...rows].sort((left, right) => {
+    const leftValue = left[sort.columnIndex];
+    const rightValue = right[sort.columnIndex];
+    const leftNumber =
+      typeof leftValue === "number" ? leftValue : Number(tableCellText(leftValue));
+    const rightNumber =
+      typeof rightValue === "number" ? rightValue : Number(tableCellText(rightValue));
+
+    if (Number.isFinite(leftNumber) && Number.isFinite(rightNumber)) {
+      return (leftNumber - rightNumber) * direction;
+    }
+
+    return tableCellText(leftValue).localeCompare(tableCellText(rightValue), "zh-Hans", {
+      numeric: true,
+      sensitivity: "base",
+    }) * direction;
+  });
+}
+
+function csvCell(value: unknown): string {
+  const text = tableCellText(value);
+  if (!/[",\r\n]/u.test(text)) return text;
+  return `"${text.replace(/"/gu, '""')}"`;
+}
+
+export function tableToCsv(columns: string[], rows: unknown[][]): string {
+  return [columns, ...rows].map((row) => row.map(csvCell).join(",")).join("\n");
+}

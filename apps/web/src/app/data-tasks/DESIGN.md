@@ -288,8 +288,10 @@ resources stay in `enabled*Ids` and remain available to the agent.
 The chat input supports file attachments via CopilotKit v2 `useAttachments`, wired in
 `StableDataTaskChatInput` (`page.tsx`) and rendered in `DataTaskChatInput`:
 
-- **UI**: paperclip button, drag-and-drop overlay, clipboard paste (scoped to input
-  container), and `AttachmentChips` above the textarea (filename, size, status, remove).
+- **UI**: unified `+` add menu with an「上传文件」action, drag-and-drop overlay,
+  clipboard paste (scoped to input container), and `AttachmentChips` above the
+  textarea (filename, size, status, remove). The `+` menu is the extension point
+  for future chat add actions.
 - **Modality split** (`chat-attachments.ts`):
   - Images (png/jpg/webp/gif) → default base64 inline as AG-UI `InputContent`.
   - Data/text files (csv/tsv/xlsx/json/parquet/txt/pdf) → `onUpload` to
@@ -356,6 +358,9 @@ Sessions are therefore managed entirely on the client:
   switching `threadId` gives each session isolated messages and run state.
 - `useDataAgentRun` resets its `LiveRun` whenever `threadId` changes.
 - New session = push a new `threadId`; switching = change the active id.
+- The collapsed left pane is labeled as a workspace quick rail, not a second
+  session list. Session rows keep the chat-type icon on the left; pinned state
+  is a trailing status icon beside the row actions.
 
 `useThreads` (durable Intelligence threads) is intentionally **not** used: it
 requires the runtime in Intelligence mode, which this backend does not run.

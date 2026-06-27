@@ -313,17 +313,23 @@ function MentionMenu({
       className="absolute bottom-full left-0 z-50 mb-2 w-[min(420px,calc(100vw-2rem))] overflow-hidden rounded-xl border border-border bg-surface shadow-lg"
       onMouseDown={(event) => event.preventDefault()}
     >
-      <div className="flex items-center justify-between border-b border-border px-3 py-2">
+      <div className="flex items-center justify-between gap-3 border-b border-border px-3 py-2">
         <span className="text-[11px] font-medium uppercase tracking-[0.06em] text-muted-light">
           通过 @ 指定本轮能力
         </span>
-        <button
-          type="button"
-          onClick={onClose}
-          className="rounded px-1.5 text-xs text-muted-light transition hover:text-muted"
-        >
-          Esc
-        </button>
+        <div className="flex shrink-0 items-center gap-1.5 text-[11px] text-muted-light">
+          <span className="rounded bg-surface-subtle px-1.5 py-0.5 font-medium text-muted">
+            ↑↓ 移动
+          </span>
+          <span className="hidden sm:inline">Enter 选择</span>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded px-1.5 py-0.5 transition hover:bg-surface-subtle hover:text-muted"
+          >
+            Esc
+          </button>
+        </div>
       </div>
       {items.length === 0 ? (
         <p className="px-3 py-4 text-sm text-muted-light">
@@ -359,7 +365,7 @@ function MentionMenu({
                   onClick={() => onPick(item)}
                   className={[
                     "flex w-full items-center gap-2 px-3 py-2 text-left transition",
-                    active ? "bg-surface-subtle" : "",
+                    active ? "bg-slate-100" : "",
                   ].join(" ")}
                 >
                   <span

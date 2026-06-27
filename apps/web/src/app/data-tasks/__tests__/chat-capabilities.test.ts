@@ -6,6 +6,7 @@ import {
 } from "../../../lib/config-api/capabilities";
 import { shouldRestoreConversation } from "../conversation-restore";
 import {
+  hasCapability,
   hasPendingCapability,
   isSelectOptionPending,
   setLiveDatasourceTypes,
@@ -19,6 +20,7 @@ describe("chat attachment capabilities", () => {
     const mapped = applyBackendCapabilities({});
     expect(mapped["chat.imageInput"]).toBe(false);
     expect(mapped["chat.fileUpload"]).toBe(false);
+    expect(mapped["conversation.title"]).toBe(false);
     expect(mapped.files).toBe(false);
   });
 
@@ -28,10 +30,12 @@ describe("chat attachment capabilities", () => {
       "chat.fileUpload": true,
       files: true,
       "conversation.memory": true,
+      "conversation.title": true,
     });
     expect(mapped["chat.imageInput"]).toBe(true);
     expect(mapped["chat.fileUpload"]).toBe(true);
     expect(mapped.files).toBe(true);
+    expect(mapped["conversation.title"]).toBe(true);
     expect(getRuntimeCapabilities().conversationMemory).toBe(true);
     expect(
       shouldRestoreConversation({

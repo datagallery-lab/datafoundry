@@ -24,7 +24,12 @@ import {
   createChatSession,
   createWorkspaceConfigItem,
   defaultSettingsForKind,
+  applyAutoTitle,
+  deleteChatSession,
+  deriveSnippetTitle,
   emptyPerRunFileSelection,
+  sortChatSessions,
+  togglePinChatSession,
   emptyPerRunSelection,
   fileMentionFromArtifact,
   fileMentionFromWorkspaceAsset,
@@ -38,6 +43,7 @@ import {
   persistActiveLlmId,
   persistChatSessions,
   isWorkspaceConfigItemValid,
+  renameChatSession,
   normalizeSkillSettings,
   parseSkillPackageFile,
   prunePerRunSelection,
@@ -160,6 +166,10 @@ import {
 } from "./agent-message-render-sync";
 import { resolveStepAssistantFlags } from "./step-assistant-state";
 import { btnSecondaryClass, panelTitleClass, sectionLabelClass } from "./ui-tokens";
+import {
+  getCollapsedWorkspaceRailCopy,
+  getSessionListItemIconSlots,
+} from "./session-pane-ui";
 import { getBackendCapabilities, isResourcePanelSupported } from "../../lib/config-api";
 
 export const dynamic = "force-dynamic";
@@ -233,6 +243,7 @@ function StableDataTaskChatInput({
   });
 
   const handleSubmitMessage = (value: string) => {
+    bindings.onUserMessageSubmitted(value);
     const ready = attachmentsApi.consumeAttachments();
     if (ready.length > 0 && agent) {
       const content = buildMessageContent(value, ready);
@@ -671,6 +682,14 @@ function DataTaskWorkspace() {
     );
   }, [workspaceConfig, activeSession]);
   const { liveRun, sessionUsage, latestQuestion } = useLiveRun();
+  useEffect(() => {
+    if (!capabilitiesReady || !hasCapability("conversation.title")) return;
+    const sessionTitle = liveRun.sessionTitle;
+    if (!sessionTitle) return;
+    setSessions((current) =>
+      applyAutoTitle(current, sessionTitle.sessionId, sessionTitle.title, "llm"),
+    );
+  }, [capabilitiesReady, liveRun.sessionTitle]);
   const refreshWorkspaceFileAssets = useCallback(async () => {
     if (!capabilitiesReady || !hasCapability("files")) {
       setWorkspaceFileAssets([]);
@@ -721,20 +740,74 @@ function DataTaskWorkspace() {
 
   const filteredSessions = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
-    if (!normalizedQuery) return sessions;
-    return sessions.filter((session) =>
-      session.title.toLowerCase().includes(normalizedQuery),
-    );
+    const matched = normalizedQuery
+      ? sessions.filter((session) =>
+          session.title.toLowerCase().includes(normalizedQuery),
+        )
+      : sessions;
+    return sortChatSessions(matched);
   }, [query, sessions]);
 
   const createSession = useCallback(() => {
     const next = createChatSession();
-    setSessions((current) => [next, ...current]);
+    setSessions((current) => sortChatSessions([next, ...current]));
     setActiveSessionId(next.id);
     setSelection(null);
     setConfigPanel(null);
     setWorkspaceFilesPanelOpen(false);
   }, []);
+
+  const renameSession = useCallback((sessionId: string, title: string) => {
+    setSessions((current) => renameChatSession(current, sessionId, title));
+  }, []);
+
+  const deleteSession = useCallback(
+    (sessionId: string) => {
+      setSessions((current) => {
+        const next = deleteChatSession(current, sessionId);
+        if (next.length === 0) {
+          const fallback = createChatSession();
+          setActiveSessionId(fallback.id);
+          return [fallback];
+        }
+        if (activeSessionId === sessionId) {
+          setActiveSessionId(next[0]?.id ?? null);
+        }
+        return next;
+      });
+      setSelection(null);
+    },
+    [activeSessionId],
+  );
+
+  const togglePinSession = useCallback((sessionId: string) => {
+    setSessions((current) => {
+      const next = sortChatSessions(togglePinChatSession(current, sessionId));
+      const pinned = next.find((session) => session.id === sessionId)?.pinned;
+      if (pinned) {
+        requestAnimationFrame(() => {
+          document
+            .getElementById(`session-item-${sessionId}`)
+            ?.scrollIntoView({ block: "nearest" });
+        });
+      }
+      return next;
+    });
+  }, []);
+
+  const applyFirstUserMessageTitle = useCallback((text: string) => {
+    if (!activeSessionId) return;
+    setSessions((current) => {
+      const session = current.find((item) => item.id === activeSessionId);
+      if (!session || session.titleSource !== "default") return current;
+      return applyAutoTitle(
+        current,
+        activeSessionId,
+        deriveSnippetTitle(text),
+        "auto-snippet",
+      );
+    });
+  }, [activeSessionId]);
 
   const agentContext = useMemo<JsonSerializable>(
     () =>
@@ -815,12 +888,14 @@ function DataTaskWorkspace() {
       agentId,
       activeThreadId: activeThreadId ?? null,
       capabilitiesReady,
+      onUserMessageSubmitted: applyFirstUserMessageTitle,
     }),
     [
       activeLlmId,
       activeSession,
       activeThreadId,
       capabilitiesReady,
+      applyFirstUserMessageTitle,
       chatColumnWidth,
       enabledLlmOptions,
       openConfigPanel,
@@ -939,6 +1014,9 @@ function DataTaskWorkspace() {
           setConfigPanel(null);
           setWorkspaceFilesPanelOpen(false);
         }}
+        onRenameSession={renameSession}
+        onDeleteSession={deleteSession}
+        onTogglePinSession={togglePinSession}
         workspaceConfig={workspaceConfig}
       />
 
@@ -2363,6 +2441,325 @@ function ChevronIcon({ direction }: { direction: "left" | "right" }) {
   );
 }
 
+function SessionBubbleIcon() {
+  return (
+    <svg
+      viewBox="0 0 20 20"
+      className="h-4 w-4 shrink-0 text-slate-400"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.6}
+      aria-hidden
+    >
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M4 5.5A2.5 2.5 0 0 1 6.5 3h7A2.5 2.5 0 0 1 16 5.5v5A2.5 2.5 0 0 1 13.5 13H9l-3.5 2.5V13H6.5A2.5 2.5 0 0 1 4 10.5v-5Z"
+      />
+    </svg>
+  );
+}
+
+function MoreHorizontalIcon() {
+  return (
+    <svg viewBox="0 0 20 20" className="h-4 w-4" fill="currentColor" aria-hidden>
+      <circle cx="4.5" cy="10" r="1.2" />
+      <circle cx="10" cy="10" r="1.2" />
+      <circle cx="15.5" cy="10" r="1.2" />
+    </svg>
+  );
+}
+
+function PinMenuIcon() {
+  return (
+    <svg
+      viewBox="0 0 20 20"
+      className="h-4 w-4"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.6}
+      aria-hidden
+    >
+      <path strokeLinecap="round" strokeLinejoin="round" d="M8.5 3.5h3l.5 3 2.5 2.5-1.5 1.5-2-1V16l-2-1.5V9.5l-2 1-1.5-1.5L7 6.5l.5-3Z" />
+    </svg>
+  );
+}
+
+function ShareMenuIcon() {
+  return (
+    <svg
+      viewBox="0 0 20 20"
+      className="h-4 w-4"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.6}
+      aria-hidden
+    >
+      <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5 16 8.5 12 12.5M16 8.5H8a3.5 3.5 0 1 0 0 7" />
+    </svg>
+  );
+}
+
+function PencilMenuIcon() {
+  return (
+    <svg
+      viewBox="0 0 20 20"
+      className="h-4 w-4"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.6}
+      aria-hidden
+    >
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="m12.2 4.8 3 3-7.8 7.8H4.4v-3l7.8-7.8Z"
+      />
+    </svg>
+  );
+}
+
+function TrashMenuIcon() {
+  return (
+    <svg
+      viewBox="0 0 20 20"
+      className="h-4 w-4"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.6}
+      aria-hidden
+    >
+      <path strokeLinecap="round" strokeLinejoin="round" d="M5 6.5h10M8 6.5V5h4v1.5M7 6.5v8.5h6V6.5" />
+    </svg>
+  );
+}
+
+function SessionActionMenu({
+  session,
+  forceVisible,
+  onRename,
+  onDelete,
+  onTogglePin,
+}: {
+  session: ChatSession;
+  forceVisible?: boolean;
+  onRename: () => void;
+  onDelete: () => void;
+  onTogglePin: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onPointerDown = (event: MouseEvent) => {
+      if (!rootRef.current?.contains(event.target as Node)) {
+        setOpen(false);
+      }
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("mousedown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [open]);
+
+  const runMenuAction = (action: () => void) => {
+    action();
+    setOpen(false);
+  };
+
+  const menuItemClass =
+    "flex w-full cursor-pointer items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-sm text-slate-700 transition hover:bg-slate-50";
+
+  return (
+    <div ref={rootRef} className="relative shrink-0">
+      <button
+        type="button"
+        aria-label={`会话操作：${session.title}`}
+        aria-expanded={open}
+        aria-haspopup="menu"
+        onClick={(event) => {
+          event.stopPropagation();
+          setOpen((value) => !value);
+        }}
+        className={[
+          "flex h-7 w-7 cursor-pointer items-center justify-center rounded-md text-slate-500 transition hover:bg-white hover:text-slate-900",
+          open || forceVisible
+            ? "bg-white text-slate-900 opacity-100"
+            : "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100",
+        ].join(" ")}
+      >
+        <MoreHorizontalIcon />
+      </button>
+      {open ? (
+        <div
+          role="menu"
+          className="absolute right-0 top-full z-20 mt-1 min-w-[148px] rounded-xl border border-slate-200 bg-white p-1.5 shadow-lg"
+        >
+          <button
+            type="button"
+            role="menuitem"
+            className={menuItemClass}
+            onMouseDown={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+            }}
+            onClick={(event) => {
+              event.stopPropagation();
+              runMenuAction(onTogglePin);
+            }}
+          >
+            <PinMenuIcon />
+            {session.pinned ? "取消置顶" : "置顶"}
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            disabled
+            className="flex w-full cursor-not-allowed items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-sm text-slate-300"
+            title="分享功能待后端支持"
+          >
+            <ShareMenuIcon />
+            分享
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            className={menuItemClass}
+            onMouseDown={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+            }}
+            onClick={(event) => {
+              event.stopPropagation();
+              runMenuAction(onRename);
+            }}
+          >
+            <PencilMenuIcon />
+            重命名
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            className="flex w-full cursor-pointer items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-sm text-rose-600 transition hover:bg-rose-50"
+            onMouseDown={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+            }}
+            onClick={(event) => {
+              event.stopPropagation();
+              runMenuAction(onDelete);
+            }}
+          >
+            <TrashMenuIcon />
+            删除
+          </button>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function SessionListItem({
+  session,
+  active,
+  onSelect,
+  onRename,
+  onDelete,
+  onTogglePin,
+}: {
+  session: ChatSession;
+  active: boolean;
+  onSelect: () => void;
+  onRename: (title: string) => void;
+  onDelete: () => void;
+  onTogglePin: () => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draftTitle, setDraftTitle] = useState(session.title);
+
+  useEffect(() => {
+    if (!editing) setDraftTitle(session.title);
+  }, [editing, session.title]);
+
+  const commitRename = () => {
+    onRename(draftTitle);
+    setEditing(false);
+  };
+  const iconSlots = getSessionListItemIconSlots({ pinned: Boolean(session.pinned) });
+
+  if (editing) {
+    return (
+      <div className="rounded-lg bg-slate-100 px-2 py-1.5">
+        <input
+          autoFocus
+          value={draftTitle}
+          onChange={(event) => setDraftTitle(event.target.value)}
+          onBlur={commitRename}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              event.preventDefault();
+              commitRename();
+            }
+            if (event.key === "Escape") {
+              event.preventDefault();
+              setDraftTitle(session.title);
+              setEditing(false);
+            }
+          }}
+          className="h-8 w-full rounded-md border border-slate-300 bg-white px-2.5 text-sm text-slate-950 outline-none focus:border-slate-500"
+        />
+      </div>
+    );
+  }
+
+  return (
+    <div
+      id={`session-item-${session.id}`}
+      className={[
+        "group flex items-center gap-2 rounded-lg px-2 py-1.5 transition",
+        active ? "bg-slate-100" : "hover:bg-slate-50",
+      ].join(" ")}
+    >
+      {iconSlots.leading === "session" ? (
+        <SessionBubbleIcon />
+      ) : null}
+      <button
+        type="button"
+        onClick={onSelect}
+        title={session.title}
+        className={[
+          "min-w-0 flex-1 truncate text-left text-sm transition",
+          active ? "font-medium text-slate-950" : "text-slate-700 hover:text-slate-950",
+        ].join(" ")}
+      >
+        {session.title}
+      </button>
+      {iconSlots.trailing === "pin" && (
+        <span
+          className="shrink-0 text-primary"
+          title="已置顶"
+          aria-label="已置顶"
+        >
+          <PinMenuIcon />
+        </span>
+      )}
+      <SessionActionMenu
+        session={session}
+        forceVisible={active}
+        onRename={() => setEditing(true)}
+        onDelete={onDelete}
+        onTogglePin={onTogglePin}
+      />
+    </div>
+  );
+}
+
 function SessionPane({
   activeSessionId,
   activeConfigPanel,
@@ -2380,6 +2777,9 @@ function SessionPane({
   onQueryChange,
   onToggleCollapse,
   onSelectSession,
+  onRenameSession,
+  onDeleteSession,
+  onTogglePinSession,
 }: {
   activeSessionId: string | null;
   activeConfigPanel: WorkspaceConfigPanelKey | null;
@@ -2397,48 +2797,66 @@ function SessionPane({
   onQueryChange: (value: string) => void;
   onToggleCollapse: () => void;
   onSelectSession: (sessionId: string) => void;
+  onRenameSession: (sessionId: string, title: string) => void;
+  onDeleteSession: (sessionId: string) => void;
+  onTogglePinSession: (sessionId: string) => void;
 }) {
+  const collapsedRailCopy = getCollapsedWorkspaceRailCopy();
+
   if (collapsed) {
     return (
-      <aside className="flex h-full min-h-0 w-14 min-w-14 max-w-14 shrink-0 flex-col items-center gap-3 border-r border-border bg-surface py-3">
-        <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary text-sm font-bold text-white">
+      <aside
+        aria-label={collapsedRailCopy.railLabel}
+        className="flex h-full min-h-0 w-14 min-w-14 max-w-14 shrink-0 flex-col items-center border-r border-border bg-surface py-3"
+      >
+        <div
+          className="mb-4 flex h-9 w-9 items-center justify-center rounded-lg bg-primary text-sm font-bold text-white"
+          title="数据任务"
+          aria-label="数据任务"
+        >
           D
+        </div>
+        <div className="flex flex-1 flex-col items-center gap-3">
+          <button
+            type="button"
+            onClick={onCreateSession}
+            title="新建数据任务"
+            aria-label="新建数据任务"
+            className="flex h-8 w-8 cursor-pointer items-center justify-center rounded-lg bg-primary text-white transition-colors duration-200 hover:bg-primary-light"
+          >
+            <span className="text-lg leading-none">+</span>
+          </button>
+          <button
+            type="button"
+            onClick={onOpenFilesPanel}
+            title="工作区文件"
+            aria-label="工作区文件"
+            className={[
+              "flex h-8 w-8 cursor-pointer items-center justify-center rounded-lg border border-border text-xs font-semibold transition-colors duration-200",
+              activeFilesPanel
+                ? "bg-slate-100 text-slate-950"
+                : "text-muted hover:bg-surface-subtle hover:text-foreground",
+            ].join(" ")}
+          >
+            F
+          </button>
+          <span
+            className="tabular rounded-full bg-surface-subtle px-1.5 py-0.5 text-[10px] font-medium text-muted-light"
+            title={`${collapsedRailCopy.sessionCountLabel}：${sessionCount}`}
+            aria-label={`${collapsedRailCopy.sessionCountLabel}：${sessionCount}`}
+          >
+            {sessionCount}
+          </span>
         </div>
         <button
           type="button"
           onClick={onToggleCollapse}
-          title="展开侧栏"
-          aria-label="展开侧栏"
-          className={`flex h-8 w-8 cursor-pointer items-center justify-center rounded-lg border border-border text-muted transition-colors duration-200 hover:bg-surface-subtle hover:text-foreground`}
+          title={collapsedRailCopy.expandLabel}
+          aria-label={collapsedRailCopy.expandLabel}
+          className="mt-3 flex h-8 w-8 cursor-pointer items-center justify-center rounded-lg border border-border text-muted transition-colors duration-200 hover:bg-surface-subtle hover:text-foreground"
         >
           <ChevronIcon direction="right" />
         </button>
-        <button
-          type="button"
-          onClick={onCreateSession}
-          title="新建数据任务"
-          aria-label="新建数据任务"
-          className="flex h-8 w-8 cursor-pointer items-center justify-center rounded-lg bg-primary text-white transition-colors duration-200 hover:bg-primary-light"
-        >
-          <span className="text-lg leading-none">+</span>
-        </button>
-        <button
-          type="button"
-          onClick={onOpenFilesPanel}
-          title="工作区文件"
-          aria-label="工作区文件"
-          className={[
-            "flex h-8 w-8 cursor-pointer items-center justify-center rounded-lg border border-border text-xs font-semibold transition-colors duration-200",
-            activeFilesPanel
-              ? "bg-slate-100 text-slate-950"
-              : "text-muted hover:bg-surface-subtle hover:text-foreground",
-          ].join(" ")}
-        >
-          F
-        </button>
-        <span className="tabular mt-1 rounded-full bg-surface-subtle px-1.5 py-0.5 text-[10px] font-medium text-muted-light">
-          {sessionCount}
-        </span>
       </aside>
     );
   }
@@ -2456,8 +2874,8 @@ function SessionPane({
         <button
           type="button"
           onClick={onToggleCollapse}
-          title="折叠侧栏"
-          aria-label="折叠侧栏"
+          title="收起为工作区快捷栏"
+          aria-label="收起为工作区快捷栏"
           className="flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-lg text-muted-light transition-colors duration-200 hover:bg-surface-subtle hover:text-foreground"
         >
           <ChevronIcon direction="left" />
@@ -2542,20 +2960,15 @@ function SessionPane({
             <p className="px-2 py-3 text-xs text-slate-400">没有匹配的会话。</p>
           ) : (
             filteredSessions.map((session) => (
-              <button
+              <SessionListItem
                 key={session.id}
-                type="button"
-                onClick={() => onSelectSession(session.id)}
-                title={session.title}
-                className={[
-                  "block w-full truncate rounded-md px-2 py-1.5 text-left text-sm transition",
-                  session.id === activeSessionId
-                    ? "bg-slate-100 font-medium text-slate-950"
-                    : "text-slate-600 hover:bg-slate-100 hover:text-slate-900",
-                ].join(" ")}
-              >
-                {session.title}
-              </button>
+                session={session}
+                active={session.id === activeSessionId}
+                onSelect={() => onSelectSession(session.id)}
+                onRename={(title) => onRenameSession(session.id, title)}
+                onDelete={() => onDeleteSession(session.id)}
+                onTogglePin={() => onTogglePinSession(session.id)}
+              />
             ))
           )}
         </div>

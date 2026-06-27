@@ -81,6 +81,22 @@ describe("live run state reducer", () => {
     });
   });
 
+  it("captures session title custom events for chat title synchronization", () => {
+    const updated = reduceLiveRunEvent(createInitialLiveRun(), {
+      type: "CUSTOM",
+      name: "session.title",
+      value: {
+        session_id: "thread-1",
+        title: "渠道订单分析",
+      },
+    });
+
+    expect(updated.sessionTitle).toEqual({
+      sessionId: "thread-1",
+      title: "渠道订单分析",
+    });
+  });
+
   it("parses slim artifact references without inline preview data", () => {
     let run = createInitialLiveRun();
     run = reduceLiveRunEvent(run, {

@@ -142,6 +142,11 @@ export type LiveContextReport = {
   value: unknown;
 };
 
+export type LiveSessionTitle = {
+  sessionId: string;
+  title: string;
+};
+
 export type LiveRunHistoryEntry = {
   startedAt?: number;
   finishedAt?: number;
@@ -170,6 +175,7 @@ export type LiveRun = {
   skillSelection?: LiveSkillSelection;
   goal?: LiveGoalSnapshot;
   resolvedRunConfig?: LiveResolvedRunConfig;
+  sessionTitle?: LiveSessionTitle;
   contextReports: LiveContextReport[];
   /** Completed run segments within the current chat thread. */
   runHistory?: LiveRunHistoryEntry[];
@@ -865,6 +871,21 @@ function reduceCustomEvent(state: LiveRun, event: AgUiLikeEvent): LiveRun {
     return {
       ...state,
       resolvedRunConfig: parseResolvedRunConfig(event.value),
+    };
+  }
+
+  if (event.name === "session.title") {
+    const value = recordValue(event.value);
+    const sessionId =
+      stringValue(value?.session_id) ??
+      stringValue(value?.sessionId) ??
+      stringValue(value?.thread_id) ??
+      stringValue(value?.threadId);
+    const title = stringValue(value?.title);
+    if (!sessionId || !title) return state;
+    return {
+      ...state,
+      sessionTitle: { sessionId, title },
     };
   }
 

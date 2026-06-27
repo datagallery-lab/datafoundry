@@ -22,6 +22,8 @@ Primary UI: `/data-tasks` — design doc at
 5. [`docs/engineering/2026-06-25-backend-requirements.md`](../../docs/engineering/2026-06-25-backend-requirements.md) (对后端要求 / gap tracking)
 6. [`docs/engineering/2026-06-26-frontend-capability-status.md`](../../docs/engineering/2026-06-26-frontend-capability-status.md) (最新前端增量)
 7. [`docs/engineering/2026-06-26-backend-requirements.md`](../../docs/engineering/2026-06-26-backend-requirements.md) (最新后端增量)
+8. [`docs/engineering/2026-06-27-frontend-capability-status.md`](../../docs/engineering/2026-06-27-frontend-capability-status.md) (会话命名 / 数据结果交互增量)
+9. [`docs/engineering/2026-06-27-backend-requirements.md`](../../docs/engineering/2026-06-27-backend-requirements.md) (会话标题 / 数据增强后端需求)
 
 ## Code conventions
 

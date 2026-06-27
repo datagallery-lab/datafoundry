@@ -220,11 +220,18 @@ export interface SessionConfigOverride {
   disabled: SessionDisabledMap;
 }
 
+export type ChatSessionTitleSource = "default" | "auto-snippet" | "llm" | "user";
+
 export interface ChatSession {
   id: string;
   threadId: string;
   title: string;
+  titleSource?: ChatSessionTitleSource;
   createdAt: number;
+  /** Pinned sessions stay at the top of the sidebar list. */
+  pinned?: boolean;
+  /** When the session was pinned; used to order multiple pinned sessions. */
+  pinnedAt?: number;
   /** Per-session resource enablement; omitted = all workspace resources enabled. */
   config?: SessionConfigOverride;
 }
@@ -244,8 +251,87 @@ export function createChatSession(title = "新数据任务"): ChatSession {
     id: threadId,
     threadId,
     title,
+    titleSource: "default",
     createdAt: Date.now(),
   };
+}
+
+function normalizeSessionTitle(title: string): string {
+  return title.replace(/\s+/g, " ").trim();
+}
+
+export function deriveSnippetTitle(text: string): string {
+  const normalized = normalizeSessionTitle(text);
+  if (!normalized) return "新数据任务";
+  const maxChars = 23;
+  return normalized.length > maxChars
+    ? `${normalized.slice(0, maxChars)}…`
+    : normalized;
+}
+
+export function deleteChatSession(
+  sessions: ChatSession[],
+  id: string,
+): ChatSession[] {
+  return sessions.filter((session) => session.id !== id);
+}
+
+export function togglePinChatSession(
+  sessions: ChatSession[],
+  id: string,
+): ChatSession[] {
+  const now = Date.now();
+  return sessions.map((session) => {
+    if (session.id !== id) return session;
+    const nextPinned = !session.pinned;
+    return {
+      ...session,
+      pinned: nextPinned,
+      pinnedAt: nextPinned ? now : undefined,
+    };
+  });
+}
+
+export function sortChatSessions(sessions: ChatSession[]): ChatSession[] {
+  return [...sessions].sort((left, right) => {
+    const leftPinned = Boolean(left.pinned);
+    const rightPinned = Boolean(right.pinned);
+    if (leftPinned !== rightPinned) {
+      return Number(rightPinned) - Number(leftPinned);
+    }
+    if (leftPinned && rightPinned) {
+      return (right.pinnedAt ?? 0) - (left.pinnedAt ?? 0);
+    }
+    return right.createdAt - left.createdAt;
+  });
+}
+
+export function renameChatSession(
+  sessions: ChatSession[],
+  id: string,
+  title: string,
+): ChatSession[] {
+  const normalized = normalizeSessionTitle(title);
+  if (!normalized) return sessions;
+  return sessions.map((session) =>
+    session.id === id
+      ? { ...session, title: normalized, titleSource: "user" }
+      : session,
+  );
+}
+
+export function applyAutoTitle(
+  sessions: ChatSession[],
+  id: string,
+  title: string,
+  source: Exclude<ChatSessionTitleSource, "default" | "user">,
+): ChatSession[] {
+  const normalized = normalizeSessionTitle(title);
+  if (!normalized) return sessions;
+  return sessions.map((session) => {
+    if (session.id !== id || session.titleSource === "user") return session;
+    return { ...session, title: normalized, titleSource: source };
+  });
 }
 
 export function dedupeChatSessions(sessions: ChatSession[]): ChatSession[] {
@@ -272,7 +358,7 @@ export function loadChatSessions(): ChatSession[] {
     if (!raw) return [];
     const parsed = JSON.parse(raw) as unknown;
     if (!Array.isArray(parsed)) return [];
-    return dedupeChatSessions(parsed.filter(isChatSession));
+    return sortChatSessions(dedupeChatSessions(parsed.filter(isChatSession)));
   } catch {
     return [];
   }
@@ -323,6 +409,21 @@ function isChatSession(value: unknown): value is ChatSession {
     return false;
   }
   if (record.config !== undefined && !isSessionConfigOverride(record.config)) {
+    return false;
+  }
+  if (record.pinned !== undefined && typeof record.pinned !== "boolean") {
+    return false;
+  }
+  if (record.pinnedAt !== undefined && typeof record.pinnedAt !== "number") {
+    return false;
+  }
+  if (
+    record.titleSource !== undefined &&
+    record.titleSource !== "default" &&
+    record.titleSource !== "auto-snippet" &&
+    record.titleSource !== "llm" &&
+    record.titleSource !== "user"
+  ) {
     return false;
   }
   return true;
@@ -593,6 +694,7 @@ export type BackendCapability =
   | "artifact.promote" // promote artifact-backed file into workspace assets
   | "chat.imageInput" // chat multimodal image parts consumed (#13a)
   | "chat.fileUpload" // chat file upload endpoint to session workspace (#13b)
+  | "conversation.title" // LLM-generated session title sync
   | "files"; // workspace FileAssetRef library API
 
 export const BACKEND_CAPABILITIES: Record<BackendCapability, boolean> = {
@@ -604,6 +706,7 @@ export const BACKEND_CAPABILITIES: Record<BackendCapability, boolean> = {
   "artifact.promote": false,
   "chat.imageInput": false,
   "chat.fileUpload": false,
+  "conversation.title": false,
   files: false,
 };
 

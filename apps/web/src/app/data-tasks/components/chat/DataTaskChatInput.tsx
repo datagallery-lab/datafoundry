@@ -22,6 +22,7 @@ import {
 import { MentionChips, useMentionAutocomplete } from "./chat-mentions";
 import { AttachmentChips } from "./AttachmentChips";
 import { CHAT_ATTACHMENT_ACCEPT } from "./chat-attachments";
+import { buildChatAddActions, type ChatAddAction } from "./chat-add-actions";
 import { SessionConfigBar } from "./SessionConfigBar";
 import { useChatTextareaAutoresize, scheduleChatTextareaResize } from "./use-chat-textarea-autoresize";
 import { resolveChatInputWidth } from "../../chat-input-layout";
@@ -128,7 +129,6 @@ export function DataTaskChatInput({
 function DataTaskChatInputLayout({
   textArea,
   sendButton,
-  addMenuButton,
   startTranscribeButton,
   cancelTranscribeButton,
   finishTranscribeButton,
@@ -231,6 +231,10 @@ function DataTaskChatInputLayout({
     event.preventDefault();
     focusTextArea(textarea);
   };
+
+  const addActions = buildChatAddActions({
+    openFilePicker: () => attachmentsApi.fileInputRef.current?.click(),
+  });
 
   return (
     <div
@@ -336,18 +340,7 @@ function DataTaskChatInputLayout({
                     className="hidden"
                     onChange={attachmentsApi.handleFileUpload}
                   />
-                  <button
-                    type="button"
-                    aria-label="上传文件"
-                    title="上传文件"
-                    onClick={() => attachmentsApi.fileInputRef.current?.click()}
-                    className="grid h-7 w-7 cursor-pointer place-items-center rounded-md text-muted hover:bg-surface-subtle hover:text-foreground"
-                  >
-                    <PaperclipIcon />
-                  </button>
-                  <div className="grid h-7 w-7 place-items-center [&_button]:flex [&_button]:h-7 [&_button]:w-7 [&_button]:items-center [&_button]:justify-center">
-                    {addMenuButton}
-                  </div>
+                  <ChatAddMenu actions={addActions} />
                 </div>
               }
               trailing={
@@ -366,6 +359,79 @@ function DataTaskChatInputLayout({
         </div>
       </div>
       {showDisclaimer ? disclaimer : null}
+    </div>
+  );
+}
+
+function ChatAddMenu({ actions }: { actions: ChatAddAction[] }) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const handlePointerDown = (event: MouseEvent) => {
+      if (!rootRef.current?.contains(event.target as Node)) {
+        setOpen(false);
+      }
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [open]);
+
+  return (
+    <div ref={rootRef} className="relative">
+      <button
+        type="button"
+        aria-label="添加内容"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        title="添加内容"
+        onClick={() => setOpen((value) => !value)}
+        className="grid h-7 w-7 cursor-pointer place-items-center rounded-md text-muted transition-colors duration-200 hover:bg-surface-subtle hover:text-foreground"
+      >
+        <PlusIcon />
+      </button>
+      {open && (
+        <div
+          role="menu"
+          aria-label="添加内容"
+          className="absolute bottom-full left-0 z-50 mb-2 w-56 overflow-hidden rounded-xl border border-border bg-surface p-1 shadow-lg"
+        >
+          {actions.map((action) => (
+            <button
+              key={action.id}
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                action.run();
+                setOpen(false);
+              }}
+              className="flex w-full cursor-pointer items-start gap-2 rounded-lg px-3 py-2 text-left transition-colors duration-200 hover:bg-surface-subtle"
+            >
+              <span className="mt-0.5 grid h-5 w-5 shrink-0 place-items-center text-muted">
+                <PaperclipIcon />
+              </span>
+              <span className="min-w-0">
+                <span className="block text-sm font-medium text-foreground">
+                  {action.label}
+                </span>
+                <span className="mt-0.5 block text-xs leading-4 text-muted-light">
+                  {action.description}
+                </span>
+              </span>
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -521,6 +587,22 @@ function CheckIcon() {
       aria-hidden
     >
       <path d="m5 10 3 3 7-7" />
+    </svg>
+  );
+}
+
+function PlusIcon() {
+  return (
+    <svg
+      viewBox="0 0 20 20"
+      className="h-4 w-4"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.8}
+      strokeLinecap="round"
+      aria-hidden
+    >
+      <path d="M10 4.5v11M4.5 10h11" />
     </svg>
   );
 }

@@ -33,6 +33,8 @@ Do **not** add REST CRUD here unless documented in
 2. [`docs/engineering/config-management-api.md`](../../docs/engineering/config-management-api.md)
 3. [`docs/engineering/2026-06-25-backend-requirements.md`](../../docs/engineering/2026-06-25-backend-requirements.md)
 4. [`docs/engineering/2026-06-26-backend-requirements.md`](../../docs/engineering/2026-06-26-backend-requirements.md)
+5. [`docs/engineering/2026-06-27-backend-requirements.md`](../../docs/engineering/2026-06-27-backend-requirements.md)
+6. [`docs/engineering/2026-06-27-frontend-capability-status.md`](../../docs/engineering/2026-06-27-frontend-capability-status.md)
 
 ## Code conventions
 

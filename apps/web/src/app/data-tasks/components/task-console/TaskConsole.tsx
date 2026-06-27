@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import {
   Bar,
@@ -38,6 +38,12 @@ import {
 } from "../../live-run-state";
 import type { TaskSelection } from "../../page";
 import { overviewSectionPlan } from "../../task-console-layout";
+import {
+  filterTableRows,
+  sortTableRows,
+  tableToCsv,
+  type TableSortState,
+} from "../../table-rows";
 import { RunConfigurationPanel } from "./RunConfigurationPanel";
 import { TraceList } from "./TraceList";
 import {
@@ -1717,127 +1723,11 @@ function ArtifactDetailView({ detail }: { detail: ArtifactDetail }) {
   }
 
   if (detail.type === "dataset") {
-    return (
-      <div className={consoleTableShellClass}>
-        <div className="max-h-[min(480px,60vh)] overflow-y-auto">
-          <table className="min-w-max w-full text-left text-xs">
-            <thead className="sticky top-0 z-10 bg-surface-subtle text-muted-light shadow-[0_1px_0_0_var(--border)]">
-              <tr>
-                {detail.columns.map((column) => (
-                  <th
-                    key={column}
-                    className="whitespace-nowrap px-3 py-2 font-semibold"
-                  >
-                    {column}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {detail.rows.map((row, rowIndex) => (
-                <tr key={rowIndex} className="border-t border-border">
-                  {row.map((cell, cellIndex) => (
-                    <td
-                      key={cellIndex}
-                      className={[
-                        "whitespace-nowrap px-3 py-2",
-                        cellIndex === 0
-                          ? "font-medium text-foreground"
-                          : "text-muted",
-                      ].join(" ")}
-                    >
-                      {cell}
-                    </td>
-                  ))}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </div>
-    );
+    return <DatasetDetailView detail={detail} />;
   }
 
   if (detail.type === "chart") {
-    const points = detail.points.length > 0
-      ? detail.points
-      : detail.series?.[0]?.points ?? [];
-
-    if (points.length === 0) {
-      return (
-        <EmptyState
-          title="暂无图表数据"
-          description="后端已声明 chart artifact，但尚未上报 points/series 预览数据。"
-        />
-      );
-    }
-
-    const chartType = detail.chartType ?? "bar";
-    const unit = detail.unit ?? "";
-    const chartData = points.map((point) => ({
-      label: point.label,
-      value: point.value,
-    }));
-
-    return (
-      <div className="grid gap-3 rounded-xl border border-border bg-surface-subtle p-3">
-        <div className="h-64 min-w-0">
-          <ResponsiveContainer width="100%" height="100%">
-            {chartType === "line" ? (
-              <LineChart data={chartData} margin={{ top: 8, right: 8, bottom: 8, left: 0 }}>
-                <XAxis dataKey="label" tick={{ fontSize: 11 }} />
-                <YAxis tick={{ fontSize: 11 }} />
-                <Tooltip formatter={(value) => [`${unit}${value}`, "value"]} />
-                <Line
-                  type="monotone"
-                  dataKey="value"
-                  stroke="var(--step-visualize)"
-                  strokeWidth={2}
-                  dot={{ r: 3 }}
-                />
-              </LineChart>
-            ) : chartType === "pie" ? (
-              <PieChart>
-                <Tooltip formatter={(value) => [`${unit}${value}`, "value"]} />
-                <Pie
-                  data={chartData}
-                  dataKey="value"
-                  nameKey="label"
-                  outerRadius={86}
-                  label={(entry) => String((entry as { name?: unknown }).name ?? "")}
-                >
-                  {chartData.map((point, index) => (
-                    <Cell
-                      key={point.label}
-                      fill={index % 2 === 0 ? "var(--step-visualize)" : "var(--primary-light)"}
-                    />
-                  ))}
-                </Pie>
-              </PieChart>
-            ) : (
-              <BarChart data={chartData} margin={{ top: 8, right: 8, bottom: 8, left: 0 }}>
-                <XAxis dataKey="label" tick={{ fontSize: 11 }} />
-                <YAxis tick={{ fontSize: 11 }} />
-                <Tooltip formatter={(value) => [`${unit}${value}`, "value"]} />
-                <Bar dataKey="value" fill="var(--step-visualize)" radius={[6, 6, 0, 0]} />
-              </BarChart>
-            )}
-          </ResponsiveContainer>
-        </div>
-        {detail.series && detail.series.length > 0 ? (
-          <div className="flex flex-wrap gap-1">
-            {detail.series.map((series) => (
-              <span
-                key={series.name}
-                className="rounded-full border border-border bg-surface px-2 py-0.5 text-[10px] font-medium text-muted"
-              >
-                {series.name}
-              </span>
-            ))}
-          </div>
-        ) : null}
-      </div>
-    );
+    return <ChartDetailView detail={detail} />;
   }
 
   if (detail.type === "file") {
@@ -1879,6 +1769,288 @@ function ArtifactDetailView({ detail }: { detail: ArtifactDetail }) {
           </p>
         </div>
       ))}
+    </div>
+  );
+}
+
+function downloadTextFile(filename: string, content: string, mimeType: string) {
+  if (typeof document === "undefined") return;
+  const blob = new Blob([content], { type: mimeType });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
+type ChartDisplayType = "bar" | "line" | "pie";
+
+function isChartDisplayType(value: string | undefined): value is ChartDisplayType {
+  return value === "bar" || value === "line" || value === "pie";
+}
+
+async function downloadSvgAsPng(container: HTMLDivElement | null, filename: string) {
+  if (!container) return;
+  const svg = container.querySelector("svg");
+  if (!svg) return;
+  const serializer = new XMLSerializer();
+  const source = serializer.serializeToString(svg);
+  const svgBlob = new Blob([source], { type: "image/svg+xml;charset=utf-8" });
+  const url = URL.createObjectURL(svgBlob);
+  const image = new Image();
+  await new Promise<void>((resolve, reject) => {
+    image.onload = () => resolve();
+    image.onerror = () => reject(new Error("图表导出失败"));
+    image.src = url;
+  });
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.ceil(svg.getBoundingClientRect().width));
+  canvas.height = Math.max(1, Math.ceil(svg.getBoundingClientRect().height));
+  const context = canvas.getContext("2d");
+  if (!context) {
+    URL.revokeObjectURL(url);
+    return;
+  }
+  context.fillStyle = "#ffffff";
+  context.fillRect(0, 0, canvas.width, canvas.height);
+  context.drawImage(image, 0, 0, canvas.width, canvas.height);
+  URL.revokeObjectURL(url);
+  const pngUrl = canvas.toDataURL("image/png");
+  const link = document.createElement("a");
+  link.href = pngUrl;
+  link.download = filename;
+  link.click();
+}
+
+function ChartDetailView({
+  detail,
+}: {
+  detail: Extract<ArtifactDetail, { type: "chart" }>;
+}) {
+  const points = detail.points.length > 0
+    ? detail.points
+    : detail.series?.[0]?.points ?? [];
+  const initialType = isChartDisplayType(detail.chartType) ? detail.chartType : "bar";
+  const [chartType, setChartType] = useState<ChartDisplayType>(initialType);
+  const chartRef = useRef<HTMLDivElement | null>(null);
+
+  if (points.length === 0) {
+    return (
+      <EmptyState
+        title="暂无图表数据"
+        description="后端已声明 chart artifact，但尚未上报 points/series 预览数据。"
+      />
+    );
+  }
+
+  const unit = detail.unit ?? "";
+  const chartData = points.map((point) => ({
+    label: point.label,
+    value: point.value,
+  }));
+
+  return (
+    <div className="grid gap-3 rounded-xl border border-border bg-surface-subtle p-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex flex-wrap gap-1">
+          {(["bar", "line", "pie"] as const).map((type) => (
+            <button
+              key={type}
+              type="button"
+              onClick={() => setChartType(type)}
+              className={[
+                "h-7 rounded-md px-2 text-[11px] font-semibold transition",
+                chartType === type
+                  ? "bg-slate-900 text-white"
+                  : "border border-border bg-surface text-muted hover:text-foreground",
+              ].join(" ")}
+            >
+              {type}
+            </button>
+          ))}
+        </div>
+        <button
+          type="button"
+          onClick={() => {
+            void downloadSvgAsPng(chartRef.current, "chart-preview.png").catch(() => undefined);
+          }}
+          className={`h-7 ${btnSecondaryClass}`}
+        >
+          导出 PNG
+        </button>
+      </div>
+      <div ref={chartRef} className="h-64 min-w-0">
+        <ResponsiveContainer width="100%" height="100%">
+          {chartType === "line" ? (
+            <LineChart data={chartData} margin={{ top: 8, right: 8, bottom: 8, left: 0 }}>
+              <XAxis dataKey="label" tick={{ fontSize: 11 }} />
+              <YAxis tick={{ fontSize: 11 }} />
+              <Tooltip formatter={(value) => [`${unit}${value}`, "value"]} />
+              <Line
+                type="monotone"
+                dataKey="value"
+                stroke="var(--step-visualize)"
+                strokeWidth={2}
+                dot={{ r: 3 }}
+              />
+            </LineChart>
+          ) : chartType === "pie" ? (
+            <PieChart>
+              <Tooltip formatter={(value) => [`${unit}${value}`, "value"]} />
+              <Pie
+                data={chartData}
+                dataKey="value"
+                nameKey="label"
+                outerRadius={86}
+                label={(entry) => String((entry as { name?: unknown }).name ?? "")}
+              >
+                {chartData.map((point, index) => (
+                  <Cell
+                    key={point.label}
+                    fill={index % 2 === 0 ? "var(--step-visualize)" : "var(--primary-light)"}
+                  />
+                ))}
+              </Pie>
+            </PieChart>
+          ) : (
+            <BarChart data={chartData} margin={{ top: 8, right: 8, bottom: 8, left: 0 }}>
+              <XAxis dataKey="label" tick={{ fontSize: 11 }} />
+              <YAxis tick={{ fontSize: 11 }} />
+              <Tooltip formatter={(value) => [`${unit}${value}`, "value"]} />
+              <Bar dataKey="value" fill="var(--step-visualize)" radius={[6, 6, 0, 0]} />
+            </BarChart>
+          )}
+        </ResponsiveContainer>
+      </div>
+      {detail.series && detail.series.length > 0 ? (
+        <div className="flex flex-wrap gap-1">
+          {detail.series.map((series) => (
+            <span
+              key={series.name}
+              className="rounded-full border border-border bg-surface px-2 py-0.5 text-[10px] font-medium text-muted"
+            >
+              {series.name}
+            </span>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function DatasetDetailView({
+  detail,
+}: {
+  detail: Extract<ArtifactDetail, { type: "dataset" }>;
+}) {
+  const [query, setQuery] = useState("");
+  const [sort, setSort] = useState<TableSortState | null>(null);
+  const rows = useMemo(
+    () => sortTableRows(filterTableRows(detail.rows, query), sort),
+    [detail.rows, query, sort],
+  );
+
+  const toggleSort = (columnIndex: number) => {
+    setSort((current) => {
+      if (!current || current.columnIndex !== columnIndex) {
+        return { columnIndex, direction: "asc" };
+      }
+      if (current.direction === "asc") {
+        return { columnIndex, direction: "desc" };
+      }
+      return null;
+    });
+  };
+
+  const exportCsv = () => {
+    downloadTextFile(
+      "dataset-preview.csv",
+      tableToCsv(detail.columns, rows),
+      "text/csv;charset=utf-8",
+    );
+  };
+
+  return (
+    <div className="grid gap-2">
+      <div className="flex flex-wrap items-center gap-2">
+        <label className="min-w-[180px] flex-1">
+          <span className="sr-only">搜索结果表</span>
+          <input
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            className="h-8 w-full rounded-lg border border-border bg-white px-2.5 text-xs text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-slate-400"
+            placeholder="搜索结果表"
+          />
+        </label>
+        <button type="button" onClick={exportCsv} className={`h-8 ${btnSecondaryClass}`}>
+          导出 CSV
+        </button>
+        <span className="text-[11px] text-muted-light">
+          {rows.length.toLocaleString()} / {detail.rows.length.toLocaleString()} 行
+        </span>
+      </div>
+      <div className={consoleTableShellClass}>
+        <div className="max-h-[min(480px,60vh)] overflow-y-auto">
+          <table className="min-w-max w-full text-left text-xs">
+            <thead className="sticky top-0 z-10 bg-surface-subtle text-muted-light shadow-[0_1px_0_0_var(--border)]">
+              <tr>
+                {detail.columns.map((column, columnIndex) => {
+                  const active = sort?.columnIndex === columnIndex;
+                  const suffix = active
+                    ? sort.direction === "asc"
+                      ? " ↑"
+                      : " ↓"
+                    : "";
+                  return (
+                    <th key={column} className="whitespace-nowrap px-3 py-2 font-semibold">
+                      <button
+                        type="button"
+                        onClick={() => toggleSort(columnIndex)}
+                        className="cursor-pointer text-left transition hover:text-foreground"
+                        title={`按 ${column} 排序`}
+                      >
+                        {column}
+                        {suffix}
+                      </button>
+                    </th>
+                  );
+                })}
+              </tr>
+            </thead>
+            <tbody>
+              {rows.length === 0 ? (
+                <tr>
+                  <td
+                    colSpan={Math.max(detail.columns.length, 1)}
+                    className="border-t border-border px-3 py-6 text-center text-muted-light"
+                  >
+                    没有匹配的结果行。
+                  </td>
+                </tr>
+              ) : (
+                rows.map((row, rowIndex) => (
+                  <tr key={rowIndex} className="border-t border-border">
+                    {row.map((cell, cellIndex) => (
+                      <td
+                        key={cellIndex}
+                        className={[
+                          "whitespace-nowrap px-3 py-2",
+                          cellIndex === 0
+                            ? "font-medium text-foreground"
+                            : "text-muted",
+                        ].join(" ")}
+                      >
+                        {cell}
+                      </td>
+                    ))}
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
     </div>
   );
 }
