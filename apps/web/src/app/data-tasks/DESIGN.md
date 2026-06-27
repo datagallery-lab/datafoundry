@@ -39,7 +39,13 @@ config-panel-open: 320px minmax(400px, 1fr)
 Layout behavior:
 
 - Left panel width is `LEFT_PANEL_WIDTH_EXPANDED = 320`; collapsed width is
-  `LEFT_PANEL_WIDTH_COLLAPSED = 56`.
+  `LEFT_PANEL_WIDTH_COLLAPSED = 56`. In collapsed mode, the 56px workspace rail
+  keeps only the expand/collapse button visible; hovering or focusing it shows a
+  compact floating preview of the left pane. A transparent bridge covers the gap
+  between the rail and preview so users can move into the popover without it
+  closing. The preview reuses the same workspace/session actions but caps the
+  session list height so it behaves like a small popover rather than a full-height
+  sidebar.
 - Right panel width is persisted and draggable via `usePanelResize`; it defaults
   to `RIGHT_PANEL_DEFAULT_WIDTH = 400` and is clamped to `320–640`.
 - The middle column reserves `CHAT_MIN_WIDTH = 400`; chat input sizing separately

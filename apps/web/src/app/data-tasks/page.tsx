@@ -115,6 +115,7 @@ import { TraceOverlay } from "./components/task-console/TraceOverlay";
 import { WorkspaceFileAssetsPanel } from "./components/task-console/WorkspaceFileAssetsPanel";
 import { SchemaBrowserPanel } from "./components/SchemaBrowserPanel";
 import { DataTaskChatInput } from "./components/chat/DataTaskChatInput";
+import { createChatStopHandler } from "./components/chat/chat-stop-handler";
 import {
   CHAT_ATTACHMENT_ACCEPT,
   CHAT_ATTACHMENT_MAX_BYTES,
@@ -185,6 +186,7 @@ import {
 import { btnSecondaryClass, panelTitleClass, sectionLabelClass } from "./ui-tokens";
 import {
   getCollapsedWorkspaceRailCopy,
+  getCollapsedWorkspacePreviewClassNames,
   getSessionListItemIconSlots,
 } from "./session-pane-ui";
 import { getBackendCapabilities, isResourcePanelSupported } from "../../lib/config-api";
@@ -273,12 +275,21 @@ function StableDataTaskChatInput({
     bindings.onClearPerRunFileMentions();
     requestAnimationFrame(scheduleChatTextareaResize);
   };
+  const handleStop = useMemo(
+    () =>
+      createChatStopHandler({
+        onCancelRun: bindings.onCancelRun,
+        onStopFrontend: inputProps.onStop,
+      }),
+    [bindings.onCancelRun, inputProps.onStop],
+  );
   return (
     <DataTaskChatInput
       {...inputProps}
       {...bindings}
       attachmentsApi={attachmentsApi}
       onSubmitMessage={handleSubmitMessage}
+      onStop={handleStop}
       showDisclaimer={false}
     />
   );
@@ -2707,6 +2718,42 @@ function ChevronIcon({ direction }: { direction: "left" | "right" }) {
   );
 }
 
+function SidebarToggleIcon() {
+  return (
+    <svg
+      viewBox="0 0 20 20"
+      className="h-[18px] w-[18px]"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.6}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <rect x="2.75" y="3.75" width="14.5" height="12.5" rx="2.5" />
+      <line x1="7.75" y1="3.75" x2="7.75" y2="16.25" />
+    </svg>
+  );
+}
+
+function WorkspaceFilesGlyph() {
+  return (
+    <svg
+      viewBox="0 0 20 20"
+      className="h-[18px] w-[18px]"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.6}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <path d="M11 2.75H5.5A1.75 1.75 0 0 0 3.75 4.5v11A1.75 1.75 0 0 0 5.5 17.25h9a1.75 1.75 0 0 0 1.75-1.75V8z" />
+      <path d="M11 2.75V8h5.25" />
+    </svg>
+  );
+}
+
 function SessionBubbleIcon() {
   return (
     <svg
@@ -3026,6 +3073,28 @@ function SessionListItem({
   );
 }
 
+type SessionPaneProps = {
+  activeSessionId: string | null;
+  activeConfigPanel: WorkspaceConfigPanelKey | null;
+  activeFilesPanel: boolean;
+  collapsed: boolean;
+  filteredSessions: ChatSession[];
+  query: string;
+  sessionCount: number;
+  workspaceFileCount: number;
+  workspaceConfig: WorkspaceConfigStore;
+  capabilitiesReady: boolean;
+  onCreateSession: () => void;
+  onOpenConfigPanel: (panel: WorkspaceConfigPanelKey) => void;
+  onOpenFilesPanel: () => void;
+  onQueryChange: (value: string) => void;
+  onToggleCollapse: () => void;
+  onSelectSession: (sessionId: string) => void;
+  onRenameSession: (sessionId: string, title: string) => void;
+  onDeleteSession: (sessionId: string) => void;
+  onTogglePinSession: (sessionId: string) => void;
+};
+
 function SessionPane({
   activeSessionId,
   activeConfigPanel,
@@ -3046,87 +3115,111 @@ function SessionPane({
   onRenameSession,
   onDeleteSession,
   onTogglePinSession,
-}: {
-  activeSessionId: string | null;
-  activeConfigPanel: WorkspaceConfigPanelKey | null;
-  activeFilesPanel: boolean;
-  collapsed: boolean;
-  filteredSessions: ChatSession[];
-  query: string;
-  sessionCount: number;
-  workspaceFileCount: number;
-  workspaceConfig: WorkspaceConfigStore;
-  capabilitiesReady: boolean;
-  onCreateSession: () => void;
-  onOpenConfigPanel: (panel: WorkspaceConfigPanelKey) => void;
-  onOpenFilesPanel: () => void;
-  onQueryChange: (value: string) => void;
-  onToggleCollapse: () => void;
-  onSelectSession: (sessionId: string) => void;
-  onRenameSession: (sessionId: string, title: string) => void;
-  onDeleteSession: (sessionId: string) => void;
-  onTogglePinSession: (sessionId: string) => void;
-}) {
+}: SessionPaneProps) {
   const collapsedRailCopy = getCollapsedWorkspaceRailCopy();
+  const previewClassNames = getCollapsedWorkspacePreviewClassNames();
 
   if (collapsed) {
     return (
       <aside
         aria-label={collapsedRailCopy.railLabel}
-        className="relative z-20 flex h-full min-h-0 w-14 min-w-14 max-w-14 shrink-0 flex-col items-center gap-3 border-r border-border bg-surface-subtle py-3"
+        className="relative z-30 flex h-full min-h-0 w-14 min-w-14 max-w-14 shrink-0 flex-col items-center border-r border-border bg-surface-subtle py-3"
       >
-        <div
-          className="flex h-9 w-9 items-center justify-center rounded-lg border border-border bg-surface text-sm font-semibold text-foreground shadow-[var(--shadow-card)]"
-          title="数据任务"
-          aria-label="数据任务"
-        >
-          D
+        <div className="group relative">
+          <button
+            type="button"
+            onClick={onToggleCollapse}
+            title={collapsedRailCopy.expandLabel}
+            aria-label={collapsedRailCopy.expandLabel}
+            className="flex h-9 w-9 cursor-pointer items-center justify-center rounded-lg border border-border bg-surface text-foreground shadow-[var(--shadow-card)] transition-colors duration-200 hover:bg-surface-subtle"
+          >
+            <SidebarToggleIcon />
+          </button>
+          <div className={previewClassNames.panel} aria-label="工作区侧栏预览">
+            <SessionPaneContent
+              activeSessionId={activeSessionId}
+              activeConfigPanel={activeConfigPanel}
+              activeFilesPanel={activeFilesPanel}
+              filteredSessions={filteredSessions}
+              query={query}
+              sessionCount={sessionCount}
+              workspaceFileCount={workspaceFileCount}
+              workspaceConfig={workspaceConfig}
+              capabilitiesReady={capabilitiesReady}
+              onCreateSession={onCreateSession}
+              onOpenConfigPanel={onOpenConfigPanel}
+              onOpenFilesPanel={onOpenFilesPanel}
+              onQueryChange={onQueryChange}
+              onToggleCollapse={onToggleCollapse}
+              onSelectSession={onSelectSession}
+              onRenameSession={onRenameSession}
+              onDeleteSession={onDeleteSession}
+              onTogglePinSession={onTogglePinSession}
+              preview
+            />
+          </div>
         </div>
-        <button
-          type="button"
-          onClick={onToggleCollapse}
-          title={collapsedRailCopy.expandLabel}
-          aria-label={collapsedRailCopy.expandLabel}
-          className="flex h-8 w-8 cursor-pointer items-center justify-center rounded-lg border border-border bg-surface text-muted transition-colors duration-200 hover:bg-surface-subtle hover:text-foreground"
-        >
-          <ChevronIcon direction="right" />
-        </button>
-        <button
-          type="button"
-          onClick={onCreateSession}
-          title="新建数据任务"
-          aria-label="新建数据任务"
-          className="flex h-8 w-8 cursor-pointer items-center justify-center rounded-lg bg-primary text-white transition-colors duration-200 hover:bg-primary-light"
-        >
-          <span className="text-lg leading-none">+</span>
-        </button>
-        <button
-          type="button"
-          onClick={onOpenFilesPanel}
-          title="工作区文件"
-          aria-label="工作区文件"
-          className={[
-            "flex h-8 w-8 cursor-pointer items-center justify-center rounded-lg border border-border text-xs font-semibold transition-colors duration-200",
-            activeFilesPanel
-              ? "bg-surface text-foreground shadow-[var(--shadow-card)]"
-              : "text-muted hover:bg-surface-subtle hover:text-foreground",
-          ].join(" ")}
-        >
-          F
-        </button>
-        <span
-          className="tabular rounded-full bg-surface-subtle px-1.5 py-0.5 text-[10px] font-medium text-muted-light"
-          title={`${collapsedRailCopy.sessionCountLabel}：${sessionCount}`}
-          aria-label={`${collapsedRailCopy.sessionCountLabel}：${sessionCount}`}
-        >
-          {sessionCount}
-        </span>
       </aside>
     );
   }
 
   return (
     <aside className="flex h-full min-h-0 w-[320px] min-w-[320px] max-w-[320px] shrink-0 flex-col overflow-hidden border-r border-border bg-surface-subtle">
+      <SessionPaneContent
+        activeSessionId={activeSessionId}
+        activeConfigPanel={activeConfigPanel}
+        activeFilesPanel={activeFilesPanel}
+        filteredSessions={filteredSessions}
+        query={query}
+        sessionCount={sessionCount}
+        workspaceFileCount={workspaceFileCount}
+        workspaceConfig={workspaceConfig}
+        capabilitiesReady={capabilitiesReady}
+        onCreateSession={onCreateSession}
+        onOpenConfigPanel={onOpenConfigPanel}
+        onOpenFilesPanel={onOpenFilesPanel}
+        onQueryChange={onQueryChange}
+        onToggleCollapse={onToggleCollapse}
+        onSelectSession={onSelectSession}
+        onRenameSession={onRenameSession}
+        onDeleteSession={onDeleteSession}
+        onTogglePinSession={onTogglePinSession}
+      />
+    </aside>
+  );
+}
+
+function SessionPaneContent({
+  activeSessionId,
+  activeConfigPanel,
+  activeFilesPanel,
+  filteredSessions,
+  query,
+  sessionCount,
+  workspaceFileCount,
+  workspaceConfig,
+  capabilitiesReady,
+  onCreateSession,
+  onOpenConfigPanel,
+  onOpenFilesPanel,
+  onQueryChange,
+  onToggleCollapse,
+  onSelectSession,
+  onRenameSession,
+  onDeleteSession,
+  onTogglePinSession,
+  preview = false,
+}: Omit<SessionPaneProps, "collapsed"> & { preview?: boolean }) {
+  const previewClassNames = getCollapsedWorkspacePreviewClassNames();
+
+  return (
+    <div
+      className={
+        preview
+          ? previewClassNames.content
+          : "flex h-full min-h-0 w-full flex-col overflow-hidden"
+      }
+    >
       <div className="flex h-16 items-center gap-3 border-b border-border px-4">
         <div className="flex h-9 w-9 items-center justify-center rounded-lg border border-border bg-surface text-sm font-semibold text-foreground shadow-[var(--shadow-card)]">
           D
@@ -3138,11 +3231,11 @@ function SessionPane({
         <button
           type="button"
           onClick={onToggleCollapse}
-          title="收起为工作区快捷栏"
-          aria-label="收起为工作区快捷栏"
+          title={preview ? "展开为常驻侧栏" : "收起为工作区快捷栏"}
+          aria-label={preview ? "展开为常驻侧栏" : "收起为工作区快捷栏"}
           className="flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-lg text-muted-light transition-colors duration-200 hover:bg-surface-subtle hover:text-foreground"
         >
-          <ChevronIcon direction="left" />
+          <SidebarToggleIcon />
         </button>
       </div>
 
@@ -3215,9 +3308,15 @@ function SessionPane({
         </label>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto p-2">
+      <div
+        className={
+          preview
+            ? previewClassNames.sessionList
+            : "min-h-0 flex-1 overflow-y-auto p-2"
+        }
+      >
         <div className="px-2 pb-2 text-xs font-semibold text-muted-light">
-          会话
+          {preview ? "历史对话" : "会话"}
         </div>
         <div className="flex flex-col gap-0.5">
           {filteredSessions.length === 0 ? (
@@ -3237,7 +3336,7 @@ function SessionPane({
           )}
         </div>
       </div>
-    </aside>
+    </div>
   );
 }
 
