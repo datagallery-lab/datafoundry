@@ -116,7 +116,6 @@ export const resolveRunIdentity = (input: ResolveRunIdentityInput): RunIdentityR
     input.metadataStore.sessions.create({
       user_id: input.userId,
       id: sessionId,
-      title: input.userInput.slice(0, 80),
       selected_datasource_id: selectedDatasourceId
     });
     const claim = input.metadataStore.runs.claim({

@@ -19,7 +19,7 @@ import {
   type SkillRecord,
   type SkillSelectionResult
 } from "@open-data-agent/skills";
-import { copyFileSync, linkSync, mkdirSync } from "node:fs";
+import { copyFileSync, linkSync, mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, dirname, join, resolve, sep } from "node:path";
 import {
   createModelProvider,
@@ -50,7 +50,7 @@ import {
 import { GoalRuntimeAdapter, type GoalRequest } from "./memory/goal-runtime-adapter.js";
 import { createDataAgentToolRegistry } from "./tools/data-tools.js";
 import { GovernedToolFactory } from "./tools/governed-tool-factory.js";
-import { createRunWorkspace, resolveSessionWorkspaceDir } from "./tools/workspace-factory.js";
+import { createRunWorkspace, resolveWorkspaceDir } from "./tools/workspace-factory.js";
 import { wrapWorkspaceToolsWithArtifactRecording } from "./tools/workspace-artifact-recorder.js";
 import { createMastraStreamNormalizerHooks } from "./stream/mastra-stream-hooks.js";
 import { createTokenUsageCorrelationStore } from "./stream/token-usage-correlation.js";
@@ -74,6 +74,8 @@ export const STATIC_AGENT_TOOL_NAMES = [
   "preview_table",
   "publish_artifact",
   "promote_workspace_file",
+  "list_workspace_files",
+  "read_workspace_file",
   "read_file",
   "retrieve_knowledge",
   "run_sql_readonly",
@@ -116,6 +118,7 @@ export {
 export {
   resolveRunWorkspaceDir,
   resolveSessionWorkspaceDir,
+  resolveWorkspaceDir,
   resolveWorkspaceRoot
 } from "./tools/workspace-factory.js";
 export { projectWorkspaceObservation } from "./context/tool-observation/adapters/workspace-tool-observation-adapters.js";
@@ -145,6 +148,7 @@ export type AgentLongTermMemoryRecord = {
 };
 
 export type CreateDataAgentInput = {
+  abortSignal?: AbortSignal | undefined;
   artifactService?: ArtifactService;
   dataGateway: DataGateway;
   emitter: AgUiEventEmitter;
@@ -196,6 +200,7 @@ export const createDataAgent = async (
   commandExecutionEnabled: boolean;
   isolation: "bwrap" | "none" | "seatbelt";
   workspaceDir: string;
+  sessionDir: string;
   destroyWorkspace(): Promise<void>;
 }> => {
   const toolObservationBoundary = createToolObservationBoundary({
@@ -209,7 +214,7 @@ export const createDataAgent = async (
   });
   const contextRunState = toolObservationBoundary.contextRunState;
 
-  const runDir = resolveSessionWorkspaceDir({
+  const runDir = resolveWorkspaceDir({
     runContext: input.runContext,
     workspaceRoot: input.workspaceRoot
   });
@@ -235,6 +240,7 @@ export const createDataAgent = async (
 
   const tokenUsageCorrelation = createTokenUsageCorrelationStore();
   const registry = createDataAgentToolRegistry({
+    ...(input.abortSignal ? { abortSignal: input.abortSignal } : {}),
     dataGateway: input.dataGateway,
     emitter: input.emitter,
     runContext: input.runContext,
@@ -321,16 +327,19 @@ export const createDataAgent = async (
     : {};
   const artifactTools = input.artifactService
     ? createArtifactTools({
+        ...(input.abortSignal ? { abortSignal: input.abortSignal } : {}),
         artifactService: input.artifactService,
         emitter: input.emitter,
         runContext: input.runContext,
-        workspaceDir: runWorkspace.runDir
+        workspaceDir: runWorkspace.sessionDir
       })
     : {};
   const fileAssetTools = input.fileAssetService
     ? createFileAssetTools({
+        ...(input.abortSignal ? { abortSignal: input.abortSignal } : {}),
         fileAssetService: input.fileAssetService,
         runContext: input.runContext,
+        sessionDir: runWorkspace.sessionDir,
         workspaceDir: runWorkspace.runDir
       })
     : {};
@@ -403,9 +412,15 @@ export const createDataAgent = async (
   let goalRuntime: GoalRuntimeAdapter | undefined;
   if (input.goal && mastra) {
     goalRuntime = new GoalRuntimeAdapter(agentForAgUi, input.runContext.user_id, input.runContext.session_id);
-    const objective = await goalRuntime.setObjective(input.goal);
+    const snapshot = await goalRuntime.setObjective(input.goal);
+    // R-016: stable goal.updated contract. `objective` is the spec key; `goal` is kept
+    // as a backward-compatible alias. Mastra's "active"/"paused"/"done" maps to the
+    // spec's "running"/"paused"/"done".
+    const goalStatus = snapshot?.status === "active" ? "running" : snapshot?.status ?? "running";
     input.emitter.emit(createCustomEvent("goal.updated", {
-      goal: objective,
+      objective: snapshot?.objective ?? input.goal.objective,
+      goal: snapshot?.objective ?? input.goal.objective,
+      status: goalStatus,
       source: "mastra-native-goal"
     }));
   }
@@ -413,11 +428,12 @@ export const createDataAgent = async (
   return {
     agent: agentForAgUi,
     commandExecutionEnabled: runWorkspace.commandExecutionEnabled,
-    destroyWorkspace: () => runWorkspace.workspace.destroy(),
+    destroyWorkspace: () => runWorkspace.destroy(),
     governedMessages,
     ...(goalRuntime ? { goalRuntime } : {}),
     isolation: runWorkspace.isolation,
-    workspaceDir: runWorkspace.runDir
+    workspaceDir: runWorkspace.runDir,
+    sessionDir: runWorkspace.sessionDir
   };
 };
 
@@ -489,8 +505,15 @@ const buildAgentInstructions = (input: AgentInstructionsInput): string => {
   if (enabled("publish_artifact")) {
     toolGroups.push("Artifact tools: publish_artifact.");
   }
-  if (enabled("promote_workspace_file")) {
-    toolGroups.push("File asset tools: promote_workspace_file.");
+  const workspaceAssetTools = ["list_workspace_files", "read_workspace_file", "promote_workspace_file"]
+    .filter(enabled);
+  if (workspaceAssetTools.length > 0) {
+    toolGroups.push(
+      `Workspace asset tools: ${workspaceAssetTools.join(", ")}. `
+      + "New files you write (write_file / execute_command) are session-scoped — only this session sees them. "
+      + "list_workspace_files / read_workspace_file read the cross-session workspace root (shared across your "
+      + "sessions, read-only). promote_workspace_file copies a session file into that cross-session root."
+    );
   }
   const workspaceTools = [
     "read_file",
@@ -514,6 +537,39 @@ const buildAgentInstructions = (input: AgentInstructionsInput): string => {
     toolGroups.push(`Uploaded workspace input files: ${input.workspaceAttachments
       .map((file) => `${file.path} (file_id=${file.file_id}, mime=${file.mime_type ?? "unknown"}, size=${file.size_bytes})`)
       .join("; ")}.`);
+  }
+  // R-019: per-run @ mentions — focus signal, not a narrowing. The agent is told which
+  // resources the user explicitly highlighted this run so it can prioritize them while
+  // the rest of the enabled set stays available.
+  const mentioned = context.mentioned;
+  if (mentioned) {
+    const focusParts: string[] = [];
+    if (mentioned.db.length > 0) {
+      focusParts.push(`datasources ${mentioned.db.join(", ")}`);
+    }
+    if (mentioned.kb.length > 0) {
+      focusParts.push(`knowledge bases ${mentioned.kb.join(", ")}`);
+    }
+    if (mentioned.mcp.length > 0) {
+      focusParts.push(`MCP servers ${mentioned.mcp.join(", ")}`);
+    }
+    if (mentioned.skill.length > 0) {
+      focusParts.push(`skills ${mentioned.skill.join(", ")}`);
+    }
+    if (focusParts.length > 0) {
+      toolGroups.push(
+        `User focus this run (via @ mentions): ${focusParts.join("; ")}. Prioritize these resources in your analysis `
+          + "and tool selection; other enabled resources remain available but should take lower priority."
+      );
+    }
+  }
+  // R-024: pinned session-relative workspace files the user wants the agent to read/reference.
+  const pinnedPaths = context.pinned_paths;
+  if (pinnedPaths && pinnedPaths.length > 0) {
+    toolGroups.push(
+      `Pinned workspace files to read/reference this run: ${pinnedPaths.join(", ")}. These already exist in the `
+        + "session workspace — read them with read_file; do not re-create or copy them into input/."
+    );
   }
   const taskTools = ["task_write", "task_update", "task_complete", "task_check"].filter(enabled);
   if (taskToolsEnabled && taskTools.length > 0) {
@@ -577,7 +633,8 @@ const buildAgentInstructions = (input: AgentInstructionsInput): string => {
       "Persist derived artifacts in the workspace. When analysis produces exports, charts, or transformed datasets, "
         + "write them as files via write_file so they are retained with the session, rather than only echoing them in "
         + "the final message. Call publish_artifact for files that should be visible and downloadable by the user. "
-        + "Call promote_workspace_file only for files that should be reused in later runs but are not final deliverables."
+        + "Call promote_workspace_file only to lift a session workspace file into a cross-session reusable asset "
+        + "(files in the same session are already retained across runs; do not promote merely to reuse within this session)."
     );
   }
   policies.push(
@@ -662,6 +719,7 @@ const materializeWorkspaceAttachments = (
 };
 
 const createArtifactTools = (input: {
+  abortSignal?: AbortSignal | undefined;
   artifactService: ArtifactService;
   emitter: AgUiEventEmitter;
   runContext: AgentRunContext;
@@ -677,6 +735,7 @@ const createArtifactTools = (input: {
       preview: z.unknown().optional()
     }),
     execute: async (toolInput) => {
+      throwIfAborted(input.abortSignal);
       const sourcePath = resolveWorkspaceRelativePath(input.workspaceDir, toolInput.path);
       const name = toolInput.name ?? basename(sourcePath);
       const artifact = await input.artifactService.createArtifactFromFile({
@@ -696,35 +755,104 @@ const createArtifactTools = (input: {
 });
 
 const createFileAssetTools = (input: {
+  abortSignal?: AbortSignal | undefined;
   fileAssetService: FileAssetService;
   runContext: AgentRunContext;
+  /** Per-session directory — the agent's writable basePath (where new files live). */
+  sessionDir: string;
+  /** Persistent workspace root — cross-session asset area (read-only to the agent). */
   workspaceDir: string;
 }): Record<string, ReturnType<typeof createTool>> => ({
   promote_workspace_file: createTool({
     id: "promote_workspace_file",
-    description: "Promote a file from the current run workspace into a reusable file asset.",
+    description: "Promote a session file into the cross-session workspace root so other sessions can read it. "
+      + "The file currently lives in this session's scope (only this session sees it); after promote it is "
+      + "copied/hardlinked into the persistent workspace root and registered as a cross-session asset. "
+      + "Use this only to share a file across sessions, not to reuse within the current session.",
     inputSchema: z.object({
       path: z.string().min(1),
       filename: z.string().min(1).optional(),
       description: z.string().optional()
     }),
     execute: async (toolInput) => {
-      const sourcePath = resolveWorkspaceRelativePath(input.workspaceDir, toolInput.path);
+      throwIfAborted(input.abortSignal);
+      // Source is a session-scoped file; target is the persistent workspace root.
+      const sourcePath = resolveWorkspaceRelativePath(input.sessionDir, toolInput.path);
       const filename = toolInput.filename ?? basename(sourcePath);
-      const resolved = input.fileAssetService.createRefFromPath({
+      const targetPath = resolveWorkspaceRelativePath(input.workspaceDir, filename);
+      // Materialize into the workspace root (hardlink, fall back to copy).
+      input.fileAssetService.materializeRefToPath({
+        ref: input.fileAssetService.createRefFromPath({
+          user_id: input.runContext.user_id,
+          workspace_id: input.runContext.workspace_id ?? "default",
+          session_id: input.runContext.session_id,
+          run_id: input.runContext.run_id,
+          filename,
+          declared_mime_type: mimeTypeForFilename(filename),
+          source: "workspace",
+          path: sourcePath,
+          ...(toolInput.description ? { metadata: { description: toolInput.description } } : {})
+        }).ref,
+        targetPath,
+        linkStrategy: "hardlink"
+      });
+      // Register as a cross-session workspace ref (session_id IS NULL).
+      const resolved = input.fileAssetService.promoteFileToWorkspace({
         user_id: input.runContext.user_id,
         workspace_id: input.runContext.workspace_id ?? "default",
-        session_id: input.runContext.session_id,
-        run_id: input.runContext.run_id,
+        file_asset_ref_id: input.fileAssetService.createRefFromPath({
+          user_id: input.runContext.user_id,
+          workspace_id: input.runContext.workspace_id ?? "default",
+          session_id: input.runContext.session_id,
+          run_id: input.runContext.run_id,
+          filename,
+          declared_mime_type: mimeTypeForFilename(filename),
+          source: "workspace",
+          path: sourcePath
+        }).ref.id,
         filename,
-        declared_mime_type: mimeTypeForFilename(filename),
-        source: "workspace",
-        path: sourcePath,
-        ...(toolInput.description ? { metadata: { description: toolInput.description } } : {})
+        declared_mime_type: mimeTypeForFilename(filename)
       });
       return {
         ...fileAssetRefDto(resolved),
         download_url: `/api/v1/files/${resolved.ref.id}/download`
+      };
+    }
+  }),
+  list_workspace_files: createTool({
+    id: "list_workspace_files",
+    description: "List files in the cross-session workspace root (read-only). These are assets shared across "
+      + "all of the user's sessions — uploads and promoted files. To read one, use read_workspace_file with the "
+      + "returned path. New files you write go to the session scope (list_files), not here.",
+    inputSchema: z.object({
+      path: z.string().optional()
+    }),
+    execute: async (toolInput) => {
+      throwIfAborted(input.abortSignal);
+      const listPath = toolInput.path
+        ? resolveWorkspaceRelativePath(input.workspaceDir, toolInput.path)
+        : input.workspaceDir;
+      const entries = listWorkspaceFiles(listPath);
+      return { path: toolInput.path ?? ".", files: entries };
+    }
+  }),
+  read_workspace_file: createTool({
+    id: "read_workspace_file",
+    description: "Read a file from the cross-session workspace root (read-only). Use the path from "
+      + "list_workspace_files. These files are shared across sessions; do not attempt to write or edit them "
+      + "(use write_file for new session-scoped files, promote_workspace_file to add one here).",
+    inputSchema: z.object({
+      path: z.string().min(1)
+    }),
+    execute: async (toolInput) => {
+      throwIfAborted(input.abortSignal);
+      const filePath = resolveWorkspaceRelativePath(input.workspaceDir, toolInput.path);
+      const body = readFileSync(filePath);
+      return {
+        path: toolInput.path,
+        content: body.toString("utf8"),
+        size_bytes: body.length,
+        mime_type: mimeTypeForFilename(toolInput.path)
       };
     }
   })
@@ -739,6 +867,39 @@ const resolveWorkspaceRelativePath = (workspaceDir: string, relativePath: string
     throw new Error("WORKSPACE_PATH_ESCAPE");
   }
   return path;
+};
+
+const throwIfAborted = (signal?: AbortSignal | undefined): void => {
+  if (signal?.aborted) {
+    throw signal.reason instanceof Error ? signal.reason : new Error("RUN_CANCELLED");
+  }
+};
+
+/** List files under a directory (one level) relative to the workspace root, read-only. */
+const listWorkspaceFiles = (dirPath: string): Array<{ path: string; name: string; size_bytes: number; is_directory: boolean }> => {
+  let entries: import("node:fs").Dirent[];
+  try {
+    entries = readdirSync(dirPath, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  return entries
+    .filter((entry) => entry.name !== ".DS_Store")
+    .map((entry) => {
+      const full = join(dirPath, entry.name);
+      let size = 0;
+      try {
+        size = statSync(full).size;
+      } catch {
+        // unreadable entry — keep size 0
+      }
+      return {
+        path: entry.name,
+        name: entry.name,
+        size_bytes: size,
+        is_directory: entry.isDirectory()
+      };
+    });
 };
 
 const uniqueWorkspaceInputFilename = (filename: string, usedNames: Set<string>): string => {

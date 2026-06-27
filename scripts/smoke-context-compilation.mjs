@@ -649,6 +649,24 @@ if (
 if (!events.some((event) => event.name === "context.compiled")) {
   throw new Error("Expected context compilation to emit a bounded AG-UI CUSTOM audit event");
 }
+// R-017: context.compiled must carry stable top-level budget fields.
+const compiledEvent = events.find((event) => event.name === "context.compiled");
+if (!compiledEvent) {
+  throw new Error("Expected a context.compiled event to inspect for R-017 budget fields");
+}
+const compiledValue = compiledEvent.value ?? {};
+if (typeof compiledValue.total_tokens !== "number") {
+  throw new Error("context.compiled must expose top-level total_tokens (R-017)");
+}
+if (typeof compiledValue.budget_tokens !== "number") {
+  throw new Error("context.compiled must expose top-level budget_tokens (R-017)");
+}
+if (typeof compiledValue.prompt_tokens !== "number") {
+  throw new Error("context.compiled must expose top-level prompt_tokens (R-017)");
+}
+if (typeof compiledValue.remaining_tokens !== "number") {
+  throw new Error("context.compiled must expose top-level remaining_tokens (R-017)");
+}
 
 const compactProcessorState = new ContextRunState({ ...identity, runId: "context-compact-memory-run" });
 compactProcessorState.merge(builder.build([
@@ -1032,6 +1050,21 @@ assertThrows(
 
 if (!guardEvents.some((event) => event.name === "context.prompt-verified")) {
   throw new Error("Expected the provider prompt guard to emit verification metrics before aborting");
+}
+// R-017: context.prompt-verified must carry stable top-level budget fields.
+const verifiedEvent = guardEvents.find((event) => event.name === "context.prompt-verified");
+const verifiedValue = verifiedEvent?.value ?? {};
+if (typeof verifiedValue.prompt_tokens !== "number") {
+  throw new Error("context.prompt-verified must expose top-level prompt_tokens (R-017)");
+}
+if (typeof verifiedValue.remaining_tokens !== "number") {
+  throw new Error("context.prompt-verified must expose top-level remaining_tokens (R-017)");
+}
+if (typeof verifiedValue.budget_tokens !== "number") {
+  throw new Error("context.prompt-verified must expose top-level budget_tokens (R-017)");
+}
+if (typeof verifiedValue.total_tokens !== "number") {
+  throw new Error("context.prompt-verified must expose top-level total_tokens (R-017)");
 }
 
 const configuredAgent = await createDataAgent({

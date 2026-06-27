@@ -30,7 +30,29 @@ export type EffectiveRunConfig = {
     maxRuns?: number;
     objective: string;
   };
+  /**
+   * Per-run @ mentions (R-019). Each kind lists the IDs the user explicitly focused on
+   * this run — a *focus* signal, not a narrowing of `enabled*Ids`. IDs that fall outside
+   * the corresponding enabled set are dropped (and surfaced as `mentioned_excluded` for
+   * diagnostics) rather than failing the run.
+   */
+  mentioned?: {
+    db: string[];
+    kb: string[];
+    mcp: string[];
+    skill: string[];
+    excluded?: { kind: PerRunMentionKind; id: string }[];
+  };
+  /** Per-run pinned session-relative paths (R-024). Sanitized, escape-checked. */
+  pinnedPaths?: string[];
+  /**
+   * Resources silently dropped from `enabled*Ids` because `default_enabled=false` (R-020).
+   * The run continues; this list is surfaced in `run.config.resolved` for diagnostics.
+   */
+  disabledByPolicy?: { kind: "knowledge-base" | "mcp-server" | "model-profile"; id: string }[];
 };
+
+export type PerRunMentionKind = "db" | "kb" | "mcp" | "skill";
 
 /** Parse and validate the frontend run_config into the backend's effective run policy. */
 export const extractEffectiveRunConfig = (
@@ -62,6 +84,25 @@ export const extractEffectiveRunConfig = (
   const skillPolicy = extractSkillPolicy(runConfig);
   const skillTags = unique(stringArrayOptionFromAliases(runConfig, ["skillTags", "skill_tags"]) ?? []);
   const goal = extractGoal(runConfig);
+  // R-019: parse per-run @ mentions. Focus signal (not narrowing). IDs outside the
+  // matching enabled*Ids set are dropped and collected into `excluded[]` for diagnostics.
+  const mentionedRaw = perRunSelectionFromAliases(runConfig, ["mentioned"]);
+  const enabledKnowledgeIds = unique(stringArrayOptionFromAliases(
+    runConfig,
+    ["enabledKnowledgeIds", "enabled_knowledge_ids"]
+  ) ?? defaults?.enabledKnowledgeIds ?? []);
+  const enabledMcpServerIds = unique(stringArrayOptionFromAliases(
+    runConfig,
+    ["enabledMcpServerIds", "enabled_mcp_server_ids"]
+  ) ?? defaults?.enabledMcpServerIds ?? []);
+  const mentioned = clampMentioned(mentionedRaw, {
+    db: effectiveDatasourceIds,
+    kb: enabledKnowledgeIds,
+    mcp: enabledMcpServerIds,
+    skill: enabledSkillIds
+  });
+  // R-024: parse pinned session-relative paths. Drop anything that escapes or is unsafe.
+  const pinnedPaths = pinnedPathsFromAliases(runConfig, ["pinnedPaths", "pinned_paths"]);
 
   if (!effectiveDatasourceIds.includes(activeDatasourceId)) {
     throw new Error("ACTIVE_DATASOURCE_NOT_ENABLED");
@@ -76,20 +117,16 @@ export const extractEffectiveRunConfig = (
     ...(activeSkillId ? { activeSkillId } : {}),
     enabledDatasourceIds: effectiveDatasourceIds,
     fileIds: unique(stringArrayOptionFromAliases(runConfig, ["fileIds", "file_ids"]) ?? []),
-    enabledKnowledgeIds: unique(stringArrayOptionFromAliases(
-      runConfig,
-      ["enabledKnowledgeIds", "enabled_knowledge_ids"]
-    ) ?? defaults?.enabledKnowledgeIds ?? []),
-    enabledMcpServerIds: unique(stringArrayOptionFromAliases(
-      runConfig,
-      ["enabledMcpServerIds", "enabled_mcp_server_ids"]
-    ) ?? defaults?.enabledMcpServerIds ?? []),
+    enabledKnowledgeIds,
+    enabledMcpServerIds,
     enabledSkillIds,
     skillIds: unique(skillIdsOverride ?? (configuredSkillId ? [configuredSkillId] : [])),
     skillMode,
     skillPolicy,
     skillTags,
-    ...(goal ? { goal } : {})
+    ...(goal ? { goal } : {}),
+    ...(mentioned ? { mentioned } : {}),
+    ...(pinnedPaths.length > 0 ? { pinnedPaths } : {})
   };
 };
 
@@ -335,3 +372,96 @@ const stringArrayOptionFromAliases = (record: Record<string, unknown>, aliases: 
 const unique = (values: string[]): string[] => [...new Set(values)];
 
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null;
+
+/**
+ * Parse the per-run `mentioned` selection (R-019). Accepts snake_case or camelCase keys
+ * for each kind. Returns undefined when no `mentioned` field is present (backward compat).
+ */
+const perRunSelectionFromAliases = (
+  record: Record<string, unknown>,
+  aliases: string[]
+): Record<PerRunMentionKind, string[]> | undefined => {
+  let raw: unknown;
+  for (const alias of aliases) {
+    if (alias in record) {
+      raw = record[alias];
+      break;
+    }
+  }
+  if (raw === undefined) {
+    return undefined;
+  }
+  if (!isRecord(raw)) {
+    return { db: [], kb: [], mcp: [], skill: [] };
+  }
+  const kinds: PerRunMentionKind[] = ["db", "kb", "mcp", "skill"];
+  const result = {} as Record<PerRunMentionKind, string[]>;
+  for (const kind of kinds) {
+    const value = raw[kind] ?? raw[`${kind}_ids`];
+    result[kind] = Array.isArray(value)
+      ? value.filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+      : [];
+  }
+  return result;
+};
+
+/**
+ * Clamp mentioned IDs to their enabled*Ids subsets (R-019 validation). Out-of-scope IDs
+ * are dropped (not thrown) and collected into `excluded[]` so the run continues and the
+ * frontend can surface a diagnostic. Returns undefined only when mentioned is undefined.
+ */
+const clampMentioned = (
+  mentioned: Record<PerRunMentionKind, string[]> | undefined,
+  enabled: Record<PerRunMentionKind, string[]>
+): EffectiveRunConfig["mentioned"] | undefined => {
+  if (!mentioned) {
+    return undefined;
+  }
+  const kinds: PerRunMentionKind[] = ["db", "kb", "mcp", "skill"];
+  const excluded: { kind: PerRunMentionKind; id: string }[] = [];
+  const clamped = {} as Record<PerRunMentionKind, string[]>;
+  for (const kind of kinds) {
+    const allowed = new Set(enabled[kind]);
+    const kept: string[] = [];
+    for (const id of mentioned[kind]) {
+      if (allowed.has(id)) {
+        kept.push(id);
+      } else {
+        excluded.push({ kind, id });
+      }
+    }
+    clamped[kind] = unique(kept);
+  }
+  return {
+    db: clamped.db,
+    kb: clamped.kb,
+    mcp: clamped.mcp,
+    skill: clamped.skill,
+    ...(excluded.length > 0 ? { excluded } : {})
+  };
+};
+
+/**
+ * Parse `pinnedPaths` (R-024). Each entry must be a session-relative path: non-empty,
+ * not absolute, no NUL bytes, no `..` traversal. Invalid entries are silently dropped.
+ */
+const pinnedPathsFromAliases = (record: Record<string, unknown>, aliases: string[]): string[] => {
+  const raw = stringArrayOptionFromAliases(record, aliases);
+  if (!raw || raw.length === 0) {
+    return [];
+  }
+  const safe: string[] = [];
+  for (const candidate of raw) {
+    const trimmed = candidate.trim();
+    if (trimmed.length === 0 || trimmed.startsWith("/") || trimmed.includes("\0")) {
+      continue;
+    }
+    // Reject any segment that is exactly ".." (path traversal into parent).
+    const segments = trimmed.split(/[/\\]+/);
+    if (segments.some((segment) => segment === "..")) {
+      continue;
+    }
+    safe.push(trimmed);
+  }
+  return unique(safe);
+};

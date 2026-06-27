@@ -19,11 +19,20 @@ export type MastraContextCompiledEventPayload = {
   selected_sources: ReturnType<typeof createSourceEventEntries>;
   step_number: number;
   token_report: ContextPlan["tokenReport"];
+  // R-017: stable top-level budget fields so the frontend overview can render model /
+  // total_tokens / budget_tokens / prompt_tokens / remaining_tokens without reaching
+  // into the nested `budget`/`token_report` objects.
+  model?: string;
+  total_tokens: number;
+  budget_tokens: number;
+  prompt_tokens: number;
+  remaining_tokens: number;
 };
 
 export const createMastraContextCompiledEventPayload = (
   contextPackage: ContextPackage,
-  plan: ContextPlan
+  plan: ContextPlan,
+  modelName?: string
 ): MastraContextCompiledEventPayload => ({
   package_revision: plan.packageRevision,
   plan_id: plan.planId,
@@ -41,7 +50,12 @@ export const createMastraContextCompiledEventPayload = (
   ])),
   decisions: plan.decisions,
   token_report: plan.tokenReport,
-  budget: plan.budget
+  budget: plan.budget,
+  ...(modelName ? { model: modelName } : {}),
+  total_tokens: plan.tokenReport.totalInputTokens,
+  budget_tokens: plan.budget.inputBudget,
+  prompt_tokens: plan.tokenReport.totalInputTokens,
+  remaining_tokens: plan.tokenReport.remainingTokens
 });
 
 export const sourcePolicyDecisionsToContextDecisions = (

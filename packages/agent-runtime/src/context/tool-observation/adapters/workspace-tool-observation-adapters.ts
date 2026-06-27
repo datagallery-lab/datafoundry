@@ -111,3 +111,21 @@ export class PromoteWorkspaceFileToolObservationAdapter extends BaseToolObservat
     return pickFields(raw, ["id", "assetId", "filename", "mimeType", "sizeBytes", "sha256", "download_url"]);
   }
 }
+
+export class ListWorkspaceFilesToolObservationAdapter extends BaseToolObservationAdapter {
+  readonly toolName = "list_workspace_files";
+  readonly resultType = "workspace-files-list";
+
+  protected project(raw: unknown): unknown {
+    return projectWorkspaceObservation(raw);
+  }
+}
+
+export class ReadWorkspaceFileToolObservationAdapter extends BaseToolObservationAdapter {
+  readonly toolName = "read_workspace_file";
+  readonly resultType = "workspace-file-read";
+
+  protected project(raw: unknown): unknown {
+    return pickFields(raw, ["path", "size_bytes", "mime_type"]);
+  }
+}

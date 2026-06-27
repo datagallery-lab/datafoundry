@@ -32,7 +32,13 @@ export class MastraProviderPromptGuardProcessor implements Processor<"provider-p
       model_profile_id: profile.id,
       prompt_tokens: promptTokens,
       input_budget: inputBudget,
-      remaining_tokens: remainingTokens
+      remaining_tokens: remainingTokens,
+      // R-017: stable top-level budget fields. `model` is the resolved model name;
+      // `budget_tokens` aliases `input_budget`; `total_tokens` mirrors prompt_tokens for
+      // the verified-prompt snapshot (no completion tokens yet at this stage).
+      ...(this.options.modelName ? { model: this.options.modelName } : {}),
+      total_tokens: promptTokens,
+      budget_tokens: inputBudget
     });
 
     if (promptTokens > inputBudget) {

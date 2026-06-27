@@ -30,6 +30,10 @@ export type RunAgentAssembly = {
     command_execution_enabled: boolean;
     isolation: "bwrap" | "none" | "seatbelt";
   };
+  /** Persistent cross-session workspace root (read-only asset area). */
+  workspaceDir: string;
+  /** Per-session directory (agent filesystem basePath; new files default here). */
+  sessionDir: string;
 };
 
 type CreateRunAgentContextInput = {
@@ -44,6 +48,7 @@ type CreateRunAgentContextInput = {
 };
 
 type CreateRunAgentAssemblyInput = {
+  abortSignal?: AbortSignal | undefined;
   artifactService: ArtifactService;
   dataGateway: DataGateway;
   effectiveRunConfig: EffectiveRunConfig;
@@ -88,6 +93,19 @@ export const createRunAgentContext = (input: CreateRunAgentContextInput): AgentR
     ...(input.effectiveRunConfig.enabledMcpServerIds.length > 0
       ? { enabled_mcp_server_ids: input.effectiveRunConfig.enabledMcpServerIds }
       : {}),
+    ...(input.effectiveRunConfig.mentioned
+      ? {
+          mentioned: {
+            db: input.effectiveRunConfig.mentioned.db,
+            kb: input.effectiveRunConfig.mentioned.kb,
+            mcp: input.effectiveRunConfig.mentioned.mcp,
+            skill: input.effectiveRunConfig.mentioned.skill
+          }
+        }
+      : {}),
+    ...((input.effectiveRunConfig.pinnedPaths?.length ?? 0) > 0
+      ? { pinned_paths: input.effectiveRunConfig.pinnedPaths }
+      : {}),
     model_name: input.modelProvider.model_name
   });
 
@@ -101,8 +119,11 @@ export const createRunAgentAssembly = async (
     destroyWorkspace,
     goalRuntime,
     governedMessages,
-    isolation
+    isolation,
+    workspaceDir,
+    sessionDir
   } = await createDataAgent({
+    ...(input.abortSignal ? { abortSignal: input.abortSignal } : {}),
     artifactService: input.artifactService,
     dataGateway: input.dataGateway,
     fileAssetService: input.fileAssetService,
@@ -140,7 +161,9 @@ export const createRunAgentAssembly = async (
     workspace: {
       command_execution_enabled: commandExecutionEnabled,
       isolation
-    }
+    },
+    workspaceDir,
+    sessionDir
   };
 };
 

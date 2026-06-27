@@ -87,6 +87,7 @@ export type ToolRegistry = {
 };
 
 type CreateDataAgentToolRegistryInput = {
+  abortSignal?: AbortSignal | undefined;
   dataGateway: DataGateway;
   emitter: AgUiEventEmitter;
   runContext: AgentRunContext;
@@ -104,6 +105,7 @@ export const createDataAgentToolRegistry = (input: CreateDataAgentToolRegistryIn
   const resultMetadata = new WeakMap<object, { datasourceId: string; stepId: string }>();
 
   const listDataSources = async (toolInput: { enabled_only?: boolean } = {}): Promise<unknown> => {
+    throwIfAborted(input.abortSignal);
     const allowedIds = new Set(input.runContext.enabled_datasource_ids);
     const results = await input.dataGateway.listDataSources({
       user_id: input.runContext.user_id,
@@ -129,6 +131,7 @@ export const createDataAgentToolRegistry = (input: CreateDataAgentToolRegistryIn
     toolInput: { datasource_id?: string; table_names?: string[] } = {},
     options?: DataToolExecutionOptions,
   ): Promise<InspectSchemaResult> => {
+    throwIfAborted(input.abortSignal);
     const datasourceId = resolveDatasourceId(input.runContext, toolInput.datasource_id);
     const stepId = `schema-${randomUUID()}`;
     emitStepCorrelation(stepId, "inspect_schema", options?.toolCallId);
@@ -145,8 +148,10 @@ export const createDataAgentToolRegistry = (input: CreateDataAgentToolRegistryIn
     try {
       const result = await input.dataGateway.inspectSchema({
         user_id: input.runContext.user_id,
+        ...(input.runContext.workspace_id ? { workspace_id: input.runContext.workspace_id } : {}),
         datasource_id: datasourceId,
-        ...(toolInput.table_names ? { table_names: toolInput.table_names } : {})
+        ...(toolInput.table_names ? { table_names: toolInput.table_names } : {}),
+        ...(input.abortSignal ? { signal: input.abortSignal } : {})
       });
       const schema_id = `schema_${randomUUID()}`;
       state.schema_capabilities.set(schema_id, { datasource_id: datasourceId, schema_id });
@@ -168,6 +173,7 @@ export const createDataAgentToolRegistry = (input: CreateDataAgentToolRegistryIn
     },
     options?: DataToolExecutionOptions,
   ): Promise<RawSqlToolResult> => {
+    throwIfAborted(input.abortSignal);
     const capability = state.schema_capabilities.get(toolInput.schema_id);
     if (!capability) {
       throw new Error("SCHEMA_REQUIRED_BEFORE_SQL");
@@ -198,11 +204,21 @@ export const createDataAgentToolRegistry = (input: CreateDataAgentToolRegistryIn
     try {
       const result = await input.dataGateway.runSqlReadonly({
         user_id: input.runContext.user_id,
+        ...(input.runContext.workspace_id ? { workspace_id: input.runContext.workspace_id } : {}),
         run_id: input.runContext.run_id,
         datasource_id: datasourceId,
         sql: toolInput.sql,
         ...(toolInput.limit ? { limit: toolInput.limit } : {}),
-        ...(toolInput.timeout_ms ? { timeout_ms: toolInput.timeout_ms } : {})
+        ...(toolInput.timeout_ms ? { timeout_ms: toolInput.timeout_ms } : {}),
+        ...(input.abortSignal ? { signal: input.abortSignal } : {}),
+        // R-018: let the produced table artifact record its origin so the Detail view
+        // can link the SQL result back to this tool_call / step.
+        ...(options?.toolCallId || stepId
+          ? { correlation: {
+              ...(options?.toolCallId ? { tool_call_id: options.toolCallId } : {}),
+              ...(stepId ? { step_id: stepId } : {})
+            } }
+          : {})
       });
       if (result.artifact_id) {
         state.artifact_ids.push(result.artifact_id);
@@ -222,15 +238,18 @@ export const createDataAgentToolRegistry = (input: CreateDataAgentToolRegistryIn
     table: string;
     limit?: number;
   }): Promise<unknown> => {
+    throwIfAborted(input.abortSignal);
     const capability = state.schema_capabilities.get(toolInput.schema_id);
     if (!capability) {
       throw new Error("SCHEMA_REQUIRED_BEFORE_PREVIEW");
     }
     const result = await input.dataGateway.previewTable({
       user_id: input.runContext.user_id,
+      ...(input.runContext.workspace_id ? { workspace_id: input.runContext.workspace_id } : {}),
       datasource_id: capability.datasource_id,
       table: toolInput.table,
-      ...(toolInput.limit ? { limit: toolInput.limit } : {})
+      ...(toolInput.limit ? { limit: toolInput.limit } : {}),
+      ...(input.abortSignal ? { signal: input.abortSignal } : {})
     });
     return { datasource_id: capability.datasource_id, table: toolInput.table, ...result };
   };
@@ -392,6 +411,12 @@ const resolveDatasourceId = (context: AgentRunContext, requestedDatasourceId: st
     throw new Error("DATASOURCE_NOT_SELECTED");
   }
   return datasourceId;
+};
+
+const throwIfAborted = (signal?: AbortSignal | undefined): void => {
+  if (signal?.aborted) {
+    throw signal.reason instanceof Error ? signal.reason : new Error("RUN_CANCELLED");
+  }
 };
 
 const isObject = (value: unknown): value is object => typeof value === "object" && value !== null;

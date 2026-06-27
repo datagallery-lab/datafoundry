@@ -51,6 +51,22 @@ try {
   assert(selectResult.row_count === 2, `SELECT row_count expected 2, got ${selectResult.row_count}`);
   assert(Boolean(selectResult.artifact_id), "SELECT should create a table artifact when run_id is provided");
 
+  // R-018: correlation handles land on the artifact's metadata_json for Detail linking.
+  const correlatedResult = await gateway.runSqlReadonly({
+    user_id,
+    run_id,
+    datasource_id: "sqlite-orders",
+    sql: "SELECT channel, COUNT(*) AS n FROM orders GROUP BY channel",
+    limit: 5,
+    correlation: { tool_call_id: "call-r018", step_id: "sql-r018" }
+  });
+  assert(Boolean(correlatedResult.artifact_id), "correlated SELECT should create a table artifact");
+  const correlatedArtifact = store.artifacts.get({ user_id, artifact_id: correlatedResult.artifact_id });
+  const correlatedMeta = correlatedArtifact.metadata_json ? JSON.parse(correlatedArtifact.metadata_json) : {};
+  assert(correlatedMeta.tool_call_id === "call-r018", "artifact metadata should carry tool_call_id");
+  assert(correlatedMeta.step_id === "sql-r018", "artifact metadata should carry step_id");
+  assert(typeof correlatedMeta.audit_log_id === "string", "artifact metadata should carry audit_log_id");
+
   const withResult = await gateway.runSqlReadonly({
     user_id,
     datasource_id: "sqlite-orders",

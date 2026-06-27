@@ -84,7 +84,14 @@ try {
     console.log("execute_command disabled by environment; skipping sandbox execution assertions");
   }
 
-  await runWorkspace.workspace.destroy();
+  // New session-default model: write_file lands in the per-session directory (sessionDir),
+  // NOT the persistent root. destroy() clears sessionDir, so a later run in a DIFFERENT
+  // session cannot read this session's greeting.txt — it was session-scoped.
+  assert(
+    runWorkspace.sessionDir !== runDir,
+    "sessionDir must differ from the persistent workspace root (runDir)"
+  );
+  await runWorkspace.destroy();
   assert(runWorkspace.workspace.status === "destroyed", "workspace should reach destroyed status after destroy");
 
   const nextRunWorkspace = createRunWorkspace({
@@ -94,21 +101,26 @@ try {
     },
     workspaceRoot
   });
-  assert(nextRunWorkspace.runDir === runDir, "same user/session should reuse the session workspace directory");
+  assert(nextRunWorkspace.runDir === runDir, "same (user, workspace) should reuse the persistent workspace directory");
   await nextRunWorkspace.workspace.init();
   const nextTools = await createWorkspaceTools(nextRunWorkspace.workspace, {
     requestContext: {},
     workspace: nextRunWorkspace.workspace
   });
-  const nextRead = await nextTools.read_file.execute({ path: "greeting.txt" }, {
-    ...execCtx,
-    context: { requestContext: new Map() }
-  });
+  let sessionFileGone = false;
+  try {
+    await nextTools.read_file.execute({ path: "greeting.txt" }, {
+      ...execCtx,
+      context: { requestContext: new Map() }
+    });
+  } catch {
+    sessionFileGone = true;
+  }
   assert(
-    String(nextRead).includes("hello-from-sandbox"),
-    "same-session later runs should read files written by earlier runs"
+    sessionFileGone,
+    "a later run (different session) must NOT read the previous session's session-scoped file after destroy"
   );
-  await nextRunWorkspace.workspace.destroy();
+  await nextRunWorkspace.destroy();
 
   const isolatedWorkspace = createRunWorkspace({
     runContext: {
@@ -118,8 +130,16 @@ try {
     },
     workspaceRoot
   });
-  assert(isolatedWorkspace.runDir !== runDir, "different sessions should not share a workspace directory");
-  await isolatedWorkspace.workspace.destroy().catch(() => undefined);
+  // New workspace model: different sessions of the same (user, workspace) SHARE the
+  // persistent workspace dir (runDir) — the cross-session user asset. They differ only
+  // in their per-session scratch dir (sessionDir), which is destroyed at run end.
+  assert(isolatedWorkspace.runDir === runDir, "same (user, workspace) sessions should share the persistent workspace dir");
+  assert(isolatedWorkspace.sessionDir !== runWorkspace.sessionDir, "different sessions should have distinct scratch dirs");
+  assert(
+    isolatedWorkspace.sessionDir.startsWith(`${runDir}${path.sep}sessions${path.sep}`),
+    "session scratch dir should live under {workspaceDir}/sessions/"
+  );
+  await isolatedWorkspace.destroy().catch(() => undefined);
 
   const otherTenantWorkspace = createRunWorkspace({
     runContext: {
@@ -130,7 +150,7 @@ try {
     workspaceRoot
   });
   assert(otherTenantWorkspace.runDir !== runDir, "different workspace ids should not share a workspace directory");
-  await otherTenantWorkspace.workspace.destroy().catch(() => undefined);
+  await otherTenantWorkspace.destroy().catch(() => undefined);
 
   let escaped = false;
   try {
