@@ -6,6 +6,7 @@ import { ActivityPanel } from './ActivityPanel.js';
 import { InputBox } from './InputBox.js';
 import { KeybindingsHelp } from './KeybindingsHelp.js';
 import { getStatusBarShortcuts } from './keybindings.js';
+import { AssistantTextStreamBuffer, type AssistantTextFlush } from './assistant-stream-buffer.js';
 import { store, type TuiAppState } from '../state/index.js';
 import { getMessageTextContent } from '../state/message-history.js';
 import type { AgentClient, AgentMessage, RunAgentInput } from '../protocol/types.js';
@@ -20,10 +21,6 @@ interface AppProps {
 
 type TabType = 'chat' | 'stats' | 'config';
 const MAX_VISIBLE_CHAT_MESSAGES = 40;
-const INTERNAL_CONTEXT_TAGS = [
-  'working_memory_data',
-  'long_term_memory',
-];
 
 const formatDirectory = (directory: string): string => {
   const homeDirectory = process.env.HOME;
@@ -45,50 +42,6 @@ const resolveModelName = (state: TuiAppState): string => {
   }
 
   return modelName || model?.name || 'server default';
-};
-
-const escapeRegExp = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-
-const stripInternalContextBlocks = (text: string): string => {
-  let result = text;
-
-  for (const tag of INTERNAL_CONTEXT_TAGS) {
-    const escapedTag = escapeRegExp(tag);
-    result = result.replace(
-      new RegExp(`<${escapedTag}>[\\s\\S]*?<\\/${escapedTag}>\\s*`, 'g'),
-      '',
-    );
-    result = result.replace(
-      new RegExp(`<${escapedTag}>[\\s\\S]*$`, 'g'),
-      '',
-    );
-
-    const openTag = `<${tag}>`;
-    for (let length = openTag.length - 1; length > 0; length -= 1) {
-      if (result.endsWith(openTag.slice(0, length))) {
-        result = result.slice(0, -length);
-        break;
-      }
-    }
-  }
-
-  return result;
-};
-
-const mergeStreamText = (current: string, incoming: string): string => {
-  if (!incoming) return current;
-  if (!current) return incoming;
-  if (incoming.startsWith(current)) return incoming;
-  if (current.endsWith(incoming)) return current;
-
-  const maxOverlap = Math.min(current.length, incoming.length);
-  for (let length = maxOverlap; length > 0; length -= 1) {
-    if (current.endsWith(incoming.slice(0, length))) {
-      return current + incoming.slice(length);
-    }
-  }
-
-  return current + incoming;
 };
 
 export const App: React.FC<AppProps> = ({ client, datasourceId }) => {
@@ -301,19 +254,30 @@ export const App: React.FC<AppProps> = ({ client, datasourceId }) => {
 
       setRetryCount(attempt);
       let receivedText = false;
-      let rawText = '';
-      let visibleText = '';
-      let flushedVisibleText = '';
+      const textBuffer = new AssistantTextStreamBuffer();
       let textFlushTimer: ReturnType<typeof setTimeout> | undefined;
 
-      const flushTextBuffer = () => {
+      const applyTextFlush = (flush: AssistantTextFlush | null) => {
+        if (!flush) return;
+        if (flush.type === 'text') {
+          store.updateAssistantMessage(flush.content, flush.isStreaming);
+        } else {
+          store.finalizeAssistantMessage();
+        }
+      };
+
+      const flushTextBuffer = (isStreaming = true) => {
         if (textFlushTimer) {
           clearTimeout(textFlushTimer);
           textFlushTimer = undefined;
         }
-        if (visibleText === flushedVisibleText) return;
-        flushedVisibleText = visibleText;
-        store.updateAssistantMessage(visibleText, true);
+
+        applyTextFlush(textBuffer.flush(isStreaming));
+      };
+
+      const startNextTextSegment = () => {
+        flushTextBuffer();
+        textBuffer.markSegmentBoundary();
       };
 
       const scheduleTextFlush = () => {
@@ -331,10 +295,7 @@ export const App: React.FC<AppProps> = ({ client, datasourceId }) => {
           if (event.type === 'TEXT_MESSAGE_CONTENT' || event.type === 'TEXT_MESSAGE_CHUNK') {
             const delta = (event as { delta?: unknown }).delta;
             if (typeof delta === 'string') {
-              rawText = mergeStreamText(rawText, delta);
-              const nextVisibleText = stripInternalContextBlocks(rawText);
-
-              if (nextVisibleText === visibleText) {
+              if (!textBuffer.append(delta)) {
                 continue;
               }
 
@@ -342,16 +303,13 @@ export const App: React.FC<AppProps> = ({ client, datasourceId }) => {
                 store.updateAssistantMessage('', true);
                 receivedText = true;
               }
-              visibleText = nextVisibleText;
               scheduleTextFlush();
             }
           } else if (event.type === 'TEXT_MESSAGE_END') {
-            flushTextBuffer();
-            store.updateAssistantMessage(visibleText, false);
+            flushTextBuffer(false);
           } else if (event.type === 'RUN_FINISHED') {
-            flushTextBuffer();
+            flushTextBuffer(false);
             store.handleLiveRunEvent(event as { type?: string; [key: string]: unknown });
-            store.updateAssistantMessage(visibleText, false);
           } else if (event.type === 'RUN_ERROR') {
             flushTextBuffer();
             const message = (event as { message?: unknown }).message;
@@ -364,13 +322,16 @@ export const App: React.FC<AppProps> = ({ client, datasourceId }) => {
             // Display user-friendly error message
             const friendlyMessage = formatErrorMessage(classifiedError);
             store.updateAssistantMessage(`Error: ${friendlyMessage}`, false);
+          } else if (event.type === 'TOOL_CALL_START') {
+            startNextTextSegment();
+            store.handleLiveRunEvent(event as { type?: string; [key: string]: unknown });
           } else {
             // Feed non-text events into the state reducer. Text chunks are
             // rendered through the buffered assistant message path above.
             store.handleLiveRunEvent(event as { type?: string; [key: string]: unknown });
           }
         }
-        flushTextBuffer();
+        flushTextBuffer(false);
 
         // Ensure run is marked as finished
         const finalState = store.getState();
