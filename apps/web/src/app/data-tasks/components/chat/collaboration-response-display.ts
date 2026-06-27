@@ -4,7 +4,7 @@ type ChoiceOption = { label: string; value: string; description?: string };
 
 export type CollaborationResponseLayout = {
   recapSide: "assistant";
-  choiceSide: "user";
+  choiceSide: "inline";
   planRenderer: "markdown" | undefined;
 };
 
@@ -13,7 +13,7 @@ export function collaborationResponseLayout(
 ): CollaborationResponseLayout {
   return {
     recapSide: "assistant",
-    choiceSide: "user",
+    choiceSide: "inline",
     planRenderer: toolName === "submit_plan" ? "markdown" : undefined,
   };
 }
@@ -40,6 +40,17 @@ export function formatCollaborationResponseDisplay(
     const trimmed = response.trim();
     const matched = options.find((option) => option.value === trimmed);
     return matched?.label ?? trimmed;
+  }
+
+  if (Array.isArray(response)) {
+    const labels = response
+      .map((item) => {
+        const value = typeof item === "string" ? item.trim() : String(item);
+        const matched = options.find((option) => option.value === value);
+        return matched?.label ?? value;
+      })
+      .filter(Boolean);
+    return labels.length > 0 ? labels.join("、") : "已提交回答";
   }
 
   if (typeof response === "number" || typeof response === "boolean") {

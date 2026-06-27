@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   findLinkedCollaborationResponse,
   hasLaterAssistantMessage,
+  resolveAssistantToolStepNumber,
   resolveStepAssistantFlags,
 } from "../step-assistant-state";
 import type { CollaborationResponseRecord } from "../components/chat/collaboration-responses";
@@ -74,7 +75,7 @@ describe("resolveStepAssistantFlags", () => {
       collaborationResponses: [baseResponse],
     });
 
-    expect(flags.isCollaborationStep).toBe(true);
+    expect(flags.isCollaborationStep).toBe(false);
     expect(flags.isCollaborationComplete).toBe(true);
     expect(flags.isFinalAnswer).toBe(false);
     expect(flags.isActive).toBe(false);
@@ -95,5 +96,172 @@ describe("resolveStepAssistantFlags", () => {
 
     expect(flags.isFinalAnswer).toBe(true);
     expect(flags.isActive).toBe(true);
+  });
+
+  it("does not classify a final text answer as collaboration only because the live run has a collaboration tool", () => {
+    const messages = [
+      { id: "msg-final", role: "assistant", content: "收到，计划已批准，可以继续执行。" },
+    ];
+    const liveRun = {
+      ...createInitialLiveRun(),
+      toolCalls: [
+        {
+          id: "tc-plan",
+          name: "submit_plan",
+          status: "success" as const,
+          startedAtMs: 1,
+          finishedAtMs: 2,
+        },
+      ],
+    };
+    const flags = resolveStepAssistantFlags({
+      message: messages[0],
+      messages,
+      content: "收到，计划已批准，可以继续执行。",
+      isRunning: false,
+      liveRunStatus: "completed",
+      liveRun,
+      collaborationResponses: [],
+    });
+
+    expect(flags.isCollaborationStep).toBe(false);
+    expect(flags.isFinalAnswer).toBe(true);
+  });
+
+  it("does not let a previous collaboration tool relabel a later run's named data tool", () => {
+    const messages = [
+      { id: "user-1", role: "user", content: "测试 ask_user" },
+      { id: "assistant-1", role: "assistant", content: "请选择工具" },
+      { id: "user-2", role: "user", content: "继续调用数据源工具" },
+      {
+        id: "assistant-2",
+        role: "assistant",
+        content: "我将先列出数据源。",
+        toolCalls: [{ id: "tc-list", function: { name: "list_data_sources" } }],
+      },
+    ];
+    const liveRun = {
+      ...createInitialLiveRun(),
+      toolCalls: [
+        {
+          id: "tc-ask",
+          name: "ask_user",
+          status: "success" as const,
+          startedAtMs: 1,
+          finishedAtMs: 2,
+        },
+        {
+          id: "tc-list",
+          name: "list_data_sources",
+          status: "running" as const,
+          startedAtMs: 3,
+        },
+      ],
+    };
+    const flags = resolveStepAssistantFlags({
+      message: messages[3],
+      messages,
+      content: "我将先列出数据源。",
+      isRunning: true,
+      liveRunStatus: "running",
+      liveRun,
+      collaborationResponses: [],
+    });
+
+    expect(flags.isCollaborationStep).toBe(false);
+    expect(flags.hasToolCalls).toBe(true);
+  });
+});
+
+describe("resolveAssistantToolStepNumber", () => {
+  it("keeps regular tool-call messages in the numbered sequence", () => {
+    const messages = [
+      { id: "assistant-1", role: "assistant", toolCalls: [{ id: "tc-data", function: { name: "list_data_sources" } }] },
+      { id: "assistant-2", role: "assistant", toolCalls: [{ id: "tc-sql", function: { name: "run_sql_readonly" } }] },
+    ];
+
+    expect(
+      resolveAssistantToolStepNumber({
+        message: messages[1],
+        messages,
+        liveRun: createInitialLiveRun(),
+        collaborationResponses: [],
+      }),
+    ).toBe(2);
+  });
+
+  it("numbers an answered ask_user step even when the chat message has no toolCalls", () => {
+    const messages = [
+      { id: "assistant-1", role: "assistant", toolCalls: [{ id: "tc-data", function: { name: "list_data_sources" } }] },
+      { id: "assistant-ask", role: "assistant", content: "请选择下一步" },
+    ];
+    const liveRun = {
+      ...createInitialLiveRun(),
+      toolCalls: [
+        {
+          id: "tc-data",
+          name: "list_data_sources",
+          status: "success" as const,
+          startedAtMs: 1,
+          finishedAtMs: 2,
+        },
+        {
+          id: "tc-ask",
+          name: "ask_user",
+          status: "success" as const,
+          startedAtMs: 3,
+          finishedAtMs: 4,
+        },
+      ],
+    };
+
+    expect(
+      resolveAssistantToolStepNumber({
+        message: messages[1],
+        messages,
+        liveRun,
+        collaborationResponses: [
+          {
+            ...baseResponse,
+            toolCallId: "tc-ask",
+            assistantMessageId: "assistant-ask",
+          },
+        ],
+      }),
+    ).toBe(2);
+  });
+
+  it("numbers a pending submit_plan step inferred from the live run", () => {
+    const messages = [
+      { id: "assistant-1", role: "assistant", toolCalls: [{ id: "tc-data", function: { name: "list_data_sources" } }] },
+      { id: "assistant-plan", role: "assistant", content: "" },
+    ];
+    const liveRun = {
+      ...createInitialLiveRun(),
+      toolCalls: [
+        {
+          id: "tc-data",
+          name: "list_data_sources",
+          status: "success" as const,
+          startedAtMs: 1,
+          finishedAtMs: 2,
+        },
+        {
+          id: "tc-plan",
+          name: "submit_plan",
+          status: "running" as const,
+          startedAtMs: 3,
+        },
+      ],
+    };
+
+    expect(
+      resolveAssistantToolStepNumber({
+        message: messages[1],
+        messages,
+        liveRun,
+        collaborationResponses: [],
+      }),
+    ).toBe(2);
   });
 });

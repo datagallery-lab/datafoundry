@@ -16,7 +16,7 @@ import {
   useRenderTool,
 } from "@copilotkit/react-core/v2";
 import { useCallback, createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
-import type { ComponentProps, ComponentType, ReactNode } from "react";
+import type { ComponentProps, ComponentType, MouseEvent, ReactNode } from "react";
 import { z } from "zod";
 import {
   buildMentionResources,
@@ -36,14 +36,17 @@ import {
   filterWorkspaceAssetFiles,
   getEnabledLlmItems,
   hasCapability,
+  toolDisplayTitle,
   loadActiveLlmId,
   loadChatSessions,
+  mergeServerChatSessions,
   normalizeLlmSettings,
   normalizeMcpSettings,
   persistActiveLlmId,
   persistChatSessions,
   isWorkspaceConfigItemValid,
   renameChatSession,
+  serverSessionDtoToChatSession,
   normalizeSkillSettings,
   parseSkillPackageFile,
   prunePerRunSelection,
@@ -72,7 +75,16 @@ import {
   WORKSPACE_CONFIG_SHORT_LABEL,
 } from "./data-task-state";
 import { configApi } from "../../lib/config-api/client";
-import { resolveAssistantThoughtContent } from "./assistant-thought-content";
+import {
+  messageTextContent,
+  resolveAssistantThoughtContent,
+} from "./assistant-thought-content";
+import {
+  resolveCollaborationStepLabel,
+  resolveStepBadgePresentation,
+  resolveStepSummaryText,
+  resolveToolStepActionLabel,
+} from "./step-display-label";
 import { JobProgressBanner } from "./components/JobProgressBanner";
 import {
   formatConfigTestError,
@@ -101,6 +113,7 @@ import { TaskConsole } from "./components/task-console/TaskConsole";
 import { TaskConsoleDrawer } from "./components/task-console/TaskConsoleDrawer";
 import { TraceOverlay } from "./components/task-console/TraceOverlay";
 import { WorkspaceFileAssetsPanel } from "./components/task-console/WorkspaceFileAssetsPanel";
+import { SchemaBrowserPanel } from "./components/SchemaBrowserPanel";
 import { DataTaskChatInput } from "./components/chat/DataTaskChatInput";
 import {
   CHAT_ATTACHMENT_ACCEPT,
@@ -141,6 +154,7 @@ import { normalizeSqlTable } from "./table-rows";
 import {
   chatPaneClassName,
   getWorkspaceGridTemplateColumns,
+  resolveSidebarExpandPreferences,
 } from "./workspace-layout";
 import { usePanelResize } from "./hooks/use-panel-resize";
 import { useChatColumnWidth } from "./hooks/use-chat-column-width";
@@ -164,7 +178,10 @@ import {
   AgentMessageRenderSync,
   useAgentMessageRenderGeneration,
 } from "./agent-message-render-sync";
-import { resolveStepAssistantFlags } from "./step-assistant-state";
+import {
+  resolveAssistantToolStepNumber,
+  resolveStepAssistantFlags,
+} from "./step-assistant-state";
 import { btnSecondaryClass, panelTitleClass, sectionLabelClass } from "./ui-tokens";
 import {
   getCollapsedWorkspaceRailCopy,
@@ -439,6 +456,8 @@ function DataTaskWorkspace() {
   const [activeLlmId, setActiveLlmId] = useState<string | null>(null);
   const [activeJob, setActiveJob] = useState<JobDto | null>(null);
   const [configActionError, setConfigActionError] = useState<string | null>(null);
+  const [sessionSyncError, setSessionSyncError] = useState<string | null>(null);
+  const [runCancelBusy, setRunCancelBusy] = useState(false);
   // Layer-2 per-run override (DESIGN.md): `@`-selected capabilities for the next
   // run only. Cleared after each send so it never mutates workspace defaults.
   const [perRunSelection, setPerRunSelection] = useState<PerRunSelection>(
@@ -529,6 +548,25 @@ function DataTaskWorkspace() {
     setIsConsoleDrawerOpen(true);
   }, [canDockRightPanel]);
 
+  const toggleSidebar = useCallback(() => {
+    if (sidebarCollapsed) {
+      const next = resolveSidebarExpandPreferences({
+        viewportWidth: workspaceViewportWidth,
+        userRightPanelOpen,
+        rightPanelWidth,
+      });
+      setUserSidebarCollapsed(next.userSidebarCollapsed);
+      setUserRightPanelOpen(next.userRightPanelOpen);
+      return;
+    }
+    setUserSidebarCollapsed(true);
+  }, [
+    sidebarCollapsed,
+    workspaceViewportWidth,
+    userRightPanelOpen,
+    rightPanelWidth,
+  ]);
+
   const closeTaskConsole = useCallback(() => {
     if (canDockRightPanel) {
       setUserRightPanelOpen(false);
@@ -567,6 +605,35 @@ function DataTaskWorkspace() {
     const first = createChatSession();
     setSessions([first]);
     setActiveSessionId(first.id);
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    void configApi.listSessions({ limit: 50 })
+      .then((response) => {
+        if (cancelled) return;
+        if (response.sessions.length === 0) {
+          setSessionSyncError(null);
+          return;
+        }
+        setSessions((current) => {
+          const merged = mergeServerChatSessions(current, response.sessions);
+          setActiveSessionId((active) => {
+            if (active && merged.some((session) => session.id === active)) return active;
+            return merged[0]?.id ?? active;
+          });
+          return merged;
+        });
+        setSessionSyncError(null);
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setSessionSyncError(error instanceof Error ? error.message : "加载服务端会话失败");
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(() => {
@@ -646,6 +713,12 @@ function DataTaskWorkspace() {
     sessions[0] ??
     null;
   const activeThreadId = activeSession?.threadId;
+  const activeDatasourceId = resolveActiveDatasourceId(
+    workspaceConfig,
+    activeSession,
+    perRunSelection,
+    runDefaults?.activeDatasourceId ?? defaultDatasourceId,
+  );
 
   const enabledLlmOptions = useMemo(
     () => getEnabledLlmItems(workspaceConfig),
@@ -695,7 +768,10 @@ function DataTaskWorkspace() {
       setWorkspaceFileAssets([]);
       return;
     }
-    const response = await configApi.listWorkspaceFiles();
+    const response = await configApi.listWorkspaceFiles({
+      scope: "workspace",
+      origin: ["uploaded", "saved"],
+    });
     setWorkspaceFileAssets(filterWorkspaceAssetFiles(response.files ?? []));
   }, [capabilitiesReady]);
   useEffect(() => {
@@ -738,6 +814,21 @@ function DataTaskWorkspace() {
     [backendToolPhases, liveRun.toolCalls],
   );
 
+  const cancelCurrentRun = useCallback(async () => {
+    if (!liveRun.runId || (liveRun.runStatus !== "running" && liveRun.runStatus !== "suspended")) {
+      return;
+    }
+    setRunCancelBusy(true);
+    setConfigActionError(null);
+    try {
+      await configApi.cancelRun(liveRun.runId, "user-requested");
+    } catch (error) {
+      setConfigActionError(error instanceof Error ? error.message : "取消运行失败");
+    } finally {
+      setRunCancelBusy(false);
+    }
+  }, [liveRun.runId, liveRun.runStatus]);
+
   const filteredSessions = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
     const matched = normalizedQuery
@@ -759,6 +850,31 @@ function DataTaskWorkspace() {
 
   const renameSession = useCallback((sessionId: string, title: string) => {
     setSessions((current) => renameChatSession(current, sessionId, title));
+    void configApi.patchSessionTitle(sessionId, title)
+      .then((updated) => {
+        setSessions((current) =>
+          current.map((session) => {
+            if (session.id !== sessionId && session.threadId !== sessionId) return session;
+            const server = serverSessionDtoToChatSession({
+              id: session.id,
+              threadId: session.threadId,
+              title: updated.title,
+              titleSource: updated.titleSource,
+              updatedAt: updated.updatedAt,
+            });
+            return {
+              ...session,
+              title: server.title,
+              titleSource: server.titleSource,
+              updatedAt: server.updatedAt,
+            };
+          }),
+        );
+        setSessionSyncError(null);
+      })
+      .catch((error) => {
+        setSessionSyncError(error instanceof Error ? error.message : "会话重命名同步失败");
+      });
   }, []);
 
   const deleteSession = useCallback(
@@ -889,6 +1005,10 @@ function DataTaskWorkspace() {
       activeThreadId: activeThreadId ?? null,
       capabilitiesReady,
       onUserMessageSubmitted: applyFirstUserMessageTitle,
+      liveRunStatus: liveRun.runStatus,
+      liveRunRunId: liveRun.runId ?? null,
+      onCancelRun: cancelCurrentRun,
+      cancelRunBusy: runCancelBusy,
     }),
     [
       activeLlmId,
@@ -896,6 +1016,7 @@ function DataTaskWorkspace() {
       activeThreadId,
       capabilitiesReady,
       applyFirstUserMessageTitle,
+      cancelCurrentRun,
       chatColumnWidth,
       enabledLlmOptions,
       openConfigPanel,
@@ -911,6 +1032,9 @@ function DataTaskWorkspace() {
       clearPerRunFileMentions,
       toggleSessionResourceItem,
       workspaceConfig,
+      liveRun.runId,
+      liveRun.runStatus,
+      runCancelBusy,
     ],
   );
 
@@ -970,6 +1094,7 @@ function DataTaskWorkspace() {
     },
     [refreshWorkspaceFileAssets],
   );
+  const sidePanelError = workspaceError ?? configActionError ?? sessionSyncError;
 
   return (
     <BackendToolRuntimeProvider runtime={backendToolRuntime}>
@@ -1005,9 +1130,7 @@ function DataTaskWorkspace() {
         onOpenConfigPanel={openConfigPanel}
         onOpenFilesPanel={openWorkspaceFilesPanel}
         onQueryChange={setQuery}
-        onToggleCollapse={() =>
-          setUserSidebarCollapsed((value) => !value)
-        }
+        onToggleCollapse={toggleSidebar}
         onSelectSession={(sessionId) => {
           setActiveSessionId(sessionId);
           setSelection(null);
@@ -1027,9 +1150,9 @@ function DataTaskWorkspace() {
         />
       ) : configPanel ? (
         <div className="flex min-h-0 min-w-0 flex-col overflow-hidden bg-surface">
-          {(workspaceError || configActionError) && (
+          {sidePanelError && (
             <div className="border-b border-rose-200 bg-rose-50 px-4 py-2 text-xs text-rose-800">
-              {workspaceError ?? configActionError}
+              {sidePanelError}
             </div>
           )}
           <JobProgressBanner
@@ -1089,17 +1212,12 @@ function DataTaskWorkspace() {
       ) : (
         <>
       <DataTaskChatInputBindingsProvider value={chatInputBindings}>
+      <ToolActionSelectionContext.Provider value={handleSelectToolAction}>
+      <div className="relative z-10 min-h-0 min-w-0 overflow-hidden">
       <ChatPane
         activeThreadId={activeThreadId}
         title={activeSession?.title ?? "数据任务"}
-        datasourceId={
-          resolveActiveDatasourceId(
-            workspaceConfig,
-            activeSession,
-            perRunSelection,
-            runDefaults?.activeDatasourceId ?? defaultDatasourceId,
-          )
-        }
+        datasourceId={activeDatasourceId}
         liveRunStatus={liveRun.runStatus}
         liveRun={liveRun}
         chatInput={chatInput}
@@ -1108,11 +1226,13 @@ function DataTaskWorkspace() {
         onChatColumnWidthChange={setChatColumnWidth}
         capabilitiesReady={capabilitiesReady}
       />
+      </div>
+      </ToolActionSelectionContext.Provider>
       </DataTaskChatInputBindingsProvider>
 
       {canDockRightPanel && rightPanelOpen ? (
         <div
-          className="relative flex h-full min-h-0 shrink-0 overflow-hidden"
+          className="relative z-0 flex h-full min-h-0 shrink-0 isolate overflow-hidden"
           style={{
             width: rightPanelWidth,
             minWidth: rightPanelWidth,
@@ -1139,6 +1259,7 @@ function DataTaskWorkspace() {
             onMentionArtifact={mentionArtifactFile}
             onOpenTrace={() => setIsTraceOpen(true)}
             onPromoteArtifact={promoteArtifactToWorkspace}
+            onArtifactExportJob={setActiveJob}
             onSelectEvent={(eventId) =>
               setSelection({ type: "action", id: eventId })
             }
@@ -1164,6 +1285,7 @@ function DataTaskWorkspace() {
         onClose={() => setIsConsoleDrawerOpen(false)}
         onOpenTrace={() => setIsTraceOpen(true)}
         onPromoteArtifact={promoteArtifactToWorkspace}
+        onArtifactExportJob={setActiveJob}
         onSelectEvent={(eventId) =>
           setSelection({ type: "action", id: eventId })
         }
@@ -1297,6 +1419,18 @@ function ToolCallSplitLayout({
       onSelectToolAction(toolCallId);
     }
   };
+  const handleContainerClick = (event: MouseEvent) => {
+    if (!selectable) return;
+    const target = event.target as HTMLElement;
+    if (
+      target.closest(
+        "button, a, input, select, textarea, label, summary, details, [data-no-tool-select]",
+      )
+    ) {
+      return;
+    }
+    handleActivate();
+  };
 
   return (
     <div
@@ -1304,12 +1438,10 @@ function ToolCallSplitLayout({
       className={[
         "mb-3 grid gap-2 last:mb-0",
         selectable
-          ? "cursor-pointer rounded-xl ring-offset-2 transition hover:bg-slate-50/80 hover:ring-2 hover:ring-slate-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
+          ? "cursor-pointer rounded-xl ring-offset-2 transition-colors duration-150 hover:bg-surface-subtle"
           : "",
       ].join(" ")}
-      role={selectable ? "button" : undefined}
-      tabIndex={selectable ? 0 : undefined}
-      onClick={selectable ? handleActivate : undefined}
+      onClick={selectable ? handleContainerClick : undefined}
       onKeyDown={
         selectable
           ? (event) => {
@@ -1336,16 +1468,16 @@ function ToolInvocationCard({
   displayStatus: ToolDisplayStatus;
   children: ReactNode;
 }) {
-  const statusTone = toolStatusToneClass(displayStatus, "blue");
+  const statusTone = toolStatusToneClass(displayStatus);
 
   return (
-    <div className="rounded-xl border border-violet-200/90 bg-violet-50/30 p-3 text-sm text-slate-700 shadow-sm">
+    <div className="rounded-xl border border-border bg-surface p-3 text-sm text-muted shadow-[var(--shadow-card)]">
       <div className="flex items-center justify-between gap-3">
         <div className="flex min-w-0 items-center gap-2">
-          <span className="rounded-full border border-violet-200 bg-violet-100 px-2 py-0.5 text-[11px] font-semibold text-violet-700">
+          <span className="rounded-full border border-border bg-surface-subtle px-2 py-0.5 text-[11px] font-semibold text-muted">
             工具调用
           </span>
-          <strong className="truncate font-mono text-slate-950">{name}</strong>
+          <strong className="truncate font-mono text-foreground">{name}</strong>
         </div>
         <span
           className={[
@@ -1364,37 +1496,26 @@ function ToolInvocationCard({
 
 function ToolResultCard({
   name,
-  tone,
   children,
 }: {
   name: string;
-  tone: "blue" | "emerald";
   children: ReactNode;
 }) {
-  const shellClass =
-    tone === "emerald"
-      ? "border-emerald-200/90 bg-emerald-50/35"
-      : "border-blue-200/90 bg-blue-50/35";
-  const badgeClass =
-    tone === "emerald"
-      ? "border-emerald-200 bg-emerald-100 text-emerald-700"
-      : "border-blue-200 bg-blue-100 text-blue-700";
-
   return (
     <div
-      className={`rounded-xl border ${shellClass} p-3 text-sm text-slate-700 shadow-sm`}
+      className="rounded-xl border border-border bg-surface p-3 text-sm text-muted shadow-[var(--shadow-card)]"
     >
       <div className="mb-2 flex items-center justify-between gap-3">
         <div className="flex min-w-0 items-center gap-2">
           <span
-            className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${badgeClass}`}
+            className="rounded-full border border-border bg-surface-subtle px-2 py-0.5 text-[11px] font-semibold text-muted"
           >
             执行结果
           </span>
-          <span className="truncate font-mono text-xs text-slate-500">{name}</span>
+          <span className="truncate font-mono text-xs text-muted-light">{name}</span>
         </div>
         <span
-          className={`rounded-full border px-2 py-0.5 text-xs ${badgeClass}`}
+          className="rounded-full border border-step-success/25 bg-step-success/8 px-2 py-0.5 text-xs text-step-success"
         >
           已返回
         </span>
@@ -1410,32 +1531,27 @@ function invocationStatusLabel(status: ToolDisplayStatus): string {
   return toolDisplayStatusLabel(status);
 }
 
-function toolStatusToneClass(
-  displayStatus: ToolDisplayStatus,
-  tone: "blue" | "emerald",
-): string {
+function toolStatusToneClass(displayStatus: ToolDisplayStatus): string {
   if (displayStatus === "complete") {
-    return tone === "blue"
-      ? "border-blue-200 bg-blue-50 text-blue-700"
-      : "border-emerald-200 bg-emerald-50 text-emerald-700";
+    return "border-border bg-surface-subtle text-muted";
   }
   if (displayStatus === "executing") {
-    return "border-amber-200 bg-amber-50 text-amber-800";
+    return "border-border bg-surface-subtle text-foreground";
   }
   if (displayStatus === "failed") {
-    return "border-red-200 bg-red-50 text-red-700";
+    return "border-step-error/25 bg-step-error/8 text-step-error";
   }
-  return "border-border bg-slate-50 text-slate-600";
+  return "border-border bg-surface-subtle text-muted";
 }
 
 function ToolPendingHint({ displayStatus }: { displayStatus: ToolDisplayStatus }) {
   if (displayStatus === "complete") return null;
   const toneClass =
     displayStatus === "failed"
-      ? "bg-red-50 text-red-700"
+      ? "bg-step-error/8 text-step-error"
       : displayStatus === "executing"
-        ? "bg-amber-50 text-amber-800"
-        : "bg-slate-50 text-slate-500";
+        ? "bg-surface-subtle text-foreground"
+        : "bg-surface-subtle text-muted";
 
   return (
     <p className={`mt-2 rounded-lg px-2.5 py-2 text-xs ${toneClass}`}>
@@ -1446,8 +1562,8 @@ function ToolPendingHint({ displayStatus }: { displayStatus: ToolDisplayStatus }
 
 function ToolResultMissingCard({ name }: { name: string }) {
   return (
-    <div className="rounded-xl border border-dashed border-amber-300/90 bg-amber-50/50 p-3 text-xs leading-5 text-amber-900">
-      <div className="font-semibold text-amber-950">执行结果未同步</div>
+    <div className="rounded-xl border border-dashed border-border bg-surface-subtle p-3 text-xs leading-5 text-muted">
+      <div className="font-semibold text-foreground">执行结果未同步</div>
       <p className="mt-1">
         <span className="font-mono">{name}</span>{" "}
         的工具 observation 仍未送达前端线程。若右侧追溯里已有 SQL 审计或 step
@@ -1471,12 +1587,12 @@ function ToolResultFailedCard({
   hint?: string;
 }) {
   return (
-    <div className="rounded-xl border border-red-200/90 bg-red-50/50 p-3 text-xs leading-5 text-red-900">
-      <div className="font-semibold text-red-950">{title}</div>
+    <div className="rounded-xl border border-step-error/25 bg-step-error/8 p-3 text-xs leading-5 text-step-error">
+      <div className="font-semibold text-step-error">{title}</div>
       <p className="mt-1">
         <span className="font-mono">{name}</span>：{message}
       </p>
-      {hint ? <p className="mt-2 text-[11px] text-red-800/90">{hint}</p> : null}
+      {hint ? <p className="mt-2 text-[11px] text-step-error/90">{hint}</p> : null}
     </div>
   );
 }
@@ -1503,11 +1619,11 @@ function ResultMetaChips({
       {items.map((item) => (
         <span
           key={item.label}
-          className="inline-flex items-center gap-1 rounded-full border border-border bg-slate-50 px-2 py-0.5 text-[11px]"
+          className="inline-flex items-center gap-1 rounded-full border border-border bg-surface-subtle px-2 py-0.5 text-[11px]"
           title={`${item.label}: ${item.value}`}
         >
-          <span className="font-semibold text-slate-500">{item.label}</span>
-          <span className="max-w-[160px] truncate font-mono text-slate-700">
+          <span className="font-semibold text-muted-light">{item.label}</span>
+          <span className="max-w-[160px] truncate font-mono text-muted">
             {item.value}
           </span>
         </span>
@@ -1528,7 +1644,7 @@ function DataTable({
   return (
     <div className="overflow-auto rounded-lg border border-border">
       <table className="w-full text-left text-[11px]">
-        <thead className="bg-slate-50 text-slate-500">
+        <thead className="bg-surface-subtle text-muted-light">
           <tr>
             {displayColumns.map((column) => (
               <th key={column} className="whitespace-nowrap px-2 py-1.5 font-semibold">
@@ -1539,15 +1655,15 @@ function DataTable({
         </thead>
         <tbody>
           {previewRows.map((row, rowIndex) => (
-            <tr key={rowIndex} className="border-t border-slate-100">
+            <tr key={rowIndex} className="border-t border-border">
               {displayColumns.map((_, cellIndex) => (
                 <td
                   key={cellIndex}
                   className={[
                     "whitespace-nowrap px-2 py-1.5",
                     cellIndex === 0
-                      ? "font-medium text-slate-900"
-                      : "text-slate-600",
+                      ? "font-medium text-foreground"
+                      : "text-muted",
                   ].join(" ")}
                 >
                   {formatCell(row[cellIndex])}
@@ -1558,7 +1674,7 @@ function DataTable({
         </tbody>
       </table>
       {normalizedRows.length > previewRows.length && (
-        <div className="border-t border-slate-100 bg-slate-50 px-2 py-1 text-[10px] text-slate-400">
+        <div className="border-t border-border bg-surface-subtle px-2 py-1 text-[10px] text-muted-light">
           仅预览前 {previewRows.length} 行，共 {normalizedRows.length} 行。
         </div>
       )}
@@ -1610,7 +1726,7 @@ function SqlToolCard({
         )}
       </ToolInvocationCard>
       {hasResult && !resultIsError ? (
-        <ToolResultCard name={name} tone="emerald">
+        <ToolResultCard name={name}>
           {parsed && Array.isArray(parsed.columns) && Array.isArray(parsed.rows) ? (
             <>
               <ResultMetaChips
@@ -1688,24 +1804,24 @@ function SchemaToolCard({
         )}
       </ToolInvocationCard>
       {hasResult && !resultIsError ? (
-        <ToolResultCard name={name} tone="blue">
+        <ToolResultCard name={name}>
           {parsed && Array.isArray(parsed.tables) && parsed.tables.length > 0 ? (
             <div className="grid gap-2">
               {parsed.tables.map((table) => (
-                <div key={table.name} className="rounded-lg bg-white/80 p-2.5">
-                  <div className="font-mono text-xs font-semibold text-slate-900">
+                <div key={table.name} className="rounded-lg border border-border bg-surface-subtle p-2.5">
+                  <div className="font-mono text-xs font-semibold text-foreground">
                     {table.name}
                   </div>
                   <div className="mt-1.5 flex flex-wrap gap-1">
                     {(table.columns ?? []).map((column) => (
                       <span
                         key={column.name}
-                        className="rounded border border-border bg-white px-1.5 py-0.5 font-mono text-[10px] text-slate-600"
+                        className="rounded border border-border bg-surface px-1.5 py-0.5 font-mono text-[10px] text-muted"
                         title={column.type}
                       >
                         {column.name}
                         {column.type ? (
-                          <span className="text-slate-400"> · {column.type}</span>
+                          <span className="text-muted-light"> · {column.type}</span>
                         ) : null}
                       </span>
                     ))}
@@ -1758,7 +1874,7 @@ function GenericToolCard({
         )}
       </ToolInvocationCard>
       {hasResult && !resultIsError ? (
-        <ToolResultCard name={name} tone="blue">
+        <ToolResultCard name={name}>
           <ToolFormattedResult
             toolName={name}
             result={effectiveResult}
@@ -1785,7 +1901,7 @@ function ToolPayloadBlock({
 }) {
   return (
     <div className="mt-2 overflow-hidden rounded-lg border border-border">
-      <div className="border-b border-border bg-slate-50 px-2.5 py-1 text-[11px] font-semibold text-slate-500">
+      <div className="border-b border-border bg-surface-subtle px-2.5 py-1 text-[11px] font-semibold text-muted-light">
         {title}
       </div>
       <pre
@@ -1793,7 +1909,7 @@ function ToolPayloadBlock({
           "max-h-44 overflow-auto whitespace-pre-wrap p-2 text-xs leading-5",
           tone === "dark"
             ? "bg-code-bg text-slate-100"
-            : "bg-white text-slate-700",
+            : "bg-surface text-muted",
         ].join(" ")}
       >
         {formatPayload(value)}
@@ -1802,27 +1918,20 @@ function ToolPayloadBlock({
   );
 }
 
-const toolDisplayName: Record<string, string> = {
-  inspect_schema: "检查 Schema",
-  run_sql_readonly: "执行只读 SQL",
-  ask_user: "询问用户",
-  submit_plan: "提交计划",
-};
-
-type ChatRunStatus = "idle" | "running" | "suspended" | "completed" | "failed";
+type ChatRunStatus = LiveRun["runStatus"];
 
 const ChatRunStatusContext = createContext<ChatRunStatus>("idle");
 const ChatLiveRunContext = createContext<LiveRun | null>(null);
-
-function firstLine(text: string): string {
-  const line = text.split("\n").find((segment) => segment.trim().length > 0) ?? "";
-  const trimmed = line
-    .replace(/^[#>*\-\s]+/, "")
-    .replace(/\*\*([^*]+)\*\*/g, "$1")
-    .replace(/`([^`]+)`/g, "$1")
-    .trim();
-  return trimmed.length > 64 ? `${trimmed.slice(0, 64)}…` : trimmed;
-}
+const ToolActionSelectionContext = createContext<
+  ((toolCallId: string) => void) | null
+>(null);
+const ProcessTimelineCollapseContext = createContext<{
+  collapsed: boolean;
+  toggle: () => void;
+}>({
+  collapsed: false,
+  toggle: () => {},
+});
 
 function CopyContentButton({ content }: { content: string }) {
   const [copied, setCopied] = useState(false);
@@ -1864,6 +1973,8 @@ function StepAssistantMessage({
   const { agent } = useAgent({ agentId: chatConfig?.agentId ?? agentId });
   const liveRunStatus = useContext(ChatRunStatusContext);
   const liveRun = useContext(ChatLiveRunContext);
+  const processTimelineCollapse = useContext(ProcessTimelineCollapseContext);
+  const selectToolAction = useContext(ToolActionSelectionContext);
   const collaborationResponses = useThreadCollaborationResponsesForChat(chatConfig?.threadId);
   const allMessages =
     agent.messages && agent.messages.length > 0 ? agent.messages : (messages ?? []);
@@ -1878,6 +1989,7 @@ function StepAssistantMessage({
     isFinalAnswer,
     isFinalAnswerComplete,
     isThought,
+    linkedCollaboration,
   } = resolveStepAssistantFlags({
     message,
     messages: allMessages,
@@ -1888,19 +2000,77 @@ function StepAssistantMessage({
     collaborationResponses,
   });
   const toolCalls = Array.isArray(message.toolCalls) ? message.toolCalls : [];
+  const linkedLiveToolCall =
+    linkedCollaboration && liveRun
+      ? liveRun.toolCalls.find((call) => call.id === linkedCollaboration.toolCallId)
+      : undefined;
+  const effectiveToolCalls =
+    toolCalls.length > 0
+      ? toolCalls
+      : linkedLiveToolCall
+        ? [
+            {
+              id: linkedLiveToolCall.id,
+              type: "function" as const,
+              function: {
+                name: linkedLiveToolCall.name,
+                arguments: "{}",
+              },
+            },
+          ]
+        : [];
+  const displayHasToolCalls = effectiveToolCalls.length > 0;
+  const displayMessage =
+    effectiveToolCalls === toolCalls
+      ? message
+      : ({ ...message, toolCalls: effectiveToolCalls } as typeof message);
+  const currentMessageIndex = allMessages.findIndex((item) => item.id === message.id);
+  const lastUserIndex =
+    currentMessageIndex >= 0
+      ? (allMessages
+          .slice(0, currentMessageIndex + 1)
+          .map((item, index) => ({ item, index }))
+          .filter(({ item }) => item.role === "user")
+          .at(-1)?.index ?? -1)
+      : -1;
+  const nextUserIndex =
+    currentMessageIndex >= 0
+      ? allMessages.findIndex(
+          (item, index) => index > currentMessageIndex && item.role === "user",
+        )
+      : -1;
+  const currentRunMessages =
+    currentMessageIndex >= 0
+      ? allMessages.slice(lastUserIndex + 1, nextUserIndex > -1 ? nextUserIndex : undefined)
+      : allMessages;
+  const processMessagesInRun = currentRunMessages.filter(
+    (item) =>
+      item.role === "assistant" &&
+      (((item as { toolCalls?: unknown[] }).toolCalls?.length ?? 0) > 0 ||
+        messageTextContent((item as { content?: unknown }).content).length > 0),
+  );
+  const isProcessStep =
+    (displayHasToolCalls || (isThought && !isCollaborationComplete)) &&
+    !isFinalAnswer &&
+    !isCollaborationStep &&
+    !isWaitingForUser;
+  const isFirstProcessStep =
+    isProcessStep && processMessagesInRun[0]?.id === message.id;
+  const processStepCount = processMessagesInRun.length;
 
-  const stepNumber = hasToolCalls
-    ? allMessages.filter(
-        (item) =>
-          item.role === "assistant" &&
-          Array.isArray((item as { toolCalls?: unknown[] }).toolCalls) &&
-          ((item as { toolCalls?: unknown[] }).toolCalls?.length ?? 0) > 0,
-      ).findIndex((item) => item.id === message.id) + 1
-    : 0;
+  const stepNumber = resolveAssistantToolStepNumber({
+    message,
+    messages: allMessages,
+    liveRun,
+    collaborationResponses,
+  });
 
-  const defaultCollapsed = !isActive && (hasToolCalls || isThought);
+  const defaultCollapsed = !isActive && (displayHasToolCalls || isThought);
   const [manualCollapsed, setManualCollapsed] = useState<boolean | null>(null);
-  const collapsed = manualCollapsed ?? defaultCollapsed;
+  const collapsed =
+    isProcessStep && processTimelineCollapse.collapsed && !isActive
+      ? true
+      : manualCollapsed ?? defaultCollapsed;
   const wasActiveRef = useRef(isActive);
 
   useEffect(() => {
@@ -1934,7 +2104,7 @@ function StepAssistantMessage({
         >
           <div className="flex items-center gap-2">
             <StepBadge
-              stepNumber={0}
+              stepNumber={stepNumber}
               isFinalAnswer={false}
               isStreamingAnswer={false}
               isActive={false}
@@ -1958,36 +2128,41 @@ function StepAssistantMessage({
     return null;
   }
 
-  const toolNames = toolCalls
-    .map((call) => {
-      const raw = call?.function?.name ?? "";
-      return toolDisplayName[raw] ?? raw;
-    })
+  const rawToolNames = effectiveToolCalls
+    .map((call) => call?.function?.name ?? "")
+    .filter(Boolean);
+  const toolNames = rawToolNames
+    .map((call) => toolDisplayTitle(call))
     .filter(Boolean)
     .join("、");
+  const toolActionLabel = resolveToolStepActionLabel(rawToolNames);
+  const collaborationStepLabel = resolveCollaborationStepLabel(
+    rawToolNames,
+    isActive,
+    linkedCollaboration?.toolName,
+  );
 
   const kindLabel = isWaitingForUser
     ? "等待你的回答"
     : isCollaborationStep
-      ? isCollaborationComplete || !isActive
-        ? "已采纳你的选择"
-        : "请你选择"
+      ? collaborationStepLabel
       : isFinalAnswer
         ? isActive
           ? "正在回答"
           : "回答"
-        : hasToolCalls
-          ? content
-            ? "思考并调用工具"
-            : "调用工具"
+        : displayHasToolCalls
+          ? toolActionLabel
           : "思考";
 
-  const summary =
-    content && hasToolCalls
-      ? `${firstLine(content)} · 调用 ${toolNames}`
-      : firstLine(content) || (toolNames ? `调用 ${toolNames}` : "步骤");
+  const summary = resolveStepSummaryText({
+    content,
+    hasToolCalls: displayHasToolCalls,
+    displayToolNames: toolNames,
+    toolActionLabel,
+    isThought,
+  });
   const theme = getStepCardTheme({
-    hasToolCalls,
+    hasToolCalls: displayHasToolCalls,
     isActive,
     isFinalAnswer,
     isFinalAnswerComplete,
@@ -1997,19 +2172,91 @@ function StepAssistantMessage({
   });
 
   const toggleCollapsed = () => {
-    setManualCollapsed(!collapsed);
+    const next = !collapsed;
+    setManualCollapsed(next);
+    if (!next && displayHasToolCalls && selectToolAction) {
+      const toolCallId = effectiveToolCalls
+        .map((call) => call?.id)
+        .find((id): id is string => typeof id === "string" && id.length > 0);
+      if (toolCallId) {
+        selectToolAction(toolCallId);
+      }
+    }
   };
 
+  if (isFinalAnswer) {
+    return (
+      <div
+        data-copilotkit
+        className="copilotKitMessage copilotKitAssistantMessage step-enter mb-6 px-1"
+      >
+        <div className="mb-2 flex items-center gap-2 text-xs font-medium text-muted-light">
+          <span className="h-1.5 w-1.5 rounded-full bg-muted-light" />
+          <span>{isActive ? "正在回答" : "回答"}</span>
+          {isActive ? (
+            <span className="inline-flex items-center gap-1 rounded-full border border-border bg-surface-subtle px-2 py-0.5 text-[10px] text-muted">
+              <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-muted" />
+              生成中
+            </span>
+          ) : null}
+          {content ? (
+            <span className="ml-auto">
+              <CopyContentButton content={content} />
+            </span>
+          ) : null}
+        </div>
+        {content ? (
+          <div className="max-w-none text-sm leading-7 text-foreground [&_code]:rounded [&_code]:bg-surface-subtle [&_code]:px-1 [&_ol]:my-2 [&_ol]:list-decimal [&_ol]:pl-5 [&_p]:my-2 [&_ul]:my-2 [&_ul]:list-disc [&_ul]:pl-5">
+            <CopilotChatAssistantMessage.MarkdownRenderer content={content} />
+            {isActive && (
+              <span
+                className={`caret-blink ml-0.5 inline-block h-4 w-[2px] -translate-y-[1px] align-middle ${theme.caret}`}
+              />
+            )}
+          </div>
+        ) : null}
+      </div>
+    );
+  }
+
   return (
+    <>
+    {isFirstProcessStep ? (
+      <div className="copilotKitMessage copilotKitAssistantMessage mb-1 mt-4 flex items-center gap-2 px-1 text-xs text-muted-light">
+        <button
+          type="button"
+          onClick={processTimelineCollapse.toggle}
+          className="inline-flex cursor-pointer items-center gap-1.5 rounded-md px-1.5 py-1 font-medium transition-colors duration-150 hover:bg-surface-subtle hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/20"
+          aria-expanded={!processTimelineCollapse.collapsed}
+        >
+          <span>工作过程</span>
+          <span className="tabular">{processStepCount} 步</span>
+          <StepChevron expanded={!processTimelineCollapse.collapsed} />
+        </button>
+      </div>
+    ) : null}
     <div
       data-copilotkit
       style={theme.glowVar}
       className={[
-        "copilotKitMessage copilotKitAssistantMessage step-enter mb-4 rounded-2xl border p-3 shadow-sm transition-colors duration-200",
-        theme.card,
-        isActive ? "step-streaming" : "",
+        "copilotKitMessage copilotKitAssistantMessage step-enter relative mb-0 pl-7 pr-1 py-1.5 transition-colors duration-200",
+        isProcessStep ? "" : `rounded-xl border p-3 shadow-[var(--shadow-card)] ${theme.card}`,
       ].join(" ")}
     >
+      {isProcessStep ? (
+        <>
+          <span className="absolute left-[9px] top-0 bottom-0 w-px bg-border" aria-hidden />
+          <span className="absolute left-0 top-2.5">
+            <StepBadge
+              stepNumber={stepNumber}
+              isFinalAnswer={false}
+              isStreamingAnswer={false}
+              isActive={isActive}
+              isThought={isThought}
+            />
+          </span>
+        </>
+      ) : null}
       <div
         role="button"
         tabIndex={0}
@@ -2021,17 +2268,22 @@ function StepAssistantMessage({
           }
         }}
         aria-expanded={!collapsed}
-        className="flex w-full cursor-pointer items-center gap-2 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-light/50"
+        className={[
+          "flex w-full cursor-pointer items-center gap-2 rounded-lg text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/20",
+          isProcessStep ? "px-2 py-1 hover:bg-surface-subtle" : "",
+        ].join(" ")}
       >
-        <StepBadge
-          stepNumber={stepNumber}
-          isFinalAnswer={isFinalAnswerComplete}
-          isStreamingAnswer={isFinalAnswer && isActive}
-          isActive={isActive}
-          isThought={isThought}
-          isCollaboration={isCollaborationStep || isWaitingForUser}
-          isWaitingForUser={isWaitingForUser}
-        />
+        {!isProcessStep ? (
+          <StepBadge
+            stepNumber={stepNumber}
+            isFinalAnswer={isFinalAnswerComplete}
+            isStreamingAnswer={isFinalAnswer && isActive}
+            isActive={isActive}
+            isThought={isThought}
+            isCollaboration={isCollaborationStep || isWaitingForUser}
+            isWaitingForUser={isWaitingForUser}
+          />
+        ) : null}
         <span className={`text-xs font-semibold ${theme.label}`}>
           {kindLabel}
         </span>
@@ -2057,40 +2309,43 @@ function StepAssistantMessage({
         <button
           type="button"
           onClick={toggleCollapsed}
-          className="mt-1.5 block w-full truncate text-left text-xs text-slate-500 hover:text-slate-700"
+          className={[
+            "block w-full truncate rounded-lg text-left text-xs transition-colors duration-150 hover:text-foreground",
+            isProcessStep ? "px-2 pb-1 text-muted" : "mt-1.5 text-muted-light",
+          ].join(" ")}
           title={summary}
         >
           {summary}
         </button>
       ) : (
         <>
-          {content && hasToolCalls ? (
+          {content && displayHasToolCalls ? (
             <>
               <StepSubPanel
                 title="思考"
                 tone="thought"
                 streaming={isActive}
               >
-                <div className="text-sm leading-6 text-slate-700 [&_code]:rounded [&_code]:bg-white/80 [&_code]:px-1 [&_ol]:my-1 [&_ol]:list-decimal [&_ol]:pl-5 [&_p]:my-1 [&_ul]:my-1 [&_ul]:list-disc [&_ul]:pl-5">
+                <div className="text-sm leading-6 text-muted [&_code]:rounded [&_code]:bg-surface-subtle [&_code]:px-1 [&_ol]:my-1 [&_ol]:list-decimal [&_ol]:pl-5 [&_p]:my-1 [&_ul]:my-1 [&_ul]:list-disc [&_ul]:pl-5">
                   <CopilotChatAssistantMessage.MarkdownRenderer content={content} />
                   {isActive && (
-                    <span className="caret-blink ml-0.5 inline-block h-4 w-[2px] -translate-y-[1px] bg-amber-600 align-middle" />
+                    <span className="caret-blink ml-0.5 inline-block h-4 w-[2px] -translate-y-[1px] bg-muted align-middle" />
                   )}
                 </div>
               </StepSubPanel>
               <StepSubPanel
                 title="工具调用"
                 tone="tool"
-                badge={toolCalls.length}
+                badge={effectiveToolCalls.length}
                 busy={isActive}
               >
                 <div className="grid gap-1">
-                  <CopilotChatToolCallsView message={message} messages={messages} />
+                  <CopilotChatToolCallsView message={displayMessage} messages={messages} />
                 </div>
               </StepSubPanel>
             </>
           ) : content ? (
-            <div className="mt-2 text-sm leading-6 text-slate-700 [&_code]:rounded [&_code]:bg-white/80 [&_code]:px-1 [&_ol]:my-1 [&_ol]:list-decimal [&_ol]:pl-5 [&_p]:my-1 [&_ul]:my-1 [&_ul]:list-disc [&_ul]:pl-5">
+            <div className="mt-2 text-sm leading-6 text-muted [&_code]:rounded [&_code]:bg-surface-subtle [&_code]:px-1 [&_ol]:my-1 [&_ol]:list-decimal [&_ol]:pl-5 [&_p]:my-1 [&_ul]:my-1 [&_ul]:list-disc [&_ul]:pl-5">
               <CopilotChatAssistantMessage.MarkdownRenderer content={content} />
               {isActive && (
                 <span
@@ -2098,21 +2353,22 @@ function StepAssistantMessage({
                 />
               )}
             </div>
-          ) : hasToolCalls ? (
+          ) : displayHasToolCalls ? (
             <StepSubPanel
               title="工具调用"
               tone="tool"
-              badge={toolCalls.length}
+              badge={effectiveToolCalls.length}
               busy={isActive}
             >
               <div className="grid gap-1">
-                <CopilotChatToolCallsView message={message} messages={messages} />
+                <CopilotChatToolCallsView message={displayMessage} messages={messages} />
               </div>
             </StepSubPanel>
           ) : null}
         </>
       )}
     </div>
+    </>
   );
 }
 
@@ -2134,16 +2390,16 @@ function StepSubPanel({
   const styles =
     tone === "thought"
       ? {
-          shell: "border-accent/40 bg-accent/5",
-          header: "border-accent/20 bg-accent/8",
-          label: "text-step-warning",
-          dot: "bg-accent",
+          shell: "border-border bg-surface",
+          header: "border-border bg-surface-subtle",
+          label: "text-muted",
+          dot: "bg-muted-light",
         }
       : {
-          shell: "border-step-query/40 bg-step-query/5",
-          header: "border-step-query/20 bg-step-query/8",
-          label: "text-step-query",
-          dot: "bg-step-query",
+          shell: "border-border bg-surface",
+          header: "border-border bg-surface-subtle",
+          label: "text-muted",
+          dot: "bg-muted-light",
         };
 
   return (
@@ -2158,7 +2414,7 @@ function StepSubPanel({
           {title}
         </span>
         {badge !== undefined && badge > 0 ? (
-          <span className="rounded-full bg-white/90 px-1.5 py-0.5 text-[10px] font-bold text-slate-500">
+          <span className="rounded-full border border-border bg-surface px-1.5 py-0.5 text-[10px] font-bold text-muted-light">
             {badge}
           </span>
         ) : null}
@@ -2195,81 +2451,81 @@ function getStepCardTheme({
 }) {
   if (isWaitingForUser || (isCollaborationStep && isActive)) {
     return {
-      card: "border-primary/45 bg-primary/8",
-      label: "text-primary",
-      statusPill: "bg-primary/10 text-primary",
-      statusDot: "bg-primary",
+      card: "border-border bg-surface",
+      label: "text-foreground",
+      statusPill: "border border-border bg-surface-subtle text-foreground",
+      statusDot: "bg-foreground",
       caret: "bg-primary",
-      glowVar: { ["--step-glow" as string]: "rgb(30 64 175 / 0.2)" },
+      glowVar: { ["--step-glow" as string]: "rgb(13 13 13 / 0.12)" },
     };
   }
   if (isCollaborationStep) {
     return {
-      card: "border-primary/35 bg-primary/5",
-      label: "text-primary",
-      statusPill: "bg-primary/10 text-primary",
-      statusDot: "bg-primary",
+      card: "border-border bg-surface",
+      label: "text-muted",
+      statusPill: "border border-border bg-surface-subtle text-muted",
+      statusDot: "bg-muted",
       caret: "bg-primary",
       glowVar: undefined,
     };
   }
   if (isFinalAnswerComplete) {
     return {
-      card: "border-step-success/50 bg-step-success/8",
-      label: "text-step-success",
-      statusPill: "bg-step-success/10 text-step-success",
-      statusDot: "bg-step-success",
-      caret: "bg-step-success",
+      card: "border-border bg-surface",
+      label: "text-foreground",
+      statusPill: "border border-border bg-surface-subtle text-muted",
+      statusDot: "bg-muted",
+      caret: "bg-primary",
       glowVar: undefined,
     };
   }
   if (isFinalAnswer && isActive) {
     return {
-      card: "border-primary-light/60 bg-primary-light/8",
-      label: "text-primary",
-      statusPill: "bg-primary-light/10 text-primary",
-      statusDot: "bg-primary-light",
+      card: "border-border bg-surface",
+      label: "text-foreground",
+      statusPill: "border border-border bg-surface-subtle text-foreground",
+      statusDot: "bg-foreground",
       caret: "bg-primary",
-      glowVar: { ["--step-glow" as string]: "rgb(59 130 246 / 0.22)" },
+      glowVar: { ["--step-glow" as string]: "rgb(13 13 13 / 0.12)" },
     };
   }
   if (hasToolCalls && isActive) {
     return {
-      card: "border-step-query/60 bg-step-query/8",
-      label: "text-step-query",
-      statusPill: "bg-step-query/10 text-step-query",
-      statusDot: "bg-step-query",
-      caret: "bg-step-query",
-      glowVar: { ["--step-glow" as string]: "rgb(139 92 246 / 0.22)" },
+      card: "border-border bg-surface",
+      label: "text-foreground",
+      statusPill: "border border-border bg-surface-subtle text-foreground",
+      statusDot: "bg-foreground",
+      caret: "bg-primary",
+      glowVar: { ["--step-glow" as string]: "rgb(13 13 13 / 0.1)" },
     };
   }
   if (hasToolCalls) {
     return {
-      card: "border-step-query/40 bg-step-query/5",
-      label: "text-step-query",
-      statusPill: "bg-step-query/10 text-step-query",
-      statusDot: "bg-step-query",
-      caret: "bg-step-query",
+      card: "border-border bg-surface",
+      label: "text-muted",
+      statusPill: "border border-border bg-surface-subtle text-muted",
+      statusDot: "bg-muted-light",
+      caret: "bg-primary",
       glowVar: undefined,
     };
   }
   if (isThought && isActive) {
     return {
-      card: "border-accent/50 bg-accent/8",
-      label: "text-step-warning",
-      statusPill: "bg-accent/10 text-step-warning",
-      statusDot: "bg-accent",
-      caret: "bg-step-warning",
-      glowVar: { ["--step-glow" as string]: "rgb(245 158 11 / 0.2)" },
+      card: "border-border bg-surface",
+      label: "text-foreground",
+      statusPill: "border border-border bg-surface-subtle text-foreground",
+      statusDot: "bg-foreground",
+      caret: "bg-primary",
+      glowVar: { ["--step-glow" as string]: "rgb(13 13 13 / 0.1)" },
     };
   }
   if (isThought) {
     return {
-      card: "border-accent/30 bg-accent/5",
-      label: "text-step-warning",
-      statusPill: "bg-accent/10 text-step-warning",
-      statusDot: "bg-accent",
-      caret: "bg-step-warning",
+      card: "border-border bg-surface",
+      label: "text-muted",
+      statusPill: "border border-border bg-surface-subtle text-muted",
+      statusDot: "bg-muted-light",
+      caret: "bg-primary",
       glowVar: undefined,
     };
   }
@@ -2287,7 +2543,7 @@ function StepChevron({ expanded }: { expanded: boolean }) {
   return (
     <span
       data-expanded={expanded}
-      className="step-chevron flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-slate-400"
+      className="step-chevron flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted-light"
       aria-hidden
     >
       <svg viewBox="0 0 20 20" className="h-4 w-4" fill="currentColor">
@@ -2343,26 +2599,36 @@ function StepBadge({
   isCollaboration?: boolean;
   isWaitingForUser?: boolean;
 }) {
-  if (isWaitingForUser || (isCollaboration && isActive)) {
+  const presentation = resolveStepBadgePresentation({
+    stepNumber,
+    isFinalAnswer,
+    isStreamingAnswer,
+    isActive,
+    isThought,
+    isCollaboration,
+    isWaitingForUser,
+  });
+
+  if (presentation.kind === "waiting") {
     return (
-      <span className="relative flex h-5 w-5 items-center justify-center rounded-full bg-primary">
-        <span className="absolute inset-0 rounded-full bg-primary-light/50 animate-ping" />
+      <span className="relative flex h-5 w-5 items-center justify-center rounded-full bg-foreground">
+        <span className="absolute inset-0 rounded-full bg-muted-light/45 animate-ping" />
         <span className="relative text-[9px] font-bold text-white">?</span>
       </span>
     );
   }
-  if (isCollaboration) {
+  if (presentation.kind === "collaboration") {
     return (
-      <span className="flex h-5 w-5 items-center justify-center rounded-full bg-primary/15 text-primary">
+      <span className="flex h-5 w-5 items-center justify-center rounded-full border border-border bg-surface-subtle text-muted">
         <svg viewBox="0 0 20 20" className="h-3 w-3" fill="currentColor" aria-hidden>
           <path d="M10 9a3 3 0 1 0 0-6 3 3 0 0 0 0 6ZM4 17v-1a4 4 0 0 1 4-4h4a4 4 0 0 1 4 4v1H4Z" />
         </svg>
       </span>
     );
   }
-  if (isFinalAnswer) {
+  if (presentation.kind === "final") {
     return (
-      <span className="flex h-5 w-5 items-center justify-center rounded-full bg-emerald-100 text-emerald-700">
+      <span className="flex h-5 w-5 items-center justify-center rounded-full border border-border bg-surface-subtle text-muted">
         <svg viewBox="0 0 20 20" className="h-3 w-3" fill="currentColor" aria-hidden>
           <path
             fillRule="evenodd"
@@ -2373,49 +2639,49 @@ function StepBadge({
       </span>
     );
   }
-  if (isStreamingAnswer) {
+  if (presentation.kind === "streaming") {
     return (
-      <span className="relative flex h-5 w-5 items-center justify-center rounded-full bg-sky-600">
-        <span className="absolute inset-0 rounded-full bg-sky-400/60 animate-ping" />
+      <span className="relative flex h-5 w-5 items-center justify-center rounded-full bg-foreground">
+        <span className="absolute inset-0 rounded-full bg-muted-light/60 animate-ping" />
         <span className="relative h-1.5 w-1.5 rounded-full bg-white" />
       </span>
     );
   }
-  if (stepNumber > 0) {
+  if (presentation.kind === "number") {
     return (
       <span
         className={`relative flex h-5 w-5 items-center justify-center rounded-full text-[10px] font-bold ${
           isActive
-            ? "bg-violet-600 text-white"
-            : "bg-violet-100 text-violet-700"
+            ? "bg-foreground text-white"
+            : "border border-border bg-surface text-muted"
         }`}
       >
         {isActive && (
-          <span className="absolute inset-0 rounded-full bg-violet-400/60 animate-ping" />
+          <span className="absolute inset-0 rounded-full bg-muted-light/60 animate-ping" />
         )}
-        <span className="relative">{stepNumber}</span>
+        <span className="relative">{presentation.value}</span>
       </span>
     );
   }
-  if (isThought) {
+  if (presentation.kind === "thought") {
     return (
       <span
         className={`relative flex h-5 w-5 items-center justify-center rounded-full ${
-          isActive ? "bg-amber-500" : "bg-amber-100"
+          isActive ? "bg-foreground" : "border border-border bg-surface"
         }`}
       >
         {isActive && (
-          <span className="absolute inset-0 rounded-full bg-amber-300/70 animate-ping" />
+          <span className="absolute inset-0 rounded-full bg-muted-light/60 animate-ping" />
         )}
         <span
-          className={`relative h-1.5 w-1.5 rounded-full ${isActive ? "bg-white" : "bg-amber-600"}`}
+          className={`relative h-1.5 w-1.5 rounded-full ${isActive ? "bg-white" : "bg-muted"}`}
         />
       </span>
     );
   }
   return (
     <span className="flex h-5 w-5 items-center justify-center">
-      <span className="h-1.5 w-1.5 rounded-full bg-slate-300" />
+      <span className="h-1.5 w-1.5 rounded-full bg-muted-light" />
     </span>
   );
 }
@@ -2445,7 +2711,7 @@ function SessionBubbleIcon() {
   return (
     <svg
       viewBox="0 0 20 20"
-      className="h-4 w-4 shrink-0 text-slate-400"
+      className="h-4 w-4 shrink-0 text-muted-light"
       fill="none"
       stroke="currentColor"
       strokeWidth={1.6}
@@ -2574,7 +2840,7 @@ function SessionActionMenu({
   };
 
   const menuItemClass =
-    "flex w-full cursor-pointer items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-sm text-slate-700 transition hover:bg-slate-50";
+    "flex w-full cursor-pointer items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-sm text-muted transition-colors duration-150 hover:bg-surface-subtle hover:text-foreground";
 
   return (
     <div ref={rootRef} className="relative shrink-0">
@@ -2588,9 +2854,9 @@ function SessionActionMenu({
           setOpen((value) => !value);
         }}
         className={[
-          "flex h-7 w-7 cursor-pointer items-center justify-center rounded-md text-slate-500 transition hover:bg-white hover:text-slate-900",
+          "flex h-7 w-7 cursor-pointer items-center justify-center rounded-md text-muted-light transition-colors duration-150 hover:bg-surface-subtle hover:text-foreground",
           open || forceVisible
-            ? "bg-white text-slate-900 opacity-100"
+            ? "bg-surface-subtle text-foreground opacity-100"
             : "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100",
         ].join(" ")}
       >
@@ -2599,7 +2865,7 @@ function SessionActionMenu({
       {open ? (
         <div
           role="menu"
-          className="absolute right-0 top-full z-20 mt-1 min-w-[148px] rounded-xl border border-slate-200 bg-white p-1.5 shadow-lg"
+          className="absolute right-0 top-full z-20 mt-1 min-w-[148px] rounded-xl border border-border bg-surface p-1.5 shadow-[var(--shadow-card-hover)]"
         >
           <button
             type="button"
@@ -2621,7 +2887,7 @@ function SessionActionMenu({
             type="button"
             role="menuitem"
             disabled
-            className="flex w-full cursor-not-allowed items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-sm text-slate-300"
+            className="flex w-full cursor-not-allowed items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-sm text-muted-light opacity-50"
             title="分享功能待后端支持"
           >
             <ShareMenuIcon />
@@ -2646,7 +2912,7 @@ function SessionActionMenu({
           <button
             type="button"
             role="menuitem"
-            className="flex w-full cursor-pointer items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-sm text-rose-600 transition hover:bg-rose-50"
+            className="flex w-full cursor-pointer items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-sm text-step-error transition-colors duration-150 hover:bg-step-error/8"
             onMouseDown={(event) => {
               event.preventDefault();
               event.stopPropagation();
@@ -2695,7 +2961,7 @@ function SessionListItem({
 
   if (editing) {
     return (
-      <div className="rounded-lg bg-slate-100 px-2 py-1.5">
+      <div className="rounded-lg bg-surface px-2 py-1.5 shadow-[var(--shadow-card)]">
         <input
           autoFocus
           value={draftTitle}
@@ -2712,7 +2978,7 @@ function SessionListItem({
               setEditing(false);
             }
           }}
-          className="h-8 w-full rounded-md border border-slate-300 bg-white px-2.5 text-sm text-slate-950 outline-none focus:border-slate-500"
+          className="h-8 w-full rounded-md border border-border bg-surface px-2.5 text-sm text-foreground outline-none transition-colors duration-150 focus:border-muted-light"
         />
       </div>
     );
@@ -2722,8 +2988,8 @@ function SessionListItem({
     <div
       id={`session-item-${session.id}`}
       className={[
-        "group flex items-center gap-2 rounded-lg px-2 py-1.5 transition",
-        active ? "bg-slate-100" : "hover:bg-slate-50",
+        "group flex items-center gap-2 rounded-lg px-2 py-1.5 transition-colors duration-150",
+        active ? "bg-surface shadow-[var(--shadow-card)]" : "hover:bg-surface",
       ].join(" ")}
     >
       {iconSlots.leading === "session" ? (
@@ -2735,14 +3001,14 @@ function SessionListItem({
         title={session.title}
         className={[
           "min-w-0 flex-1 truncate text-left text-sm transition",
-          active ? "font-medium text-slate-950" : "text-slate-700 hover:text-slate-950",
+          active ? "font-medium text-foreground" : "text-muted hover:text-foreground",
         ].join(" ")}
       >
         {session.title}
       </button>
       {iconSlots.trailing === "pin" && (
         <span
-          className="shrink-0 text-primary"
+          className="shrink-0 text-muted"
           title="已置顶"
           aria-label="已置顶"
         >
@@ -2807,64 +3073,62 @@ function SessionPane({
     return (
       <aside
         aria-label={collapsedRailCopy.railLabel}
-        className="flex h-full min-h-0 w-14 min-w-14 max-w-14 shrink-0 flex-col items-center border-r border-border bg-surface py-3"
+        className="relative z-20 flex h-full min-h-0 w-14 min-w-14 max-w-14 shrink-0 flex-col items-center gap-3 border-r border-border bg-surface-subtle py-3"
       >
         <div
-          className="mb-4 flex h-9 w-9 items-center justify-center rounded-lg bg-primary text-sm font-bold text-white"
+          className="flex h-9 w-9 items-center justify-center rounded-lg border border-border bg-surface text-sm font-semibold text-foreground shadow-[var(--shadow-card)]"
           title="数据任务"
           aria-label="数据任务"
         >
           D
-        </div>
-        <div className="flex flex-1 flex-col items-center gap-3">
-          <button
-            type="button"
-            onClick={onCreateSession}
-            title="新建数据任务"
-            aria-label="新建数据任务"
-            className="flex h-8 w-8 cursor-pointer items-center justify-center rounded-lg bg-primary text-white transition-colors duration-200 hover:bg-primary-light"
-          >
-            <span className="text-lg leading-none">+</span>
-          </button>
-          <button
-            type="button"
-            onClick={onOpenFilesPanel}
-            title="工作区文件"
-            aria-label="工作区文件"
-            className={[
-              "flex h-8 w-8 cursor-pointer items-center justify-center rounded-lg border border-border text-xs font-semibold transition-colors duration-200",
-              activeFilesPanel
-                ? "bg-slate-100 text-slate-950"
-                : "text-muted hover:bg-surface-subtle hover:text-foreground",
-            ].join(" ")}
-          >
-            F
-          </button>
-          <span
-            className="tabular rounded-full bg-surface-subtle px-1.5 py-0.5 text-[10px] font-medium text-muted-light"
-            title={`${collapsedRailCopy.sessionCountLabel}：${sessionCount}`}
-            aria-label={`${collapsedRailCopy.sessionCountLabel}：${sessionCount}`}
-          >
-            {sessionCount}
-          </span>
         </div>
         <button
           type="button"
           onClick={onToggleCollapse}
           title={collapsedRailCopy.expandLabel}
           aria-label={collapsedRailCopy.expandLabel}
-          className="mt-3 flex h-8 w-8 cursor-pointer items-center justify-center rounded-lg border border-border text-muted transition-colors duration-200 hover:bg-surface-subtle hover:text-foreground"
+          className="flex h-8 w-8 cursor-pointer items-center justify-center rounded-lg border border-border bg-surface text-muted transition-colors duration-200 hover:bg-surface-subtle hover:text-foreground"
         >
           <ChevronIcon direction="right" />
         </button>
+        <button
+          type="button"
+          onClick={onCreateSession}
+          title="新建数据任务"
+          aria-label="新建数据任务"
+          className="flex h-8 w-8 cursor-pointer items-center justify-center rounded-lg bg-primary text-white transition-colors duration-200 hover:bg-primary-light"
+        >
+          <span className="text-lg leading-none">+</span>
+        </button>
+        <button
+          type="button"
+          onClick={onOpenFilesPanel}
+          title="工作区文件"
+          aria-label="工作区文件"
+          className={[
+            "flex h-8 w-8 cursor-pointer items-center justify-center rounded-lg border border-border text-xs font-semibold transition-colors duration-200",
+            activeFilesPanel
+              ? "bg-surface text-foreground shadow-[var(--shadow-card)]"
+              : "text-muted hover:bg-surface-subtle hover:text-foreground",
+          ].join(" ")}
+        >
+          F
+        </button>
+        <span
+          className="tabular rounded-full bg-surface-subtle px-1.5 py-0.5 text-[10px] font-medium text-muted-light"
+          title={`${collapsedRailCopy.sessionCountLabel}：${sessionCount}`}
+          aria-label={`${collapsedRailCopy.sessionCountLabel}：${sessionCount}`}
+        >
+          {sessionCount}
+        </span>
       </aside>
     );
   }
 
   return (
-    <aside className="flex h-full min-h-0 w-[320px] min-w-[320px] max-w-[320px] shrink-0 flex-col overflow-hidden border-r border-border bg-surface">
+    <aside className="flex h-full min-h-0 w-[320px] min-w-[320px] max-w-[320px] shrink-0 flex-col overflow-hidden border-r border-border bg-surface-subtle">
       <div className="flex h-16 items-center gap-3 border-b border-border px-4">
-        <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary text-sm font-bold text-white">
+        <div className="flex h-9 w-9 items-center justify-center rounded-lg border border-border bg-surface text-sm font-semibold text-foreground shadow-[var(--shadow-card)]">
           D
         </div>
         <div className="min-w-0 flex-1">
@@ -2882,7 +3146,7 @@ function SessionPane({
         </button>
       </div>
 
-      <div className="border-b border-border px-3 py-2.5">
+      <div className="border-b border-border px-3 py-3">
         <div className="mb-1 flex items-center justify-between gap-2">
           <span className={sectionLabelClass}>工作区默认配置</span>
         </div>
@@ -2936,7 +3200,7 @@ function SessionPane({
         <button
           type="button"
           onClick={onCreateSession}
-          className="h-9 w-full rounded-lg bg-code-bg text-sm font-semibold text-white transition hover:bg-slate-800"
+          className="h-9 w-full cursor-pointer rounded-lg bg-primary text-sm font-semibold text-white transition-colors duration-200 hover:bg-primary-light focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/25"
         >
           新建数据任务
         </button>
@@ -2945,19 +3209,19 @@ function SessionPane({
           <input
             value={query}
             onChange={(event) => onQueryChange(event.target.value)}
-            className="h-9 w-full rounded-lg border border-border bg-slate-50 px-3 text-sm text-slate-900 outline-none transition placeholder:text-slate-500 focus:border-slate-400 focus:bg-white"
+            className="h-9 w-full rounded-lg border border-border bg-surface px-3 text-sm text-foreground outline-none transition-colors duration-200 placeholder:text-muted-light focus:border-muted-light focus:bg-surface"
             placeholder="搜索会话"
           />
         </label>
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto p-2">
-        <div className="px-2 pb-2 text-xs font-semibold text-slate-500">
+        <div className="px-2 pb-2 text-xs font-semibold text-muted-light">
           会话
         </div>
         <div className="flex flex-col gap-0.5">
           {filteredSessions.length === 0 ? (
-            <p className="px-2 py-3 text-xs text-slate-400">没有匹配的会话。</p>
+            <p className="px-2 py-3 text-xs text-muted-light">没有匹配的会话。</p>
           ) : (
             filteredSessions.map((session) => (
               <SessionListItem
@@ -3414,6 +3678,9 @@ function WorkspaceConfigPanel({
                   onClick={openCreate}
                 />
               </div>
+              {panel === "db" ? (
+                <SchemaBrowserPanel datasources={items} />
+              ) : null}
             </>
           )}
         </div>
@@ -4224,9 +4491,9 @@ function ConfigRow({
   const badgeClass = WORKSPACE_CONFIG_BADGE_CLASS[kind];
 
   const className = [
-    "flex w-full items-center gap-2 rounded-md px-2 py-1 text-xs transition",
-    onClick ? "cursor-pointer hover:bg-slate-100" : "",
-    active ? "bg-slate-100 font-medium" : "",
+    "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-xs transition-colors duration-150",
+    onClick ? "cursor-pointer hover:bg-surface" : "",
+    active ? "bg-surface font-medium shadow-[var(--shadow-card)]" : "",
   ].join(" ");
 
   const content = (
@@ -4239,14 +4506,14 @@ function ConfigRow({
       >
         {label}
       </span>
-      <span className="min-w-0 flex-1 truncate text-left text-slate-600">{value}</span>
+      <span className="min-w-0 flex-1 truncate text-left text-muted">{value}</span>
       {unsupported && (
-        <span className="shrink-0 rounded bg-slate-100 px-1 py-0.5 text-[10px] text-slate-400">
+        <span className="shrink-0 rounded bg-surface px-1 py-0.5 text-[10px] text-muted-light">
           未支持
         </span>
       )}
       {onClick && (
-        <span className="shrink-0 text-slate-400">
+        <span className="shrink-0 text-muted-light">
           <ChevronIcon direction="right" />
         </span>
       )}
@@ -4289,23 +4556,23 @@ function WorkspaceFilesRow({
       type="button"
       onClick={onClick}
       className={[
-        "flex w-full items-center gap-2 rounded-md px-2 py-1 text-xs transition hover:bg-slate-100",
-        active ? "bg-slate-100 font-medium" : "",
+        "flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-xs transition-colors duration-150 hover:bg-surface",
+        active ? "bg-surface font-medium shadow-[var(--shadow-card)]" : "",
       ].join(" ")}
       title="工作区文件"
     >
-      <span className="inline-flex w-9 shrink-0 items-center justify-center rounded-md bg-indigo-50 px-1 py-px text-[10px] font-semibold uppercase tracking-wide text-indigo-700">
+      <span className="inline-flex w-9 shrink-0 items-center justify-center rounded-md bg-surface-subtle px-1 py-px text-[10px] font-semibold uppercase tracking-wide text-muted ring-1 ring-inset ring-border">
         File
       </span>
-      <span className="min-w-0 flex-1 truncate text-left text-slate-600">
+      <span className="min-w-0 flex-1 truncate text-left text-muted">
         {count > 0 ? `${count} 个跨会话文件` : "跨会话文件资产"}
       </span>
       {unsupported ? (
-        <span className="shrink-0 rounded bg-slate-100 px-1 py-0.5 text-[10px] text-slate-400">
+        <span className="shrink-0 rounded bg-surface px-1 py-0.5 text-[10px] text-muted-light">
           未支持
         </span>
       ) : null}
-      <span className="shrink-0 text-slate-400">
+      <span className="shrink-0 text-muted-light">
         <ChevronIcon direction="right" />
       </span>
     </button>
@@ -4327,7 +4594,7 @@ function ChatPane({
   activeThreadId?: string;
   title: string;
   datasourceId: string;
-  liveRunStatus: "idle" | "running" | "suspended" | "completed" | "failed";
+  liveRunStatus: LiveRun["runStatus"];
   liveRun: LiveRun;
   chatInput: ComponentType<ComponentProps<typeof DataTaskChatInput>>;
   rightPanelOpen: boolean;
@@ -4336,6 +4603,14 @@ function ChatPane({
   capabilitiesReady: boolean;
 }) {
   const { containerRef, chatColumnWidth } = useChatColumnWidth();
+  const [processTimelineCollapsed, setProcessTimelineCollapsed] = useState(false);
+  const processTimelineCollapse = useMemo(
+    () => ({
+      collapsed: processTimelineCollapsed,
+      toggle: () => setProcessTimelineCollapsed((value) => !value),
+    }),
+    [processTimelineCollapsed],
+  );
 
   useEffect(() => {
     if (chatColumnWidth > 0) {
@@ -4344,10 +4619,11 @@ function ChatPane({
   }, [chatColumnWidth, onChatColumnWidthChange]);
 
   return (
-    <main className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-surface-subtle">
+    <main className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-surface">
       <ChatRunStatusContext.Provider value={liveRunStatus}>
       <ChatLiveRunContext.Provider value={liveRun}>
-      <header className="flex h-16 items-center justify-between gap-3 border-b border-border bg-surface px-5 shadow-sm">
+      <ProcessTimelineCollapseContext.Provider value={processTimelineCollapse}>
+      <header className="flex h-16 items-center justify-between gap-3 border-b border-border bg-surface px-5">
         <div className="min-w-0">
           <h2 className="truncate text-base font-semibold text-foreground">
             {title}
@@ -4418,6 +4694,7 @@ function ChatPane({
           <ChatInitializingState />
         )}
       </div>
+      </ProcessTimelineCollapseContext.Provider>
       </ChatLiveRunContext.Provider>
       </ChatRunStatusContext.Provider>
     </main>
@@ -4459,7 +4736,7 @@ function formatCell(value: unknown): string {
 function RunStatusPill({
   status,
 }: {
-  status: "idle" | "running" | "suspended" | "completed" | "failed";
+  status: LiveRun["runStatus"];
 }) {
   const label =
     status === "completed"
@@ -4470,24 +4747,28 @@ function RunStatusPill({
           ? "等待回复"
           : status === "failed"
             ? "失败"
-            : "就绪";
+            : status === "canceled"
+              ? "已取消"
+              : "就绪";
   const className =
     status === "completed"
-      ? "bg-step-success/10 text-step-success"
+      ? "border border-step-success/20 bg-step-success/8 text-step-success"
       : status === "running"
-        ? "bg-primary-light/10 text-primary"
+        ? "border border-border bg-surface-subtle text-foreground"
         : status === "suspended"
-          ? "bg-accent/10 text-step-warning"
+          ? "border border-border bg-surface-subtle text-foreground"
           : status === "failed"
-            ? "bg-step-error/10 text-step-error"
-            : "bg-surface-subtle text-muted";
+            ? "border border-step-error/20 bg-step-error/8 text-step-error"
+            : status === "canceled"
+              ? "border border-border bg-surface-subtle text-muted"
+              : "border border-border bg-surface-subtle text-muted";
 
   return (
     <span
       className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium ${className}`}
     >
       {status === "running" ? (
-        <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-primary-light" />
+        <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-foreground" />
       ) : null}
       {label}
     </span>

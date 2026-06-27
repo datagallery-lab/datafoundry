@@ -70,6 +70,8 @@ export type FileAssetRefDto = {
   sizeBytes?: number;
   sha256?: string;
   source?: string;
+  origin?: string;
+  scope?: "session" | "workspace";
   status?: string;
   sessionId?: string;
   runId?: string;
@@ -255,9 +257,13 @@ export type ConversationRunEventRefDto = {
 
 export type ConversationToolCallDto = {
   runId: string;
+  id?: string;
   toolCallId: string;
   status: "completed" | "failed" | "pending";
+  name?: string;
   toolName?: string;
+  args?: unknown;
+  result?: unknown;
   callEventSeq?: number;
   endEventSeq?: number;
   resultEventSeq?: number;
@@ -267,10 +273,35 @@ export type ConversationToolCallDto = {
 
 export type SessionConversationDto = {
   sessionId: string;
+  title?: string;
+  titleSource?: string;
+  updatedAt?: string;
   messages: ConversationMessageDto[];
   summary?: ConversationSummaryDto;
   runEventRefs: ConversationRunEventRefDto[];
   toolCalls: ConversationToolCallDto[];
+};
+
+export type SessionListItemDto = {
+  id: string;
+  threadId: string;
+  title?: string;
+  titleSource?: string;
+  createdAt?: string;
+  updatedAt?: string;
+  lastMessageAt?: string;
+};
+
+export type SessionListResponseDto = {
+  sessions: SessionListItemDto[];
+  nextCursor?: string;
+};
+
+export type SessionTitleDto = {
+  sessionId: string;
+  title: string;
+  titleSource?: string;
+  updatedAt?: string;
 };
 
 export type JobDto = {
@@ -279,12 +310,68 @@ export type JobDto = {
   user_id?: string;
   type: string;
   resource_id: string;
+  resourceId?: string;
+  artifactId?: string;
   status: "pending" | "running" | "completed" | "failed" | "canceled";
   progress: number;
   result?: Record<string, unknown>;
   created_at?: string;
   started_at?: string;
   finished_at?: string;
+};
+
+export type ArtifactExportFormat = "csv" | "xlsx";
+
+export type RunCancelDto = {
+  canceled: boolean;
+  runId: string;
+  sessionId?: string;
+  persistedOnly?: boolean;
+  reason?: string;
+};
+
+export type DatasourceSchemaColumnDto = {
+  name: string;
+  type?: string;
+  nullable?: boolean;
+  description?: string;
+};
+
+export type DatasourceSchemaTableDto = {
+  name: string;
+  table?: string;
+  description?: string;
+  sampleAvailable?: boolean;
+  columns: DatasourceSchemaColumnDto[];
+  stats?: {
+    rowCount?: number;
+    sizeBytes?: number;
+  };
+};
+
+export type DatasourceSchemaDto = {
+  datasourceId?: string;
+  datasource_id?: string;
+  tables: DatasourceSchemaTableDto[];
+  inspectedAt?: string;
+  adapterSchemaVersion?: number;
+};
+
+export type QueryHistoryItemDto = {
+  id: string;
+  sessionId?: string;
+  runId?: string;
+  datasourceId?: string;
+  sql: string;
+  rowCount?: number;
+  elapsedMs?: number;
+  favorite?: boolean;
+  createdAt?: string;
+  updatedAt?: string;
+};
+
+export type QueryHistoryListResponseDto = {
+  queries: QueryHistoryItemDto[];
 };
 
 export type ArtifactDto = {

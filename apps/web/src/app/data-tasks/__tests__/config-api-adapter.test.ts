@@ -295,4 +295,111 @@ describe("config api adapter", () => {
     expect(conversation.messages[0]?.contentText).toBe("hi");
     expect(conversation.toolCalls[0]?.toolName).toBe("inspect_schema");
   });
+
+  it("loads and patches server sessions through the config client", async () => {
+    process.env.NEXT_PUBLIC_CONFIG_API_URL = "http://config.test";
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        success: true,
+        data: {
+          sessions: [
+            {
+              id: "thread-1",
+              threadId: "thread-1",
+              title: "渠道订单分析",
+              titleSource: "llm",
+              updatedAt: "2026-06-27T10:05:00.000Z",
+            },
+          ],
+          nextCursor: "cursor-2",
+        },
+      }), { headers: { "Content-Type": "application/json" }, status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        success: true,
+        data: {
+          sessionId: "thread-1",
+          title: "我的复盘",
+          titleSource: "user",
+          updatedAt: "2026-06-27T10:06:00.000Z",
+        },
+      }), { headers: { "Content-Type": "application/json" }, status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const list = await configApi.listSessions({ limit: 20, cursor: "cursor-1" });
+    const patched = await configApi.patchSessionTitle("thread-1", "我的复盘");
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "http://config.test/api/v1/sessions?limit=20&cursor=cursor-1",
+      expect.objectContaining({ headers: expect.objectContaining({ Accept: "application/json" }) }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "http://config.test/api/v1/sessions/thread-1",
+      expect.objectContaining({
+        method: "PATCH",
+        body: JSON.stringify({ title: "我的复盘" }),
+      }),
+    );
+    expect(list.sessions[0]?.title).toBe("渠道订单分析");
+    expect(list.nextCursor).toBe("cursor-2");
+    expect(patched.sessionId).toBe("thread-1");
+    expect(patched.titleSource).toBe("user");
+  });
+
+  it("calls backend implemented data-task extension endpoints", async () => {
+    process.env.NEXT_PUBLIC_CONFIG_API_URL = "http://config.test";
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(new Response(JSON.stringify({
+        success: true,
+        data: {},
+      }), { headers: { "Content-Type": "application/json" }, status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await configApi.cancelRun("run-1", "user-click");
+    await configApi.exportArtifact("artifact-1", "xlsx", "same-export");
+    await configApi.listWorkspaceFiles({ scope: "workspace", origin: ["uploaded", "saved"] });
+    await configApi.getDatasourceSchema("db-1", { q: "orders", includeStats: true });
+    await configApi.listQueryHistory({ sessionId: "thread-1", datasourceId: "db-1", favorite: true });
+    await configApi.favoriteQueryHistory("query-1", true);
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "http://config.test/api/v1/runs/run-1/cancel",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ reason: "user-click" }),
+      }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "http://config.test/api/v1/artifacts/artifact-1/export",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ format: "xlsx", idempotencyKey: "same-export" }),
+      }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      3,
+      "http://config.test/api/v1/files?scope=workspace&origin=uploaded%2Csaved",
+      expect.any(Object),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      4,
+      "http://config.test/api/v1/datasources/db-1/schema?q=orders&includeStats=true",
+      expect.any(Object),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      5,
+      "http://config.test/api/v1/query-history?sessionId=thread-1&datasourceId=db-1&favorite=true",
+      expect.any(Object),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      6,
+      "http://config.test/api/v1/query-history/query-1/favorite",
+      expect.objectContaining({ method: "POST" }),
+    );
+  });
 });

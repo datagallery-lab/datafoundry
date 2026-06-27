@@ -22,6 +22,8 @@ function runStatusLabel(status: LiveRun["runStatus"]): string {
       return "已完成";
     case "failed":
       return "失败";
+    case "canceled":
+      return "已取消";
     default:
       return "空闲";
   }

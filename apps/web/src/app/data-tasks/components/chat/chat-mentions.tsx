@@ -98,20 +98,24 @@ export function useMentionAutocomplete({
     ];
     if (query.length === 0) return items;
     return items.filter((item) => {
+      if (item.type === "resource") {
+        const resource = item.resource;
+        const meta = PER_RUN_MENTION_META[resource.kind];
+        const haystack = [
+          resource.name,
+          resource.description,
+          meta.token,
+          meta.label,
+        ];
+        return haystack.join(" ").toLowerCase().includes(query);
+      }
       const resource = item.resource;
-      const haystack = item.type === "resource"
-        ? [
-            resource.name,
-            resource.description,
-            PER_RUN_MENTION_META[resource.kind].token,
-            PER_RUN_MENTION_META[resource.kind].label,
-          ]
-        : [
-            resource.name,
-            resource.description,
-            "file",
-            resource.scope === "workspace" ? "工作区" : "本对话",
-          ];
+      const haystack = [
+        resource.name,
+        resource.description,
+        "file",
+        resource.scope === "workspace" ? "工作区" : "本对话",
+      ];
       return haystack.join(" ").toLowerCase().includes(query);
     });
   }, [fileResources, menuState, resources]);

@@ -114,11 +114,41 @@ export function resolveResponsiveSidebars({
     rightPanelOpen = false;
   }
 
-  if (overflows() && !sidebarCollapsed) {
-    sidebarCollapsed = true;
+  return { sidebarCollapsed, rightPanelOpen };
+}
+
+/**
+ * When the user explicitly expands the left panel, honor that intent even if the
+ * viewport cannot fit a docked right console at the same time.
+ */
+export function resolveSidebarExpandPreferences({
+  viewportWidth,
+  userRightPanelOpen,
+  rightPanelWidth,
+}: {
+  viewportWidth: number;
+  userRightPanelOpen: boolean;
+  rightPanelWidth: number;
+}): {
+  userSidebarCollapsed: false;
+  userRightPanelOpen: boolean;
+} {
+  let nextRightPanelOpen = userRightPanelOpen;
+  const expandedWidthExceedsViewport = (rightPanelOpen: boolean) =>
+    getRequiredWorkspaceWidth({
+      sidebarCollapsed: false,
+      rightPanelOpen,
+      rightPanelWidth,
+    }) > viewportWidth;
+
+  if (expandedWidthExceedsViewport(nextRightPanelOpen) && nextRightPanelOpen) {
+    nextRightPanelOpen = false;
   }
 
-  return { sidebarCollapsed, rightPanelOpen };
+  return {
+    userSidebarCollapsed: false,
+    userRightPanelOpen: nextRightPanelOpen,
+  };
 }
 
 /**

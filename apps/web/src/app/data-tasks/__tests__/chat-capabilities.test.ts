@@ -26,6 +26,8 @@ describe("chat attachment capabilities", () => {
 
   it("maps backend response flags through", () => {
     const mapped = applyBackendCapabilities({
+      "artifact.list": true,
+      "artifact.promote": true,
       "chat.imageInput": true,
       "chat.fileUpload": true,
       files: true,
@@ -34,6 +36,8 @@ describe("chat attachment capabilities", () => {
     });
     expect(mapped["chat.imageInput"]).toBe(true);
     expect(mapped["chat.fileUpload"]).toBe(true);
+    expect(mapped["artifact.list"]).toBe(true);
+    expect(mapped["artifact.promote"]).toBe(true);
     expect(mapped.files).toBe(true);
     expect(mapped["conversation.title"]).toBe(true);
     expect(getRuntimeCapabilities().conversationMemory).toBe(true);

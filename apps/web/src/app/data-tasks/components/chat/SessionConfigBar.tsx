@@ -113,12 +113,17 @@ export function SessionConfigBar({
       data-testid="session-config-bar"
     >
       <div
-        className="pointer-events-none absolute left-0 top-0 -z-10 flex opacity-0"
+        className="pointer-events-none absolute -left-[9999px] top-0 flex"
         aria-hidden
       >
-        {PER_RUN_MENTION_KINDS.map((kind) =>
-          renderPill(kind, { measureRef: (node) => setPillRef(kind, node) }),
-        )}
+        {PER_RUN_MENTION_KINDS.map((kind) => (
+          <ConfigPillMeasure
+            key={kind}
+            kind={kind}
+            counts={sessionResourceCounts(workspaceConfig, kind, session)}
+            rootRef={(node) => setPillRef(kind, node)}
+          />
+        ))}
       </div>
 
       {leading ? (
@@ -248,6 +253,42 @@ function AnchoredPortal({
       {children}
     </div>,
     document.body,
+  );
+}
+
+function ConfigPillMeasure({
+  kind,
+  counts,
+  rootRef,
+}: {
+  kind: PerRunMentionKind;
+  counts: { enabled: number; total: number };
+  rootRef?: (node: HTMLDivElement | null) => void;
+}) {
+  const meta = PER_RUN_MENTION_META[kind];
+  const appearance = PER_RUN_MENTION_APPEARANCE[kind];
+
+  return (
+    <div
+      ref={rootRef}
+      className={[
+        "inline-flex shrink-0 items-center gap-1.5 rounded-full border px-2 py-1 text-xs font-medium",
+        appearance.pill,
+      ].join(" ")}
+    >
+      <span className="inline-flex h-3 w-3 shrink-0" aria-hidden />
+      <span
+        className={[
+          "inline-flex items-center rounded-md px-1.5 py-px text-[10px] font-semibold uppercase tracking-wide",
+          appearance.badge,
+        ].join(" ")}
+      >
+        {meta.token}
+      </span>
+      <span className="opacity-70">
+        {counts.enabled}/{counts.total}
+      </span>
+    </div>
   );
 }
 

@@ -6,6 +6,7 @@ import {
   createChatSession,
   emptyPerRunSelection,
   filterWorkspaceAssetFiles,
+  fileMentionFromArtifact,
   removePerRunMention,
   resolveActiveDatasourceId,
   setLiveMentionSupport,
@@ -132,7 +133,7 @@ describe("buildRunConfig", () => {
         description: "本对话产物",
         scope: "session",
         path: "output/report.html",
-        backendSupported: false,
+        backendSupported: true,
       },
     ];
     let fileSelection = togglePerRunFileMention(
@@ -150,6 +151,28 @@ describe("buildRunConfig", () => {
 
     expect(config.fileIds).toEqual(["file-ref-1"]);
     expect(config.pinnedPaths).toEqual(["output/report.html"]);
+  });
+
+  it("marks current-session artifact pins as backend supported", () => {
+    const mention = fileMentionFromArtifact({
+      id: "artifact-1",
+      kind: "file",
+      type: "file",
+      title: "report.html",
+      summary: "本对话产物",
+      fileId: "file-ref-1",
+      detail: {
+        type: "file",
+        path: "output/report.html",
+      },
+    });
+
+    expect(mention).toMatchObject({
+      id: "session:artifact-1",
+      fileId: "file-ref-1",
+      path: "output/report.html",
+      backendSupported: true,
+    });
   });
 });
 

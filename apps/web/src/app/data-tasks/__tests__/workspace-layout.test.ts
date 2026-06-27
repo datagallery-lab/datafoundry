@@ -11,6 +11,7 @@ import {
   RIGHT_PANEL_MAX_WIDTH,
   RIGHT_PANEL_MIN_WIDTH,
   resolveResponsiveSidebars,
+  resolveSidebarExpandPreferences,
   CHAT_MIN_WIDTH,
   LEFT_PANEL_WIDTH_COLLAPSED,
 } from "../workspace-layout";
@@ -157,6 +158,20 @@ describe("resolveResponsiveSidebars", () => {
       rightPanelOpen: true,
     });
   });
+
+  it("keeps an explicitly expanded left panel when only the chat input preference overflows", () => {
+    expect(
+      resolveResponsiveSidebars({
+        viewportWidth: 1000,
+        userSidebarCollapsed: false,
+        userRightPanelOpen: false,
+        rightPanelWidth: 360,
+      }),
+    ).toEqual({
+      sidebarCollapsed: false,
+      rightPanelOpen: false,
+    });
+  });
 });
 
 describe("getRequiredWorkspaceWidth", () => {
@@ -205,5 +220,33 @@ describe("canDockRightPanel", () => {
         rightPanelWidth: RIGHT_PANEL_DEFAULT_WIDTH,
       }),
     ).toBe(true);
+  });
+});
+
+describe("resolveSidebarExpandPreferences", () => {
+  it("keeps right panel open when the viewport fits expanded left + right", () => {
+    expect(
+      resolveSidebarExpandPreferences({
+        viewportWidth: 1500,
+        userRightPanelOpen: true,
+        rightPanelWidth: 360,
+      }),
+    ).toEqual({
+      userSidebarCollapsed: false,
+      userRightPanelOpen: true,
+    });
+  });
+
+  it("closes the right panel when expanding left would overflow", () => {
+    expect(
+      resolveSidebarExpandPreferences({
+        viewportWidth: 1200,
+        userRightPanelOpen: true,
+        rightPanelWidth: 360,
+      }),
+    ).toEqual({
+      userSidebarCollapsed: false,
+      userRightPanelOpen: false,
+    });
   });
 });

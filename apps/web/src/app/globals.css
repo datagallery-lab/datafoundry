@@ -1,38 +1,38 @@
 @import "tailwindcss";
 
 :root {
-  /* Data-dense dashboard palette */
-  --primary: #1e40af;
-  --primary-light: #3b82f6;
-  --accent: #f59e0b;
+  /* Codex-style neutral workbench palette */
+  --primary: #0d0d0d;
+  --primary-light: #3a3a3a;
+  --accent: #737373;
   --surface: #ffffff;
-  --surface-subtle: #f8fafc;
-  --border: #e2e8f0;
-  --foreground: #0f172a;
+  --surface-subtle: #f7f7f8;
+  --border: #ececf0;
+  --foreground: #0d0d0d;
   /* Text hierarchy — use --text-* (not --muted) so CopilotKit's [data-copilotkit] scope
      cannot override secondary copy colors (it redefines --muted as a surface tone). */
-  --text-secondary: #334155;
-  --text-tertiary: #475569;
+  --text-secondary: #4d4d4d;
+  --text-tertiary: #8a8a99;
   --muted: var(--text-secondary);
   --muted-light: var(--text-tertiary);
   --muted-foreground: var(--text-secondary);
-  --code-bg: #0f172a;
+  --code-bg: #171717;
 
   /* Semantic step tones */
-  --step-inspect: #3b82f6;
-  --step-query: #8b5cf6;
-  --step-transform: #06b6d4;
-  --step-fetch: #0ea5e9;
-  --step-visualize: #7c3aed;
-  --step-knowledge: #0891b2;
-  --step-success: #059669;
-  --step-warning: #d97706;
-  --step-error: #dc2626;
-  --step-glow: rgb(59 130 246 / 0.18);
+  --step-inspect: #2563eb;
+  --step-query: #7c3aed;
+  --step-transform: #0891b2;
+  --step-fetch: #0284c7;
+  --step-visualize: #6d28d9;
+  --step-knowledge: #0e7490;
+  --step-success: #047857;
+  --step-warning: #b45309;
+  --step-error: #b91c1c;
+  --step-glow: rgb(13 13 13 / 0.08);
 
-  --radius-card: 0.75rem;
-  --shadow-card: 0 1px 2px rgb(15 23 42 / 0.04);
-  --shadow-card-hover: 0 4px 14px rgb(15 23 42 / 0.06);
+  --radius-card: 0.625rem;
+  --shadow-card: 0 1px 1px rgb(13 13 13 / 0.02);
+  --shadow-card-hover: 0 2px 8px rgb(13 13 13 / 0.04);
 }
 
 @theme inline {
@@ -56,14 +56,14 @@
   --color-step-success: var(--step-success);
   --color-step-warning: var(--step-warning);
   --color-step-error: var(--step-error);
-  --font-sans: var(--font-fira-sans);
+  --font-sans: var(--font-inter);
   --font-mono: var(--font-fira-code);
 }
 
 body {
   background: var(--surface-subtle);
   color: var(--foreground);
-  font-family: var(--font-fira-sans), ui-sans-serif, system-ui, sans-serif;
+  font-family: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
 }
 
 nextjs-portal {

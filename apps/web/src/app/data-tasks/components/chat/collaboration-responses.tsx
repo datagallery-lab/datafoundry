@@ -15,6 +15,8 @@ import {
   type ReactNode,
 } from "react";
 import type { Message } from "@ag-ui/core";
+import type { LiveRun } from "../../live-run-state";
+import { useLiveRun } from "../../use-data-agent-run";
 import {
   collaborationResponseLayout,
   formatCollaborationResponseDisplay,
@@ -69,6 +71,33 @@ function recordResponse(entry: CollaborationResponseRecord) {
     [entry.threadId]: [...current, entry],
   };
   emitChange();
+}
+
+export function hydrateCollaborationResponses(
+  entries: Array<Omit<CollaborationResponseRecord, "id" | "createdAt">>,
+): void {
+  for (const entry of entries) {
+    recordResponse({
+      ...entry,
+      id: `${entry.threadId}:${entry.toolCallId}`,
+      createdAt: Date.now(),
+    });
+  }
+}
+
+export function shouldShowCollaborationRecap(
+  message: Message,
+  response: CollaborationResponseRecord,
+  liveRun: LiveRun | null,
+): boolean {
+  if (messageHasToolCall(message, response.toolCallId)) {
+    return false;
+  }
+  const liveCall = liveRun?.toolCalls.find((call) => call.id === response.toolCallId);
+  if (liveCall && liveCall.status !== "running") {
+    return false;
+  }
+  return true;
 }
 
 export { formatCollaborationResponseDisplay };
@@ -159,15 +188,11 @@ export function CollaborationChoiceBubble({
     layout.recapSide === "assistant"
       ? "copilotKitMessage copilotKitAssistantMessage flex flex-col items-start"
       : "copilotKitMessage copilotKitUserMessage flex flex-col items-end";
-  const choiceClass =
-    layout.choiceSide === "user"
-      ? "copilotKitMessage copilotKitUserMessage flex flex-col items-end"
-      : "copilotKitMessage copilotKitAssistantMessage flex flex-col items-start";
 
   if (inline) {
     return (
-      <div className="rounded-xl border border-primary/20 bg-primary/8 px-3 py-2.5">
-        <div className="mb-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-primary">
+      <div className="rounded-xl border border-border bg-surface px-3 py-2.5 shadow-[var(--shadow-card)]">
+        <div className="mb-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-light">
           我的选择
         </div>
         <div className={`text-sm leading-6 text-foreground ${mono ? "font-mono tracking-tight" : ""}`}>
@@ -178,30 +203,31 @@ export function CollaborationChoiceBubble({
   }
 
   return (
-    <div data-copilotkit className="mb-4 grid gap-2 pt-2">
-      {response.question || response.plan ? (
-        <div className={recapClass}>
-          <div className="max-w-[85%] rounded-2xl border border-border bg-surface-subtle px-3.5 py-2.5 text-left shadow-sm">
-            <div className="mb-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted">
-              {recapLabel}
+    <div data-copilotkit className="mb-3 pt-1">
+      <div className={recapClass}>
+        <div className="w-full rounded-xl border border-border bg-surface px-3 py-2.5 text-left shadow-[var(--shadow-card)]">
+          {response.question ? (
+            <div className="mb-2 text-xs leading-5 text-muted">
+              <span className="font-medium text-muted-light">{recapLabel}：</span>
+              {response.question}
             </div>
-            {response.question ? (
-              <div className="text-sm font-medium leading-6 text-foreground">
-                {response.question}
-              </div>
-            ) : null}
-            {response.plan && layout.planRenderer === "markdown" ? (
-              <PlanMarkdown content={response.plan} />
-            ) : null}
+          ) : null}
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="inline-flex h-5 w-5 items-center justify-center rounded-full border border-border bg-surface-subtle text-muted">
+              <svg viewBox="0 0 20 20" className="h-3 w-3" fill="currentColor" aria-hidden>
+                <path d="M10 9a3 3 0 1 0 0-6 3 3 0 0 0 0 6ZM4 17v-1a4 4 0 0 1 4-4h4a4 4 0 0 1 4 4v1H4Z" />
+              </svg>
+            </span>
+            <span className="text-[11px] font-semibold text-muted">
+              已采纳你的选择
+            </span>
+            <span className={`rounded-md bg-surface-subtle px-2 py-0.5 text-xs text-foreground ${mono ? "font-mono tracking-tight" : ""}`}>
+              {response.displayText}
+            </span>
           </div>
-        </div>
-      ) : null}
-      <div className={choiceClass}>
-        <div className="max-w-[85%] rounded-2xl border border-primary/20 bg-primary/10 px-3.5 py-2.5 text-sm leading-6 text-foreground shadow-sm">
-          <div className="mb-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-primary">
-            我的选择
-          </div>
-          <div className={mono ? "font-mono tracking-tight" : ""}>{response.displayText}</div>
+          {response.plan && layout.planRenderer === "markdown" ? (
+            <PlanMarkdown content={response.plan} />
+          ) : null}
         </div>
       </div>
     </div>
@@ -224,6 +250,7 @@ export function CollaborationResponseAfterMessage({
   const chatConfig = useCopilotChatConfiguration();
   const threadId = chatConfig?.threadId;
   const responses = useThreadCollaborationResponses(threadId);
+  const { liveRun } = useLiveRun();
 
   if (position !== "after" || message.role !== "assistant") {
     return null;
@@ -231,8 +258,9 @@ export function CollaborationResponseAfterMessage({
 
   const matching = responses.filter(
     (response) =>
-      response.assistantMessageId === message.id ||
-      messageHasToolCall(message, response.toolCallId),
+      (response.assistantMessageId === message.id ||
+        messageHasToolCall(message, response.toolCallId)) &&
+      shouldShowCollaborationRecap(message, response, liveRun),
   );
   if (matching.length === 0) {
     return null;

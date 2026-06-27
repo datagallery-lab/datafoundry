@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import type { DataArtifact, TimelineEvent } from "../../data-task-state";
+import type { JobDto } from "../../../../lib/config-api";
 import type { LiveRun, SessionUsageStats } from "../../live-run-state";
 import type { TaskSelection } from "../../page";
 import { overlayBackdropClass, overlayPanelClass } from "../../ui-tokens";
@@ -20,6 +21,7 @@ type TaskConsoleDrawerProps = {
   onClose: () => void;
   onOpenTrace: () => void;
   onPromoteArtifact?: (artifact: DataArtifact) => Promise<void> | void;
+  onArtifactExportJob?: (job: JobDto) => void;
   onSelectEvent: (eventId: string) => void;
   promotedArtifactIds?: ReadonlySet<string>;
 };
@@ -39,6 +41,7 @@ export function TaskConsoleDrawer({
   onClose,
   onOpenTrace,
   onPromoteArtifact,
+  onArtifactExportJob,
   onSelectEvent,
   promotedArtifactIds,
 }: TaskConsoleDrawerProps) {
@@ -76,6 +79,7 @@ export function TaskConsoleDrawer({
           onMentionArtifact={onMentionArtifact}
           onOpenTrace={onOpenTrace}
           onPromoteArtifact={onPromoteArtifact}
+          onArtifactExportJob={onArtifactExportJob}
           onSelectEvent={onSelectEvent}
           promotedArtifactIds={promotedArtifactIds}
         />

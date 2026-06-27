@@ -3,7 +3,7 @@ import type { DataArtifactType, DataStepKind } from "./data-task-state";
 /** Shared Tailwind class bundles for the data-tasks workbench. */
 
 export const panelShellClass =
-  "min-w-0 max-w-full rounded-xl border border-border bg-surface p-3 shadow-sm";
+  "min-w-0 max-w-full rounded-xl border border-border bg-surface p-3 shadow-[var(--shadow-card)]";
 
 export const panelTitleClass = "text-sm font-semibold text-foreground";
 
@@ -18,23 +18,23 @@ export const metricLabelClass = "text-[11px] font-medium text-muted-light";
 
 /** Secondary actions — pair with `.hitl-action-btn-secondary` in globals.css inside CopilotKit. */
 export const btnSecondaryClass =
-  "cursor-pointer rounded-lg border border-border bg-surface px-3 py-1.5 text-xs font-medium text-muted transition-colors duration-200 hover:border-primary-light/40 hover:bg-surface-subtle hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-light/50";
+  "cursor-pointer rounded-lg border border-border bg-surface px-3 py-1.5 text-xs font-medium text-muted transition-colors duration-200 hover:border-muted-light hover:bg-surface-subtle hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/20";
 
 /** ask_user / HITL selectable option rows — pair with `.hitl-choice-option` in globals.css. */
 export const choiceOptionClass =
-  "flex w-full cursor-pointer items-center gap-3 rounded-lg px-3 py-2.5 text-left shadow-sm transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-light/45 active:scale-[0.99]";
+  "flex w-full cursor-pointer items-center gap-3 rounded-lg px-3 py-2.5 text-left transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/20";
 
 export const choiceOptionIconClass =
-  "flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-border bg-surface text-[11px] font-semibold text-muted-light transition-colors duration-200 group-hover:border-primary/30 group-hover:bg-primary-light/12 group-hover:text-primary";
+  "flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-border bg-surface text-[11px] font-semibold text-muted-light transition-colors duration-200 group-hover:border-muted-light group-hover:bg-surface-subtle group-hover:text-foreground";
 
 export const choiceOptionChevronClass =
-  "shrink-0 text-muted-light transition-all duration-200 group-hover:translate-x-0.5 group-hover:text-primary";
+  "shrink-0 text-muted-light transition-colors duration-200 group-hover:text-foreground";
 
 export const btnPrimaryClass =
-  "cursor-pointer rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-white transition-colors duration-200 hover:bg-primary-light focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-light/50";
+  "cursor-pointer rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-white transition-colors duration-200 hover:bg-primary-light focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/25";
 
 export const btnGhostClass =
-  "cursor-pointer rounded-lg px-2.5 py-1 text-xs font-medium text-muted transition-colors duration-200 hover:bg-surface-subtle hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-light/50";
+  "cursor-pointer rounded-lg px-2.5 py-1 text-xs font-medium text-muted transition-colors duration-200 hover:bg-surface-subtle hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/20";
 
 export const chipClass =
   "inline-flex items-center gap-1.5 rounded-full border border-border bg-surface-subtle px-2.5 py-0.5 text-[11px] font-medium text-muted";

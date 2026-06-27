@@ -192,7 +192,16 @@ function DataTaskChatInputLayout({
   onToggleSessionResource: (kind: PerRunMentionKind, id: string) => void;
   attachmentsApi: UseAttachmentsReturn;
 }) {
-  const { chatColumnWidth } = useDataTaskChatInputBindings();
+  const {
+    chatColumnWidth,
+    liveRunStatus,
+    liveRunRunId,
+    onCancelRun,
+    cancelRunBusy,
+  } = useDataTaskChatInputBindings();
+  const showRunStopButton =
+    (liveRunStatus === "running" || liveRunStatus === "suspended") &&
+    Boolean(liveRunRunId);
   const chatInputWidth = resolveChatInputWidth(chatColumnWidth);
   const mention = useMentionAutocomplete({
     resources: mentionResources,
@@ -253,7 +262,7 @@ function DataTaskChatInputLayout({
       }}
     >
       <div
-        className="pointer-events-auto mx-auto w-full"
+        className="mx-auto w-full"
         style={{ width: chatInputWidth, maxWidth: "100%" }}
       >
         <div
@@ -261,7 +270,7 @@ function DataTaskChatInputLayout({
           onDragOver={attachmentsApi.handleDragOver}
           onDragLeave={attachmentsApi.handleDragLeave}
           onDrop={attachmentsApi.handleDrop}
-          className="relative flex w-full flex-col overflow-visible rounded-2xl border border-border bg-surface shadow-[0_8px_28px_-6px_rgba(15,23,42,0.12),0_2px_8px_-2px_rgba(15,23,42,0.05)]"
+          className="pointer-events-auto relative flex w-full flex-col overflow-visible rounded-2xl border border-border bg-surface shadow-[0_8px_28px_-6px_rgba(15,23,42,0.12),0_2px_8px_-2px_rgba(15,23,42,0.05)]"
         >
           {attachmentsApi.dragOver && (
             <div className="pointer-events-none absolute inset-0 z-30 grid place-items-center rounded-2xl border-2 border-dashed border-primary bg-primary-light/10 text-sm font-medium text-primary">
@@ -351,6 +360,21 @@ function DataTaskChatInputLayout({
                     onActiveLlmChange={onActiveLlmChange}
                     onOpenLlmConfig={onOpenLlmConfig}
                   />
+                  {showRunStopButton ? (
+                    <button
+                      type="button"
+                      aria-label={cancelRunBusy ? "停止中" : "停止运行"}
+                      title={cancelRunBusy ? "停止中…" : "停止"}
+                      onClick={() => void onCancelRun?.()}
+                      disabled={cancelRunBusy}
+                      className="grid h-7 w-7 cursor-pointer place-items-center rounded-md border border-border bg-surface text-step-error transition-colors duration-200 hover:border-step-error/40 hover:bg-step-error/5 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      <span
+                        className="h-2.5 w-2.5 rounded-[2px] bg-current"
+                        aria-hidden
+                      />
+                    </button>
+                  ) : null}
                   {sendButton}
                 </>
               }

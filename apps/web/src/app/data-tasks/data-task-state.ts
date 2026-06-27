@@ -66,23 +66,36 @@ export function dataStepLabel(kind: DataStepKind): string {
   }
 }
 
+const toolDisplayTitles: Record<string, string> = {
+  list_data_sources: "查看数据源",
+  inspect_schema: "检查数据源 Schema",
+  preview_table: "预览数据表",
+  run_sql_readonly: "生成并执行 SQL",
+  retrieve_knowledge: "检索知识库",
+  read_file: "读取文件",
+  edit_file: "编辑文件",
+  write_file: "写入文件",
+  list_files: "浏览工作区文件",
+  grep: "搜索文件内容",
+  mkdir: "创建目录",
+  file_stat: "查看文件信息",
+  execute_command: "执行命令",
+  publish_artifact: "发布产物",
+  promote_workspace_file: "提升工作区文件",
+  task_write: "写入任务计划",
+  task_update: "更新任务",
+  task_complete: "完成任务",
+  task_check: "检查任务状态",
+  ask_user: "询问用户",
+  submit_plan: "提交计划",
+};
+
 /** Human-readable title for a backend tool name (console / trace / progress). */
 export function toolDisplayTitle(toolName?: string): string {
-  switch (toolName) {
-    case "inspect_schema":
-      return "检查数据源 Schema";
-    case "run_sql_readonly":
-      return "生成并执行 SQL";
-    case "ask_user":
-      return "询问用户";
-    case "submit_plan":
-      return "提交计划";
-    default:
-      if (!toolName || toolName === "tool" || toolName === "unknown") {
-        return "执行工具";
-      }
-      return toolName;
+  if (!toolName || toolName === "tool" || toolName === "unknown") {
+    return "执行工具";
   }
+  return toolDisplayTitles[toolName] ?? toolName;
 }
 
 export type ArtifactDetail =
@@ -228,6 +241,8 @@ export interface ChatSession {
   title: string;
   titleSource?: ChatSessionTitleSource;
   createdAt: number;
+  updatedAt?: number;
+  lastMessageAt?: number;
   /** Pinned sessions stay at the top of the sidebar list. */
   pinned?: boolean;
   /** When the session was pinned; used to order multiple pinned sessions. */
@@ -247,12 +262,14 @@ function newThreadId(): string {
 
 export function createChatSession(title = "新数据任务"): ChatSession {
   const threadId = newThreadId();
+  const now = Date.now();
   return {
     id: threadId,
     threadId,
     title,
     titleSource: "default",
-    createdAt: Date.now(),
+    createdAt: now,
+    updatedAt: now,
   };
 }
 
@@ -332,6 +349,71 @@ export function applyAutoTitle(
     if (session.id !== id || session.titleSource === "user") return session;
     return { ...session, title: normalized, titleSource: source };
   });
+}
+
+export type ServerChatSessionDto = {
+  id?: string;
+  sessionId?: string;
+  threadId?: string;
+  title?: string;
+  titleSource?: ChatSessionTitleSource | string;
+  createdAt?: string;
+  updatedAt?: string;
+  lastMessageAt?: string;
+};
+
+function timestampFromIso(value: string | undefined, fallback: number): number {
+  if (!value) return fallback;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function normalizeTitleSource(value: string | undefined): ChatSessionTitleSource {
+  if (value === "auto-snippet" || value === "llm" || value === "user") return value;
+  return "default";
+}
+
+export function serverSessionDtoToChatSession(dto: ServerChatSessionDto): ChatSession {
+  const threadId = dto.threadId ?? dto.sessionId ?? dto.id ?? newThreadId();
+  const createdAt = timestampFromIso(dto.createdAt, Date.now());
+  const updatedAt = timestampFromIso(dto.updatedAt, createdAt);
+  return {
+    id: dto.id ?? dto.sessionId ?? threadId,
+    threadId,
+    title: normalizeSessionTitle(dto.title ?? "") || "新数据任务",
+    titleSource: normalizeTitleSource(dto.titleSource),
+    createdAt,
+    updatedAt,
+    lastMessageAt: timestampFromIso(dto.lastMessageAt, updatedAt),
+  };
+}
+
+export function mergeServerChatSessions(
+  localSessions: ChatSession[],
+  serverSessions: ServerChatSessionDto[],
+): ChatSession[] {
+  const localById = new Map<string, ChatSession>();
+  const localByThreadId = new Map<string, ChatSession>();
+  const matchedLocalIds = new Set<string>();
+  for (const session of localSessions) {
+    localById.set(session.id, session);
+    localByThreadId.set(session.threadId, session);
+  }
+
+  const mergedServer = serverSessions.map((dto) => {
+    const server = serverSessionDtoToChatSession(dto);
+    const local = localById.get(server.id) ?? localByThreadId.get(server.threadId);
+    if (!local) return server;
+    matchedLocalIds.add(local.id);
+    return {
+      ...server,
+      pinned: local.pinned,
+      pinnedAt: local.pinnedAt,
+      config: local.config,
+    };
+  });
+  const localOnly = localSessions.filter((session) => !matchedLocalIds.has(session.id));
+  return sortChatSessions(dedupeChatSessions([...mergedServer, ...localOnly]));
 }
 
 export function dedupeChatSessions(sessions: ChatSession[]): ChatSession[] {
@@ -2029,43 +2111,43 @@ export function setLiveMentionSupport(support: MentionSupportMap): void {
 const CONFIG_APPEARANCE = {
   db: {
     badge:
-      "bg-sky-200 text-sky-800 ring-1 ring-inset ring-sky-300/80 dark:bg-sky-500/25 dark:text-sky-200 dark:ring-sky-500/40",
-    pill: "border-sky-300 bg-sky-100 text-sky-900 hover:border-sky-400 hover:bg-sky-200 dark:border-sky-600 dark:bg-sky-500/20 dark:text-sky-100 dark:hover:bg-sky-500/30",
+      "bg-surface-subtle text-muted ring-1 ring-inset ring-border",
+    pill: "border-border bg-surface text-foreground hover:border-muted-light hover:bg-surface-subtle",
     pillOpen:
-      "border-sky-400 bg-sky-200 text-sky-950 dark:border-sky-500 dark:bg-sky-500/35 dark:text-sky-50",
-    chip: "border-sky-300 bg-sky-100 text-sky-900 dark:border-sky-600 dark:bg-sky-500/20 dark:text-sky-100",
+      "border-muted-light bg-surface-subtle text-foreground",
+    chip: "border-border bg-surface-subtle text-muted",
   },
   kb: {
     badge:
-      "bg-violet-200 text-violet-800 ring-1 ring-inset ring-violet-300/80 dark:bg-violet-500/25 dark:text-violet-200 dark:ring-violet-500/40",
-    pill: "border-violet-300 bg-violet-100 text-violet-900 hover:border-violet-400 hover:bg-violet-200 dark:border-violet-600 dark:bg-violet-500/20 dark:text-violet-100 dark:hover:bg-violet-500/30",
+      "bg-surface-subtle text-muted ring-1 ring-inset ring-border",
+    pill: "border-border bg-surface text-foreground hover:border-muted-light hover:bg-surface-subtle",
     pillOpen:
-      "border-violet-400 bg-violet-200 text-violet-950 dark:border-violet-500 dark:bg-violet-500/35 dark:text-violet-50",
-    chip: "border-violet-300 bg-violet-100 text-violet-900 dark:border-violet-600 dark:bg-violet-500/20 dark:text-violet-100",
+      "border-muted-light bg-surface-subtle text-foreground",
+    chip: "border-border bg-surface-subtle text-muted",
   },
   mcp: {
     badge:
-      "bg-emerald-200 text-emerald-800 ring-1 ring-inset ring-emerald-300/80 dark:bg-emerald-500/25 dark:text-emerald-200 dark:ring-emerald-500/40",
-    pill: "border-emerald-300 bg-emerald-100 text-emerald-900 hover:border-emerald-400 hover:bg-emerald-200 dark:border-emerald-600 dark:bg-emerald-500/20 dark:text-emerald-100 dark:hover:bg-emerald-500/30",
+      "bg-surface-subtle text-muted ring-1 ring-inset ring-border",
+    pill: "border-border bg-surface text-foreground hover:border-muted-light hover:bg-surface-subtle",
     pillOpen:
-      "border-emerald-400 bg-emerald-200 text-emerald-950 dark:border-emerald-500 dark:bg-emerald-500/35 dark:text-emerald-50",
-    chip: "border-emerald-300 bg-emerald-100 text-emerald-900 dark:border-emerald-600 dark:bg-emerald-500/20 dark:text-emerald-100",
+      "border-muted-light bg-surface-subtle text-foreground",
+    chip: "border-border bg-surface-subtle text-muted",
   },
   llm: {
     badge:
-      "bg-red-200 text-red-800 ring-1 ring-inset ring-red-300/80 dark:bg-red-500/25 dark:text-red-200 dark:ring-red-500/40",
-    pill: "border-red-300 bg-red-100 text-red-900 hover:border-red-400 hover:bg-red-200 dark:border-red-600 dark:bg-red-500/20 dark:text-red-100 dark:hover:bg-red-500/30",
+      "bg-surface-subtle text-muted ring-1 ring-inset ring-border",
+    pill: "border-border bg-surface text-foreground hover:border-muted-light hover:bg-surface-subtle",
     pillOpen:
-      "border-red-400 bg-red-200 text-red-950 dark:border-red-500 dark:bg-red-500/35 dark:text-red-50",
-    chip: "border-red-300 bg-red-100 text-red-900 dark:border-red-600 dark:bg-red-500/20 dark:text-red-100",
+      "border-muted-light bg-surface-subtle text-foreground",
+    chip: "border-border bg-surface-subtle text-muted",
   },
   skill: {
     badge:
-      "bg-amber-200 text-amber-900 ring-1 ring-inset ring-amber-300/80 dark:bg-amber-500/25 dark:text-amber-200 dark:ring-amber-500/40",
-    pill: "border-amber-300 bg-amber-100 text-amber-950 hover:border-amber-400 hover:bg-amber-200 dark:border-amber-600 dark:bg-amber-500/20 dark:text-amber-100 dark:hover:bg-amber-500/30",
+      "bg-surface-subtle text-muted ring-1 ring-inset ring-border",
+    pill: "border-border bg-surface text-foreground hover:border-muted-light hover:bg-surface-subtle",
     pillOpen:
-      "border-amber-400 bg-amber-200 text-amber-950 dark:border-amber-500 dark:bg-amber-500/35 dark:text-amber-50",
-    chip: "border-amber-300 bg-amber-100 text-amber-950 dark:border-amber-600 dark:bg-amber-500/20 dark:text-amber-100",
+      "border-muted-light bg-surface-subtle text-foreground",
+    chip: "border-border bg-surface-subtle text-muted",
   },
 } as const satisfies Record<
   WorkspaceConfigKind,
@@ -2192,7 +2274,7 @@ export function fileMentionFromArtifact(artifact: DataArtifact): FileMentionReso
     description: artifact.summary,
     scope: "session",
     ...(path ? { path } : {}),
-    backendSupported: false,
+    backendSupported: true,
   };
 }
 

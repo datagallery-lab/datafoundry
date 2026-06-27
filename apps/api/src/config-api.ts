@@ -155,6 +155,8 @@ const routeConfigRequest = async (
   if (root === "capabilities" && request.method === "GET") {
     return ok({
       "artifact.export": true,
+      "artifact.list": true,
+      "artifact.promote": true,
       "chat.fileUpload": true,
       "chat.imageInput": true,
       "conversation.memory": true,

@@ -1,4 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { CollaborationChoiceBubble } from "../components/chat/collaboration-responses";
 import {
   collaborationResponseLayout,
   formatCollaborationResponseDisplay,
@@ -32,10 +35,25 @@ describe("formatCollaborationResponseDisplay", () => {
     expect(formatCollaborationResponseDisplay("ask_user", "  继续分析  ")).toBe("继续分析");
   });
 
-  it("renders collaboration prompts as assistant-side recap and choices as user-side replies", () => {
+  it("maps ask_user multi-select values to option labels", () => {
+    expect(
+      formatCollaborationResponseDisplay("ask_user", ["schema", "sql"], [
+        { label: "检查表结构", value: "schema" },
+        { label: "执行 SQL", value: "sql" },
+      ]),
+    ).toBe("检查表结构、执行 SQL");
+  });
+
+  it("formats submit_plan rejection without feedback", () => {
+    expect(
+      formatCollaborationResponseDisplay("submit_plan", { action: "rejected" }),
+    ).toBe("已拒绝执行计划");
+  });
+
+  it("renders collaboration prompts as inline assistant-side records", () => {
     expect(collaborationResponseLayout("ask_user")).toEqual({
       recapSide: "assistant",
-      choiceSide: "user",
+      choiceSide: "inline",
       planRenderer: undefined,
     });
   });
@@ -43,8 +61,28 @@ describe("formatCollaborationResponseDisplay", () => {
   it("renders submitted plans as assistant-side markdown recap", () => {
     expect(collaborationResponseLayout("submit_plan")).toEqual({
       recapSide: "assistant",
-      choiceSide: "user",
+      choiceSide: "inline",
       planRenderer: "markdown",
     });
+  });
+
+  it("shows the question before the accepted answer in the recap bubble", () => {
+    const html = renderToStaticMarkup(
+      createElement(CollaborationChoiceBubble, {
+        response: {
+          id: "t:tc-ask",
+          threadId: "t",
+          toolCallId: "tc-ask",
+          toolName: "ask_user",
+          question: "请问您对当前测试流程是否满意？",
+          displayText: "已确认满意",
+          createdAt: 1,
+        },
+      }),
+    );
+
+    expect(html.indexOf("回答的问题")).toBeGreaterThan(-1);
+    expect(html.indexOf("已确认满意")).toBeGreaterThan(-1);
+    expect(html.indexOf("回答的问题")).toBeLessThan(html.indexOf("已确认满意"));
   });
 });

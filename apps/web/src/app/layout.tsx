@@ -1,12 +1,11 @@
 import type { Metadata } from "next";
-import { Fira_Code, Fira_Sans } from "next/font/google";
+import { Fira_Code, Inter } from "next/font/google";
 import "./globals.css";
 import "@copilotkit/react-core/v2/styles.css";
 
-const firaSans = Fira_Sans({
+const inter = Inter({
   subsets: ["latin"],
-  weight: ["300", "400", "500", "600", "700"],
-  variable: "--font-fira-sans",
+  variable: "--font-inter",
   display: "swap",
 });
 
@@ -28,7 +27,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="zh-CN" className={`${firaSans.variable} ${firaCode.variable}`}>
+    <html lang="zh-CN" className={`${inter.variable} ${firaCode.variable}`}>
       <body className="font-sans antialiased">{children}</body>
     </html>
   );

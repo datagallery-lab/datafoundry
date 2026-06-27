@@ -11,6 +11,7 @@ import type {
   WorkspaceConfigItem,
   WorkspaceConfigStore,
 } from "../../data-task-state";
+import type { LiveRunStatus } from "../../live-run-state";
 
 export type DataTaskChatInputBindings = {
   activeLlmId: string | null;
@@ -35,6 +36,10 @@ export type DataTaskChatInputBindings = {
   activeThreadId: string | null;
   capabilitiesReady: boolean;
   onUserMessageSubmitted: (text: string) => void;
+  liveRunStatus: LiveRunStatus;
+  liveRunRunId: string | null;
+  onCancelRun?: () => Promise<void> | void;
+  cancelRunBusy?: boolean;
 };
 
 const DataTaskChatInputBindingsContext =

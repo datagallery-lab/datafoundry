@@ -32,7 +32,10 @@ export function WorkspaceFileAssetsPanel({ onFilesChange }: WorkspaceFileAssetsP
     setLoading(true);
     setError(null);
     try {
-      const response = await configApi.listWorkspaceFiles();
+      const response = await configApi.listWorkspaceFiles({
+        scope: "workspace",
+        origin: ["uploaded", "saved"],
+      });
       const workspaceFiles = filterWorkspaceAssetFiles(response.files ?? []);
       setFiles(workspaceFiles);
       onFilesChange?.(workspaceFiles);

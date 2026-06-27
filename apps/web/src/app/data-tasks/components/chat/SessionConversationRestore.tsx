@@ -6,9 +6,13 @@ import { configApi } from "../../../../lib/config-api/client";
 import { getRuntimeCapabilities } from "../../../../lib/config-api/capabilities";
 import {
   conversationToAgentMessages,
+  collaborationResponsesFromConversation,
+  hydrateLiveRunFromConversation,
   isIgnorableConversationRestoreError,
   shouldRestoreConversation,
 } from "../../conversation-restore";
+import { hydrateCollaborationResponses } from "./collaboration-responses";
+import { useLiveRunSetters } from "../../use-data-agent-run";
 
 export function SessionConversationRestore({
   agentId,
@@ -20,7 +24,9 @@ export function SessionConversationRestore({
   const chatConfig = useCopilotChatConfiguration();
   const threadId = chatConfig?.threadId;
   const { agent } = useAgent({ agentId });
-  const restoredThreadIdsRef = useRef(new Set<string>());
+  const { setLiveRun } = useLiveRunSetters();
+  const restoredMessagesRef = useRef(new Set<string>());
+  const hydratedLiveRunRef = useRef(new Set<string>());
   const inFlightThreadIdRef = useRef<string | null>(null);
 
   useEffect(() => {
@@ -28,16 +34,22 @@ export function SessionConversationRestore({
       return;
     }
 
+    const conversationMemoryEnabled = getRuntimeCapabilities().conversationMemory;
+    if (!conversationMemoryEnabled) {
+      return;
+    }
+
     const messageCount = agent.messages?.length ?? 0;
-    const alreadyRestored = restoredThreadIdsRef.current.has(threadId);
-    const canRestore = shouldRestoreConversation({
-      conversationMemoryEnabled: getRuntimeCapabilities().conversationMemory,
+    const alreadyRestoredMessages = restoredMessagesRef.current.has(threadId);
+    const alreadyHydratedLiveRun = hydratedLiveRunRef.current.has(threadId);
+    const canRestoreMessages = shouldRestoreConversation({
+      conversationMemoryEnabled,
       messageCount,
       isRunning: Boolean(agent.isRunning),
-      alreadyRestored,
+      alreadyRestored: alreadyRestoredMessages,
     });
 
-    if (!canRestore || inFlightThreadIdRef.current === threadId) {
+    if ((!canRestoreMessages && alreadyHydratedLiveRun) || inFlightThreadIdRef.current === threadId) {
       return;
     }
 
@@ -50,20 +62,34 @@ export function SessionConversationRestore({
         if (cancelled) {
           return;
         }
+
         const currentCount = agent.messages?.length ?? 0;
-        if (currentCount > 0 || agent.isRunning) {
-          return;
+        if (currentCount === 0 && !agent.isRunning && !alreadyRestoredMessages) {
+          const restored = conversationToAgentMessages(conversation);
+          if (restored.length > 0) {
+            agent.setMessages(restored);
+          }
+          restoredMessagesRef.current.add(threadId);
         }
-        const restored = conversationToAgentMessages(conversation);
-        if (restored.length === 0) {
-          restoredThreadIdsRef.current.add(threadId);
-          return;
+
+        if (!alreadyHydratedLiveRun) {
+          await new Promise<void>((resolve) => {
+            requestAnimationFrame(() => resolve());
+          });
+          if (cancelled) {
+            return;
+          }
+          setLiveRun((current) => hydrateLiveRunFromConversation(current, conversation));
+          hydratedLiveRunRef.current.add(threadId);
         }
-        agent.setMessages(restored);
-        restoredThreadIdsRef.current.add(threadId);
+
+        hydrateCollaborationResponses(
+          collaborationResponsesFromConversation(threadId, conversation),
+        );
       } catch (error) {
         if (isIgnorableConversationRestoreError(error)) {
-          restoredThreadIdsRef.current.add(threadId);
+          restoredMessagesRef.current.add(threadId);
+          hydratedLiveRunRef.current.add(threadId);
           return;
         }
         if (typeof window !== "undefined") {
@@ -78,8 +104,9 @@ export function SessionConversationRestore({
 
     return () => {
       cancelled = true;
+      hydratedLiveRunRef.current.delete(threadId);
     };
-  }, [agent, agent.isRunning, agent.messages?.length, capabilitiesReady, threadId]);
+  }, [agent, agent.isRunning, agent.messages?.length, capabilitiesReady, setLiveRun, threadId]);
 
   return null;
 }

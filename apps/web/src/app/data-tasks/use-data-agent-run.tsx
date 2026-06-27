@@ -4,6 +4,7 @@ import {
   createContext,
   useContext,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -142,7 +143,7 @@ export function LiveRunEventSubscriber({
     ],
   });
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     setLiveRun(createInitialLiveRun());
     setSessionUsage(createInitialSessionUsage());
   }, [threadId, setLiveRun, setSessionUsage]);

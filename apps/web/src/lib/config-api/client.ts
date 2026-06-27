@@ -1,16 +1,23 @@
 import type {
   ApiResult,
+  ArtifactExportFormat,
   ArtifactDto,
   BackendCapabilitiesResponse,
   DatasourceDto,
+  DatasourceSchemaDto,
   DatasourceTypeDto,
   FileAssetRefDto,
   JobDto,
   KnowledgeBaseDto,
   McpServerDto,
   ModelProfileDto,
+  QueryHistoryItemDto,
+  QueryHistoryListResponseDto,
+  RunCancelDto,
   RunDefaultsDto,
   SessionConversationDto,
+  SessionListResponseDto,
+  SessionTitleDto,
   SkillDto,
   WorkspaceConfigDto,
 } from "./types";
@@ -83,6 +90,11 @@ async function requestRaw(path: string, init?: RequestInit): Promise<Response> {
   return response;
 }
 
+function queryString(params: URLSearchParams): string {
+  const query = params.toString();
+  return query ? `?${query}` : "";
+}
+
 export const configApi = {
   getCapabilities(): Promise<BackendCapabilitiesResponse> {
     return requestEnvelope<BackendCapabilitiesResponse>("/api/v1/capabilities");
@@ -120,10 +132,23 @@ export const configApi = {
     if (limit !== undefined) {
       params.set("limit", String(limit));
     }
-    const query = params.toString();
     return requestEnvelope<SessionConversationDto>(
-      `/api/v1/sessions/${encodeURIComponent(sessionId)}/conversation${query ? `?${query}` : ""}`,
+      `/api/v1/sessions/${encodeURIComponent(sessionId)}/conversation${queryString(params)}`,
     );
+  },
+
+  listSessions(options: { limit?: number; cursor?: string } = {}): Promise<SessionListResponseDto> {
+    const params = new URLSearchParams();
+    if (options.limit !== undefined) params.set("limit", String(options.limit));
+    if (options.cursor) params.set("cursor", options.cursor);
+    return requestEnvelope<SessionListResponseDto>(`/api/v1/sessions${queryString(params)}`);
+  },
+
+  patchSessionTitle(sessionId: string, title: string): Promise<SessionTitleDto> {
+    return requestEnvelope<SessionTitleDto>(`/api/v1/sessions/${encodeURIComponent(sessionId)}`, {
+      method: "PATCH",
+      body: JSON.stringify({ title }),
+    });
   },
 
   listDatasourceTypes(): Promise<DatasourceTypeDto[]> {
@@ -161,6 +186,18 @@ export const configApi = {
       method: "POST",
       headers: idempotencyKey ? { "Idempotency-Key": idempotencyKey } : undefined,
     });
+  },
+
+  getDatasourceSchema(
+    id: string,
+    options: { q?: string; includeStats?: boolean } = {},
+  ): Promise<DatasourceSchemaDto> {
+    const params = new URLSearchParams();
+    if (options.q) params.set("q", options.q);
+    if (options.includeStats) params.set("includeStats", "true");
+    return requestEnvelope<DatasourceSchemaDto>(
+      `/api/v1/datasources/${encodeURIComponent(id)}/schema${queryString(params)}`,
+    );
   },
 
   createKnowledgeBase(body: Record<string, unknown>): Promise<KnowledgeBaseDto> {
@@ -316,6 +353,13 @@ export const configApi = {
     });
   },
 
+  cancelRun(id: string, reason?: string): Promise<RunCancelDto> {
+    return requestEnvelope<RunCancelDto>(`/api/v1/runs/${encodeURIComponent(id)}/cancel`, {
+      method: "POST",
+      body: JSON.stringify(reason ? { reason } : {}),
+    });
+  },
+
   getArtifact(id: string): Promise<ArtifactDto> {
     return requestEnvelope<ArtifactDto>(`/api/v1/artifacts/${encodeURIComponent(id)}`);
   },
@@ -335,8 +379,29 @@ export const configApi = {
     });
   },
 
-  async downloadArtifact(id: string): Promise<{ blob: Blob; filename: string }> {
-    const response = await requestRaw(`/api/v1/artifacts/${encodeURIComponent(id)}/download`);
+  exportArtifact(
+    id: string,
+    format: ArtifactExportFormat,
+    idempotencyKey?: string,
+  ): Promise<JobDto> {
+    return requestEnvelope<JobDto>(`/api/v1/artifacts/${encodeURIComponent(id)}/export`, {
+      method: "POST",
+      body: JSON.stringify({
+        format,
+        ...(idempotencyKey ? { idempotencyKey } : {}),
+      }),
+    });
+  },
+
+  async downloadArtifact(
+    id: string,
+    format?: ArtifactExportFormat,
+  ): Promise<{ blob: Blob; filename: string }> {
+    const params = new URLSearchParams();
+    if (format) params.set("format", format);
+    const response = await requestRaw(
+      `/api/v1/artifacts/${encodeURIComponent(id)}/download${queryString(params)}`,
+    );
     const disposition = response.headers.get("Content-Disposition") ?? "";
     const match = /filename="([^"]+)"/u.exec(disposition);
     const filename = match?.[1] ?? `artifact-${id}`;
@@ -344,8 +409,18 @@ export const configApi = {
     return { blob, filename };
   },
 
-  listWorkspaceFiles(): Promise<{ files: FileAssetRefDto[] }> {
-    return requestEnvelope<{ files: FileAssetRefDto[] }>("/api/v1/files");
+  listWorkspaceFiles(options: {
+    scope?: "session" | "workspace";
+    origin?: string[];
+    source?: string[];
+    sessionId?: string;
+  } = {}): Promise<{ files: FileAssetRefDto[] }> {
+    const params = new URLSearchParams();
+    if (options.scope) params.set("scope", options.scope);
+    if (options.origin?.length) params.set("origin", options.origin.join(","));
+    if (options.source?.length) params.set("source", options.source.join(","));
+    if (options.sessionId) params.set("sessionId", options.sessionId);
+    return requestEnvelope<{ files: FileAssetRefDto[] }>(`/api/v1/files${queryString(params)}`);
   },
 
   async uploadWorkspaceFiles(files: File[]): Promise<{ files: FileAssetRefDto[] }> {
@@ -372,6 +447,29 @@ export const configApi = {
     return requestEnvelope(`/api/v1/files/${encodeURIComponent(id)}`, {
       method: "DELETE",
     });
+  },
+
+  listQueryHistory(options: {
+    sessionId?: string;
+    datasourceId?: string;
+    favorite?: boolean;
+    limit?: number;
+  } = {}): Promise<QueryHistoryListResponseDto> {
+    const params = new URLSearchParams();
+    if (options.sessionId) params.set("sessionId", options.sessionId);
+    if (options.datasourceId) params.set("datasourceId", options.datasourceId);
+    if (options.favorite !== undefined) params.set("favorite", String(options.favorite));
+    if (options.limit !== undefined) params.set("limit", String(options.limit));
+    return requestEnvelope<QueryHistoryListResponseDto>(
+      `/api/v1/query-history${queryString(params)}`,
+    );
+  },
+
+  favoriteQueryHistory(id: string, favorite: boolean): Promise<QueryHistoryItemDto> {
+    return requestEnvelope<QueryHistoryItemDto>(
+      `/api/v1/query-history/${encodeURIComponent(id)}/${favorite ? "favorite" : "unfavorite"}`,
+      { method: "POST" },
+    );
   },
 };
 

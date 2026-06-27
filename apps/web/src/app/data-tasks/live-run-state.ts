@@ -24,7 +24,7 @@ export type LiveAudit = {
   elapsedMs?: number;
 };
 
-export type LiveRunStatus = "idle" | "running" | "suspended" | "completed" | "failed";
+export type LiveRunStatus = "idle" | "running" | "suspended" | "completed" | "failed" | "canceled";
 
 export type LiveToolCallRecord = {
   id: string;
@@ -159,6 +159,7 @@ export type LiveRunHistoryEntry = {
 };
 
 export type LiveRun = {
+  runId?: string;
   plan: LivePlanTask[];
   events: TimelineEvent[];
   artifacts: DataArtifact[];
@@ -361,9 +362,11 @@ export function deriveLiveSessionView(
 export function reduceLiveRunEvent(state: LiveRun, event: AgUiLikeEvent): LiveRun {
   switch (event.type) {
     case "RUN_STARTED":
+      const runId = eventRunId(event) ?? state.runId;
       if (state.runStatus === "suspended") {
         return {
           ...state,
+          ...(runId ? { runId } : {}),
           runStatus: "running",
           errorMessage: undefined,
         };
@@ -372,6 +375,7 @@ export function reduceLiveRunEvent(state: LiveRun, event: AgUiLikeEvent): LiveRu
         return {
           ...state,
           runHistory: archiveCurrentRunSegment(state),
+          ...(runId ? { runId } : { runId: undefined }),
           runStatus: "running",
           runStartedAt: Date.now(),
           runFinishedAt: undefined,
@@ -383,10 +387,19 @@ export function reduceLiveRunEvent(state: LiveRun, event: AgUiLikeEvent): LiveRu
       }
       return {
         ...createInitialLiveRun(),
+        ...(runId ? { runId } : {}),
         runStatus: "running",
         runStartedAt: Date.now(),
       };
     case "RUN_FINISHED":
+      if (stringValue(event.status) === "cancelled" || stringValue(event.status) === "canceled") {
+        return {
+          ...state,
+          runStatus: "canceled",
+          runFinishedAt: Date.now(),
+          toolCalls: finalizeRunningToolCalls(state.toolCalls, "failed"),
+        };
+      }
       if (state.runStatus === "suspended") {
         return {
           ...state,
@@ -435,7 +448,13 @@ export function reduceLiveRunEvent(state: LiveRun, event: AgUiLikeEvent): LiveRu
 function reduceStateSnapshot(state: LiveRun, event: AgUiLikeEvent): LiveRun {
   const snapshot = recordValue(event.snapshot);
   const status = liveStatusFromValue(snapshot?.runStatus);
-  return status ? { ...state, runStatus: status } : state;
+  const runId = eventRunId(event) ?? stringValue(snapshot?.runId) ?? stringValue(snapshot?.run_id);
+  if (!status && !runId) return state;
+  return {
+    ...state,
+    ...(status ? { runStatus: status } : {}),
+    ...(runId ? { runId } : {}),
+  };
 }
 
 function reduceStateDelta(state: LiveRun, event: AgUiLikeEvent): LiveRun {
@@ -448,12 +467,25 @@ function reduceStateDelta(state: LiveRun, event: AgUiLikeEvent): LiveRun {
       const status = liveStatusFromValue(op.value);
       if (status) next = { ...next, runStatus: status };
     }
+    if (op.path === "/runId" || op.path === "/run_id") {
+      const runId = stringValue(op.value);
+      if (runId) next = { ...next, runId };
+    }
     if (op.path === "/errorMessage") {
       const errorMessage = stringValue(op.value);
       if (errorMessage) next = { ...next, errorMessage };
     }
   }
   return next;
+}
+
+function eventRunId(event: AgUiLikeEvent): string | undefined {
+  const run = recordValue(event.run);
+  return (
+    stringValue(event.runId) ??
+    stringValue(event.run_id) ??
+    stringValue(run?.id)
+  );
 }
 
 function reduceActivitySnapshot(state: LiveRun, event: AgUiLikeEvent): LiveRun {
@@ -1474,7 +1506,8 @@ function artifactValueFromDataArtifact(artifact: DataArtifact): Record<string, u
   return value;
 }
 
-function reconcileUnlinkedArtifacts(state: LiveRun): LiveRun {
+/** Re-link artifacts missing `createdByEventId` after restore or out-of-order events. */
+export function reconcileLiveRunArtifacts(state: LiveRun): LiveRun {
   let nextState = state;
   for (const artifact of state.artifacts) {
     if (artifact.createdByEventId) continue;
@@ -1484,6 +1517,10 @@ function reconcileUnlinkedArtifacts(state: LiveRun): LiveRun {
     }
   }
   return nextState;
+}
+
+function reconcileUnlinkedArtifacts(state: LiveRun): LiveRun {
+  return reconcileLiveRunArtifacts(state);
 }
 
 function findArtifactSourceTool(
@@ -1633,10 +1670,12 @@ function liveStatusFromValue(value: unknown): LiveRunStatus | null {
     value === "running" ||
     value === "suspended" ||
     value === "completed" ||
-    value === "failed"
+    value === "failed" ||
+    value === "canceled"
   ) {
     return value;
   }
+  if (value === "cancelled") return "canceled";
   return null;
 }
 
@@ -1645,6 +1684,7 @@ function statusSummary(value: unknown): string {
   if (status === "running") return "正在执行。";
   if (status === "completed") return "已完成。";
   if (status === "failed") return "执行失败。";
+  if (status === "canceled" || status === "cancelled") return "已取消。";
   return "等待执行。";
 }
 

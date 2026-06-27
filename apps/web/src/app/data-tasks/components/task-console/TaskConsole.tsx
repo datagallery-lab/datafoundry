@@ -19,6 +19,7 @@ import type {
   GenericStepPayload,
   TimelineEvent,
 } from "../../data-task-state";
+import type { ArtifactExportFormat, JobDto } from "../../../../lib/config-api";
 import { dataStepKindForTool, dataStepLabel, hasCapability, toolDisplayTitle } from "../../data-task-state";
 import { artifactExportClient } from "../../artifact-export-client";
 import {
@@ -50,6 +51,7 @@ import {
   consoleCodeBlockBaseClass,
   consoleCodeInnerClass,
   consoleScrollXShellClass,
+  consoleStepsListClass,
   consoleTableShellClass,
 } from "./console-scroll-styles";
 import { ToolFormattedResult } from "../../tool-result-format";
@@ -86,6 +88,7 @@ type TaskConsoleProps = {
   onMentionArtifact?: (artifact: DataArtifact) => void;
   onOpenTrace: () => void;
   onPromoteArtifact?: (artifact: DataArtifact) => Promise<void> | void;
+  onArtifactExportJob?: (job: JobDto) => void;
   onSelectEvent: (eventId: string) => void;
   promotedArtifactIds?: ReadonlySet<string>;
 };
@@ -100,6 +103,8 @@ function runStatusLabel(status: LiveRun["runStatus"]): string {
       return "已完成";
     case "failed":
       return "失败";
+    case "canceled":
+      return "已取消";
     default:
       return "空闲";
   }
@@ -150,6 +155,7 @@ export function TaskConsole({
   onMentionArtifact,
   onOpenTrace,
   onPromoteArtifact,
+  onArtifactExportJob,
   onSelectEvent,
   promotedArtifactIds,
 }: TaskConsoleProps) {
@@ -312,6 +318,7 @@ export function TaskConsole({
             onExpandedIdChange={setOutputsExpandedId}
             onMentionArtifact={onMentionArtifact}
             onPromoteArtifact={onPromoteArtifact}
+            onArtifactExportJob={onArtifactExportJob}
             onSelectEvent={onSelectEvent}
             promotedArtifactIds={promotedArtifactIds}
           />
@@ -515,6 +522,7 @@ function ConclusionZone({
           value={tokenKpi}
           meta={tokenLine}
           accentClass={tokenReported ? "text-step-knowledge" : "text-muted-light"}
+          stackMeta
         />
       </div>
     </ConsoleSection>
@@ -597,7 +605,7 @@ function DynamicStepsList({
           description="发送问题后，Agent 实际执行的每个数据工具会在这里按顺序出现。"
         />
       ) : (
-        <ol className="grid gap-1.5">
+        <ol className={["grid gap-1.5", consoleStepsListClass].join(" ")}>
           {toolCalls.map((call) => {
             const event = eventById.get(call.id);
             const rawName = event?.toolName ?? call.name;
@@ -783,6 +791,7 @@ function DeliverablesZone({
   onExpandedIdChange,
   onMentionArtifact,
   onPromoteArtifact,
+  onArtifactExportJob,
   onSelectEvent,
   promotedArtifactIds,
 }: {
@@ -792,6 +801,7 @@ function DeliverablesZone({
   onExpandedIdChange: (artifactId: string | null) => void;
   onMentionArtifact?: (artifact: DataArtifact) => void;
   onPromoteArtifact?: (artifact: DataArtifact) => Promise<void> | void;
+  onArtifactExportJob?: (job: JobDto) => void;
   onSelectEvent: (eventId: string) => void;
   promotedArtifactIds?: ReadonlySet<string>;
 }) {
@@ -852,7 +862,7 @@ function DeliverablesZone({
                     />
                   ) : null}
                   {expanded ? (
-                    <div className="border-t border-border px-3 pb-3 pt-2">
+                    <div className="max-h-[min(480px,55vh)] overflow-y-auto overflow-x-hidden border-t border-border px-3 pb-3 pt-2">
                       {sourceEvent ? (
                         <div className="mb-3 rounded-lg border border-border bg-surface-subtle p-2.5">
                           <div className={sectionLabelClass}>来源步骤</div>
@@ -870,7 +880,10 @@ function DeliverablesZone({
                         exportReady={exportReady}
                       />
                       {exportReady ? (
-                        <ArtifactExportActions artifact={artifact} />
+                        <ArtifactExportActions
+                          artifact={artifact}
+                          onExportJob={onArtifactExportJob}
+                        />
                       ) : (
                         <p className="mt-3 text-[11px] leading-4 text-muted-light">
                           连接配置 API 后可预览与下载完整产物。
@@ -1264,7 +1277,7 @@ function ActionDetail({
                     </span>
                   </button>
                   {expanded ? (
-                    <div className="border-t border-border px-3 pb-3 pt-2">
+                    <div className="max-h-[min(480px,55vh)] overflow-y-auto overflow-x-hidden border-t border-border px-3 pb-3 pt-2">
                       <ArtifactExpandedDetail artifact={artifact} />
                     </div>
                   ) : null}
@@ -1535,10 +1548,22 @@ function EventPayloadView({
   );
 }
 
-function ArtifactExportActions({ artifact }: { artifact: DataArtifact }) {
+function ArtifactExportActions({
+  artifact,
+  onExportJob,
+}: {
+  artifact: DataArtifact;
+  onExportJob?: (job: JobDto) => void;
+}) {
   const [previewText, setPreviewText] = useState<string | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [loadingPreview, setLoadingPreview] = useState(false);
+  const [busyFormat, setBusyFormat] = useState<ArtifactExportFormat | "job" | null>(null);
+  const canFormatExport =
+    artifact.type === "dataset" ||
+    artifact.type === "sql" ||
+    artifact.kind === "csv" ||
+    artifact.detail?.type === "dataset";
 
   const handleView = () => {
     setLoadingPreview(true);
@@ -1562,15 +1587,34 @@ function ArtifactExportActions({ artifact }: { artifact: DataArtifact }) {
       });
   };
 
-  const handleDownload = () => {
-    void artifactExportClient.download(artifact.id).then(({ blob, filename }) => {
+  const handleDownload = (format?: ArtifactExportFormat) => {
+    setBusyFormat(format ?? "job");
+    setPreviewError(null);
+    void artifactExportClient.download(artifact.id, format).then(({ blob, filename }) => {
       const url = URL.createObjectURL(blob);
       const anchor = document.createElement("a");
       anchor.href = url;
       anchor.download = filename;
       anchor.click();
       URL.revokeObjectURL(url);
+    }).catch((error: unknown) => {
+      setPreviewError(error instanceof Error ? error.message : "下载失败");
+    }).finally(() => {
+      setBusyFormat(null);
     });
+  };
+
+  const handleExportJob = (format: ArtifactExportFormat) => {
+    setBusyFormat("job");
+    setPreviewError(null);
+    void artifactExportClient.export(artifact.id, format)
+      .then((job) => onExportJob?.(job))
+      .catch((error: unknown) => {
+        setPreviewError(error instanceof Error ? error.message : "导出任务创建失败");
+      })
+      .finally(() => {
+        setBusyFormat(null);
+      });
   };
 
   return (
@@ -1586,11 +1630,40 @@ function ArtifactExportActions({ artifact }: { artifact: DataArtifact }) {
         </button>
         <button
           type="button"
-          onClick={handleDownload}
-          className={btnSecondaryClass}
+          onClick={() => handleDownload()}
+          disabled={busyFormat !== null}
+          className={`${btnSecondaryClass} disabled:cursor-not-allowed disabled:opacity-60`}
         >
-          下载
+          {busyFormat === "job" ? "下载中…" : "下载"}
         </button>
+        {canFormatExport ? (
+          <>
+            <button
+              type="button"
+              onClick={() => handleDownload("csv")}
+              disabled={busyFormat !== null}
+              className={`${btnSecondaryClass} disabled:cursor-not-allowed disabled:opacity-60`}
+            >
+              {busyFormat === "csv" ? "CSV 中…" : "下载 CSV"}
+            </button>
+            <button
+              type="button"
+              onClick={() => handleDownload("xlsx")}
+              disabled={busyFormat !== null}
+              className={`${btnSecondaryClass} disabled:cursor-not-allowed disabled:opacity-60`}
+            >
+              {busyFormat === "xlsx" ? "XLSX 中…" : "下载 XLSX"}
+            </button>
+            <button
+              type="button"
+              onClick={() => handleExportJob("xlsx")}
+              disabled={busyFormat !== null}
+              className={`${btnSecondaryClass} disabled:cursor-not-allowed disabled:opacity-60`}
+            >
+              后台导出
+            </button>
+          </>
+        ) : null}
       </div>
       {previewError ? (
         <p className="rounded-lg bg-step-error/10 px-2.5 py-2 text-xs text-step-error">
@@ -2041,7 +2114,7 @@ function DatasetDetailView({
                             : "text-muted",
                         ].join(" ")}
                       >
-                        {cell}
+                        {formatConsoleTableCell(cell)}
                       </td>
                     ))}
                   </tr>
@@ -2053,6 +2126,18 @@ function DatasetDetailView({
       </div>
     </div>
   );
+}
+
+function formatConsoleTableCell(value: unknown): string {
+  if (value === null || value === undefined) return "—";
+  if (typeof value === "object") {
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return String(value);
+    }
+  }
+  return String(value);
 }
 
 function ArtifactCardHeader({
@@ -2164,23 +2249,36 @@ function KpiMetric({
   value,
   meta,
   accentClass,
+  stackMeta = false,
 }: {
   label: string;
   value: string;
   meta?: string;
   accentClass: string;
+  stackMeta?: boolean;
 }) {
   return (
     <div className="rounded-xl border border-border bg-surface-subtle p-3 shadow-sm">
       <div className={metricLabelClass}>{label}</div>
-      <div className="mt-1 flex min-w-0 items-end gap-1.5">
-        <span className={`${kpiValueClass} ${accentClass}`}>{value}</span>
-        {meta ? (
-          <span className="mb-1 truncate text-[11px] font-medium text-muted-light">
-            {meta}
-          </span>
-        ) : null}
-      </div>
+      {stackMeta ? (
+        <div className="mt-1 grid min-w-0 gap-0.5">
+          <span className={`${kpiValueClass} ${accentClass}`}>{value}</span>
+          {meta ? (
+            <span className="break-all text-[11px] font-medium leading-snug text-muted-light">
+              {meta}
+            </span>
+          ) : null}
+        </div>
+      ) : (
+        <div className="mt-1 flex min-w-0 items-end gap-1.5">
+          <span className={`${kpiValueClass} ${accentClass}`}>{value}</span>
+          {meta ? (
+            <span className="mb-1 shrink text-[11px] font-medium text-muted-light">
+              {meta}
+            </span>
+          ) : null}
+        </div>
+      )}
     </div>
   );
 }

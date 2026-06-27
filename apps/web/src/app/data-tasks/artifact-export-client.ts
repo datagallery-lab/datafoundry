@@ -1,4 +1,5 @@
 import { configApi, getConfigApiBaseUrl } from "../../lib/config-api";
+import type { ArtifactExportFormat, JobDto } from "../../lib/config-api";
 import { hasCapability } from "./data-task-state";
 
 export type ArtifactExportMeta = {
@@ -34,15 +35,23 @@ export const artifactExportClient = {
     return configApi.getArtifactPreview(id);
   },
 
-  async download(id: string): Promise<{ blob: Blob; filename: string }> {
-    return configApi.downloadArtifact(id);
+  async download(
+    id: string,
+    format?: ArtifactExportFormat,
+  ): Promise<{ blob: Blob; filename: string }> {
+    return configApi.downloadArtifact(id, format);
+  },
+
+  async export(id: string, format: ArtifactExportFormat): Promise<JobDto> {
+    return configApi.exportArtifact(id, format, `${id}:${format}`);
   },
 
   previewUrl(id: string): string {
     return `${getConfigApiBaseUrl()}/api/v1/artifacts/${encodeURIComponent(id)}/preview`;
   },
 
-  downloadUrl(id: string): string {
-    return `${getConfigApiBaseUrl()}/api/v1/artifacts/${encodeURIComponent(id)}/download`;
+  downloadUrl(id: string, format?: ArtifactExportFormat): string {
+    const query = format ? `?format=${encodeURIComponent(format)}` : "";
+    return `${getConfigApiBaseUrl()}/api/v1/artifacts/${encodeURIComponent(id)}/download${query}`;
   },
 };

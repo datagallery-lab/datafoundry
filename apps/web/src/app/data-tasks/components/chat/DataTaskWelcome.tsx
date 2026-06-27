@@ -59,7 +59,7 @@ function SparkIcon({ className }: { className?: string }) {
 export function DataTaskWelcomeScreen() {
   return (
     <div className="flex flex-1 flex-col items-center justify-center px-6 py-10">
-      <div className="mb-6 flex h-14 w-14 items-center justify-center rounded-2xl bg-primary/10 text-primary">
+      <div className="mb-6 flex h-14 w-14 items-center justify-center rounded-2xl border border-border bg-surface-subtle text-foreground">
         <DatabaseIcon className="h-7 w-7" />
       </div>
       <h2 className="text-center text-lg font-semibold text-foreground">
@@ -70,7 +70,7 @@ export function DataTaskWelcomeScreen() {
       </p>
       <div className="mt-6 flex flex-wrap justify-center gap-2">
         <span className={chipClass}>
-          <SparkIcon className="h-3.5 w-3.5 text-accent" />
+          <SparkIcon className="h-3.5 w-3.5 text-muted-light" />
           SQL 查询
         </span>
         <span className={chipClass}>Schema 检查</span>
@@ -80,11 +80,11 @@ export function DataTaskWelcomeScreen() {
         {EXAMPLE_PROMPTS.map((item) => (
           <div
             key={item.title}
-            className="rounded-xl border border-border bg-surface px-4 py-3 shadow-sm"
+            className="rounded-xl border border-border bg-surface px-4 py-3 shadow-[var(--shadow-card)]"
           >
             <div className="text-sm font-medium text-foreground">{item.title}</div>
             <p className="mt-0.5 text-xs text-muted-light">{item.description}</p>
-            <p className="mt-2 font-mono text-[11px] leading-5 text-primary">
+            <p className="mt-2 font-mono text-[11px] leading-5 text-muted">
               「{item.prompt}」
             </p>
           </div>
@@ -99,7 +99,7 @@ export function DataTaskWelcomeScreen() {
 
 export function DatasourceChip({ datasourceId }: { datasourceId: string }) {
   return (
-    <span className="inline-flex max-w-[220px] items-center gap-1.5 rounded-full border border-primary-light/30 bg-primary-light/10 px-2.5 py-0.5 text-[11px] font-medium text-primary">
+    <span className="inline-flex max-w-[220px] items-center gap-1.5 rounded-full border border-border bg-surface px-2.5 py-0.5 text-[11px] font-medium text-muted shadow-[var(--shadow-card)]">
       <DatabaseIcon className="h-3.5 w-3.5 shrink-0" />
       <span className="truncate font-mono">{datasourceId}</span>
     </span>
@@ -110,7 +110,7 @@ export function ChatInitializingState() {
   return (
     <div className="grid flex-1 place-items-center px-6">
       <div className="text-center">
-        <div className="mx-auto mb-3 h-8 w-8 animate-pulse rounded-full bg-primary-light/20" />
+        <div className="mx-auto mb-3 h-8 w-8 animate-pulse rounded-full bg-surface-subtle ring-1 ring-border" />
         <p className="text-sm text-muted">正在初始化会话…</p>
       </div>
     </div>

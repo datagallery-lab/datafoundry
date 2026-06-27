@@ -7,8 +7,10 @@ import {
   deriveSnippetTitle,
   emptyPerRunSelection,
   getSessionDisabled,
+  mergeServerChatSessions,
   prunePerRunSelection,
   renameChatSession,
+  serverSessionDtoToChatSession,
   sessionEnabledIds,
   sessionResourceCounts,
   sortChatSessions,
@@ -100,6 +102,56 @@ describe("session config disabled map", () => {
 
     expect(renamed.title).toBe("订单分析");
     expect(renamed.titleSource).toBe("user");
+  });
+
+  it("maps server session list DTOs into chat sessions", () => {
+    const session = serverSessionDtoToChatSession({
+      id: "thread-1",
+      threadId: "thread-1",
+      title: "渠道订单分析",
+      titleSource: "llm",
+      createdAt: "2026-06-27T10:00:00.000Z",
+      updatedAt: "2026-06-27T10:05:00.000Z",
+      lastMessageAt: "2026-06-27T10:04:00.000Z",
+    });
+
+    expect(session).toMatchObject({
+      id: "thread-1",
+      threadId: "thread-1",
+      title: "渠道订单分析",
+      titleSource: "llm",
+    });
+    expect(session.createdAt).toBe(new Date("2026-06-27T10:00:00.000Z").getTime());
+    expect(session.updatedAt).toBe(new Date("2026-06-27T10:05:00.000Z").getTime());
+    expect(session.lastMessageAt).toBe(new Date("2026-06-27T10:04:00.000Z").getTime());
+  });
+
+  it("merges server sessions with local pinned metadata", () => {
+    const local = {
+      ...createChatSession("本地标题"),
+      id: "thread-1",
+      threadId: "thread-1",
+      pinned: true,
+      pinnedAt: 100,
+    };
+
+    const merged = mergeServerChatSessions([local], [
+      {
+        id: "thread-1",
+        threadId: "thread-1",
+        title: "服务端标题",
+        titleSource: "llm",
+        updatedAt: "2026-06-27T10:05:00.000Z",
+      },
+    ]);
+
+    expect(merged[0]).toMatchObject({
+      id: "thread-1",
+      title: "服务端标题",
+      titleSource: "llm",
+      pinned: true,
+      pinnedAt: 100,
+    });
   });
 
   it("lets llm titles replace default or snippet titles but not user titles", () => {

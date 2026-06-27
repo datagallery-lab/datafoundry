@@ -5,7 +5,7 @@ import {
   useAgent,
   useInterrupt,
 } from "@copilotkit/react-core/v2";
-import { useCallback, useState } from "react";
+import { useCallback, useState, type ComponentProps } from "react";
 import {
   btnPrimaryClass,
   btnSecondaryClass,
@@ -18,6 +18,7 @@ import {
 import {
   formatCollaborationResponseDisplay,
   useCollaborationResponses,
+  useThreadCollaborationResponsesForChat,
 } from "./collaboration-responses";
 
 type MastraInterrupt = {
@@ -223,7 +224,7 @@ function AskUserPrompt({
 
   if (options.length > 0) {
     return (
-      <div className={panelShellClass}>
+      <CollaborationInterruptPanel data-testid="collaboration-interrupt-ask-user">
         <div className={sectionLabelClass}>用户协作</div>
         <p className="mt-1.5 text-sm font-medium leading-6 text-foreground">{question}</p>
         <ChoiceOptionList
@@ -231,12 +232,12 @@ function AskUserPrompt({
           disabled={submitted}
           onSelect={(value) => submit(value)}
         />
-      </div>
+      </CollaborationInterruptPanel>
     );
   }
 
   return (
-    <div className={panelShellClass}>
+    <CollaborationInterruptPanel data-testid="collaboration-interrupt-ask-user">
       <div className={sectionLabelClass}>用户协作</div>
       <p className="mt-1.5 text-sm font-medium text-foreground">{question}</p>
       <textarea
@@ -244,7 +245,7 @@ function AskUserPrompt({
         onChange={(event) => setAnswer(event.target.value)}
         rows={3}
         disabled={submitted}
-        className="mt-3 w-full resize-none rounded-lg border border-border bg-surface px-3 py-2 text-sm text-foreground outline-none focus-visible:ring-2 focus-visible:ring-primary-light/50 disabled:opacity-60"
+        className="mt-3 w-full resize-none rounded-lg border border-border bg-surface px-3 py-2 text-sm text-foreground outline-none transition-colors duration-150 focus:border-muted-light focus-visible:ring-2 focus-visible:ring-primary/20 disabled:opacity-60"
         placeholder="输入你的回答…"
       />
       <div className="mt-3 flex justify-end">
@@ -257,7 +258,7 @@ function AskUserPrompt({
           提交回答
         </button>
       </div>
-    </div>
+    </CollaborationInterruptPanel>
   );
 }
 
@@ -302,7 +303,7 @@ function SubmitPlanPrompt({
   };
 
   return (
-    <div className={panelShellClass}>
+    <CollaborationInterruptPanel data-testid="collaboration-interrupt-submit-plan">
       <p className="text-sm font-semibold text-foreground">{title}</p>
       {plan ? (
         <PlanMarkdown content={plan} />
@@ -325,6 +326,27 @@ function SubmitPlanPrompt({
           批准
         </button>
       </div>
+    </CollaborationInterruptPanel>
+  );
+}
+
+function CollaborationInterruptPanel({
+  children,
+  ...props
+}: ComponentProps<"div">) {
+  return (
+    <div
+      {...props}
+      data-no-tool-select
+      className={[
+        panelShellClass,
+        "relative z-30 mb-3 mt-2 pointer-events-auto",
+        props.className,
+      ]
+        .filter(Boolean)
+        .join(" ")}
+    >
+      {children}
     </div>
   );
 }
@@ -338,15 +360,28 @@ export function CollaborationInterruptHandler({
   threadId: string;
 }) {
   const { agent } = useAgent({ agentId });
+  const collaborationResponses = useThreadCollaborationResponsesForChat(threadId);
 
   useInterrupt({
     agentId,
     enabled: (event) => {
       if (agent.threadId !== threadId) return false;
       const interrupt = parseInterruptValue(event.value);
-      return (
-        interrupt?.toolName === "ask_user" || interrupt?.toolName === "submit_plan"
-      );
+      if (
+        interrupt?.toolName !== "ask_user" &&
+        interrupt?.toolName !== "submit_plan"
+      ) {
+        return false;
+      }
+      if (
+        interrupt.toolCallId &&
+        collaborationResponses.some(
+          (response) => response.toolCallId === interrupt.toolCallId,
+        )
+      ) {
+        return false;
+      }
+      return true;
     },
     render: ({ event, resolve }) => {
       if (agent.threadId !== threadId) {

@@ -21,6 +21,7 @@ export {
 } from "./adapter";
 export type {
   ApiErrorCode,
+  ArtifactExportFormat,
   ArtifactDto,
   BackendCapabilitiesResponse,
   ConversationMessageDto,
@@ -28,6 +29,8 @@ export type {
   ConversationSummaryDto,
   ConversationToolCallDto,
   DatasourceDto,
+  DatasourceSchemaDto,
+  DatasourceSchemaTableDto,
   DatasourceTypeDto,
   DatasourceTypeParamDto,
   FileAssetRefDto,
@@ -35,8 +38,14 @@ export type {
   KnowledgeBaseDto,
   McpServerDto,
   ModelProfileDto,
+  QueryHistoryItemDto,
+  QueryHistoryListResponseDto,
+  RunCancelDto,
   RunDefaultsDto,
   SessionConversationDto,
+  SessionListItemDto,
+  SessionListResponseDto,
+  SessionTitleDto,
   SkillDto,
   WorkspaceConfigDto,
 } from "./types";

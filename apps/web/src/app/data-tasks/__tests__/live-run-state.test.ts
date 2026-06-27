@@ -97,6 +97,24 @@ describe("live run state reducer", () => {
     });
   });
 
+  it("tracks canceled run status from state delta and run finished events", () => {
+    const started = reduceLiveRunEvent(createInitialLiveRun(), { type: "RUN_STARTED" });
+    const canceledByDelta = reduceLiveRunEvent(started, {
+      type: "STATE_DELTA",
+      delta: [{ op: "replace", path: "/runStatus", value: "canceled" }],
+    });
+
+    expect(canceledByDelta.runStatus).toBe("canceled");
+
+    const canceledByFinished = reduceLiveRunEvent(started, {
+      type: "RUN_FINISHED",
+      status: "cancelled",
+    });
+
+    expect(canceledByFinished.runStatus).toBe("canceled");
+    expect(canceledByFinished.runFinishedAt).toBeTypeOf("number");
+  });
+
   it("parses slim artifact references without inline preview data", () => {
     let run = createInitialLiveRun();
     run = reduceLiveRunEvent(run, {
