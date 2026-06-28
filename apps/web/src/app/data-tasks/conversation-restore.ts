@@ -32,6 +32,84 @@ export function shouldRestoreConversation(input: {
   );
 }
 
+/** True when agent chat messages already reflect the persisted conversation. */
+export function agentMessagesMatchConversation(
+  agentMessages: unknown,
+  dto: SessionConversationDto,
+): boolean {
+  const expected = conversationToAgentMessages(dto);
+  if (expected.length === 0) {
+    return true;
+  }
+  if (!Array.isArray(agentMessages) || agentMessages.length === 0) {
+    return false;
+  }
+  if (agentMessages.length !== expected.length) {
+    return false;
+  }
+  const lastAgent = agentMessages[agentMessages.length - 1] as { id?: string } | undefined;
+  const lastExpected = expected[expected.length - 1];
+  return lastAgent?.id === lastExpected?.id;
+}
+
+/** Whether chat messages should be replaced from server conversation metadata. */
+export function shouldRestoreConversationMessages(input: {
+  conversationMemoryEnabled: boolean;
+  isRunning: boolean;
+  agentMessages: unknown;
+  dto: SessionConversationDto;
+}): boolean {
+  if (!input.conversationMemoryEnabled || input.isRunning) {
+    return false;
+  }
+  const expected = conversationToAgentMessages(input.dto);
+  if (expected.length === 0) {
+    return false;
+  }
+  return !agentMessagesMatchConversation(input.agentMessages, input.dto);
+}
+
+/** Whether live-run tool timeline should be rebuilt from persisted tool calls. */
+export function shouldHydrateLiveRunFromConversation(
+  state: LiveRun,
+  dto: SessionConversationDto,
+): boolean {
+  if (dto.toolCalls.length === 0) {
+    return false;
+  }
+  if (state.runStatus === "running" || state.runStatus === "suspended") {
+    return false;
+  }
+  if (state.toolCalls.length === 0) {
+    return true;
+  }
+  if (
+    state.runStatus === "idle" &&
+    state.toolCalls.length < dto.toolCalls.length
+  ) {
+    return true;
+  }
+  return false;
+}
+
+/** Latest user utterance in a persisted conversation (for console overview). */
+export function latestUserQuestionFromConversation(
+  dto: SessionConversationDto,
+): string | undefined {
+  const sorted = [...dto.messages].sort((left, right) => left.position - right.position);
+  for (let index = sorted.length - 1; index >= 0; index -= 1) {
+    const entry = sorted[index];
+    if (entry?.role !== "user") {
+      continue;
+    }
+    const text = entry.contentText.trim();
+    if (text) {
+      return text;
+    }
+  }
+  return undefined;
+}
+
 export function isIgnorableConversationRestoreError(error: unknown): boolean {
   if (error instanceof ConfigApiError) {
     return error.status === 404 || error.code === "RESOURCE_NOT_FOUND";
@@ -395,7 +473,7 @@ export function hydrateLiveRunFromConversation(
   state: LiveRun,
   dto: SessionConversationDto,
 ): LiveRun {
-  if (dto.toolCalls.length === 0 || state.toolCalls.length > 0) {
+  if (!shouldHydrateLiveRunFromConversation(state, dto)) {
     return state;
   }
 

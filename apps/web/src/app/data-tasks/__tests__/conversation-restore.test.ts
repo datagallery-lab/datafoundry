@@ -5,7 +5,11 @@ import {
   conversationToAgentMessages,
   hydrateLiveRunFromConversation,
   isIgnorableConversationRestoreError,
+  agentMessagesMatchConversation,
+  latestUserQuestionFromConversation,
+  shouldHydrateLiveRunFromConversation,
   shouldRestoreConversation,
+  shouldRestoreConversationMessages,
 } from "../conversation-restore";
 import { ConfigApiError } from "../../../lib/config-api/types";
 import {
@@ -323,6 +327,164 @@ describe("shouldRestoreConversation", () => {
     expect(shouldRestoreConversation({ ...base, alreadyRestored: true })).toBe(
       false,
     );
+  });
+});
+
+describe("agentMessagesMatchConversation", () => {
+  const dto: SessionConversationDto = {
+    sessionId: "thread-1",
+    messages: [
+      {
+        id: "m1",
+        runId: "run-1",
+        role: "user",
+        source: "client",
+        messageId: "msg-user-1",
+        contentText: "统计不同品类销售额",
+        position: 1,
+        createdAt: "2026-06-25T10:00:01Z",
+      },
+      {
+        id: "m2",
+        runId: "run-1",
+        role: "assistant",
+        source: "agent",
+        messageId: "msg-assistant-1",
+        contentText: "好的，我来分析。",
+        position: 2,
+        createdAt: "2026-06-25T10:00:02Z",
+      },
+    ],
+    runEventRefs: [],
+    toolCalls: [],
+  };
+
+  it("returns false when agent still holds another thread's messages", () => {
+    expect(
+      agentMessagesMatchConversation(
+        [{ id: "other-thread-msg", role: "user", content: "hello" }],
+        dto,
+      ),
+    ).toBe(false);
+  });
+
+  it("returns true when agent messages match restored conversation", () => {
+    expect(agentMessagesMatchConversation(conversationToAgentMessages(dto), dto)).toBe(
+      true,
+    );
+  });
+});
+
+describe("shouldRestoreConversationMessages", () => {
+  it("restores when agent messages are stale after thread switch", () => {
+    const dto: SessionConversationDto = {
+      sessionId: "thread-2",
+      messages: [
+        {
+          id: "m1",
+          runId: "run-1",
+          role: "user",
+          source: "client",
+          messageId: "msg-user-2",
+          contentText: "查询 orders 表有多少行",
+          position: 1,
+          createdAt: "2026-06-25T10:00:01Z",
+        },
+      ],
+      runEventRefs: [],
+      toolCalls: [],
+    };
+
+    expect(
+      shouldRestoreConversationMessages({
+        conversationMemoryEnabled: true,
+        isRunning: false,
+        agentMessages: [{ id: "msg-user-1", role: "user", content: "old question" }],
+        dto,
+      }),
+    ).toBe(true);
+  });
+});
+
+describe("shouldHydrateLiveRunFromConversation", () => {
+  it("hydrates when tool calls are missing but conversation has history", () => {
+    const dto: SessionConversationDto = {
+      sessionId: "thread-1",
+      messages: [],
+      runEventRefs: [],
+      toolCalls: [
+        {
+          runId: "run-1",
+          toolCallId: "sql-1",
+          status: "completed",
+          toolName: "run_sql_readonly",
+          callEventSeq: 1,
+        },
+      ],
+    };
+
+    expect(shouldHydrateLiveRunFromConversation(createInitialLiveRun(), dto)).toBe(true);
+  });
+
+  it("skips when live run already reflects the conversation", () => {
+    const dto: SessionConversationDto = {
+      sessionId: "thread-1",
+      messages: [],
+      runEventRefs: [],
+      toolCalls: [
+        {
+          runId: "run-1",
+          toolCallId: "sql-1",
+          status: "completed",
+          toolName: "run_sql_readonly",
+          callEventSeq: 1,
+        },
+      ],
+    };
+
+    let run = hydrateLiveRunFromConversation(createInitialLiveRun(), dto);
+    expect(shouldHydrateLiveRunFromConversation(run, dto)).toBe(false);
+  });
+});
+
+describe("latestUserQuestionFromConversation", () => {
+  it("returns the last user message text", () => {
+    const dto: SessionConversationDto = {
+      sessionId: "thread-1",
+      messages: [
+        {
+          id: "m1",
+          runId: "run-1",
+          role: "user",
+          source: "client",
+          contentText: "first question",
+          position: 1,
+          createdAt: "2026-06-25T10:00:01Z",
+        },
+        {
+          id: "m2",
+          runId: "run-1",
+          role: "assistant",
+          source: "agent",
+          contentText: "answer",
+          position: 2,
+          createdAt: "2026-06-25T10:00:02Z",
+        },
+        {
+          id: "m3",
+          runId: "run-2",
+          role: "user",
+          source: "client",
+          contentText: "follow up",
+          position: 3,
+          createdAt: "2026-06-25T10:00:03Z",
+        },
+      ],
+      runEventRefs: [],
+      toolCalls: [],
+    };
+
+    expect(latestUserQuestionFromConversation(dto)).toBe("follow up");
   });
 });
 

@@ -146,7 +146,8 @@ export function LiveRunEventSubscriber({
   useLayoutEffect(() => {
     setLiveRun(createInitialLiveRun());
     setSessionUsage(createInitialSessionUsage());
-  }, [threadId, setLiveRun, setSessionUsage]);
+    setLatestQuestion(undefined);
+  }, [threadId, setLatestQuestion, setLiveRun, setSessionUsage]);
 
   useEffect(() => {
     const applyEvent = (event: BaseEvent) => {
