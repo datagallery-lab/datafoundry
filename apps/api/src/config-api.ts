@@ -1652,6 +1652,7 @@ const toolCallPairDtos = (runId: string, events: RunEventRecord[]): Array<Record
     args?: unknown;
     callEventSeq?: number;
     endEventSeq?: number;
+    parentMessageId?: string;
     result?: unknown;
     resultEventSeq?: number;
     resultMessageId?: string;
@@ -1675,12 +1676,17 @@ const toolCallPairDtos = (runId: string, events: RunEventRecord[]): Array<Record
       // AG-UI tool-call events are passthrough; capture args if the middleware populated
       // `args` / `input` / `argsText` (R-027 conversation-restore wants stable args).
       const args = existing.args ?? toolCallArgs(event);
+      const parentMessageId =
+        type === "TOOL_CALL_START"
+          ? stringValue(event.parentMessageId) ?? existing.parentMessageId
+          : existing.parentMessageId;
       calls.set(toolCallId, {
         ...existing,
         ...(toolName ? { toolName } : {}),
         ...(args !== undefined ? { args } : {}),
         ...(type === "TOOL_CALL_START" ? { callEventSeq: eventRecord.seq } : {}),
-        ...(type === "TOOL_CALL_END" ? { endEventSeq: eventRecord.seq } : {})
+        ...(type === "TOOL_CALL_END" ? { endEventSeq: eventRecord.seq } : {}),
+        ...(parentMessageId ? { parentMessageId } : {})
       });
       return;
     }
@@ -1713,6 +1719,7 @@ const toolCallPairDtos = (runId: string, events: RunEventRecord[]): Array<Record
     ...(call.callEventSeq !== undefined ? { callEventSeq: call.callEventSeq } : {}),
     ...(call.endEventSeq !== undefined ? { endEventSeq: call.endEventSeq } : {}),
     ...(call.resultEventSeq !== undefined ? { resultEventSeq: call.resultEventSeq } : {}),
+    ...(call.parentMessageId ? { parentMessageId: call.parentMessageId } : {}),
     ...(call.resultMessageId ? { resultMessageId: call.resultMessageId } : {}),
     ...(call.resultPreview ? { resultPreview: call.resultPreview } : {})
   }));

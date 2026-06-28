@@ -25,6 +25,12 @@ describe("resolveToolStepActionLabel", () => {
     expect(resolveToolStepActionLabel(["list_files", "grep"])).toBe("操作工作区");
     expect(resolveToolStepActionLabel(["unknown_tool", "another_tool"])).toBe("调用 2 个工具");
   });
+
+  it("falls back to readable labels for unmapped and namespaced tools", () => {
+    expect(resolveToolStepActionLabel(["custom_analytics_tool"])).toBe("Custom Analytics Tool");
+    expect(resolveToolStepActionLabel(["mcp__demo__inspect_schema"])).toBe("检查表结构");
+    expect(resolveToolStepActionLabel(["查看数据源"])).toBe("查看数据源");
+  });
 });
 
 describe("resolveStepSummaryText", () => {
@@ -37,10 +43,34 @@ describe("resolveStepSummaryText", () => {
         toolActionLabel: "检查表结构",
         isThought: false,
       }),
-    ).toBe("调用 检查数据源 Schema");
+    ).toBe("I'll inspect the schema for you. · 调用 检查数据源 Schema");
   });
 
-  it("falls back to thought label for English-only interim text", () => {
+  it("shows thought preview before tool invocation when both are available", () => {
+    expect(
+      resolveStepSummaryText({
+        content: "我先查看一下可用的数据源。",
+        hasToolCalls: true,
+        displayToolNames: "查看数据源",
+        toolActionLabel: "查看数据源",
+        isThought: false,
+      }),
+    ).toBe("我先查看一下可用的数据源。 · 调用 查看数据源");
+  });
+
+  it("shows only tool invocation when there is no thought text", () => {
+    expect(
+      resolveStepSummaryText({
+        content: "",
+        hasToolCalls: true,
+        displayToolNames: "查看数据源",
+        toolActionLabel: "查看数据源",
+        isThought: false,
+      }),
+    ).toBe("调用 查看数据源");
+  });
+
+  it("shows thought preview text for English-only interim messages", () => {
     expect(
       resolveStepSummaryText({
         content: "Let me think about this query.",
@@ -49,7 +79,19 @@ describe("resolveStepSummaryText", () => {
         toolActionLabel: "思考",
         isThought: true,
       }),
-    ).toBe("思考");
+    ).toBe("Let me think about this query.");
+  });
+
+  it("shows Chinese thought preview when available", () => {
+    expect(
+      resolveStepSummaryText({
+        content: "我需要分析不同品类的销售额数据。",
+        hasToolCalls: false,
+        displayToolNames: "",
+        toolActionLabel: "思考",
+        isThought: true,
+      }),
+    ).toBe("我需要分析不同品类的销售额数据。");
   });
 });
 

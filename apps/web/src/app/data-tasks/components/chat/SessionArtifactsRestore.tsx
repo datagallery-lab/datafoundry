@@ -34,8 +34,9 @@ export function SessionArtifactsRestore({
     void configApi.listSessionArtifacts(threadId)
       .then((response) => {
         if (cancelled || requestIdRef.current !== requestId) return;
-        setLiveRun((current) =>
-          reconcileLiveRunArtifacts(
+        setLiveRun((current) => {
+          const base = { ...current, artifacts: [] as typeof current.artifacts };
+          return reconcileLiveRunArtifacts(
             (response.artifacts ?? []).reduce(
               (state, artifact) =>
                 reduceLiveRunEvent(state, {
@@ -52,10 +53,10 @@ export function SessionArtifactsRestore({
                     preview_available: artifact.preview_json !== undefined,
                   },
                 }),
-              current,
+              base,
             ),
-          ),
-        );
+          );
+        });
       })
       .catch(() => undefined);
 

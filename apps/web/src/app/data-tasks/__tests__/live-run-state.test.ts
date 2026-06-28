@@ -830,6 +830,52 @@ describe("live run state reducer", () => {
     expect(run.toolCalls).toHaveLength(2);
   });
 
+  it("ignores duplicate RUN_STARTED while the run is already running", () => {
+    let run = createInitialLiveRun();
+    run = reduceLiveRunEvent(run, { type: "RUN_STARTED", runId: "run-1" });
+    const startedAt = run.runStartedAt;
+    run = reduceLiveRunEvent(run, {
+      type: "TOOL_CALL_START",
+      toolCallId: "tool-1",
+      toolCallName: "inspect_schema",
+    });
+
+    const replayed = reduceLiveRunEvent(run, { type: "RUN_STARTED", runId: "run-1" });
+
+    expect(replayed.runStartedAt).toBe(startedAt);
+    expect(replayed.toolCalls).toHaveLength(1);
+    expect(replayed.runHistory ?? []).toHaveLength(0);
+  });
+
+  it("ignores duplicate RUN_FINISHED after the run already completed", () => {
+    let run = createInitialLiveRun();
+    run = reduceLiveRunEvent(run, { type: "RUN_STARTED" });
+    run = reduceLiveRunEvent(run, { type: "RUN_FINISHED" });
+    const finishedAt = run.runFinishedAt;
+
+    const replayed = reduceLiveRunEvent(run, { type: "RUN_FINISHED" });
+
+    expect(replayed.runFinishedAt).toBe(finishedAt);
+    expect(replayed.runStatus).toBe("completed");
+  });
+
+  it("does not append duplicate archived segments when RUN_STARTED replays without new tools", () => {
+    let run = createInitialLiveRun();
+    run = reduceLiveRunEvent(run, { type: "RUN_STARTED" });
+    run = reduceLiveRunEvent(run, {
+      type: "TOOL_CALL_START",
+      toolCallId: "tool-1",
+      toolCallName: "inspect_schema",
+    });
+    run = reduceLiveRunEvent(run, { type: "RUN_FINISHED" });
+    run = reduceLiveRunEvent(run, { type: "RUN_STARTED" });
+    run = reduceLiveRunEvent(run, { type: "RUN_FINISHED" });
+    run = reduceLiveRunEvent(run, { type: "RUN_STARTED" });
+
+    expect(run.runHistory).toHaveLength(1);
+    expect(run.runHistory?.[0]?.toolCallEndIndex).toBe(1);
+  });
+
   it("resets to an idle empty run on first RUN_STARTED with no session activity", () => {
     const restarted = reduceLiveRunEvent(createInitialLiveRun(), { type: "RUN_STARTED" });
 

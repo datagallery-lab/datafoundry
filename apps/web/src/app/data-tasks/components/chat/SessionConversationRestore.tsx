@@ -1,7 +1,7 @@
 "use client";
 
 import { useAgent, useCopilotChatConfiguration } from "@copilotkit/react-core/v2";
-import { useEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef } from "react";
 import { configApi } from "../../../../lib/config-api/client";
 import { getRuntimeCapabilities } from "../../../../lib/config-api/capabilities";
 import {
@@ -13,7 +13,10 @@ import {
   shouldRestoreConversationMessages,
 } from "../../conversation-restore";
 import { hydrateCollaborationResponses } from "./collaboration-responses";
-import { useLiveRunSetters } from "../../use-data-agent-run";
+import {
+  useConversationRestoreGate,
+  useLiveRunSetters,
+} from "../../use-data-agent-run";
 
 export function SessionConversationRestore({
   agentId,
@@ -26,7 +29,22 @@ export function SessionConversationRestore({
   const threadId = chatConfig?.threadId;
   const { agent } = useAgent({ agentId });
   const { setLiveRun, setLatestQuestion } = useLiveRunSetters();
+  const { setIsRestoringConversation } = useConversationRestoreGate();
   const fetchGenerationRef = useRef(0);
+
+  useLayoutEffect(() => {
+    if (!threadId || !capabilitiesReady) {
+      return;
+    }
+    if (!getRuntimeCapabilities().conversationMemory) {
+      return;
+    }
+    if (Boolean(agent.isRunning)) {
+      return;
+    }
+    setIsRestoringConversation(true);
+    agent.setMessages([]);
+  }, [agent, capabilitiesReady, setIsRestoringConversation, threadId]);
 
   useEffect(() => {
     if (!threadId || !capabilitiesReady) {
@@ -84,13 +102,25 @@ export function SessionConversationRestore({
         if (typeof window !== "undefined") {
           console.warn("[conversation-restore] failed to load session history", error);
         }
+      } finally {
+        if (!cancelled && fetchGenerationRef.current === generation) {
+          setIsRestoringConversation(false);
+        }
       }
     })();
 
     return () => {
       cancelled = true;
     };
-  }, [agent, agent.isRunning, capabilitiesReady, setLatestQuestion, setLiveRun, threadId]);
+  }, [
+    agent,
+    agent.isRunning,
+    capabilitiesReady,
+    setIsRestoringConversation,
+    setLatestQuestion,
+    setLiveRun,
+    threadId,
+  ]);
 
   return null;
 }

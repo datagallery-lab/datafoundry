@@ -208,6 +208,131 @@ describe("conversationToAgentMessages", () => {
       JSON.stringify({ table_names: ["orders"] }),
     );
   });
+
+  it("uses parentMessageId when linking tool calls to assistant messages", () => {
+    const dto: SessionConversationDto = {
+      sessionId: "thread-1",
+      messages: [
+        {
+          id: "m1",
+          runId: "run-1",
+          role: "assistant",
+          source: "agent",
+          messageId: "msg-assistant-1",
+          contentText: "First step",
+          position: 1,
+          createdAt: "2026-06-25T10:00:02Z",
+        },
+        {
+          id: "m2",
+          runId: "run-1",
+          role: "assistant",
+          source: "agent",
+          messageId: "msg-assistant-2",
+          contentText: "Second step",
+          position: 2,
+          createdAt: "2026-06-25T10:00:03Z",
+        },
+      ],
+      runEventRefs: [],
+      toolCalls: [
+        {
+          runId: "run-1",
+          toolCallId: "tc-1",
+          status: "completed",
+          toolName: "list_data_sources",
+          parentMessageId: "msg-assistant-1",
+          callEventSeq: 1,
+        },
+        {
+          runId: "run-1",
+          toolCallId: "tc-2",
+          status: "completed",
+          toolName: "inspect_schema",
+          parentMessageId: "msg-assistant-2",
+          callEventSeq: 2,
+        },
+      ],
+    };
+
+    const restored = conversationToAgentMessages(dto);
+    expect(restored[0]?.toolCalls?.[0]?.function.name).toBe("list_data_sources");
+    expect(restored[1]?.toolCalls?.[0]?.function.name).toBe("inspect_schema");
+  });
+
+  it("distributes unlinked tool calls across assistant turns in order", () => {
+    const dto: SessionConversationDto = {
+      sessionId: "thread-1",
+      messages: [
+        {
+          id: "m1",
+          runId: "run-1",
+          role: "user",
+          source: "client",
+          messageId: "msg-user-1",
+          contentText: "analyze",
+          position: 1,
+          createdAt: "2026-06-25T10:00:01Z",
+        },
+        {
+          id: "m2",
+          runId: "run-1",
+          role: "assistant",
+          source: "agent",
+          messageId: "msg-assistant-1",
+          contentText: "Step 1",
+          position: 2,
+          createdAt: "2026-06-25T10:00:02Z",
+        },
+        {
+          id: "m3",
+          runId: "run-1",
+          role: "assistant",
+          source: "agent",
+          messageId: "msg-assistant-2",
+          contentText: "Step 2",
+          position: 3,
+          createdAt: "2026-06-25T10:00:03Z",
+        },
+        {
+          id: "m4",
+          runId: "run-1",
+          role: "assistant",
+          source: "agent",
+          messageId: "msg-assistant-3",
+          contentText: "Final answer",
+          position: 4,
+          createdAt: "2026-06-25T10:00:04Z",
+        },
+      ],
+      runEventRefs: [],
+      toolCalls: [
+        {
+          runId: "run-1",
+          toolCallId: "tc-1",
+          status: "completed",
+          toolName: "list_data_sources",
+          callEventSeq: 1,
+        },
+        {
+          runId: "run-1",
+          toolCallId: "tc-2",
+          status: "completed",
+          toolName: "inspect_schema",
+          callEventSeq: 2,
+        },
+      ],
+    };
+
+    const restored = conversationToAgentMessages(dto);
+    expect(restored.find((message) => message.id === "msg-assistant-1")?.toolCalls?.[0]?.function.name).toBe(
+      "list_data_sources",
+    );
+    expect(restored.find((message) => message.id === "msg-assistant-2")?.toolCalls?.[0]?.function.name).toBe(
+      "inspect_schema",
+    );
+    expect(restored.find((message) => message.id === "msg-assistant-3")?.toolCalls).toBeUndefined();
+  });
 });
 
 describe("collaborationResponsesFromConversation", () => {
@@ -445,6 +570,109 @@ describe("shouldHydrateLiveRunFromConversation", () => {
     let run = hydrateLiveRunFromConversation(createInitialLiveRun(), dto);
     expect(shouldHydrateLiveRunFromConversation(run, dto)).toBe(false);
   });
+
+  it("hydrates when AG-UI replay left the run running with no tool calls", () => {
+    const dto: SessionConversationDto = {
+      sessionId: "thread-1",
+      messages: [],
+      runEventRefs: [],
+      toolCalls: [
+        {
+          runId: "run-1",
+          toolCallId: "sql-1",
+          status: "completed",
+          toolName: "run_sql_readonly",
+          callEventSeq: 1,
+        },
+      ],
+    };
+
+    let run = createInitialLiveRun();
+    run = reduceLiveRunEvent(run, { type: "RUN_STARTED" });
+    expect(run.runStatus).toBe("running");
+    expect(shouldHydrateLiveRunFromConversation(run, dto)).toBe(true);
+  });
+
+  it("hydrates when replay only produced run boundaries without tools", () => {
+    const dto: SessionConversationDto = {
+      sessionId: "thread-1",
+      messages: [],
+      runEventRefs: [],
+      toolCalls: [
+        {
+          runId: "run-1",
+          toolCallId: "schema-1",
+          status: "completed",
+          toolName: "inspect_schema",
+          callEventSeq: 1,
+          resultPreview: JSON.stringify({ tables: [] }),
+        },
+      ],
+    };
+
+    let run = createInitialLiveRun();
+    run = reduceLiveRunEvent(run, { type: "RUN_STARTED" });
+    run = reduceLiveRunEvent(run, {
+      type: "CUSTOM",
+      name: "artifact",
+      value: { id: "artifact-orphan", title: "旧产出", summary: "" },
+    });
+    run = reduceLiveRunEvent(run, { type: "RUN_FINISHED" });
+    run = reduceLiveRunEvent(run, { type: "RUN_STARTED" });
+    run = reduceLiveRunEvent(run, { type: "RUN_FINISHED" });
+    run = reduceLiveRunEvent(run, { type: "RUN_STARTED" });
+
+    expect(run.toolCalls).toHaveLength(0);
+    expect((run.runHistory?.length ?? 0)).toBeGreaterThan(0);
+    expect(shouldHydrateLiveRunFromConversation(run, dto)).toBe(true);
+
+    run = hydrateLiveRunFromConversation(run, dto);
+    expect(run.toolCalls).toHaveLength(1);
+    expect(run.runHistory).toEqual([]);
+  });
+
+  it("hydrates when live run is missing tool ids from conversation", () => {
+    const dto: SessionConversationDto = {
+      sessionId: "thread-1",
+      messages: [],
+      runEventRefs: [],
+      toolCalls: [
+        {
+          runId: "run-1",
+          toolCallId: "tc-1",
+          status: "completed",
+          toolName: "list_data_sources",
+          callEventSeq: 1,
+        },
+        {
+          runId: "run-1",
+          toolCallId: "tc-2",
+          status: "completed",
+          toolName: "inspect_schema",
+          callEventSeq: 2,
+        },
+      ],
+    };
+
+    let run = createInitialLiveRun();
+    run = reduceLiveRunEvent(run, { type: "RUN_STARTED" });
+    run = reduceLiveRunEvent(run, {
+      type: "TOOL_CALL_START",
+      toolCallId: "tc-1",
+      toolCallName: "list_data_sources",
+    });
+    run = reduceLiveRunEvent(run, {
+      type: "TOOL_CALL_RESULT",
+      toolCallId: "tc-1",
+      toolCallName: "list_data_sources",
+      result: "{}",
+    });
+    run = reduceLiveRunEvent(run, { type: "RUN_FINISHED" });
+
+    expect(shouldHydrateLiveRunFromConversation(run, dto)).toBe(true);
+    run = hydrateLiveRunFromConversation(run, dto);
+    expect(run.toolCalls).toHaveLength(2);
+  });
 });
 
 describe("latestUserQuestionFromConversation", () => {
@@ -486,6 +714,102 @@ describe("latestUserQuestionFromConversation", () => {
 
     expect(latestUserQuestionFromConversation(dto)).toBe("follow up");
   });
+
+  it("skips collaboration echo user messages when resolving latest question", () => {
+    const dto: SessionConversationDto = {
+      sessionId: "thread-1",
+      messages: [
+        {
+          id: "m1",
+          runId: "run-1",
+          role: "user",
+          source: "client",
+          contentText: "先查看数据库，再问我下一步要做什么",
+          position: 1,
+          createdAt: "2026-06-25T10:00:01Z",
+        },
+        {
+          id: "m2",
+          runId: "run-2",
+          role: "user",
+          source: "client",
+          contentText: "调用askuser tool",
+          position: 2,
+          createdAt: "2026-06-25T10:00:03Z",
+        },
+      ],
+      runEventRefs: [],
+      toolCalls: [],
+    };
+
+    expect(latestUserQuestionFromConversation(dto)).toBe(
+      "先查看数据库，再问我下一步要做什么",
+    );
+  });
+});
+
+describe("hydrateLiveRunFromConversation run ordering", () => {
+  it("orders hydrated run groups by user turn instead of interleaved tool seq", () => {
+    const dto: SessionConversationDto = {
+      sessionId: "thread-1",
+      messages: [
+        {
+          id: "m1",
+          runId: "run-a",
+          role: "user",
+          source: "client",
+          contentText: "round one",
+          position: 1,
+          createdAt: "2026-06-25T10:00:01Z",
+        },
+        {
+          id: "m2",
+          runId: "run-b",
+          role: "user",
+          source: "client",
+          contentText: "round two",
+          position: 2,
+          createdAt: "2026-06-25T10:00:02Z",
+        },
+      ],
+      runEventRefs: [],
+      toolCalls: [
+        {
+          runId: "run-b",
+          toolCallId: "tc-collab",
+          status: "completed",
+          resultPreview: JSON.stringify({
+            content: "User answered: yes",
+            source: "mastra-collaboration",
+          }),
+        },
+        {
+          runId: "run-a",
+          toolCallId: "tc-a",
+          status: "completed",
+          toolName: "list_data_sources",
+          callEventSeq: 10,
+        },
+        {
+          runId: "run-b",
+          toolCallId: "tc-b",
+          status: "completed",
+          toolName: "inspect_schema",
+          callEventSeq: 20,
+        },
+      ],
+    };
+
+    const run = hydrateLiveRunFromConversation(createInitialLiveRun(), dto);
+    expect(run.toolCalls.map((call) => call.id)).toEqual([
+      "tc-a",
+      "tc-collab",
+      "tc-b",
+    ]);
+    expect(run.toolCalls.find((call) => call.id === "tc-collab")?.name).toBe("ask_user");
+    expect(run.runHistory).toHaveLength(1);
+    expect(run.runHistory?.[0]?.toolCallEndIndex).toBe(1);
+  });
 });
 
 describe("hydrateLiveRunFromConversation", () => {
@@ -524,6 +848,84 @@ describe("hydrateLiveRunFromConversation", () => {
     });
     run = reconcileLiveRunArtifacts(run);
     expect(run.artifacts[0]?.createdByEventId).toBe("sql-1");
+  });
+
+  it("rebuilds multi-run tool history with run boundaries", () => {
+    const dto: SessionConversationDto = {
+      sessionId: "thread-1",
+      messages: [],
+      runEventRefs: [],
+      toolCalls: [
+        {
+          runId: "run-1",
+          toolCallId: "tc-1",
+          status: "completed",
+          toolName: "list_data_sources",
+          callEventSeq: 1,
+        },
+        {
+          runId: "run-1",
+          toolCallId: "tc-ask",
+          status: "pending",
+          toolName: "ask_user",
+          callEventSeq: 2,
+        },
+        {
+          runId: "run-2",
+          toolCallId: "tc-2",
+          status: "completed",
+          toolName: "inspect_schema",
+          callEventSeq: 3,
+          resultPreview: JSON.stringify({ tables: [] }),
+        },
+        {
+          runId: "run-2",
+          toolCallId: "tc-3",
+          status: "completed",
+          toolName: "run_sql_readonly",
+          callEventSeq: 4,
+          resultPreview: JSON.stringify({ row_count: 2 }),
+        },
+      ],
+    };
+
+    const run = hydrateLiveRunFromConversation(createInitialLiveRun(), dto);
+    expect(run.toolCalls).toHaveLength(4);
+    expect(run.runHistory).toHaveLength(1);
+    expect(run.runHistory?.[0]?.status).toBe("suspended");
+    expect(run.runHistory?.[0]?.toolCallEndIndex).toBe(2);
+    expect(run.runStatus).toBe("completed");
+  });
+
+  it("preserves orphaned artifacts when re-hydrating tool calls", () => {
+    const dto: SessionConversationDto = {
+      sessionId: "thread-1",
+      messages: [],
+      runEventRefs: [],
+      toolCalls: [
+        {
+          runId: "run-1",
+          toolCallId: "sql-1",
+          status: "completed",
+          toolName: "run_sql_readonly",
+          callEventSeq: 1,
+          resultPreview: JSON.stringify({ row_count: 3 }),
+        },
+      ],
+    };
+
+    let polluted = createInitialLiveRun();
+    polluted = reduceLiveRunEvent(polluted, { type: "RUN_STARTED" });
+    polluted = reduceLiveRunEvent(polluted, {
+      type: "CUSTOM",
+      name: "artifact",
+      value: { id: "artifact-orphan", title: "旧产出", summary: "" },
+    });
+    polluted = reduceLiveRunEvent(polluted, { type: "RUN_FINISHED" });
+
+    const run = hydrateLiveRunFromConversation(polluted, dto);
+    expect(run.toolCalls).toHaveLength(1);
+    expect(run.artifacts.some((artifact) => artifact.id === "artifact-orphan")).toBe(true);
   });
 });
 

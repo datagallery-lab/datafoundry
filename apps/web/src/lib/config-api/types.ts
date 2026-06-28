@@ -267,6 +267,7 @@ export type ConversationToolCallDto = {
   callEventSeq?: number;
   endEventSeq?: number;
   resultEventSeq?: number;
+  parentMessageId?: string;
   resultMessageId?: string;
   resultPreview?: string;
 };

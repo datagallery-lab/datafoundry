@@ -80,6 +80,7 @@ import {
   resolveAssistantThoughtContent,
 } from "./assistant-thought-content";
 import {
+  isDisplayableToolName,
   resolveCollaborationStepLabel,
   resolveStepBadgePresentation,
   resolveStepSummaryText,
@@ -1145,6 +1146,8 @@ function DataTaskWorkspace() {
         onSelectSession={(sessionId) => {
           setActiveSessionId(sessionId);
           setSelection(null);
+          setArtifactFocusId(null);
+          setIsTraceOpen(false);
           setConfigPanel(null);
           setWorkspaceFilesPanelOpen(false);
         }}
@@ -1257,6 +1260,7 @@ function DataTaskWorkspace() {
             onReset={resetRightPanelWidth}
           />
           <TaskConsole
+            key={activeThreadId ?? activeSession?.id ?? "no-session"}
             artifacts={visibleArtifacts}
             liveRun={liveRun}
             sessionUsage={sessionUsage}
@@ -1282,6 +1286,7 @@ function DataTaskWorkspace() {
       )}
 
       <TaskConsoleDrawer
+        key={activeThreadId ?? activeSession?.id ?? "no-session"}
         artifacts={visibleArtifacts}
         liveRun={liveRun}
         sessionUsage={sessionUsage}
@@ -2094,45 +2099,46 @@ function StepAssistantMessage({
     wasActiveRef.current = isActive;
   }, [isActive]);
 
-  if (!content && !hasToolCalls) {
-    if (isWaitingForUser) {
-      const theme = getStepCardTheme({
-        hasToolCalls: false,
-        isActive: false,
-        isFinalAnswer: false,
-        isFinalAnswerComplete: false,
-        isThought: false,
-        isCollaborationStep: true,
-        isWaitingForUser: true,
-      });
-      return (
-        <div
-          data-copilotkit
-          className={[
-            "copilotKitMessage copilotKitAssistantMessage step-enter mb-4 rounded-2xl border p-3 shadow-sm",
-            theme.card,
-          ].join(" ")}
-        >
-          <div className="flex items-center gap-2">
-            <StepBadge
-              stepNumber={stepNumber}
-              isFinalAnswer={false}
-              isStreamingAnswer={false}
-              isActive={false}
-              isThought={false}
-              isCollaboration={true}
-              isWaitingForUser={true}
-            />
-            <span className={`text-xs font-semibold ${theme.label}`}>
-              等待你的回答
-            </span>
-          </div>
-          <p className="mt-2 text-sm leading-6 text-muted">
-            Agent 已暂停，请在下方卡片中选择或填写你的回答。
-          </p>
+  if (isWaitingForUser) {
+    const theme = getStepCardTheme({
+      hasToolCalls: false,
+      isActive: false,
+      isFinalAnswer: false,
+      isFinalAnswerComplete: false,
+      isThought: false,
+      isCollaborationStep: true,
+      isWaitingForUser: true,
+    });
+    return (
+      <div
+        data-copilotkit
+        className={[
+          "copilotKitMessage copilotKitAssistantMessage step-enter mb-4 rounded-2xl border p-3 shadow-sm",
+          theme.card,
+        ].join(" ")}
+      >
+        <div className="flex items-center gap-2">
+          <StepBadge
+            stepNumber={stepNumber}
+            isFinalAnswer={false}
+            isStreamingAnswer={false}
+            isActive={false}
+            isThought={false}
+            isCollaboration={true}
+            isWaitingForUser={true}
+          />
+          <span className={`text-xs font-semibold ${theme.label}`}>
+            等待你的回答
+          </span>
         </div>
-      );
-    }
+        <p className="mt-2 text-sm leading-6 text-muted">
+          Agent 已暂停，请在下方卡片中选择或填写你的回答。
+        </p>
+      </div>
+    );
+  }
+
+  if (!content && !hasToolCalls) {
     if (isActive) {
       return <ChatAssistantLoadingRow />;
     }
@@ -2141,7 +2147,7 @@ function StepAssistantMessage({
 
   const rawToolNames = effectiveToolCalls
     .map((call) => call?.function?.name ?? "")
-    .filter(Boolean);
+    .filter((name) => isDisplayableToolName(name));
   const toolNames = rawToolNames
     .map((call) => toolDisplayTitle(call))
     .filter(Boolean)
@@ -3324,7 +3330,7 @@ function SessionPaneContent({
           ) : (
             filteredSessions.map((session) => (
               <SessionListItem
-                key={session.id}
+                key={session.threadId || session.id}
                 session={session}
                 active={session.id === activeSessionId}
                 onSelect={() => onSelectSession(session.id)}

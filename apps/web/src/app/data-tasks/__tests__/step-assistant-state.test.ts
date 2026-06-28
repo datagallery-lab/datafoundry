@@ -171,6 +171,81 @@ describe("resolveStepAssistantFlags", () => {
     expect(flags.isCollaborationStep).toBe(false);
     expect(flags.hasToolCalls).toBe(true);
   });
+
+  it("does not keep the last step streaming after ask_user suspends the run", () => {
+    const messages = [
+      { id: "assistant-ask", role: "assistant", content: "请选择下一步" },
+    ];
+    const liveRun = {
+      ...createInitialLiveRun(),
+      toolCalls: [
+        {
+          id: "tc-ask",
+          name: "ask_user",
+          status: "running" as const,
+          startedAtMs: 1,
+        },
+      ],
+    };
+    const flags = resolveStepAssistantFlags({
+      message: messages[0],
+      messages,
+      content: "请选择下一步",
+      isRunning: true,
+      liveRunStatus: "suspended",
+      liveRun,
+      collaborationResponses: [],
+    });
+
+    expect(flags.isWaitingForUser).toBe(true);
+    expect(flags.isActive).toBe(false);
+    expect(flags.isFinalAnswer).toBe(false);
+  });
+
+  it("does not infer ask_user on a preamble when a later assistant message owns the tool call", () => {
+    const messages = [
+      { id: "assistant-preamble", role: "assistant", content: "我需要确认你的选择。" },
+      {
+        id: "assistant-ask",
+        role: "assistant",
+        toolCalls: [{ id: "tc-ask", function: { name: "ask_user" } }],
+      },
+    ];
+    const liveRun = {
+      ...createInitialLiveRun(),
+      toolCalls: [
+        {
+          id: "tc-ask",
+          name: "ask_user",
+          status: "running" as const,
+          startedAtMs: 1,
+        },
+      ],
+    };
+    const preambleFlags = resolveStepAssistantFlags({
+      message: messages[0],
+      messages,
+      content: "我需要确认你的选择。",
+      isRunning: true,
+      liveRunStatus: "suspended",
+      liveRun,
+      collaborationResponses: [],
+    });
+    const askFlags = resolveStepAssistantFlags({
+      message: messages[1],
+      messages,
+      content: "",
+      isRunning: true,
+      liveRunStatus: "suspended",
+      liveRun,
+      collaborationResponses: [],
+    });
+
+    expect(preambleFlags.isCollaborationStep).toBe(false);
+    expect(preambleFlags.isThought).toBe(true);
+    expect(askFlags.isWaitingForUser).toBe(true);
+    expect(askFlags.isCollaborationStep).toBe(true);
+  });
 });
 
 describe("resolveAssistantToolStepNumber", () => {
@@ -263,5 +338,31 @@ describe("resolveAssistantToolStepNumber", () => {
         collaborationResponses: [],
       }),
     ).toBe(2);
+  });
+
+  it("restarts step numbering within each user turn", () => {
+    const messages = [
+      { id: "user-1", role: "user", content: "第一轮" },
+      {
+        id: "assistant-1",
+        role: "assistant",
+        toolCalls: [{ id: "tc-1", function: { name: "list_data_sources" } }],
+      },
+      { id: "user-2", role: "user", content: "第二轮" },
+      {
+        id: "assistant-2",
+        role: "assistant",
+        toolCalls: [{ id: "tc-2", function: { name: "inspect_schema" } }],
+      },
+    ];
+
+    expect(
+      resolveAssistantToolStepNumber({
+        message: messages[3],
+        messages,
+        liveRun: createInitialLiveRun(),
+        collaborationResponses: [],
+      }),
+    ).toBe(1);
   });
 });

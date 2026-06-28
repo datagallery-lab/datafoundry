@@ -24,6 +24,10 @@ import {
   type LiveRunStatus,
   type SessionUsageStats,
 } from "./live-run-state";
+import {
+  isCollaborationEchoUserMessage,
+  normalizeUserQuestionText,
+} from "./conversation-restore";
 
 type LiveRunContextValue = {
   liveRun: LiveRun;
@@ -37,30 +41,58 @@ type LiveRunSetters = {
   setLatestQuestion: Dispatch<SetStateAction<string | undefined>>;
 };
 
+type ConversationRestoreGate = {
+  isRestoringConversation: boolean;
+  setIsRestoringConversation: Dispatch<SetStateAction<boolean>>;
+};
+
 const LiveRunContext = createContext<LiveRunContextValue | null>(null);
 const LiveRunSettersContext = createContext<LiveRunSetters | null>(null);
+const ConversationRestoreGateContext = createContext<ConversationRestoreGate | null>(null);
+
+function normalizeUserQuestion(text: string): string | undefined {
+  return normalizeUserQuestionText(text);
+}
+
+function isRunBoundaryReplayEvent(event: BaseEvent): boolean {
+  const type = (event as { type?: string }).type;
+  return (
+    type === "RUN_STARTED" ||
+    type === "RUN_FINISHED" ||
+    type === "RUN_ERROR" ||
+    type === "STATE_SNAPSHOT"
+  );
+}
 
 function extractLatestUserQuestion(messages: unknown): string | undefined {
   if (!Array.isArray(messages)) return undefined;
+  let fallback: string | undefined;
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index] as Record<string, unknown> | null;
     if (!message || message.role !== "user") continue;
     const content = message.content;
-    if (typeof content === "string" && content.trim()) return content.trim();
-    if (Array.isArray(content)) {
-      const text = content
-        .map((part) => {
-          if (part && typeof part === "object" && (part as { type?: unknown }).type === "text") {
-            return String((part as { text?: unknown }).text ?? "");
-          }
-          return "";
-        })
-        .join("")
-        .trim();
-      if (text) return text;
+    let text: string | undefined;
+    if (typeof content === "string") {
+      text = normalizeUserQuestion(content);
+    } else if (Array.isArray(content)) {
+      text = normalizeUserQuestion(
+        content
+          .map((part) => {
+            if (part && typeof part === "object" && (part as { type?: unknown }).type === "text") {
+              return String((part as { text?: unknown }).text ?? "");
+            }
+            return "";
+          })
+          .join(""),
+      );
+    }
+    if (!text) continue;
+    fallback ??= text;
+    if (!isCollaborationEchoUserMessage(text)) {
+      return text;
     }
   }
-  return undefined;
+  return fallback;
 }
 
 export function LiveRunProvider({ children }: { children: ReactNode }) {
@@ -69,11 +101,20 @@ export function LiveRunProvider({ children }: { children: ReactNode }) {
     createInitialSessionUsage(),
   );
   const [latestQuestion, setLatestQuestion] = useState<string | undefined>();
+  const [isRestoringConversation, setIsRestoringConversation] = useState(false);
   const prevRunStatusRef = useRef<LiveRunStatus>("idle");
 
   const setters = useMemo(
     () => ({ setLiveRun, setSessionUsage, setLatestQuestion }),
     [],
+  );
+
+  const restoreGate = useMemo(
+    () => ({
+      isRestoringConversation,
+      setIsRestoringConversation,
+    }),
+    [isRestoringConversation],
   );
 
   useEffect(() => {
@@ -93,9 +134,11 @@ export function LiveRunProvider({ children }: { children: ReactNode }) {
 
   return (
     <LiveRunSettersContext.Provider value={setters}>
-      <LiveRunContext.Provider value={{ liveRun, sessionUsage, latestQuestion }}>
-        {children}
-      </LiveRunContext.Provider>
+      <ConversationRestoreGateContext.Provider value={restoreGate}>
+        <LiveRunContext.Provider value={{ liveRun, sessionUsage, latestQuestion }}>
+          {children}
+        </LiveRunContext.Provider>
+      </ConversationRestoreGateContext.Provider>
     </LiveRunSettersContext.Provider>
   );
 }
@@ -116,6 +159,14 @@ export function useLiveRunSetters(): LiveRunSetters {
   return setters;
 }
 
+export function useConversationRestoreGate(): ConversationRestoreGate {
+  const gate = useContext(ConversationRestoreGateContext);
+  if (!gate) {
+    throw new Error("useConversationRestoreGate must be used within LiveRunProvider");
+  }
+  return gate;
+}
+
 /**
  * Subscribes to AG-UI events for the active thread. Must render as a sibling
  * **before** `<CopilotChat>` inside `<CopilotChatConfigurationProvider>` so
@@ -133,6 +184,9 @@ export function LiveRunEventSubscriber({
     throw new Error("LiveRunEventSubscriber requires LiveRunProvider");
   }
   const { setLiveRun, setSessionUsage, setLatestQuestion } = setters;
+  const { isRestoringConversation } = useConversationRestoreGate();
+  const isRestoringConversationRef = useRef(isRestoringConversation);
+  isRestoringConversationRef.current = isRestoringConversation;
 
   const { agent } = useAgent({
     agentId,
@@ -151,6 +205,9 @@ export function LiveRunEventSubscriber({
 
   useEffect(() => {
     const applyEvent = (event: BaseEvent) => {
+      if (isRestoringConversationRef.current && isRunBoundaryReplayEvent(event)) {
+        return;
+      }
       setLiveRun((current) => reduceLiveRunEvent(current, event));
     };
 
@@ -195,6 +252,9 @@ export function LiveRunEventSubscriber({
         applyEvent(event as BaseEvent);
       },
       onRunFailed: ({ error }) => {
+        if (isRestoringConversationRef.current) {
+          return;
+        }
         setLiveRun((current) =>
           reduceLiveRunEvent(current, {
             type: "RUN_ERROR",
@@ -208,6 +268,9 @@ export function LiveRunEventSubscriber({
   }, [agent, setLiveRun]);
 
   useEffect(() => {
+    if (isRestoringConversationRef.current) {
+      return;
+    }
     const state = agent.state as Record<string, unknown> | undefined;
     if (!state || Object.keys(state).length === 0) return;
 
@@ -217,7 +280,7 @@ export function LiveRunEventSubscriber({
         snapshot: state,
       }),
     );
-  }, [agent.state, setLiveRun]);
+  }, [agent.state, setLiveRun, isRestoringConversation]);
 
   useEffect(() => {
     const onError = (event: Event) => {
@@ -240,8 +303,11 @@ export function LiveRunEventSubscriber({
     (agent as { messages?: unknown }).messages,
   );
   useEffect(() => {
+    if (isRestoringConversationRef.current) {
+      return;
+    }
     setLatestQuestion(latestQuestion);
-  }, [latestQuestion, setLatestQuestion]);
+  }, [isRestoringConversation, latestQuestion, setLatestQuestion]);
 
   return null;
 }

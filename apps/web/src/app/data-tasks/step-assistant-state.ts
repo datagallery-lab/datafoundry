@@ -38,6 +38,23 @@ export function hasLaterAssistantMessage(
   return messages.slice(index + 1).some((item) => item.role === "assistant");
 }
 
+export function laterAssistantHasCollaborationToolCall(
+  messageId: string | undefined,
+  messages: MessageLike[],
+): boolean {
+  if (!messageId) return false;
+  const index = messages.findIndex((item) => item.id === messageId);
+  if (index < 0) return false;
+  return messages.slice(index + 1).some((item) => {
+    if (item.role !== "assistant" || !Array.isArray(item.toolCalls)) {
+      return false;
+    }
+    return item.toolCalls.some((call) =>
+      COLLABORATION_TOOL_NAMES.has(call?.function?.name ?? ""),
+    );
+  });
+}
+
 export function inferCollaborationFromLiveRun(
   message: MessageLike,
   messages: MessageLike[],
@@ -115,7 +132,10 @@ export function resolveStepAssistantFlags(input: {
   const isWaitingForUser = liveRunStatus === "suspended" && isLast;
   const hasLaterAssistant = hasLaterAssistantMessage(message.id, messages);
   const canInferCollaborationFromLiveRun =
-    !hasNamedToolCalls && (content.length === 0 || hasLaterAssistant);
+    !hasNamedToolCalls &&
+    !laterAssistantHasCollaborationToolCall(message.id, messages) &&
+    (content.length === 0 || hasLaterAssistant) &&
+    (liveRunStatus !== "suspended" || isLast);
   const linkedCollaboration = findLinkedCollaborationResponse(
     message,
     messages,
@@ -131,7 +151,13 @@ export function resolveStepAssistantFlags(input: {
   const orphanPreamble =
     !hasToolCalls && content.length > 0 && hasLaterAssistant;
   const isActive =
-    isLast && !!isRunning && !isCollaborationComplete && !orphanPreamble;
+    isLast &&
+    liveRunStatus === "running" &&
+    !!isRunning &&
+    !isCollaborationComplete &&
+    !orphanPreamble &&
+    !isWaitingForUser &&
+    !isCollaborationStep;
   const isFinalAnswer =
     isLast &&
     content.length > 0 &&
@@ -159,6 +185,37 @@ export function resolveStepAssistantFlags(input: {
   };
 }
 
+function getRunMessageBounds(
+  messages: MessageLike[],
+  messageIndex: number,
+): { lastUserIndex: number; nextUserIndex: number } {
+  const lastUserIndex =
+    messageIndex >= 0
+      ? (messages
+          .slice(0, messageIndex + 1)
+          .map((item, index) => ({ item, index }))
+          .filter(({ item }) => item.role === "user")
+          .at(-1)?.index ?? -1)
+      : -1;
+  const nextUserIndex =
+    messageIndex >= 0
+      ? messages.findIndex((item, index) => index > messageIndex && item.role === "user")
+      : -1;
+  return { lastUserIndex, nextUserIndex };
+}
+
+function liveRunToolOffsetBeforeRun(messages: MessageLike[], lastUserIndex: number): number {
+  const assistants = messages
+    .slice(0, Math.max(0, lastUserIndex + 1))
+    .filter((item) => item.role === "assistant");
+  let liveToolIndex = 0;
+  for (const item of assistants) {
+    const toolCount = item.toolCalls?.length ?? 0;
+    liveToolIndex += toolCount > 0 ? toolCount : 1;
+  }
+  return liveToolIndex;
+}
+
 export function resolveAssistantToolStepNumber(input: {
   message: MessageLike;
   messages: MessageLike[];
@@ -166,18 +223,23 @@ export function resolveAssistantToolStepNumber(input: {
   collaborationResponses: CollaborationResponseRecord[];
 }): number {
   const { message, messages, liveRun, collaborationResponses } = input;
+  const messageIndex = messages.findIndex((item) => item.id === message.id);
+  const { lastUserIndex, nextUserIndex } = getRunMessageBounds(messages, messageIndex);
+  const runMessages =
+    messageIndex >= 0
+      ? messages.slice(lastUserIndex + 1, nextUserIndex > -1 ? nextUserIndex : undefined)
+      : messages;
+
   const toolCalls = Array.isArray(message.toolCalls) ? message.toolCalls : [];
   if (toolCalls.length > 0) {
-    return (
-      messages
-        .filter(
-          (item) =>
-            item.role === "assistant" &&
-            Array.isArray(item.toolCalls) &&
-            item.toolCalls.length > 0,
-        )
-        .findIndex((item) => item.id === message.id) + 1
+    const processSteps = runMessages.filter(
+      (item) =>
+        item.role === "assistant" &&
+        Array.isArray(item.toolCalls) &&
+        item.toolCalls.length > 0,
     );
+    const index = processSteps.findIndex((item) => item.id === message.id);
+    return index >= 0 ? index + 1 : 0;
   }
 
   const linkedCollaboration = findLinkedCollaborationResponse(
@@ -189,9 +251,16 @@ export function resolveAssistantToolStepNumber(input: {
     const liveToolIndex = liveRun.toolCalls.findIndex(
       (call) => call.id === linkedCollaboration.toolCallId,
     );
-    if (liveToolIndex >= 0) return liveToolIndex + 1;
+    if (liveToolIndex >= 0) {
+      const offset = liveRunToolOffsetBeforeRun(messages, lastUserIndex);
+      return liveToolIndex - offset + 1;
+    }
   }
 
   const inferred = liveRunCollaborationCandidate(message, messages, liveRun);
-  return inferred ? inferred.index + 1 : 0;
+  if (inferred) {
+    const offset = liveRunToolOffsetBeforeRun(messages, lastUserIndex);
+    return inferred.index - offset + 1;
+  }
+  return 0;
 }

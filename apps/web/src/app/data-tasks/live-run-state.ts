@@ -236,8 +236,13 @@ export function deriveSegmentRunUsage(liveRun: LiveRun): RunUsageSnapshot {
   };
 }
 
-function archiveCurrentRunSegment(state: LiveRun): LiveRunHistoryEntry[] {
+export function archiveCurrentRunSegment(state: LiveRun): LiveRunHistoryEntry[] {
   if (state.runStartedAt === undefined) return state.runHistory ?? [];
+
+  const lastEndIndex = state.runHistory?.at(-1)?.toolCallEndIndex;
+  if (lastEndIndex === state.toolCalls.length) {
+    return state.runHistory ?? [];
+  }
 
   const resolvedStatus =
     state.runStatus === "running"
@@ -363,6 +368,12 @@ export function reduceLiveRunEvent(state: LiveRun, event: AgUiLikeEvent): LiveRu
   switch (event.type) {
     case "RUN_STARTED":
       const runId = eventRunId(event) ?? state.runId;
+      if (state.runStatus === "running") {
+        return {
+          ...state,
+          ...(runId ? { runId } : {}),
+        };
+      }
       if (state.runStatus === "suspended") {
         return {
           ...state,
@@ -392,6 +403,9 @@ export function reduceLiveRunEvent(state: LiveRun, event: AgUiLikeEvent): LiveRu
         runStartedAt: Date.now(),
       };
     case "RUN_FINISHED":
+      if (state.runStatus === "completed" || state.runStatus === "canceled") {
+        return state;
+      }
       if (stringValue(event.status) === "cancelled" || stringValue(event.status) === "canceled") {
         return {
           ...state,

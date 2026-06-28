@@ -22,6 +22,8 @@ const toolActionLabels: Record<string, string> = {
   submit_plan: "提交计划",
 };
 
+const SUMMARY_PREVIEW_MAX = 48;
+
 const fileToolNames = new Set(["read_file", "edit_file", "write_file"]);
 const dataToolNames = new Set([
   "list_data_sources",
@@ -43,11 +45,68 @@ const workspaceToolNames = new Set([
   "task_check",
 ]);
 
+/** Strip MCP namespace prefix so `mcp__server__inspect_schema` resolves like `inspect_schema`. */
+export function normalizeToolLookupName(toolName: string): string {
+  const trimmed = toolName.trim();
+  if (!trimmed.startsWith("mcp__")) {
+    return trimmed;
+  }
+  const parts = trimmed.split("__");
+  if (parts.length >= 3) {
+    return parts.slice(2).join("__");
+  }
+  return trimmed;
+}
+
+export function isDisplayableToolName(toolName: string): boolean {
+  const trimmed = toolName.trim();
+  if (!trimmed) return false;
+  const normalized = normalizeToolLookupName(trimmed).toLowerCase();
+  return normalized !== "tool" && normalized !== "unknown";
+}
+
+function formatSnakeCaseLabel(toolName: string): string {
+  return toolName
+    .split("_")
+    .filter(Boolean)
+    .map((segment) => segment.charAt(0).toUpperCase() + segment.slice(1))
+    .join(" ");
+}
+
+function resolveSingleToolStepActionLabel(toolName: string): string {
+  const trimmed = toolName.trim();
+  if (!trimmed) return "思考";
+
+  const direct = toolActionLabels[trimmed];
+  if (direct) return direct;
+
+  const lookupName = normalizeToolLookupName(trimmed);
+  const lookupLabel = toolActionLabels[lookupName];
+  if (lookupLabel) return lookupLabel;
+
+  if (/[\u4e00-\u9fff]/.test(trimmed)) {
+    return trimmed;
+  }
+
+  if (lookupName !== trimmed) {
+    const namespacedDisplay = toolActionLabels[lookupName];
+    if (namespacedDisplay) return namespacedDisplay;
+  }
+
+  if (trimmed.includes("_")) {
+    return formatSnakeCaseLabel(lookupName);
+  }
+
+  return trimmed;
+}
+
 export function resolveToolStepActionLabel(toolNames: string[]): string {
-  const normalized = toolNames.map((name) => name.trim()).filter(Boolean);
+  const normalized = toolNames
+    .map((name) => name.trim())
+    .filter((name) => isDisplayableToolName(name));
   const unique = [...new Set(normalized)];
   if (unique.length === 0) return "思考";
-  if (unique.length === 1) return toolActionLabels[unique[0]] ?? "调用工具";
+  if (unique.length === 1) return resolveSingleToolStepActionLabel(unique[0]);
 
   if (unique.every((name) => fileToolNames.has(name))) return "处理文件";
   if (unique.every((name) => dataToolNames.has(name))) return "分析数据";
@@ -73,6 +132,16 @@ function looksChinese(text: string): boolean {
   return /[\u4e00-\u9fff]/.test(text);
 }
 
+function truncatePreview(text: string, max = SUMMARY_PREVIEW_MAX): string {
+  return text.length > max ? `${text.slice(0, max)}…` : text;
+}
+
+function buildThoughtPreview(content: string): string | undefined {
+  const line = firstSummaryLine(content);
+  if (!line) return undefined;
+  return truncatePreview(line);
+}
+
 /** Step card subtitle — prefer Chinese tool labels over English LLM body text. */
 export function resolveStepSummaryText(input: {
   content: string;
@@ -81,16 +150,40 @@ export function resolveStepSummaryText(input: {
   toolActionLabel: string;
   isThought: boolean;
 }): string {
-  if (input.hasToolCalls) {
-    if (input.displayToolNames) return `调用 ${input.displayToolNames}`;
-    return input.toolActionLabel;
+  const thoughtPreview = buildThoughtPreview(input.content);
+  const toolPart = input.hasToolCalls
+    ? input.displayToolNames
+      ? `调用 ${input.displayToolNames}`
+      : input.toolActionLabel
+    : undefined;
+
+  if (toolPart) {
+    if (thoughtPreview) {
+      if (
+        thoughtPreview === toolPart ||
+        thoughtPreview === input.toolActionLabel ||
+        thoughtPreview === input.displayToolNames
+      ) {
+        return toolPart;
+      }
+      return `${thoughtPreview} · ${toolPart}`;
+    }
+    return toolPart;
   }
-  if (input.isThought) return "思考";
-  const line = firstSummaryLine(input.content);
-  if (line && looksChinese(line)) {
-    return line.length > 64 ? `${line.slice(0, 64)}…` : line;
+
+  if (input.isThought) {
+    if (thoughtPreview && looksChinese(thoughtPreview)) {
+      return thoughtPreview;
+    }
+    if (thoughtPreview) {
+      return thoughtPreview;
+    }
+    return "思考";
   }
-  return line ? "思考" : "步骤";
+  if (thoughtPreview && looksChinese(thoughtPreview)) {
+    return thoughtPreview;
+  }
+  return thoughtPreview ? "思考" : "步骤";
 }
 
 export function resolveCollaborationStepLabel(

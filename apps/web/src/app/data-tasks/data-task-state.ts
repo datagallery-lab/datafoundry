@@ -95,7 +95,14 @@ export function toolDisplayTitle(toolName?: string): string {
   if (!toolName || toolName === "tool" || toolName === "unknown") {
     return "执行工具";
   }
-  return toolDisplayTitles[toolName] ?? toolName;
+  const trimmed = toolName.trim();
+  if (/[\u4e00-\u9fff]/.test(trimmed)) {
+    return trimmed;
+  }
+  const lookupName = trimmed.startsWith("mcp__")
+    ? trimmed.split("__").slice(2).join("__")
+    : trimmed;
+  return toolDisplayTitles[lookupName] ?? toolDisplayTitles[trimmed] ?? lookupName;
 }
 
 export type ArtifactDetail =

@@ -4,6 +4,8 @@ import {
   createInitialLiveRun,
   reduceLiveRunEvent,
 } from "../live-run-state";
+import { hydrateLiveRunFromConversation } from "../conversation-restore";
+import type { SessionConversationDto } from "../../../lib/config-api/types";
 
 describe("buildTraceTimeline", () => {
   it("returns empty timeline for idle run with no activity", () => {
@@ -195,5 +197,104 @@ describe("buildTraceTimeline", () => {
       title: "运行继续",
       summary: "Agent 已收到你的回答，继续执行。",
     });
+  });
+
+  it("shows restored tool calls instead of replay-only run boundaries", () => {
+    const dto: SessionConversationDto = {
+      sessionId: "thread-1",
+      messages: [],
+      runEventRefs: [],
+      toolCalls: [
+        {
+          runId: "run-1",
+          toolCallId: "schema-1",
+          status: "completed",
+          toolName: "inspect_schema",
+          callEventSeq: 1,
+          resultPreview: JSON.stringify({
+            tables: [{ name: "orders", columns: [{ name: "id", type: "INT" }] }],
+          }),
+        },
+        {
+          runId: "run-1",
+          toolCallId: "sql-1",
+          status: "completed",
+          toolName: "run_sql_readonly",
+          callEventSeq: 2,
+          resultPreview: JSON.stringify({ row_count: 12, elapsed_ms: 8 }),
+        },
+      ],
+    };
+
+    let run = createInitialLiveRun();
+    run = reduceLiveRunEvent(run, { type: "RUN_STARTED" });
+    run = reduceLiveRunEvent(run, {
+      type: "CUSTOM",
+      name: "artifact",
+      value: { id: "artifact-orphan", title: "旧产出", summary: "" },
+    });
+    run = reduceLiveRunEvent(run, { type: "RUN_FINISHED" });
+    run = reduceLiveRunEvent(run, { type: "RUN_STARTED" });
+    run = reduceLiveRunEvent(run, { type: "RUN_FINISHED" });
+
+    const corruptedEntries = buildTraceTimeline(run);
+    expect(corruptedEntries.every((entry) => entry.kind !== "tool")).toBe(true);
+    expect(corruptedEntries.filter((entry) => entry.kind === "run_started")).toHaveLength(2);
+
+    run = hydrateLiveRunFromConversation(run, dto);
+    const entries = buildTraceTimeline(run);
+
+    expect(entries.filter((entry) => entry.kind === "tool")).toHaveLength(2);
+    expect(entries.filter((entry) => entry.kind === "run_started")).toHaveLength(1);
+    expect(entries.filter((entry) => entry.kind === "run_finished")).toHaveLength(1);
+    expect(entries.find((entry) => entry.toolCallId === "schema-1")?.title).toBe(
+      "检查数据源 Schema",
+    );
+  });
+
+  it("interleaves tool calls between archived run segments", () => {
+    const run = {
+      ...createInitialLiveRun(),
+      runStatus: "completed" as const,
+      runStartedAt: 3_000,
+      runFinishedAt: 4_000,
+      runHistory: [
+        {
+          startedAt: 1_000,
+          finishedAt: 1_500,
+          status: "suspended" as const,
+          toolCallEndIndex: 1,
+          auditEndIndex: 0,
+        },
+        {
+          startedAt: 2_000,
+          finishedAt: 2_500,
+          status: "completed" as const,
+          toolCallEndIndex: 2,
+          auditEndIndex: 0,
+        },
+      ],
+      toolCalls: [
+        { id: "tc-ask", name: "ask_user", status: "success" as const },
+        { id: "tc-resume", name: "list_data_sources", status: "success" as const },
+        { id: "tc-sql", name: "run_sql_readonly", status: "success" as const },
+      ],
+    };
+
+    const entries = buildTraceTimeline(run);
+    const entryIndex = (id: string) => entries.findIndex((entry) => entry.id === id);
+
+    expect(entryIndex("run-history-0-started")).toBeGreaterThanOrEqual(0);
+    expect(entryIndex("run-history-0-suspended")).toBeGreaterThan(entryIndex("run-history-0-started"));
+    expect(entryIndex("tool-tc-ask")).toBeGreaterThan(entryIndex("run-history-0-started"));
+    expect(entryIndex("tool-tc-ask")).toBeLessThan(entryIndex("run-history-0-suspended"));
+
+    expect(entryIndex("run-history-1-started")).toBeGreaterThan(entryIndex("run-history-0-suspended"));
+    expect(entryIndex("tool-tc-resume")).toBeGreaterThan(entryIndex("run-history-1-started"));
+    expect(entryIndex("tool-tc-resume")).toBeLessThan(entryIndex("run-history-1-finished"));
+
+    expect(entryIndex("run-started-current")).toBeGreaterThan(entryIndex("run-history-1-finished"));
+    expect(entryIndex("tool-tc-sql")).toBeGreaterThan(entryIndex("run-started-current"));
+    expect(entryIndex("run-finished-current")).toBeGreaterThan(entryIndex("tool-tc-sql"));
   });
 });
