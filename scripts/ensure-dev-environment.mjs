@@ -1,16 +1,22 @@
 #!/usr/bin/env node
 /**
  * Validates the local dev environment before starting API/web.
- * Intended for WSL2 / Linux. Warns when npm was run from Windows against this tree.
+ * Supports Linux, Windows, and macOS — run npm install on the same OS you dev on.
  */
 import { execSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+import {
+  MIN_NODE_MAJOR,
+  detectMixedPlatformInstall,
+  localBinExists,
+  missingNativeCssPackages,
+  nodeVersionMessage,
+} from "./platform-hints.mjs";
 
-const MIN_NODE_MAJOR = 22;
+const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 
 function fail(message) {
   console.error(`\n[dev-env] ${message}\n`);
@@ -22,22 +28,17 @@ function warn(message) {
 }
 
 function run(command) {
-  execSync(command, { cwd: root, stdio: "inherit", env: process.env });
+  execSync(command, {
+    cwd: root,
+    stdio: "inherit",
+    env: process.env,
+    shell: true,
+  });
 }
 
 const nodeMajor = Number(process.versions.node.split(".")[0]);
 if (!Number.isFinite(nodeMajor) || nodeMajor < MIN_NODE_MAJOR) {
-  fail(
-    `Node.js ${MIN_NODE_MAJOR}+ required (current: ${process.versions.node}). ` +
-      "In WSL use: nvm use 22",
-  );
-}
-
-if (process.platform === "win32") {
-  fail(
-    "Detected Windows Node. Run npm and dev commands inside WSL2 (~/project/dataagent), " +
-      "not from PowerShell/CMD against the same directory.",
-  );
+  fail(nodeVersionMessage(process.versions.node));
 }
 
 if (!existsSync(join(root, "node_modules"))) {
@@ -45,30 +46,20 @@ if (!existsSync(join(root, "node_modules"))) {
 }
 
 for (const bin of ["tsx", "next"]) {
-  const localBin = join(root, "node_modules", ".bin", bin);
-  if (!existsSync(localBin)) {
+  if (!localBinExists(root, bin)) {
     fail(`${bin} not found in node_modules/.bin — run: npm install`);
   }
 }
 
-const linuxNativeHints = [
-  "@tailwindcss/oxide-linux-x64-gnu",
-  "lightningcss-linux-x64-gnu",
-];
-for (const pkg of linuxNativeHints) {
-  const pkgPath = join(root, "node_modules", pkg);
-  if (!existsSync(pkgPath)) {
-    warn(
-      `${pkg} missing — Tailwind/Next CSS may fail. Re-run npm install from WSL, ` +
-        "not from Windows npm.",
-    );
-  }
+const mixedInstall = detectMixedPlatformInstall(root);
+if (mixedInstall) {
+  warn(mixedInstall);
 }
 
-if (existsSync(join(root, "package-lock.json.win.bak"))) {
+for (const pkg of missingNativeCssPackages(root)) {
   warn(
-    "package-lock.json.win.bak detected — you may have run npm on Windows. " +
-      "Use WSL-only: rm package-lock.json.win.bak && npm install",
+    `${pkg} missing — Tailwind/Next CSS may fail. ` +
+      "Re-run npm install on this OS (do not mix Windows and WSL node_modules).",
   );
 }
 

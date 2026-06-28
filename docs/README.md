@@ -33,6 +33,7 @@ App 级约束见 [`apps/api/AGENTS.md`](../apps/api/AGENTS.md)、[`apps/web/AGEN
 
 | 文档 | 用途 | 状态 |
 | --- | --- | --- |
+| [快速开始](quick-start.md) | 面向外部用户：安装、配置模型 API Key、使用内置演示数据源体验工作台。 | Current |
 | [Repository README](../README.md) | 当前能力、运行和验证入口。 | Current |
 | [Backend Config Runtime Delivery Report](engineering/2026-06-23-backend-config-runtime-delivery-report.md) | 本轮配置管理、run config、MCP、Skill、KB、adapter 交付报告。 | Current |
 | [Backend REST API Reference](engineering/2026-06-23-backend-rest-api-reference.md) | 当前后端 REST 端点、请求和响应样例。 | Current |

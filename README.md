@@ -50,34 +50,43 @@ Current active workspace modules:
 
 ## Requirements
 
-- Node.js 22 or newer (use the same Node inside WSL — do not mix Windows and WSL `npm install`).
+- Node.js 22 or newer.
 - npm.
+
+Supported on **Linux**, **Windows**, and **macOS**. Run `npm install` on the **same OS** you use for
+development — do not share `node_modules` between Windows and WSL against the same project directory.
 
 Node's built-in `node:sqlite` is used by the local metadata store. On current Node versions it may print an
 `ExperimentalWarning`; that is expected for local MVP development.
 
-### WSL2 development (recommended)
-
-This repo is validated on **WSL2 Linux**. Treat the project directory as Linux-only for install and dev:
+### Install (all platforms)
 
 ```bash
-# Inside WSL (bash), not PowerShell/CMD
-export NVM_DIR="$HOME/.nvm" && . "$NVM_DIR/nvm.sh" && nvm use 22
-cd ~/project/dataagent
+# Linux / macOS / WSL
+node -v   # should be 22+
 npm install          # .npmrc enables legacy-peer-deps; postinstall runs tsc -b
 npm run dev          # builds packages, starts API + web
 ```
 
+```powershell
+# Windows (PowerShell or CMD — native Node, not WSL path)
+node -v   # should be 22+
+npm install
+npm run dev
+```
+
 | Symptom | Cause | Fix |
 | --- | --- | --- |
-| `tsx` / `next` not found | `node_modules` missing or Windows npm used | Run `npm install` **in WSL** |
+| `tsx` / `next` not found | `node_modules` missing or incomplete install | Run `npm install` on your current OS |
+| Mixed native module warnings | Windows and WSL shared one `node_modules` | Delete `node_modules` and `npm install` once on the OS you dev on |
 | `resolveSessionWorkspaceDir` export missing | `packages/*/dist` stale after pull/rebase | `npm run build` (automatic via `predev:api` / `npm run dev`) |
 | Turbopack font module error | Monorepo + `next dev --turbopack` | Default `dev:web` uses webpack; optional `npm run dev:turbo -w @open-data-agent/web` |
-| Tailwind / lightningcss native error | npm install run from Windows | Reinstall in WSL; root pins `*-linux-x64-gnu` optional natives |
+| Tailwind / lightningcss native error | Wrong OS binaries in `node_modules` | Remove `node_modules` and reinstall on your current platform |
 | npm peer dependency ERESOLVE | CopilotKit pre-release peers | `.npmrc` sets `legacy-peer-deps=true` |
 
-**Do not** run `npm install` from Windows against `\\wsl$\\...\\dataagent` — it produces a Windows lockfile
-and breaks Linux native modules. If you see `package-lock.json.win.bak`, delete it and reinstall in WSL.
+**WSL tip:** clone or keep the repo under the Linux filesystem (e.g. `~/project/dataagent`), not only under
+`/mnt/c/...`. Avoid running `npm install` from Windows against `\\wsl$\\...\\dataagent` — that installs
+Windows native modules into a tree you later use from Linux.
 
 ## Install
 
@@ -366,6 +375,7 @@ declared semver range. Remaining findings are low/moderate transitive dependency
 
 Start here:
 
+- [Quick Start (中文)](docs/quick-start.md) — install, configure LLM API key, and run your first data task
 - [Docs Index](docs/README.md) — includes **source-of-truth priority** for AI implementation
 - [CopilotKit / AG-UI Frontend Protocol Support](docs/engineering/copilotkit-ag-ui-frontend-protocol.md)
 - [Config Management REST API](docs/engineering/config-management-api.md)

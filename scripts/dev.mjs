@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Build workspace packages and start API + web dev servers (WSL/Linux).
+ * Build workspace packages and start API + web dev servers (Linux, Windows, macOS).
  *
  * Usage:
  *   npm run dev          # start both
@@ -22,17 +22,14 @@ execSync("node scripts/ensure-dev-environment.mjs", {
   cwd: root,
   stdio: "inherit",
   env: process.env,
+  shell: true,
 });
 
 for (const port of [8787, 3000]) {
   try {
-    execSync(`fuser -k ${port}/tcp 2>/dev/null || true`, {
-      cwd: root,
-      stdio: "ignore",
-      shell: true,
-    });
+    freePort(port);
   } catch {
-    // fuser may be unavailable; dev servers will fail loudly if ports stay busy.
+    // Port may already be free; dev servers will fail loudly if it stays busy.
   }
 }
 
@@ -40,20 +37,10 @@ for (const port of [8787, 3000]) {
 const children = [];
 
 if (startApi) {
-  const child = spawn("npm", ["--workspace", "@open-data-agent/api", "run", "dev"], {
-    cwd: root,
-    stdio: "inherit",
-    env: process.env,
-  });
-  children.push(child);
+  children.push(spawnNpm(["--workspace", "@open-data-agent/api", "run", "dev"]));
 }
 if (startWeb) {
-  const child = spawn("npm", ["--workspace", "@open-data-agent/web", "run", "dev"], {
-    cwd: root,
-    stdio: "inherit",
-    env: process.env,
-  });
-  children.push(child);
+  children.push(spawnNpm(["--workspace", "@open-data-agent/web", "run", "dev"]));
 }
 
 if (children.length === 0) {
@@ -84,5 +71,49 @@ for (const child of children) {
       shutdown("SIGTERM");
       process.exit(code);
     }
+  });
+}
+
+function spawnNpm(args) {
+  return spawn("npm", args, {
+    cwd: root,
+    stdio: "inherit",
+    env: process.env,
+    shell: true,
+  });
+}
+
+function freePort(port) {
+  if (process.platform === "win32") {
+    let output = "";
+    try {
+      output = execSync(`netstat -ano | findstr :${port}`, {
+        encoding: "utf8",
+        shell: true,
+        stdio: ["ignore", "pipe", "ignore"],
+      });
+    } catch {
+      return;
+    }
+
+    const pids = new Set();
+    for (const line of output.split(/\r?\n/u)) {
+      if (!/\bLISTENING\b/u.test(line)) continue;
+      const pid = line.trim().split(/\s+/u).at(-1);
+      if (pid && /^\d+$/u.test(pid) && pid !== "0") {
+        pids.add(pid);
+      }
+    }
+
+    for (const pid of pids) {
+      execSync(`taskkill /F /PID ${pid}`, { stdio: "ignore", shell: true });
+    }
+    return;
+  }
+
+  execSync(`fuser -k ${port}/tcp 2>/dev/null || true`, {
+    cwd: root,
+    stdio: "ignore",
+    shell: true,
   });
 }

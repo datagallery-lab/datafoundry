@@ -7,21 +7,43 @@ import { execSync } from "node:child_process";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import {
+  MIN_NODE_MAJOR,
+  detectMixedPlatformInstall,
+  missingNativeCssPackages,
+  nodeVersionMessage,
+} from "./platform-hints.mjs";
+
 if (process.env.SKIP_POSTINSTALL_BUILD === "1") {
   process.exit(0);
 }
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const nodeMajor = Number(process.versions.node.split(".")[0]);
-if (!Number.isFinite(nodeMajor) || nodeMajor < 22) {
-  console.warn(
-    `[postinstall] Node 22+ recommended (current ${process.versions.node}); skipping build.`,
-  );
+if (!Number.isFinite(nodeMajor) || nodeMajor < MIN_NODE_MAJOR) {
+  console.warn(`[postinstall] ${nodeVersionMessage(process.versions.node)} Skipping build.`);
   process.exit(0);
 }
 
+const mixedInstall = detectMixedPlatformInstall(root);
+if (mixedInstall) {
+  console.warn(`[postinstall] warning: ${mixedInstall}`);
+}
+
+for (const pkg of missingNativeCssPackages(root)) {
+  console.warn(
+    `[postinstall] warning: ${pkg} missing — if Next/Tailwind fails later, ` +
+      "remove node_modules and run npm install on this OS.",
+  );
+}
+
 try {
-  execSync("npm run build", { cwd: root, stdio: "inherit", env: process.env });
+  execSync("npm run build", {
+    cwd: root,
+    stdio: "inherit",
+    env: process.env,
+    shell: true,
+  });
 } catch {
   console.warn(
     "[postinstall] build failed — run `npm run build` manually before `npm run dev:api`.",
