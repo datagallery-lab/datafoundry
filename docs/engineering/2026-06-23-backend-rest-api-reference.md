@@ -276,7 +276,8 @@ SQL_BLOCKED, SQL_TIMEOUT, PROVIDER_CONFIG_MISSING, PROVIDER_RATE_LIMITED
 ### GET `/api/v1/datasource-types`
 
 返回 Data Gateway 当前支持的数据源类型 schema。前端可用 `enabled` 判断是否展示或取消
-「待后端」占位；未实现 adapter 不应标为 enabled。
+「待后端」占位；未实现 adapter 不应标为 enabled。完整数据库清单和字段说明见
+[Supported Databases](./supported-databases.md)。
 
 响应：
 
@@ -296,6 +297,17 @@ SQL_BLOCKED, SQL_TIMEOUT, PROVIDER_CONFIG_MISSING, PROVIDER_RATE_LIMITED
   ]
 }
 ```
+
+当前 `enabled=true` 的类型：
+
+```text
+duckdb, sqlite, csv, xlsx, postgresql, mysql, clickhouse, snowflake, bigquery,
+sqlserver, oracle, mongodb, gaussdb, access, redis, starrocks, trino, presto,
+spark, databricks, redshift, elasticsearch, opensearch, doris, mariadb, tidb,
+oceanbase, greenplum
+```
+
+前端应根据 `parameters[]` 动态渲染连接字段，不要硬编码旧类型集合。
 
 ## 4. Workspace 与 Run Defaults
 
@@ -524,7 +536,9 @@ Datasource DTO：
 ### POST `/api/v1/datasources`
 
 支持 `config`、`connection` 或 `settings` 作为连接配置输入。`password` 或
-`credentials` 会写入 secret store，不会出现在后续响应里。
+`credentials` 会写入 secret store，不会出现在后续响应里。各数据库类型需要的字段见
+[Supported Databases](./supported-databases.md)；调用方也可以实时读取
+`GET /api/v1/datasource-types` 的 `parameters[]`。
 
 请求：
 
@@ -557,6 +571,44 @@ Datasource DTO：
 ```
 
 响应：`201 Created`，data 为 Datasource DTO。
+
+最小创建示例：
+
+```bash
+curl -X POST http://127.0.0.1:8787/api/v1/datasources \
+  -H "Content-Type: application/json" \
+  -d '{
+    "id": "orders-duckdb",
+    "name": "Orders DuckDB",
+    "type": "duckdb",
+    "config": {
+      "mode": "file",
+      "path": "/absolute/path/orders.duckdb"
+    }
+  }'
+```
+
+带凭据的创建示例：
+
+```bash
+curl -X POST http://127.0.0.1:8787/api/v1/datasources \
+  -H "Content-Type: application/json" \
+  -d '{
+    "id": "sales-pg",
+    "name": "Sales PostgreSQL",
+    "type": "postgresql",
+    "config": {
+      "host": "127.0.0.1",
+      "port": 5432,
+      "database": "sales",
+      "schema": "public",
+      "username": "readonly"
+    },
+    "credentials": {
+      "password": "secret-password"
+    }
+  }'
+```
 
 策略消费边界：
 
@@ -686,6 +738,28 @@ Datasource DTO：
   }
 }
 ```
+
+### 在 agent run 中选择 datasource
+
+Datasource 的 SQL 执行不提供单独 REST API；前端通过 CopilotKit / AG-UI run input 选择 datasource，
+后端 agent 再经 `inspect_schema` / `run_sql_readonly` 工具访问 Data Gateway。
+
+推荐在 `forwardedProps.run_config` 中传：
+
+```json
+{
+  "threadId": "session-001",
+  "runId": "run-001",
+  "forwardedProps": {
+    "run_config": {
+      "activeDatasourceId": "sales-pg",
+      "enabledDatasourceIds": ["sales-pg"]
+    }
+  }
+}
+```
+
+兼容入口 `forwardedProps.datasourceId` 仍可用，但新代码优先使用 `run_config.activeDatasourceId`。
 
 ## 6. File Assets
 

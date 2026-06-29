@@ -4,17 +4,20 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { createServer as createHttpServer } from "node:http";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import duckdb from "duckdb";
 import writeXlsxFile from "write-excel-file/node";
 
 const stamp = Date.now();
 const root = `storage/data-gateway-smoke/${stamp}`;
 const metadataPath = `${root}/metadata.sqlite`;
 const sqlitePath = `${root}/orders.sqlite`;
+const duckdbPath = `${root}/orders.duckdb`;
 const csvPath = `${root}/orders.csv`;
 const xlsxPath = `${root}/orders.xlsx`;
 
 mkdirSync(root, { recursive: true });
 createSqliteFixture(sqlitePath);
+await createDuckDbFixture(duckdbPath);
 writeFileSync(
   csvPath,
   "order_id,channel,gmv\nc_001,search,1280\nc_002,social,640\nc_003,direct,920\n",
@@ -44,6 +47,13 @@ try {
     name: "SQLite Orders",
     type: "sqlite",
     config: { path: sqlitePath }
+  });
+  await gateway.registerDataSource({
+    user_id,
+    id: "duckdb-orders",
+    name: "DuckDB Orders",
+    type: "duckdb",
+    config: { mode: "file", path: duckdbPath }
   });
   await gateway.registerDataSource({
     user_id,
@@ -82,15 +92,23 @@ try {
   );
 
   const list = await gateway.listDataSources({ user_id });
-  assert(list.length === 5, `expected 5 data sources, got ${list.length}`);
+  assert(list.length === 6, `expected 6 data sources, got ${list.length}`);
   assert(!JSON.stringify(list).includes("file_path"), "data source list leaked config file_path");
 
-  for (const datasource_id of ["duckdb-demo", "sqlite-orders", "csv-orders", "xlsx-orders", "clickhouse-orders"]) {
+  for (const datasource_id of [
+    "duckdb-demo",
+    "duckdb-orders",
+    "sqlite-orders",
+    "csv-orders",
+    "xlsx-orders",
+    "clickhouse-orders"
+  ]) {
     const test = await gateway.testConnect({ user_id, datasource_id });
     assert(test.ok, `${datasource_id} test-connect failed`);
   }
 
   const duckdbSchema = await gateway.inspectSchema({ user_id, datasource_id: "duckdb-demo" });
+  const realDuckdbSchema = await gateway.inspectSchema({ user_id, datasource_id: "duckdb-orders" });
   const sqliteSchema = await gateway.inspectSchema({ user_id, datasource_id: "sqlite-orders" });
   const csvPreview = await gateway.previewTable({
     user_id,
@@ -119,6 +137,7 @@ try {
   });
 
   assert(duckdbSchema.tables.some((table) => table.name === "orders"), "duckdb orders schema missing");
+  assert(realDuckdbSchema.tables.some((table) => table.name === "orders"), "real duckdb orders schema missing");
   assert(sqliteSchema.tables.some((table) => table.name === "orders"), "sqlite orders schema missing");
   assert(clickHouseSchema.tables.some((table) => table.name === "orders"), "clickhouse orders schema missing");
   assert(csvPreview.row_count === 3, `expected 3 CSV rows, got ${csvPreview.row_count}`);
@@ -128,6 +147,7 @@ try {
 
   console.log(
     `Data Gateway smoke OK: sources=${list.length}, duckdb_tables=${duckdbSchema.tables.length}, ` +
+      `real_duckdb_tables=${realDuckdbSchema.tables.length}, ` +
       `sqlite_tables=${sqliteSchema.tables.length}, csv_rows=${csvPreview.row_count}, ` +
       `xlsx_rows=${xlsxPreview.row_count}, clickhouse_rows=${clickHouseSql.row_count}`
   );
@@ -195,6 +215,47 @@ function createSqliteFixture(path) {
   } finally {
     db.close();
   }
+}
+
+async function createDuckDbFixture(path) {
+  mkdirSync(dirname(path), { recursive: true });
+  const db = new duckdb.Database(path);
+  const connection = db.connect();
+
+  try {
+    await duckDbExec(connection, `
+      CREATE TABLE orders (
+        order_id VARCHAR,
+        channel VARCHAR,
+        gmv DOUBLE
+      );
+      INSERT INTO orders VALUES
+        ('d_001', 'search', 1280),
+        ('d_002', 'social', 640),
+        ('d_003', 'direct', 920);
+    `);
+  } finally {
+    await duckDbClose(connection);
+    await duckDbCloseDatabase(db);
+  }
+}
+
+async function duckDbExec(connection, sql) {
+  await new Promise((resolve, reject) => {
+    connection.exec(sql, (error) => error ? reject(error) : resolve());
+  });
+}
+
+async function duckDbClose(connection) {
+  await new Promise((resolve, reject) => {
+    connection.close((error) => error ? reject(error) : resolve());
+  });
+}
+
+async function duckDbCloseDatabase(db) {
+  await new Promise((resolve, reject) => {
+    db.close((error) => error ? reject(error) : resolve());
+  });
 }
 
 async function createXlsxFixture(path) {

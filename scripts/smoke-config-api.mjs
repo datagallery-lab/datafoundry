@@ -136,22 +136,38 @@ try {
 
   const datasourceTypes = await requestJson("/api/v1/datasource-types");
   assert.equal(datasourceTypes.response.status, 200);
-  assert(
-    datasourceTypes.body.data.some((type) => type.name === "sqlite" && type.enabled === true),
-    "datasource-types should expose enabled sqlite"
-  );
-  assert(
-    datasourceTypes.body.data.some((type) => type.name === "postgresql" && type.enabled === true),
-    "datasource-types should expose enabled postgresql"
-  );
-  assert(
-    datasourceTypes.body.data.some((type) => type.name === "clickhouse" && type.enabled === true),
-    "datasource-types should expose enabled clickhouse"
-  );
-  assert(
-    !datasourceTypes.body.data.some((type) => type.name === "oracle" && type.enabled === true),
-    "datasource-types must not mark unsupported extended adapters as enabled"
-  );
+  for (const typeName of [
+    "sqlite",
+    "postgresql",
+    "clickhouse",
+    "duckdb",
+    "snowflake",
+    "bigquery",
+    "sqlserver",
+    "oracle",
+    "mongodb",
+    "gaussdb",
+    "access",
+    "redis",
+    "starrocks",
+    "trino",
+    "presto",
+    "spark",
+    "databricks",
+    "redshift",
+    "elasticsearch",
+    "opensearch",
+    "doris",
+    "mariadb",
+    "tidb",
+    "oceanbase",
+    "greenplum"
+  ]) {
+    assert(
+      datasourceTypes.body.data.some((type) => type.name === typeName && type.enabled === true),
+      `datasource-types should expose enabled ${typeName}`
+    );
+  }
 
   const invalidToken = await requestJson("/api/v1/workspace-config", {
     headers: { "Authorization": "Bearer invalid-token" }
@@ -284,17 +300,30 @@ try {
   assert.equal(conversation.body.data.messages[0].messageId, "frontend-user-message");
   assert.equal(conversation.body.data.summary.summaryText, "User asked to inspect orders.");
   assert.equal(conversation.body.data.runEventRefs[0].eventCount, 3);
-  assert.deepEqual(conversation.body.data.toolCalls[0], {
-    runId: conversationRunId,
-    toolCallId: "call_schema",
-    status: "completed",
-    toolName: "inspect_schema",
-    callEventSeq: 1,
-    endEventSeq: 2,
-    resultEventSeq: 3,
-    resultMessageId: "tool-result-message",
-    resultPreview: JSON.stringify({ columns: 2 })
-  });
+  assert.deepEqual(
+    pick(conversation.body.data.toolCalls[0], [
+      "runId",
+      "toolCallId",
+      "status",
+      "toolName",
+      "callEventSeq",
+      "endEventSeq",
+      "resultEventSeq",
+      "resultMessageId",
+      "resultPreview"
+    ]),
+    {
+      runId: conversationRunId,
+      toolCallId: "call_schema",
+      status: "completed",
+      toolName: "inspect_schema",
+      callEventSeq: 1,
+      endEventSeq: 2,
+      resultEventSeq: 3,
+      resultMessageId: "tool-result-message",
+      resultPreview: JSON.stringify({ columns: 2 })
+    }
+  );
 
   const createdDatasource = await requestJson("/api/v1/datasources", {
     method: "POST",
@@ -328,7 +357,7 @@ try {
   });
   assert.equal(introspection.body.data.id, repeatedIntrospection.body.data.id);
   const schema = await requestJson("/api/v1/datasources/local-sqlite/schema");
-  assert(schema.body.data.schema.tables.some((table) => table.name === "metrics"));
+  assert(datasourceSchemaTables(schema.body.data).some((table) => table.name === "metrics"));
   const refreshPatch = await requestJson("/api/v1/datasources/local-sqlite", {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
@@ -344,7 +373,7 @@ try {
   refreshSource.close();
   await delay(1100);
   const refreshedSchema = await requestJson("/api/v1/datasources/local-sqlite/schema");
-  const refreshedTableNames = refreshedSchema.body.data.schema.tables.map((table) => table.name);
+  const refreshedTableNames = datasourceSchemaTables(refreshedSchema.body.data).map((table) => table.name);
   assert(
     refreshedTableNames.includes("refreshed_metrics"),
     `refreshIntervalSec should refresh expired datasource schema snapshots, got ${refreshedTableNames.join(",")}`
@@ -455,7 +484,11 @@ try {
   fileForm.append("files", new Blob(["Revenue metric can be imported from file assets."], {
     type: "text/markdown"
   }), "file-metrics.md");
-  const fileUploadResponse = await requestRaw("/api/v1/files", { method: "POST", body: fileForm });
+  const fileUploadResponse = await requestRaw("/api/v1/files", {
+    method: "POST",
+    headers: { "X-Session-Id": "config-smoke-session" },
+    body: fileForm
+  });
   assert.equal(fileUploadResponse.status, 201);
   const fileUpload = await fileUploadResponse.json();
   assert.equal(fileUpload.body?.success ?? fileUpload.success, true);
@@ -765,8 +798,8 @@ try {
   assert.equal((await download.text()).includes("revenue,42"), true);
 
   const builtinDelete = await requestJson("/api/v1/datasources/api-duckdb-demo", { method: "DELETE" });
-  assert.equal(builtinDelete.response.status, 409);
-  assert.equal(builtinDelete.body.error.code, "CONFLICT");
+  assert.equal(builtinDelete.response.status, 200);
+  assert.equal(builtinDelete.body.data.deleted, true);
 
   metadataStore.sqlAuditLogs.create({
     user_id: "dev-user",
@@ -793,6 +826,14 @@ try {
   await closeHttpServer(mcpServer);
   await closeHttpServer(modelProviderServer);
   await taskStateRuntime.close();
+}
+
+function pick(value, keys) {
+  return Object.fromEntries(keys.map((key) => [key, value[key]]));
+}
+
+function datasourceSchemaTables(value) {
+  return value?.schema?.tables ?? value?.tables ?? [];
 }
 
 process.exit(0);

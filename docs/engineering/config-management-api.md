@@ -199,7 +199,7 @@ Skill package materialization 均使用同一 `(user_id, workspace_id)`。产品
   "id": "sales-prod-readonly",
   "name": "Sales Prod (RO)",
   "description": "销售只读库",
-  "type": "duckdb | postgresql | mysql | clickhouse | sqlite | csv | xlsx",
+  "type": "duckdb | postgresql | mysql | clickhouse | sqlite | csv | xlsx | ...",
   "mode": "readonly",                 // 默认且强制只读，对齐 run_sql_readonly
   "connection": {
     "host": "...", "port": 5432, "database": "...", "schema": "public",
@@ -223,8 +223,8 @@ Skill package materialization 均使用同一 `(user_id, workspace_id)`。产品
 - `samplePolicy.allowSample=false` 会阻止预览采样；`maxSampleRows` 会压低 preview 行数上限。
 - `queryPolicy.denyWrite` 可保存用于策略表达；`run_sql_readonly` 始终强制只读，不会因为关闭该字段放开写 SQL。
 - 凭据走 `connection.secretRef`，不回传明文。
-- wire type 使用与 Data Gateway 相同的稳定枚举；BigQuery / Snowflake 在 adapter 设计落地前
-  不进入正式契约，避免无法兑现的类型长期固化。
+- wire type 使用与 Data Gateway 相同的稳定枚举；客户端应以 `/api/v1/datasource-types`
+  返回为准，不静态翻开未启用类型。
 - run 时前端只传 `forwardedProps.datasourceId`，后端凭 id 查 metadata store 后
   交给 Data Gateway tools（与现有 `extractDatasourceId` 衔接）。
 
@@ -237,20 +237,36 @@ Skill package materialization 均使用同一 `(user_id, workspace_id)`。产品
 前端以扁平 `settings` 键值存储，按 `type` 条件显示对应字段；BFF 写入时映射为上述
 嵌套模型。`*` 为必填。
 
-**重要：UI 只暴露后端 Data Gateway 当前真正能 adapt 的类型。** 经核实后端
-`createAdapter` 已实现 `duckdb`(demo) / `sqlite` / `csv` / `xlsx` /
-`postgresql` / `mysql` / `clickhouse`；Oracle / SQL Server / Hive / Spark / Vertica /
-`bigquery` / `snowflake` 无实现代码。因此前端当前可以恢复 PostgreSQL / MySQL / ClickHouse
-字段；其他扩展类型仍以 `/api/v1/datasource-types` 的 `enabled` 为准，不应被客户端静态翻开。
+**重要：UI 只暴露后端 Data Gateway 当前真正能 adapt 的类型。** 当前后端
+`createAdapter` 已实现 `duckdb`(demo + 文件) / `sqlite` / `csv` / `xlsx` /
+`postgresql` / `mysql` / `clickhouse` / `snowflake` / `bigquery` / `sqlserver` /
+`oracle` / `mongodb` / `gaussdb` / `access` / `redis` / `starrocks` / `trino` /
+`presto` / `spark` / `databricks` / `redshift` / `elasticsearch` / `opensearch` /
+`doris` / `mariadb` / `tidb` / `oceanbase` / `greenplum`。其他扩展类型仍以
+`/api/v1/datasource-types` 的 `enabled` 为准，不应被客户端静态翻开。完整字段、示例和使用流程见
+[Supported Databases](./supported-databases.md)。
 
 | type | UI 当前显示字段 | 状态 |
 | --- | --- | --- |
-| `duckdb` | `datasourceId`* `type`* `mode`(只读) | ✅ 已实现（内置 demo） |
+| `duckdb` | `datasourceId`* `type`* `mode`(只读) `path`/`filePath` | ✅ 已实现（内置 demo + 真实 DuckDB 文件） |
 | `sqlite` / `csv` / `xlsx` | 上述 + `filePath`* | ✅ 已实现（文件） |
 | `postgresql` / `mysql` | `host`* `port`* `database`* `schema` `username`* `password` | ✅ adapter 已实现，需真实 DB 集成验证 |
 | `clickhouse` | `host`* `port`* `database`* `username` `password` `secure` | ✅ adapter 已实现，需真实 ClickHouse 集成验证 |
-| `bigquery` | `projectId`* `dataset`* `credentialsJson` | 🚧 无实现，UI 不显示 |
-| `snowflake` | `account`* `warehouse`* `database`* `username`* `password` | 🚧 无实现，UI 不显示 |
+| `snowflake` | `account`* `warehouse`* `database`* `schema` `role` `username`* `password` | ✅ adapter 已实现，需真实 Snowflake 验证 |
+| `bigquery` | `projectId`* `dataset`* `location` `credentialsJson`/`keyFilename` | ✅ adapter 已实现，需真实 BigQuery 验证 |
+| `sqlserver` | `host`* `port`* `database`* `schema` `username`* `password` `encrypt` `trustServerCertificate` | ✅ adapter 已实现，需真实 SQL Server 验证 |
+| `oracle` | `connectString`* `schema` `username`* `password` | ✅ adapter 已实现，需真实 Oracle 验证 |
+| `mongodb` | `uri`* `database`* `sampleSize` | ✅ adapter 已实现；`run_sql_readonly` 支持简单 `SELECT ... FROM collection [LIMIT n]` |
+| `gaussdb` | `host`* `port`* `database`* `schema` `username`* `password` | ✅ PostgreSQL 协议兼容 adapter |
+| `access` | `connectionString` 或 `path`/`filePath` | ✅ ODBC adapter；运行环境需要 Access ODBC driver |
+| `redis` | `url`* `database` `keyPattern` | ✅ adapter 已实现；暴露 `redis_keys` 伪表 |
+| `starrocks` | `host`* `port`* `database`* `schema` `username`* `password` | ✅ MySQL 协议兼容 adapter |
+| `trino` / `presto` | `host`* `port`* `catalog`* `schema` `username` `password` `secure` | ✅ REST 协议 adapter |
+| `spark` | `host`* `port`* `catalog` `schema` `transport` `auth` `username` `password` | ✅ Spark Thrift Server / HiveServer2 协议 adapter |
+| `databricks` | `host`* `path`* 或 `warehouseId`，`token`* `catalog` `schema` | ✅ Databricks SQL Warehouse REST adapter |
+| `redshift` / `greenplum` | `host`* `port`* `database`* `schema` `username`* `password` | ✅ PostgreSQL 协议兼容 adapter |
+| `doris` / `mariadb` / `tidb` / `oceanbase` | `host`* `port`* `database`* `schema` `username`* `password` | ✅ MySQL 协议兼容 adapter |
+| `elasticsearch` / `opensearch` | `node`/`url` 或 `host`+`port`，`indexPattern` `username` `password`/`apiKey` | ✅ index-as-table read-only adapter |
 
 `GET /api/v1/datasource-types` 返回后端当前 Data Gateway 类型 schema：
 
@@ -271,7 +287,8 @@ Skill package materialization 均使用同一 `(user_id, workspace_id)`。产品
 ```
 
 前端应以 `enabled` 作为动态展示/占位依据；未落地的扩展 adapter 不得由后端标成 enabled。
-当前 ClickHouse 已落地并返回 `enabled: true`，其他扩展类型仍未启用。
+当前已启用类型的完整清单以 [Supported Databases](./supported-databases.md) 和
+`GET /api/v1/datasource-types` 的实时响应为准。
 
 其余四类同样按"后端已有能力"裁剪 UI 暴露面（完整契约仍保留在本文档各资源模型）：
 

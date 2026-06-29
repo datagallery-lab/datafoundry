@@ -294,10 +294,10 @@ BigQuery / Snowflake 可第二批。类型启用后 `supportTypes()` / capabilit
 
 | 项    | 内容                                                                                                                                                                                                                                                                                                                                                                                     |
 | ---- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 状态   | 部分完成                                                                                                                                                                                                                                                                                                                                                                                   |
-| 当前边界 | ClickHouse 第一批 adapter 已实现：HTTP JSON 只读连接、`testConnect`、`inspectSchema`、`previewTable`、`run_sql_readonly` 统一走 Data Gateway SQL guard / limit / timeout / mask / allowlist 策略；`/api/v1/datasource-types` 对 ClickHouse 返回 `enabled: true`，capabilities 返回 `datasource.extendedTypes: true`。Oracle / SQL Server / Hive / Spark / Vertica / BigQuery / Snowflake 仍未实现，前端应继续显示“待后端”或不展示为可用。 |
-| 分批计划 | 第二批建议做 Oracle / SQL Server；第三批做 Hive / Spark / Vertica。BigQuery / Snowflake 需要云凭据与成本策略，放第二阶段之后。                                                                                                                                                                                                                                                                                        |
-| 本轮边界 | 已用本地 fake ClickHouse HTTP server 覆盖 schema / preview / readonly SQL smoke；真实 ClickHouse 实例 E2E 保留为可选入口：配置 `ODA_E2E_CLICKHOUSE_`* 后，`npm run smoke:server-datasources` 会执行真实 ClickHouse `create → test → introspect → schema → inspectSchema → runSqlReadonly`。                                                                                                                         |
+| 状态   | 已扩展完成                                                                                                                                                                                                                                                                                                                                                                                   |
+| 当前边界 | Data Gateway 已新增真实 DuckDB 文件、Snowflake、BigQuery、SQL Server、Oracle、MongoDB、GaussDB、Access/ODBC、Redis、StarRocks、Trino、Presto、Spark SQL、Databricks SQL、Redshift、Elasticsearch、OpenSearch、Doris、MariaDB、TiDB、OceanBase、Greenplum adapter；所有 `run_sql_readonly` 仍统一经过 SQL guard / limit / timeout / mask / allowlist / audit 策略。MongoDB 通过简单 `SELECT ... FROM collection [LIMIT n]` 映射到只读 find；Redis 暴露 `redis_keys` 伪表；Elasticsearch / OpenSearch 暴露 index-as-table 只读能力；Access 依赖运行环境提供 Access ODBC driver。Hive 独立 adapter / Vertica 暂缓。 |
+| 分批计划 | 下一批如需要可继续接 Hive 独立 adapter / Vertica，并补外部真实服务 E2E 凭据入口。                                                                                                                                                                                                                                                                                        |
+| 本轮边界 | 已用本地 fake ClickHouse HTTP server 覆盖 schema / preview / readonly SQL smoke，并新增真实 DuckDB 文件 smoke。外部 SaaS / 企业数据库当前完成 adapter 与类型验证，真实服务 E2E 需要后续提供测试实例或凭据。                                                                                                                         |
 | 验证   | `npm run smoke:data-gateway` 覆盖 fake ClickHouse adapter；`npm run smoke:config-api` 覆盖 `/api/v1/datasource-types` 与 capability 暴露。                                                                                                                                                                                                                                                      |
 
 
@@ -486,7 +486,7 @@ MCP envelope；result-size 治理只作用于下一轮模型可见 context，不
 | 项        | 内容                                                                                                                                                                                                                                                                                                      |
 | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 状态       | 已完成                                                                                                                                                                                                                                                                                                     |
-| API 草案链接 | `GET /api/v1/datasource-types` 已实现，返回 Data Gateway `supportTypes()` 的 `name` / `label` / `enabled` / `description` / `parameters[]`。当前已实现 adapter 才标 enabled：DuckDB / SQLite / CSV / XLSX / PostgreSQL / MySQL / ClickHouse；其他扩展类型不标 enabled。详见 [config-management-api.md](./config-management-api.md)。 |
+| API 草案链接 | `GET /api/v1/datasource-types` 已实现，返回 Data Gateway `supportTypes()` 的 `name` / `label` / `enabled` / `description` / `parameters[]`。当前已实现 adapter 才标 enabled：DuckDB(demo + 文件) / SQLite / CSV / XLSX / PostgreSQL / MySQL / ClickHouse / Snowflake / BigQuery / SQL Server / Oracle / MongoDB / GaussDB / Access / Redis / StarRocks / Trino / Presto / Spark SQL / Databricks SQL / Redshift / Elasticsearch / OpenSearch / Doris / MariaDB / TiDB / OceanBase / Greenplum。详见 [config-management-api.md](./config-management-api.md)。 |
 | 验证       | `npm run smoke:config-api` 覆盖 `/api/v1/datasource-types`；`npm --workspace @open-data-agent/web run test -- config-api-adapter chat-capabilities` 覆盖前端 adapter / capability 映射。                                                                                                                          |
 
 
@@ -498,15 +498,15 @@ MCP envelope；result-size 治理只作用于下一轮模型可见 context，不
 均已按当前后端/前端联调口径完成。R-003 的真实外部 PG/MySQL E2E 不纳入本轮强制验收，
 但 adapter、REST、capability 与可选 E2E 入口已就绪。
 
-仍保留为部分完成的只有 R-008 与 R-010：R-008 当前只启用 ClickHouse，Oracle / SQL Server /
-Hive / Spark / Vertica / BigQuery / Snowflake 不在本轮；R-010 已补齐半生效字段与 chunk policy，
+仍保留为部分完成的只有 R-008 与 R-010：R-008 已启用当前第一优先级 native adapter，
+Vertica / Hive 独立 adapter 与外部真实环境 E2E 暂缓；R-010 已补齐半生效字段与 chunk policy，
 外部 vectorStore、rerank、graphRAG 暂缓。
 
 ## 建议排期顺序
 
 旧排期已完成收口，后续只保留两个方向：
 
-1. **DB 扩展 adapter**：按产品优先级继续实现 Oracle / SQL Server / Hive / Spark / Vertica 等。
+1. **DB 扩展 adapter**：按产品优先级继续实现 Hive 独立 adapter / Vertica，并补真实外部服务 E2E。
 2. **KB B 档能力**：外部 vectorStore、rerank、graphRAG 等高级 RAG 能力后续单独排期。
 
 ## 变更记录
