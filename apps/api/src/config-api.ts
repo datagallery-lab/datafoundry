@@ -2563,7 +2563,7 @@ const normalizeDatasourceConfig = (
   config: Record<string, unknown>
 ): Record<string, unknown> => {
   const filePath = stringValue(config.filePath) ?? stringValue(config.file_path);
-  if (type === "sqlite" && filePath) {
+  if ((type === "sqlite" || type === "duckdb" || type === "access") && filePath) {
     return { ...config, path: filePath, filePath: undefined, file_path: undefined };
   }
   if ((type === "csv" || type === "xlsx") && filePath) {

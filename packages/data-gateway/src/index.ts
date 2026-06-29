@@ -9,8 +9,48 @@ import { DatabaseSync } from "node:sqlite";
 import { createConnection, type Connection, type RowDataPacket } from "mysql2/promise";
 import { Pool, type PoolClient } from "pg";
 import readXlsxFile from "read-excel-file/node";
+import type * as BigQueryModule from "@google-cloud/bigquery";
+import type * as DuckDbModule from "duckdb";
+import type * as ElasticSearchModule from "@elastic/elasticsearch";
+import type * as HiveDriverModule from "hive-driver";
+import type * as MongoDbModule from "mongodb";
+import type * as MsSqlModule from "mssql";
+import type * as OdbcModule from "odbc";
+import type * as OpenSearchModule from "@opensearch-project/opensearch";
+import type * as OracleDbModule from "oracledb";
+import type * as RedisModule from "redis";
+import type * as SnowflakeModule from "snowflake-sdk";
 
-export type DataSourceType = "duckdb" | "sqlite" | "csv" | "xlsx" | "postgresql" | "mysql" | string;
+export type DataSourceType =
+  | "duckdb"
+  | "sqlite"
+  | "csv"
+  | "xlsx"
+  | "postgresql"
+  | "mysql"
+  | "clickhouse"
+  | "snowflake"
+  | "bigquery"
+  | "sqlserver"
+  | "oracle"
+  | "mongodb"
+  | "gaussdb"
+  | "access"
+  | "redis"
+  | "starrocks"
+  | "trino"
+  | "presto"
+  | "spark"
+  | "databricks"
+  | "redshift"
+  | "elasticsearch"
+  | "opensearch"
+  | "doris"
+  | "mariadb"
+  | "tidb"
+  | "oceanbase"
+  | "greenplum"
+  | string;
 
 export type ConfigurableParam = {
   name: string;
@@ -266,7 +306,7 @@ export class LocalDataGateway implements DataGateway {
       const adapter = this.createAdapter(dataSource, workspaceId);
       const result = await withTimeout(
         adapter.runSqlReadonly({
-          sql: applyLimit(guard.normalized_sql, limit),
+          sql: guard.normalized_sql,
           limit,
           signal: input.signal
         }),
@@ -422,8 +462,11 @@ const SUPPORTED_DATA_SOURCE_TYPES: SupportedDataSourceType[] = [
     name: "duckdb",
     enabled: true,
     label: "DuckDB",
-    description: "Local analytical datasource. Day 3 supports schema and preview for demo/local datasets.",
-    parameters: [{ name: "mode", label: "Mode", type: "select", required: false, options: ["demo"] }]
+    description: "Local analytical datasource. Supports the built-in demo mode and real DuckDB database files.",
+    parameters: [
+      { name: "mode", label: "Mode", type: "select", required: false, options: ["demo", "file"] },
+      { name: "path", label: "Database Path", type: "file", required: false }
+    ]
   },
   {
     name: "sqlite",
@@ -473,6 +516,199 @@ const SUPPORTED_DATA_SOURCE_TYPES: SupportedDataSourceType[] = [
       { name: "password", label: "Password", type: "password", required: false },
       { name: "secure", label: "Use HTTPS", type: "boolean", required: false, default_value: false }
     ]
+  },
+  {
+    name: "snowflake",
+    enabled: true,
+    label: "Snowflake",
+    description: "Snowflake read-only datasource.",
+    parameters: [
+      { name: "account", label: "Account", type: "string", required: true },
+      { name: "warehouse", label: "Warehouse", type: "string", required: true },
+      { name: "database", label: "Database", type: "string", required: true },
+      { name: "schema", label: "Schema", type: "string", required: false, default_value: "PUBLIC" },
+      { name: "role", label: "Role", type: "string", required: false },
+      { name: "username", label: "Username", type: "string", required: true },
+      { name: "password", label: "Password", type: "password", required: true }
+    ]
+  },
+  {
+    name: "bigquery",
+    enabled: true,
+    label: "BigQuery",
+    description: "Google BigQuery read-only datasource.",
+    parameters: [
+      { name: "projectId", label: "Project ID", type: "string", required: true },
+      { name: "dataset", label: "Dataset", type: "string", required: true },
+      { name: "location", label: "Location", type: "string", required: false },
+      { name: "credentialsJson", label: "Credentials JSON", type: "password", required: false },
+      { name: "keyFilename", label: "Key File", type: "file", required: false }
+    ]
+  },
+  {
+    name: "sqlserver",
+    enabled: true,
+    label: "SQL Server",
+    description: "Microsoft SQL Server read-only datasource.",
+    parameters: serverDatabaseParameters(1433)
+  },
+  {
+    name: "oracle",
+    enabled: true,
+    label: "Oracle",
+    description: "Oracle Database read-only datasource.",
+    parameters: [
+      { name: "connectString", label: "Connect String", type: "string", required: true },
+      { name: "schema", label: "Schema", type: "string", required: false },
+      { name: "username", label: "Username", type: "string", required: true },
+      { name: "password", label: "Password", type: "password", required: true }
+    ]
+  },
+  {
+    name: "mongodb",
+    enabled: true,
+    label: "MongoDB",
+    description: "MongoDB read-only datasource with simple SELECT-to-find mapping.",
+    parameters: [
+      { name: "uri", label: "URI", type: "password", required: true },
+      { name: "database", label: "Database", type: "string", required: true },
+      { name: "sampleSize", label: "Schema Sample Size", type: "number", required: false, default_value: 20 }
+    ]
+  },
+  {
+    name: "gaussdb",
+    enabled: true,
+    label: "GaussDB",
+    description: "GaussDB PostgreSQL-compatible read-only datasource.",
+    parameters: serverDatabaseParameters(5432)
+  },
+  {
+    name: "access",
+    enabled: true,
+    label: "Microsoft Access",
+    description: "Microsoft Access read-only datasource over ODBC.",
+    parameters: [
+      { name: "connectionString", label: "ODBC Connection String", type: "password", required: false },
+      { name: "path", label: "Access File Path", type: "file", required: false }
+    ]
+  },
+  {
+    name: "redis",
+    enabled: true,
+    label: "Redis",
+    description: "Redis read-only keyspace datasource exposed as the redis_keys pseudo table.",
+    parameters: [
+      { name: "url", label: "URL", type: "password", required: true },
+      { name: "keyPattern", label: "Key Pattern", type: "string", required: false, default_value: "*" },
+      { name: "database", label: "Database", type: "number", required: false, default_value: 0 }
+    ]
+  },
+  {
+    name: "starrocks",
+    enabled: true,
+    label: "StarRocks",
+    description: "StarRocks MySQL-compatible read-only datasource.",
+    parameters: serverDatabaseParameters(9030)
+  },
+  {
+    name: "trino",
+    enabled: true,
+    label: "Trino",
+    description: "Trino read-only datasource over the Trino REST API.",
+    parameters: trinoLikeParameters(8080)
+  },
+  {
+    name: "presto",
+    enabled: true,
+    label: "Presto",
+    description: "Presto read-only datasource over the Presto REST API.",
+    parameters: trinoLikeParameters(8080)
+  },
+  {
+    name: "spark",
+    enabled: true,
+    label: "Spark SQL",
+    description: "Spark Thrift Server read-only datasource over HiveServer2 protocol.",
+    parameters: [
+      { name: "host", label: "Host", type: "string", required: true },
+      { name: "port", label: "Port", type: "number", required: true, default_value: 10000 },
+      { name: "catalog", label: "Catalog", type: "string", required: false },
+      { name: "schema", label: "Schema", type: "string", required: false, default_value: "default" },
+      { name: "transport", label: "Transport", type: "select", required: false, options: ["tcp", "http"] },
+      { name: "auth", label: "Auth", type: "select", required: false, options: ["none", "plain"] },
+      { name: "username", label: "Username", type: "string", required: false },
+      { name: "password", label: "Password", type: "password", required: false }
+    ]
+  },
+  {
+    name: "databricks",
+    enabled: true,
+    label: "Databricks SQL",
+    description: "Databricks SQL Warehouse read-only datasource.",
+    parameters: [
+      { name: "host", label: "Host", type: "string", required: true },
+      { name: "path", label: "HTTP Path", type: "string", required: true },
+      { name: "warehouseId", label: "Warehouse ID", type: "string", required: false },
+      { name: "token", label: "Token", type: "password", required: true },
+      { name: "catalog", label: "Catalog", type: "string", required: false },
+      { name: "schema", label: "Schema", type: "string", required: false }
+    ]
+  },
+  {
+    name: "redshift",
+    enabled: true,
+    label: "Amazon Redshift",
+    description: "Amazon Redshift PostgreSQL-compatible read-only datasource.",
+    parameters: serverDatabaseParameters(5439)
+  },
+  {
+    name: "elasticsearch",
+    enabled: true,
+    label: "Elasticsearch",
+    description: "Elasticsearch read-only datasource with index-as-table mapping.",
+    parameters: searchIndexParameters()
+  },
+  {
+    name: "opensearch",
+    enabled: true,
+    label: "OpenSearch",
+    description: "OpenSearch read-only datasource with index-as-table mapping.",
+    parameters: searchIndexParameters()
+  },
+  {
+    name: "doris",
+    enabled: true,
+    label: "Apache Doris",
+    description: "Apache Doris MySQL-compatible read-only datasource.",
+    parameters: serverDatabaseParameters(9030)
+  },
+  {
+    name: "mariadb",
+    enabled: true,
+    label: "MariaDB",
+    description: "MariaDB MySQL-compatible read-only datasource.",
+    parameters: serverDatabaseParameters(3306)
+  },
+  {
+    name: "tidb",
+    enabled: true,
+    label: "TiDB",
+    description: "TiDB MySQL-compatible read-only datasource.",
+    parameters: serverDatabaseParameters(4000)
+  },
+  {
+    name: "oceanbase",
+    enabled: true,
+    label: "OceanBase",
+    description: "OceanBase MySQL-compatible read-only datasource.",
+    parameters: serverDatabaseParameters(2881)
+  },
+  {
+    name: "greenplum",
+    enabled: true,
+    label: "Greenplum",
+    description: "Greenplum PostgreSQL-compatible read-only datasource.",
+    parameters: serverDatabaseParameters(5432)
   }
 ];
 
@@ -496,7 +732,7 @@ const createAdapter = (
   }
 
   if (dataSource.type === "duckdb") {
-    return new DuckDbDemoAdapter(config);
+    return stringConfig(config, "mode", "file") === "demo" ? new DuckDbDemoAdapter(config) : new DuckDbAdapter(config);
   }
 
   if (dataSource.type === "postgresql") {
@@ -509,6 +745,90 @@ const createAdapter = (
 
   if (dataSource.type === "clickhouse") {
     return new ClickHouseAdapter(config);
+  }
+
+  if (dataSource.type === "snowflake") {
+    return new SnowflakeAdapter(config);
+  }
+
+  if (dataSource.type === "bigquery") {
+    return new BigQueryAdapter(config);
+  }
+
+  if (dataSource.type === "sqlserver") {
+    return new SqlServerAdapter(config);
+  }
+
+  if (dataSource.type === "oracle") {
+    return new OracleAdapter(config);
+  }
+
+  if (dataSource.type === "mongodb") {
+    return new MongoDbAdapter(config);
+  }
+
+  if (dataSource.type === "gaussdb") {
+    return new GaussDbAdapter(config);
+  }
+
+  if (dataSource.type === "access") {
+    return new AccessAdapter(config);
+  }
+
+  if (dataSource.type === "redis") {
+    return new RedisAdapter(config);
+  }
+
+  if (dataSource.type === "starrocks") {
+    return new StarRocksAdapter(config);
+  }
+
+  if (dataSource.type === "trino") {
+    return new TrinoAdapter(config);
+  }
+
+  if (dataSource.type === "presto") {
+    return new PrestoAdapter(config);
+  }
+
+  if (dataSource.type === "spark") {
+    return new SparkSqlAdapter(config);
+  }
+
+  if (dataSource.type === "databricks") {
+    return new DatabricksSqlAdapter(config);
+  }
+
+  if (dataSource.type === "redshift") {
+    return new RedshiftAdapter(config);
+  }
+
+  if (dataSource.type === "elasticsearch") {
+    return new ElasticsearchAdapter(config);
+  }
+
+  if (dataSource.type === "opensearch") {
+    return new OpenSearchAdapter(config);
+  }
+
+  if (dataSource.type === "doris") {
+    return new DorisAdapter(config);
+  }
+
+  if (dataSource.type === "mariadb") {
+    return new MariaDbAdapter(config);
+  }
+
+  if (dataSource.type === "tidb") {
+    return new TiDbAdapter(config);
+  }
+
+  if (dataSource.type === "oceanbase") {
+    return new OceanBaseAdapter(config);
+  }
+
+  if (dataSource.type === "greenplum") {
+    return new GreenplumAdapter(config);
   }
 
   throw new Error(`Unsupported data source type: ${dataSource.type}`);
@@ -541,7 +861,7 @@ class PostgreSqlAdapter implements DataSourceAdapter {
 
   async runSqlReadonly(input: AdapterSqlInput): Promise<TableResult> {
     throwIfAborted(input.signal);
-    return rowsToTableResult(await this.query(input.sql, [], input.signal));
+    return rowsToTableResult(await this.query(applyStandardLimit(input.sql, input.limit), [], input.signal));
   }
 
   private async query(
@@ -610,7 +930,7 @@ class MySqlAdapter implements DataSourceAdapter {
 
   async runSqlReadonly(input: AdapterSqlInput): Promise<TableResult> {
     throwIfAborted(input.signal);
-    return rowsToTableResult(await this.query(input.sql, [], input.signal));
+    return rowsToTableResult(await this.query(applyStandardLimit(input.sql, input.limit), [], input.signal));
   }
 
   private async query(
@@ -684,7 +1004,7 @@ class ClickHouseAdapter implements DataSourceAdapter {
 
   async runSqlReadonly(input: AdapterSqlInput): Promise<TableResult> {
     throwIfAborted(input.signal);
-    return rowsToTableResult(await this.query(input.sql, input.signal));
+    return rowsToTableResult(await this.query(applyStandardLimit(input.sql, input.limit), input.signal));
   }
 
   private async query(sql: string, signal?: AbortSignal | undefined): Promise<Record<string, unknown>[]> {
@@ -729,6 +1049,243 @@ class ClickHouseAdapter implements DataSourceAdapter {
       "X-ClickHouse-User": username,
       ...(password ? { "X-ClickHouse-Key": password } : {})
     };
+  }
+}
+
+class SnowflakeAdapter implements DataSourceAdapter {
+  constructor(private readonly config: Record<string, unknown>) {}
+
+  async inspectSchema(input: AdapterExecutionInput = {}): Promise<Omit<SchemaSummary, "datasource_id">> {
+    throwIfAborted(input.signal);
+    const schema = stringConfig(this.config, "schema", "PUBLIC");
+    const rows = await this.query(`
+      SELECT table_name, column_name, data_type, is_nullable
+      FROM information_schema.columns
+      WHERE table_schema = ?
+      ORDER BY table_name, ordinal_position
+    `, [schema.toUpperCase()], input.signal);
+    return schemaRowsToSummary(rows, "TABLE_NAME", "COLUMN_NAME", "DATA_TYPE", "IS_NULLABLE");
+  }
+
+  async previewTable(input: AdapterPreviewInput): Promise<TableResult> {
+    throwIfAborted(input.signal);
+    const schema = stringConfig(this.config, "schema", "PUBLIC");
+    return rowsToTableResult(await this.query(
+      `SELECT * FROM ${quoteSnowflakeIdentifier(schema)}.${quoteSnowflakeIdentifier(input.table)} LIMIT ?`,
+      [input.limit],
+      input.signal
+    ));
+  }
+
+  async runSqlReadonly(input: AdapterSqlInput): Promise<TableResult> {
+    throwIfAborted(input.signal);
+    return rowsToTableResult(await this.query(applyStandardLimit(input.sql, input.limit), [], input.signal));
+  }
+
+  private async query(
+    sql: string,
+    binds: SnowflakeModule.Binds = [],
+    signal?: AbortSignal | undefined
+  ): Promise<Record<string, unknown>[]> {
+    const snowflake = await loadSnowflake();
+    const connection = snowflake.createConnection({
+      account: stringConfig(this.config, "account"),
+      username: stringConfig(this.config, "username"),
+      password: stringConfig(this.config, "password"),
+      warehouse: stringConfig(this.config, "warehouse"),
+      database: stringConfig(this.config, "database"),
+      schema: stringConfig(this.config, "schema", "PUBLIC"),
+      ...optionalConfigString(this.config, "role", "role"),
+      timeout: numberConfig(this.config, "timeoutMs", 30000)
+    });
+    try {
+      await snowflakeConnect(connection, signal);
+      return await snowflakeExecute(connection, sql, binds, signal);
+    } finally {
+      await snowflakeDestroy(connection);
+    }
+  }
+}
+
+class BigQueryAdapter implements DataSourceAdapter {
+  constructor(private readonly config: Record<string, unknown>) {}
+
+  async inspectSchema(input: AdapterExecutionInput = {}): Promise<Omit<SchemaSummary, "datasource_id">> {
+    throwIfAborted(input.signal);
+    const dataset = stringConfig(this.config, "dataset");
+    const rows = await this.query(`
+      SELECT table_name, column_name, data_type, is_nullable
+      FROM ${quoteBigQueryIdentifier(this.projectId(), dataset, "INFORMATION_SCHEMA.COLUMNS")}
+      ORDER BY table_name, ordinal_position
+    `, input.signal);
+    return schemaRowsToSummary(rows, "table_name", "column_name", "data_type", "is_nullable");
+  }
+
+  async previewTable(input: AdapterPreviewInput): Promise<TableResult> {
+    throwIfAborted(input.signal);
+    return rowsToTableResult(await this.query(
+      `SELECT * FROM ${quoteBigQueryIdentifier(this.projectId(), stringConfig(this.config, "dataset"), input.table)}
+       LIMIT ${input.limit}`,
+      input.signal
+    ));
+  }
+
+  async runSqlReadonly(input: AdapterSqlInput): Promise<TableResult> {
+    throwIfAborted(input.signal);
+    return rowsToTableResult(await this.query(applyStandardLimit(input.sql, input.limit), input.signal));
+  }
+
+  private projectId(): string {
+    return stringConfig(this.config, "projectId");
+  }
+
+  private async query(sql: string, signal?: AbortSignal | undefined): Promise<Record<string, unknown>[]> {
+    throwIfAborted(signal);
+    const bigquery = await loadBigQuery();
+    const credentialsJson = optionalStringConfig(this.config, "credentialsJson");
+    const keyFilename = optionalStringConfig(this.config, "keyFilename");
+    const client = new bigquery.BigQuery({
+      projectId: this.projectId(),
+      ...(credentialsJson ? { credentials: JSON.parse(credentialsJson) as Record<string, unknown> } : {}),
+      ...(keyFilename ? { keyFilename } : {})
+    });
+    const location = optionalStringConfig(this.config, "location");
+    const queryOptions: BigQueryModule.Query = {
+      query: sql,
+      useLegacySql: false,
+      ...(location ? { location } : {})
+    };
+    const [rows] = await client.query(queryOptions) as unknown as [unknown[]];
+    throwIfAborted(signal);
+    return rows.filter(isRecord);
+  }
+}
+
+class SqlServerAdapter implements DataSourceAdapter {
+  constructor(protected readonly config: Record<string, unknown>) {}
+
+  async inspectSchema(input: AdapterExecutionInput = {}): Promise<Omit<SchemaSummary, "datasource_id">> {
+    throwIfAborted(input.signal);
+    const schema = stringConfig(this.config, "schema", "dbo");
+    const rows = await this.query(`
+      SELECT table_name, column_name, data_type, is_nullable
+      FROM information_schema.columns
+      WHERE table_schema = @schema
+      ORDER BY table_name, ordinal_position
+    `, { schema }, input.signal);
+    return schemaRowsToSummary(rows, "TABLE_NAME", "COLUMN_NAME", "DATA_TYPE", "IS_NULLABLE");
+  }
+
+  async previewTable(input: AdapterPreviewInput): Promise<TableResult> {
+    throwIfAborted(input.signal);
+    const schema = stringConfig(this.config, "schema", "dbo");
+    return rowsToTableResult(await this.query(
+      `SELECT TOP (${input.limit}) * FROM ${quoteSqlServerIdentifier(schema)}.${quoteSqlServerIdentifier(input.table)}`,
+      {},
+      input.signal
+    ));
+  }
+
+  async runSqlReadonly(input: AdapterSqlInput): Promise<TableResult> {
+    throwIfAborted(input.signal);
+    return rowsToTableResult(await this.query(applyTopLimit(input.sql, input.limit), {}, input.signal));
+  }
+
+  protected async query(
+    sql: string,
+    parameters: Record<string, string | number>,
+    signal?: AbortSignal | undefined
+  ): Promise<Record<string, unknown>[]> {
+    const mssql = await loadMsSql();
+    const pool = new mssql.ConnectionPool({
+      server: stringConfig(this.config, "host"),
+      port: numberConfig(this.config, "port", 1433),
+      database: stringConfig(this.config, "database"),
+      user: stringConfig(this.config, "username"),
+      password: stringConfig(this.config, "password"),
+      requestTimeout: numberConfig(this.config, "timeoutMs", 30000),
+      connectionTimeout: numberConfig(this.config, "timeoutMs", 30000),
+      options: {
+        encrypt: booleanConfig(this.config, "encrypt", true),
+        trustServerCertificate: booleanConfig(this.config, "trustServerCertificate", false),
+        readOnlyIntent: true
+      }
+    });
+    const abort = (): void => {
+      void pool.close().catch(() => undefined);
+    };
+    try {
+      signal?.addEventListener("abort", abort, { once: true });
+      await pool.connect();
+      throwIfAborted(signal);
+      const request = pool.request();
+      Object.entries(parameters).forEach(([key, value]) => request.input(key, value));
+      const result = await request.query(sql);
+      throwIfAborted(signal);
+      return result.recordset.filter(isRecord);
+    } finally {
+      signal?.removeEventListener("abort", abort);
+      await pool.close();
+    }
+  }
+}
+
+class OracleAdapter implements DataSourceAdapter {
+  constructor(private readonly config: Record<string, unknown>) {}
+
+  async inspectSchema(input: AdapterExecutionInput = {}): Promise<Omit<SchemaSummary, "datasource_id">> {
+    throwIfAborted(input.signal);
+    const schema = stringConfig(this.config, "schema", stringConfig(this.config, "username")).toUpperCase();
+    const rows = await this.query(`
+      SELECT table_name, column_name, data_type, nullable AS is_nullable
+      FROM all_tab_columns
+      WHERE owner = :schema
+      ORDER BY table_name, column_id
+    `, { schema }, input.signal);
+    return schemaRowsToSummary(rows, "TABLE_NAME", "COLUMN_NAME", "DATA_TYPE", "IS_NULLABLE");
+  }
+
+  async previewTable(input: AdapterPreviewInput): Promise<TableResult> {
+    throwIfAborted(input.signal);
+    const schema = stringConfig(this.config, "schema", stringConfig(this.config, "username"));
+    return rowsToTableResult(await this.query(
+      `SELECT * FROM ${quoteOracleIdentifier(schema)}.${quoteOracleIdentifier(input.table)} WHERE ROWNUM <= :limit`,
+      { limit: input.limit },
+      input.signal
+    ));
+  }
+
+  async runSqlReadonly(input: AdapterSqlInput): Promise<TableResult> {
+    throwIfAborted(input.signal);
+    return rowsToTableResult(await this.query(applyRowNumLimit(input.sql, input.limit), {}, input.signal));
+  }
+
+  private async query(
+    sql: string,
+    bindParams: Record<string, string | number>,
+    signal?: AbortSignal | undefined
+  ): Promise<Record<string, unknown>[]> {
+    const oracle = await loadOracleDb();
+    const connection = await oracle.getConnection({
+      user: stringConfig(this.config, "username"),
+      password: stringConfig(this.config, "password"),
+      connectString: stringConfig(this.config, "connectString")
+    });
+    const abort = (): void => {
+      void connection.break();
+    };
+    try {
+      signal?.addEventListener("abort", abort, { once: true });
+      const result = await connection.execute(sql, bindParams, {
+        outFormat: oracle.OUT_FORMAT_OBJECT,
+        maxRows: numberConfig(this.config, "maxRows", 1000)
+      });
+      throwIfAborted(signal);
+      return Array.isArray(result.rows) ? result.rows.filter(isRecord) : [];
+    } finally {
+      signal?.removeEventListener("abort", abort);
+      await connection.close();
+    }
   }
 }
 
@@ -782,7 +1339,7 @@ class SQLiteAdapter implements DataSourceAdapter {
     const database = this.open();
 
     try {
-      const rows = database.prepare(input.sql).all();
+      const rows = database.prepare(applyStandardLimit(input.sql, input.limit)).all();
       return rowsToTableResult(rows);
     } finally {
       database.close();
@@ -792,6 +1349,47 @@ class SQLiteAdapter implements DataSourceAdapter {
   private open(): DatabaseSync {
     const path = stringConfig(this.config, "path");
     return new DatabaseSync(path);
+  }
+}
+
+class DuckDbAdapter implements DataSourceAdapter {
+  constructor(private readonly config: Record<string, unknown>) {}
+
+  async inspectSchema(input: AdapterExecutionInput = {}): Promise<Omit<SchemaSummary, "datasource_id">> {
+    throwIfAborted(input.signal);
+    const rows = await this.query(`
+      SELECT table_name, column_name, data_type, is_nullable
+      FROM information_schema.columns
+      WHERE table_schema = 'main'
+      ORDER BY table_name, ordinal_position
+    `, input.signal);
+    return schemaRowsToSummary(rows, "table_name", "column_name", "data_type", "is_nullable");
+  }
+
+  async previewTable(input: AdapterPreviewInput): Promise<TableResult> {
+    throwIfAborted(input.signal);
+    return rowsToTableResult(await this.query(
+      `SELECT * FROM ${quoteIdentifier(input.table)} LIMIT ${input.limit}`,
+      input.signal
+    ));
+  }
+
+  async runSqlReadonly(input: AdapterSqlInput): Promise<TableResult> {
+    throwIfAborted(input.signal);
+    return rowsToTableResult(await this.query(applyStandardLimit(input.sql, input.limit), input.signal));
+  }
+
+  private async query(sql: string, signal?: AbortSignal | undefined): Promise<Record<string, unknown>[]> {
+    const duckdb = await loadDuckDb();
+    const database = new duckdb.Database(stringConfig(this.config, "path", ":memory:"));
+    const connection = database.connect();
+    try {
+      const rows = await duckDbAll(connection, sql, signal);
+      return rows.filter(isRecord);
+    } finally {
+      await duckDbClose(connection);
+      await duckDbCloseDatabase(database);
+    }
   }
 }
 
@@ -824,6 +1422,495 @@ class DuckDbDemoAdapter implements DataSourceAdapter {
   async runSqlReadonly(input: AdapterSqlInput): Promise<TableResult> {
     throwIfAborted(input.signal);
     return executeSimpleSelectOnTables(demoTables(this.config), input.sql, input.limit);
+  }
+}
+
+class MongoDbAdapter implements DataSourceAdapter {
+  constructor(private readonly config: Record<string, unknown>) {}
+
+  async inspectSchema(input: AdapterExecutionInput = {}): Promise<Omit<SchemaSummary, "datasource_id">> {
+    throwIfAborted(input.signal);
+    return await this.withDb(async (db) => {
+      const collections = await db.listCollections().toArray();
+      const sampleSize = numberConfig(this.config, "sampleSize", 20);
+      const tables = [];
+      for (const collectionInfo of collections.filter(isRecord)) {
+        const name = requiredRecordString(collectionInfo, "name");
+        const rows = await db.collection(name).find({}, { limit: sampleSize }).toArray();
+        tables.push({
+          name,
+          columns: inferDocumentColumns(rows.filter(isRecord))
+        });
+      }
+      return { tables };
+    }, input.signal);
+  }
+
+  async previewTable(input: AdapterPreviewInput): Promise<TableResult> {
+    throwIfAborted(input.signal);
+    return await this.withDb(async (db) => {
+      const rows = await db.collection(input.table).find({}, { limit: input.limit }).toArray();
+      return rowsToTableResult(rows.filter(isRecord).map(flattenDocument));
+    }, input.signal);
+  }
+
+  async runSqlReadonly(input: AdapterSqlInput): Promise<TableResult> {
+    throwIfAborted(input.signal);
+    const query = parseLimitedSimpleSelect(input.sql, input.limit);
+    return await this.withDb(async (db) => {
+      const rows = await db.collection(query.table).find({}, {
+        limit: query.limit,
+        projection: query.columns.length > 0 ? Object.fromEntries(query.columns.map((column) => [column, 1])) : {}
+      }).toArray();
+      return rowsToTableResult(rows.filter(isRecord).map(flattenDocument));
+    }, input.signal);
+  }
+
+  private async withDb<T>(
+    callback: (db: MongoDbModule.Db) => Promise<T>,
+    signal?: AbortSignal | undefined
+  ): Promise<T> {
+    const mongodb = await loadMongoDb();
+    const client = new mongodb.MongoClient(stringConfig(this.config, "uri"), {
+      serverSelectionTimeoutMS: numberConfig(this.config, "timeoutMs", 30000)
+    });
+    const abort = (): void => {
+      void client.close(true);
+    };
+    try {
+      signal?.addEventListener("abort", abort, { once: true });
+      await client.connect();
+      throwIfAborted(signal);
+      return await callback(client.db(stringConfig(this.config, "database")));
+    } finally {
+      signal?.removeEventListener("abort", abort);
+      await client.close();
+    }
+  }
+}
+
+class GaussDbAdapter extends PostgreSqlAdapter {}
+
+class AccessAdapter implements DataSourceAdapter {
+  constructor(private readonly config: Record<string, unknown>) {}
+
+  async inspectSchema(input: AdapterExecutionInput = {}): Promise<Omit<SchemaSummary, "datasource_id">> {
+    throwIfAborted(input.signal);
+    return await this.withConnection(async (connection) => {
+      const tableRows = await connection.tables(null, null, null, "TABLE");
+      const tables = [];
+      for (const row of tableRows.filter(isRecord)) {
+        const tableName = odbcString(row, ["TABLE_NAME", "table_name"]);
+        if (!tableName) {
+          continue;
+        }
+        const columnRows = await connection.columns(null, null, tableName, null);
+        tables.push({
+          name: tableName,
+          columns: columnRows.filter(isRecord).map((column) => ({
+            name: odbcString(column, ["COLUMN_NAME", "column_name"]) ?? "",
+            type: odbcString(column, ["TYPE_NAME", "type_name", "DATA_TYPE", "data_type"]) ?? "TEXT",
+            nullable: odbcNullable(column)
+          }))
+        });
+      }
+      return { tables };
+    }, input.signal);
+  }
+
+  async previewTable(input: AdapterPreviewInput): Promise<TableResult> {
+    throwIfAborted(input.signal);
+    return rowsToTableResult(await this.query(
+      `SELECT TOP ${input.limit} * FROM ${quoteAccessIdentifier(input.table)}`,
+      input.signal
+    ));
+  }
+
+  async runSqlReadonly(input: AdapterSqlInput): Promise<TableResult> {
+    throwIfAborted(input.signal);
+    return rowsToTableResult(await this.query(applyAccessLimit(input.sql, input.limit), input.signal));
+  }
+
+  private async query(sql: string, signal?: AbortSignal | undefined): Promise<Record<string, unknown>[]> {
+    return await this.withConnection(async (connection) => {
+      const rows = await connection.query<Record<string, unknown>>(sql);
+      return rows.filter(isRecord);
+    }, signal);
+  }
+
+  private async withConnection<T>(
+    callback: (connection: OdbcModule.Connection) => Promise<T>,
+    signal?: AbortSignal | undefined
+  ): Promise<T> {
+    const odbc = await loadOdbc();
+    const connection = await odbc.connect({
+      connectionString: accessConnectionString(this.config),
+      connectionTimeout: numberConfig(this.config, "timeoutMs", 30000) / 1000,
+      loginTimeout: numberConfig(this.config, "timeoutMs", 30000) / 1000
+    });
+    const abort = (): void => {
+      void connection.close();
+    };
+    try {
+      signal?.addEventListener("abort", abort, { once: true });
+      await connection.setIsolationLevel(odbc.SQL_TXN_READ_COMMITTED);
+      throwIfAborted(signal);
+      return await callback(connection);
+    } finally {
+      signal?.removeEventListener("abort", abort);
+      await connection.close();
+    }
+  }
+}
+
+class RedisAdapter implements DataSourceAdapter {
+  constructor(private readonly config: Record<string, unknown>) {}
+
+  async inspectSchema(input: AdapterExecutionInput = {}): Promise<Omit<SchemaSummary, "datasource_id">> {
+    throwIfAborted(input.signal);
+    return {
+      tables: [
+        {
+          name: "redis_keys",
+          columns: [
+            { name: "key", type: "TEXT", nullable: false },
+            { name: "type", type: "TEXT", nullable: false },
+            { name: "ttl", type: "INTEGER", nullable: true },
+            { name: "value", type: "TEXT", nullable: true }
+          ]
+        }
+      ]
+    };
+  }
+
+  async previewTable(input: AdapterPreviewInput): Promise<TableResult> {
+    if (input.table !== "redis_keys") {
+      throw new Error(`Table not found: ${input.table}`);
+    }
+    return await this.readKeys(input.limit, input.signal);
+  }
+
+  async runSqlReadonly(input: AdapterSqlInput): Promise<TableResult> {
+    const query = parseLimitedSimpleSelect(input.sql, input.limit);
+    if (query.table !== "redis_keys") {
+      throw new Error(`Table not found: ${query.table}`);
+    }
+    return await this.readKeys(query.limit, input.signal);
+  }
+
+  private async readKeys(limit: number, signal?: AbortSignal | undefined): Promise<TableResult> {
+    const redis = await loadRedis();
+    const client = redis.createClient({
+      url: stringConfig(this.config, "url"),
+      database: numberConfig(this.config, "database", 0)
+    }) as RedisReadonlyClient;
+    const abort = (): void => {
+      void client.disconnect();
+    };
+    try {
+      signal?.addEventListener("abort", abort, { once: true });
+      await client.connect();
+      const rows: Record<string, unknown>[] = [];
+      const pattern = stringConfig(this.config, "keyPattern", "*");
+      for await (const batch of client.scanIterator({ MATCH: pattern, COUNT: Math.max(limit, 10) })) {
+        const keys = Array.isArray(batch) ? batch : [batch];
+        for (const key of keys) {
+          if (rows.length >= limit) {
+            return rowsToTableResult(rows);
+          }
+          rows.push(await this.redisKeyRow(client, key));
+        }
+      }
+      return rowsToTableResult(rows);
+    } finally {
+      signal?.removeEventListener("abort", abort);
+      await client.quit();
+    }
+  }
+
+  private async redisKeyRow(client: RedisReadonlyClient, key: string): Promise<Record<string, unknown>> {
+    const type = await client.type(key);
+    const ttl = await client.ttl(key);
+    return {
+      key,
+      type,
+      ttl,
+      value: await redisPreviewValue(client, key, type)
+    };
+  }
+}
+
+class StarRocksAdapter extends MySqlAdapter {}
+
+class RedshiftAdapter extends PostgreSqlAdapter {}
+
+class GreenplumAdapter extends PostgreSqlAdapter {}
+
+class DorisAdapter extends MySqlAdapter {}
+
+class MariaDbAdapter extends MySqlAdapter {}
+
+class TiDbAdapter extends MySqlAdapter {}
+
+class OceanBaseAdapter extends MySqlAdapter {}
+
+class TrinoAdapter implements DataSourceAdapter {
+  constructor(private readonly config: Record<string, unknown>) {}
+
+  async inspectSchema(input: AdapterExecutionInput = {}): Promise<Omit<SchemaSummary, "datasource_id">> {
+    throwIfAborted(input.signal);
+    const schema = stringConfig(this.config, "schema", "default");
+    const rows = await this.query(`
+      SELECT table_name, column_name, data_type, is_nullable
+      FROM information_schema.columns
+      WHERE table_schema = ${sqlLiteral(schema)}
+      ORDER BY table_name, ordinal_position
+    `, input.signal);
+    return schemaRowsToSummary(rows, "table_name", "column_name", "data_type", "is_nullable");
+  }
+
+  async previewTable(input: AdapterPreviewInput): Promise<TableResult> {
+    throwIfAborted(input.signal);
+    const catalog = stringConfig(this.config, "catalog");
+    const schema = stringConfig(this.config, "schema", "default");
+    return rowsToTableResult(await this.query(
+      `SELECT * FROM ${quoteTrinoIdentifier(catalog)}.${quoteTrinoIdentifier(schema)}.${quoteTrinoIdentifier(input.table)}
+       LIMIT ${input.limit}`,
+      input.signal
+    ));
+  }
+
+  async runSqlReadonly(input: AdapterSqlInput): Promise<TableResult> {
+    throwIfAborted(input.signal);
+    return rowsToTableResult(await this.query(applyStandardLimit(input.sql, input.limit), input.signal));
+  }
+
+  private async query(sql: string, signal?: AbortSignal | undefined): Promise<Record<string, unknown>[]> {
+    return await queryTrinoCompatible(this.config, sql, "trino", signal);
+  }
+}
+
+class PrestoAdapter implements DataSourceAdapter {
+  constructor(private readonly config: Record<string, unknown>) {}
+
+  async inspectSchema(input: AdapterExecutionInput = {}): Promise<Omit<SchemaSummary, "datasource_id">> {
+    throwIfAborted(input.signal);
+    const schema = stringConfig(this.config, "schema", "default");
+    const rows = await this.query(`
+      SELECT table_name, column_name, data_type, is_nullable
+      FROM information_schema.columns
+      WHERE table_schema = ${sqlLiteral(schema)}
+      ORDER BY table_name, ordinal_position
+    `, input.signal);
+    return schemaRowsToSummary(rows, "table_name", "column_name", "data_type", "is_nullable");
+  }
+
+  async previewTable(input: AdapterPreviewInput): Promise<TableResult> {
+    throwIfAborted(input.signal);
+    const catalog = stringConfig(this.config, "catalog");
+    const schema = stringConfig(this.config, "schema", "default");
+    return rowsToTableResult(await this.query(
+      `SELECT * FROM ${quoteTrinoIdentifier(catalog)}.${quoteTrinoIdentifier(schema)}.${quoteTrinoIdentifier(input.table)}
+       LIMIT ${input.limit}`,
+      input.signal
+    ));
+  }
+
+  async runSqlReadonly(input: AdapterSqlInput): Promise<TableResult> {
+    throwIfAborted(input.signal);
+    return rowsToTableResult(await this.query(applyStandardLimit(input.sql, input.limit), input.signal));
+  }
+
+  private async query(sql: string, signal?: AbortSignal | undefined): Promise<Record<string, unknown>[]> {
+    return await queryTrinoCompatible(this.config, sql, "presto", signal);
+  }
+}
+
+class SparkSqlAdapter implements DataSourceAdapter {
+  constructor(private readonly config: Record<string, unknown>) {}
+
+  async inspectSchema(input: AdapterExecutionInput = {}): Promise<Omit<SchemaSummary, "datasource_id">> {
+    throwIfAborted(input.signal);
+    const catalog = optionalStringConfig(this.config, "catalog");
+    const schema = stringConfig(this.config, "schema", "default");
+    return await this.withSession(async (hive, session) => {
+      const operation = await session.getColumns({
+        ...(catalog ? { catalogName: catalog } : {}),
+        schemaName: schema,
+        tableName: "%",
+        columnName: "%"
+      });
+      const rows = await sparkOperationRows(hive, operation, input.signal);
+      return schemaRowsToSummary(rows, "TABLE_NAME", "COLUMN_NAME", "TYPE_NAME", "IS_NULLABLE");
+    }, input.signal);
+  }
+
+  async previewTable(input: AdapterPreviewInput): Promise<TableResult> {
+    throwIfAborted(input.signal);
+    const catalog = optionalStringConfig(this.config, "catalog");
+    const schema = stringConfig(this.config, "schema", "default");
+    const table = [catalog, schema, input.table].filter((part): part is string => Boolean(part))
+      .map(quoteTrinoIdentifier).join(".");
+    return rowsToTableResult(await this.query(`SELECT * FROM ${table} LIMIT ${input.limit}`, input.signal));
+  }
+
+  async runSqlReadonly(input: AdapterSqlInput): Promise<TableResult> {
+    throwIfAborted(input.signal);
+    return rowsToTableResult(await this.query(applyStandardLimit(input.sql, input.limit), input.signal));
+  }
+
+  private async query(sql: string, signal?: AbortSignal | undefined): Promise<Record<string, unknown>[]> {
+    return await this.withSession(async (hive, session) => {
+      const operation = await session.executeStatement(sql, {
+        runAsync: true,
+        confOverlay: new Map([["spark.sql.thriftServer.interruptOnCancel", "true"]])
+      });
+      return await sparkOperationRows(hive, operation, signal);
+    }, signal);
+  }
+
+  private async withSession<T>(
+    callback: (hive: typeof HiveDriverModule, session: HiveSessionLike) => Promise<T>,
+    signal?: AbortSignal | undefined
+  ): Promise<T> {
+    const hive = await loadHiveDriver();
+    const client = new hive.HiveClient(hive.thrift.TCLIService, hive.thrift.TCLIService_types);
+    const connection = stringConfig(this.config, "transport", "tcp") === "http"
+      ? new hive.connections.HttpConnection()
+      : new hive.connections.TcpConnection();
+    const auth = sparkAuthProvider(hive, this.config);
+    const abort = (): void => {
+      client.close();
+    };
+    let session: HiveSessionLike | undefined;
+    try {
+      signal?.addEventListener("abort", abort, { once: true });
+      await client.connect(sparkConnectionOptions(this.config) as never, connection, auth as never);
+      throwIfAborted(signal);
+      session = await client.openSession({
+        client_protocol: hive.thrift.TCLIService_types.TProtocolVersion.HIVE_CLI_SERVICE_PROTOCOL_V10,
+        ...optionalConfigString(this.config, "username")
+      });
+      return await callback(hive, session);
+    } finally {
+      signal?.removeEventListener("abort", abort);
+      await session?.close().catch(() => undefined);
+      client.close();
+    }
+  }
+}
+
+class DatabricksSqlAdapter implements DataSourceAdapter {
+  constructor(private readonly config: Record<string, unknown>) {}
+
+  async inspectSchema(input: AdapterExecutionInput = {}): Promise<Omit<SchemaSummary, "datasource_id">> {
+    throwIfAborted(input.signal);
+    const schema = stringConfig(this.config, "schema", "default");
+    const rows = await this.query(`
+      SELECT table_name, column_name, data_type, is_nullable
+      FROM information_schema.columns
+      WHERE table_schema = ${sqlLiteral(schema)}
+      ORDER BY table_name, ordinal_position
+    `, input.signal);
+    return schemaRowsToSummary(rows, "table_name", "column_name", "data_type", "is_nullable");
+  }
+
+  async previewTable(input: AdapterPreviewInput): Promise<TableResult> {
+    throwIfAborted(input.signal);
+    const catalog = optionalStringConfig(this.config, "catalog");
+    const schema = stringConfig(this.config, "schema", "default");
+    const table = [catalog, schema, input.table].filter((part): part is string => Boolean(part))
+      .map(quoteTrinoIdentifier).join(".");
+    return rowsToTableResult(await this.query(`SELECT * FROM ${table} LIMIT ${input.limit}`, input.signal));
+  }
+
+  async runSqlReadonly(input: AdapterSqlInput): Promise<TableResult> {
+    throwIfAborted(input.signal);
+    return rowsToTableResult(await this.query(applyStandardLimit(input.sql, input.limit), input.signal));
+  }
+
+  private async query(sql: string, signal?: AbortSignal | undefined): Promise<Record<string, unknown>[]> {
+    return await queryDatabricksSql(this.config, sql, signal);
+  }
+}
+
+class ElasticsearchAdapter implements DataSourceAdapter {
+  constructor(private readonly config: Record<string, unknown>) {}
+
+  async inspectSchema(input: AdapterExecutionInput = {}): Promise<Omit<SchemaSummary, "datasource_id">> {
+    throwIfAborted(input.signal);
+    const elasticsearch = await loadElasticSearch();
+    const client = new elasticsearch.Client(searchClientOptions(this.config));
+    const mappings = await client.indices.getMapping({ index: searchIndexPattern(this.config) });
+    return searchMappingsToSchema(mappings as unknown);
+  }
+
+  async previewTable(input: AdapterPreviewInput): Promise<TableResult> {
+    throwIfAborted(input.signal);
+    return await this.search(input.table, input.limit, input.signal);
+  }
+
+  async runSqlReadonly(input: AdapterSqlInput): Promise<TableResult> {
+    throwIfAborted(input.signal);
+    const query = parseLimitedSimpleSelect(input.sql, input.limit);
+    return await this.search(query.table, query.limit, input.signal, query.columns);
+  }
+
+  private async search(
+    index: string,
+    limit: number,
+    signal?: AbortSignal | undefined,
+    columns: string[] = []
+  ): Promise<TableResult> {
+    const elasticsearch = await loadElasticSearch();
+    const client = new elasticsearch.Client(searchClientOptions(this.config));
+    const result = await client.search({
+      index,
+      size: limit,
+      _source: columns.length > 0 ? columns : true,
+      query: { match_all: {} }
+    }, signal ? ({ signal } as never) : undefined);
+    return searchHitsToTableResult(result as unknown);
+  }
+}
+
+class OpenSearchAdapter implements DataSourceAdapter {
+  constructor(private readonly config: Record<string, unknown>) {}
+
+  async inspectSchema(input: AdapterExecutionInput = {}): Promise<Omit<SchemaSummary, "datasource_id">> {
+    throwIfAborted(input.signal);
+    const opensearch = await loadOpenSearch();
+    const client = new opensearch.Client(searchClientOptions(this.config));
+    const mappings = await client.indices.getMapping({ index: searchIndexPattern(this.config) });
+    return searchMappingsToSchema(mappings as unknown);
+  }
+
+  async previewTable(input: AdapterPreviewInput): Promise<TableResult> {
+    throwIfAborted(input.signal);
+    return await this.search(input.table, input.limit, input.signal);
+  }
+
+  async runSqlReadonly(input: AdapterSqlInput): Promise<TableResult> {
+    throwIfAborted(input.signal);
+    const query = parseLimitedSimpleSelect(input.sql, input.limit);
+    return await this.search(query.table, query.limit, input.signal, query.columns);
+  }
+
+  private async search(
+    index: string,
+    limit: number,
+    signal?: AbortSignal | undefined,
+    columns: string[] = []
+  ): Promise<TableResult> {
+    const opensearch = await loadOpenSearch();
+    const client = new opensearch.Client(searchClientOptions(this.config));
+    const result = await client.search({
+      index,
+      size: limit,
+      _source: columns.length > 0 ? columns : true,
+      body: { query: { match_all: {} } }
+    }, signal ? ({ signal } as never) : undefined);
+    return searchHitsToTableResult(result as unknown);
   }
 }
 
@@ -1060,6 +2147,29 @@ function serverDatabaseParameters(defaultPort: number): ConfigurableParam[] {
   ];
 }
 
+function trinoLikeParameters(defaultPort: number): ConfigurableParam[] {
+  return [
+    { name: "host", label: "Host", type: "string", required: true },
+    { name: "port", label: "Port", type: "number", required: true, default_value: defaultPort },
+    { name: "catalog", label: "Catalog", type: "string", required: true },
+    { name: "schema", label: "Schema", type: "string", required: false, default_value: "default" },
+    { name: "username", label: "Username", type: "string", required: false },
+    { name: "password", label: "Password", type: "password", required: false },
+    { name: "secure", label: "Use HTTPS", type: "boolean", required: false, default_value: false }
+  ];
+}
+
+function searchIndexParameters(): ConfigurableParam[] {
+  return [
+    { name: "node", label: "Node URL", type: "password", required: false },
+    { name: "url", label: "Node URL", type: "password", required: false },
+    { name: "indexPattern", label: "Index Pattern", type: "string", required: false, default_value: "*" },
+    { name: "username", label: "Username", type: "string", required: false },
+    { name: "password", label: "Password", type: "password", required: false },
+    { name: "apiKey", label: "API Key", type: "password", required: false }
+  ];
+}
+
 const stringConfig = (config: Record<string, unknown>, key: string, defaultValue?: string): string => {
   const value = config[key];
 
@@ -1077,6 +2187,11 @@ const stringConfig = (config: Record<string, unknown>, key: string, defaultValue
 const optionalStringConfig = (config: Record<string, unknown>, key: string): string | undefined => {
   const value = config[key];
   return typeof value === "string" && value.length > 0 ? value : undefined;
+};
+
+const optionalConfigString = (config: Record<string, unknown>, key: string, targetKey = key): Record<string, string> => {
+  const value = optionalStringConfig(config, key);
+  return value ? { [targetKey]: value } : {};
 };
 
 const numberConfig = (config: Record<string, unknown>, key: string, defaultValue: number): number => {
@@ -1101,6 +2216,27 @@ const requiredRecordString = (row: unknown, key: string): string => {
   }
 
   return row[key];
+};
+
+const requiredRecordStringLoose = (row: unknown, key: string): string => {
+  if (!isRecord(row)) {
+    throw new Error(`Expected string column: ${key}`);
+  }
+  const value = row[key] ?? row[key.toUpperCase()] ?? row[key.toLowerCase()];
+  if (typeof value !== "string") {
+    throw new Error(`Expected string column: ${key}`);
+  }
+  return value;
+};
+
+const odbcString = (row: Record<string, unknown>, keys: string[]): string | undefined => {
+  const value = keys.map((key) => row[key]).find((candidate) => typeof candidate === "string");
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+};
+
+const odbcNullable = (row: Record<string, unknown>): boolean => {
+  const value = row.NULLABLE ?? row.nullable;
+  return value === true || value === 1 || value === "1" || value === "YES";
 };
 
 const requiredRecordNumber = (row: unknown, key: string): number => {
@@ -1140,13 +2276,594 @@ const writeSqlResultCsv = (auditId: string, result: TableResult): string => {
   return path;
 };
 
+type RedisReadonlyClient = {
+  connect(): Promise<unknown>;
+  disconnect(): Promise<unknown>;
+  quit(): Promise<unknown>;
+  scanIterator(input: { COUNT: number; MATCH: string }): AsyncIterable<string[] | string>;
+  type(key: string): Promise<string>;
+  ttl(key: string): Promise<number>;
+  get(key: string): Promise<string | null>;
+  hGetAll(key: string): Promise<Record<string, string>>;
+  lRange(key: string, start: number, stop: number): Promise<string[]>;
+  sMembers(key: string): Promise<string[]>;
+  zRange(key: string, start: number, stop: number): Promise<string[]>;
+};
+
+type HiveSessionLike = {
+  close(): Promise<unknown>;
+  executeStatement(statement: string, options?: Record<string, unknown>): Promise<HiveOperationLike>;
+  getColumns(request: Record<string, string>): Promise<HiveOperationLike>;
+};
+
+type HiveOperationLike = {
+  close(): Promise<unknown>;
+  setMaxRows(maxRows: number): void;
+};
+
+type TrinoCompatiblePage = {
+  columns?: Array<{ name: string; type?: string }>;
+  data?: unknown[][];
+  nextUri?: string;
+};
+
+type DatabricksStatementResponse = {
+  manifest?: {
+    schema?: {
+      columns?: Array<{ name: string; type_name?: string; type_text?: string }>;
+    };
+  };
+  result?: {
+    data_array?: unknown[][];
+    next_chunk_internal_link?: string;
+  };
+  statement_id?: string;
+  status?: {
+    error?: { message?: string };
+    state?: string;
+  };
+};
+
+type LimitedSimpleSelect = {
+  columns: string[];
+  limit: number;
+  table: string;
+};
+
+const loadDuckDb = async (): Promise<typeof DuckDbModule> => {
+  const loaded = await import("duckdb") as unknown as { default?: typeof DuckDbModule } & typeof DuckDbModule;
+  return loaded.default ?? loaded;
+};
+
+const loadSnowflake = async (): Promise<typeof SnowflakeModule> => {
+  const loaded = await import("snowflake-sdk") as unknown as { default?: typeof SnowflakeModule } & typeof SnowflakeModule;
+  return loaded.default ?? loaded;
+};
+
+const loadBigQuery = async (): Promise<typeof BigQueryModule> => await import("@google-cloud/bigquery");
+
+const loadMsSql = async (): Promise<typeof MsSqlModule> => {
+  const loaded = await import("mssql") as unknown as { default?: typeof MsSqlModule } & typeof MsSqlModule;
+  return loaded.default ?? loaded;
+};
+
+const loadOracleDb = async (): Promise<typeof OracleDbModule> => {
+  const loaded = await import("oracledb") as unknown as { default?: typeof OracleDbModule } & typeof OracleDbModule;
+  return loaded.default ?? loaded;
+};
+
+const loadMongoDb = async (): Promise<typeof MongoDbModule> => await import("mongodb");
+
+const loadOdbc = async (): Promise<typeof OdbcModule> => {
+  const loaded = await import("odbc") as unknown as { default?: typeof OdbcModule } & typeof OdbcModule;
+  return loaded.default ?? loaded;
+};
+
+const loadRedis = async (): Promise<typeof RedisModule> => await import("redis");
+
+const loadHiveDriver = async (): Promise<typeof HiveDriverModule> => {
+  const loaded = await import("hive-driver") as unknown as { default?: typeof HiveDriverModule } & typeof HiveDriverModule;
+  return loaded.default ?? loaded;
+};
+
+const loadElasticSearch = async (): Promise<typeof ElasticSearchModule> => await import("@elastic/elasticsearch");
+
+const loadOpenSearch = async (): Promise<typeof OpenSearchModule> => await import("@opensearch-project/opensearch");
+
+const duckDbAll = async (
+  connection: DuckDbModule.Connection,
+  sql: string,
+  signal?: AbortSignal | undefined
+): Promise<DuckDbModule.TableData> =>
+  await new Promise((resolve, reject) => {
+    const abort = (): void => {
+      reject(signal?.reason instanceof Error ? signal.reason : new Error("RUN_CANCELLED"));
+    };
+    signal?.addEventListener("abort", abort, { once: true });
+    connection.all(sql, (error, rows) => {
+      signal?.removeEventListener("abort", abort);
+      if (error) {
+        reject(error);
+      } else {
+        resolve(rows);
+      }
+    });
+  });
+
+const duckDbClose = async (connection: DuckDbModule.Connection): Promise<void> =>
+  await new Promise((resolve, reject) => {
+    connection.close((error) => error ? reject(error) : resolve());
+  });
+
+const duckDbCloseDatabase = async (database: DuckDbModule.Database): Promise<void> =>
+  await new Promise((resolve, reject) => {
+    database.close((error) => error ? reject(error) : resolve());
+  });
+
+const snowflakeConnect = async (
+  connection: SnowflakeModule.Connection,
+  signal?: AbortSignal | undefined
+): Promise<void> =>
+  await new Promise((resolve, reject) => {
+    const abort = (): void => {
+      connection.destroy(() => undefined);
+      reject(signal?.reason instanceof Error ? signal.reason : new Error("RUN_CANCELLED"));
+    };
+    signal?.addEventListener("abort", abort, { once: true });
+    connection.connect((error) => {
+      signal?.removeEventListener("abort", abort);
+      error ? reject(error) : resolve();
+    });
+  });
+
+const snowflakeExecute = async (
+  connection: SnowflakeModule.Connection,
+  sql: string,
+  binds: SnowflakeModule.Binds,
+  signal?: AbortSignal | undefined
+): Promise<Record<string, unknown>[]> =>
+  await new Promise((resolve, reject) => {
+    const abort = (): void => {
+      connection.destroy(() => undefined);
+      reject(signal?.reason instanceof Error ? signal.reason : new Error("RUN_CANCELLED"));
+    };
+    signal?.addEventListener("abort", abort, { once: true });
+    connection.execute({
+      sqlText: sql,
+      binds,
+      complete: (error, _statement, rows) => {
+        signal?.removeEventListener("abort", abort);
+        if (error) {
+          reject(error);
+        } else {
+          resolve((rows ?? []).filter(isRecord));
+        }
+      }
+    });
+  });
+
+const snowflakeDestroy = async (connection: SnowflakeModule.Connection): Promise<void> =>
+  await new Promise((resolve) => {
+    connection.destroy(() => resolve());
+  });
+
+const queryTrinoCompatible = async (
+  config: Record<string, unknown>,
+  sql: string,
+  protocol: "presto" | "trino",
+  signal?: AbortSignal | undefined
+): Promise<Record<string, unknown>[]> => {
+  const headerPrefix = protocol === "trino" ? "X-Trino" : "X-Presto";
+  const requestHeaders = trinoCompatibleHeaders(config, headerPrefix);
+  const rows: Record<string, unknown>[] = [];
+  let columns: string[] = [];
+  let nextUri: string | undefined;
+  let response = await fetch(trinoStatementUrl(config), {
+    method: "POST",
+    headers: requestHeaders,
+    body: sql,
+    ...(signal ? { signal } : {})
+  });
+  for (;;) {
+    const page = await parseTrinoCompatibleResponse(response);
+    if (Array.isArray(page.columns) && columns.length === 0) {
+      columns = page.columns.map((column) => column.name);
+    }
+    if (Array.isArray(page.data)) {
+      rows.push(...arrayRowsToRecords(columns, page.data));
+    }
+    nextUri = typeof page.nextUri === "string" ? page.nextUri : undefined;
+    if (!nextUri) {
+      return rows;
+    }
+    throwIfAborted(signal);
+    response = await fetch(nextUri, { headers: requestHeaders, ...(signal ? { signal } : {}) });
+  }
+};
+
+const trinoCompatibleHeaders = (config: Record<string, unknown>, prefix: "X-Presto" | "X-Trino"): HeadersInit => {
+  const username = stringConfig(config, "username", "data-agent");
+  const password = optionalStringConfig(config, "password");
+  return {
+    "Accept": "application/json",
+    "Content-Type": "text/plain; charset=utf-8",
+    [`${prefix}-User`]: username,
+    [`${prefix}-Source`]: stringConfig(config, "source", "open-data-agent"),
+    [`${prefix}-Catalog`]: stringConfig(config, "catalog"),
+    [`${prefix}-Schema`]: stringConfig(config, "schema", "default"),
+    ...(password ? { "Authorization": `Basic ${Buffer.from(`${username}:${password}`).toString("base64")}` } : {})
+  };
+};
+
+const parseTrinoCompatibleResponse = async (response: Response): Promise<TrinoCompatiblePage> => {
+  const body = await response.text();
+  if (!response.ok) {
+    throw new Error(`TRINO_COMPATIBLE_QUERY_FAILED:${response.status}:${body.slice(0, 500)}`);
+  }
+  const parsed: unknown = body ? JSON.parse(body) : {};
+  if (!isRecord(parsed)) {
+    throw new Error("TRINO_COMPATIBLE_JSON_RESULT_INVALID");
+  }
+  if (isRecord(parsed.error)) {
+    const message = typeof parsed.error.message === "string" ? parsed.error.message : "unknown error";
+    throw new Error(`TRINO_COMPATIBLE_QUERY_ERROR:${message}`);
+  }
+  return parsed as TrinoCompatiblePage;
+};
+
+const queryDatabricksSql = async (
+  config: Record<string, unknown>,
+  sql: string,
+  signal?: AbortSignal | undefined
+): Promise<Record<string, unknown>[]> => {
+  const submitted = await databricksRequest(config, "/api/2.0/sql/statements", {
+    statement: sql,
+    warehouse_id: databricksWarehouseId(config),
+    wait_timeout: "10s",
+    disposition: "INLINE",
+    format: "JSON_ARRAY",
+    ...optionalConfigString(config, "catalog"),
+    ...optionalConfigString(config, "schema")
+  }, signal);
+  const completed = await waitDatabricksStatement(config, submitted, signal);
+  const columns = databricksColumns(completed);
+  const rows = [...arrayRowsToRecords(columns, completed.result?.data_array ?? [])];
+  let nextChunk = completed.result?.next_chunk_internal_link;
+  while (nextChunk) {
+    const chunk = await databricksRequest(config, nextChunk, undefined, signal);
+    rows.push(...arrayRowsToRecords(columns, chunk.result?.data_array ?? []));
+    nextChunk = chunk.result?.next_chunk_internal_link;
+  }
+  return rows;
+};
+
+const waitDatabricksStatement = async (
+  config: Record<string, unknown>,
+  response: DatabricksStatementResponse,
+  signal?: AbortSignal | undefined
+): Promise<DatabricksStatementResponse> => {
+  let current = response;
+  for (;;) {
+    const state = current.status?.state;
+    if (state === "SUCCEEDED") {
+      return current;
+    }
+    if (state === "FAILED" || state === "CANCELED" || state === "CLOSED") {
+      throw new Error(`DATABRICKS_SQL_FAILED:${current.status?.error?.message ?? state}`);
+    }
+    const statementId = current.statement_id;
+    if (!statementId) {
+      throw new Error("DATABRICKS_SQL_STATEMENT_ID_MISSING");
+    }
+    await delay(1000, signal);
+    current = await databricksRequest(config, `/api/2.0/sql/statements/${statementId}`, undefined, signal);
+  }
+};
+
+const databricksRequest = async (
+  config: Record<string, unknown>,
+  pathOrUrl: string,
+  body?: Record<string, unknown>,
+  signal?: AbortSignal | undefined
+): Promise<DatabricksStatementResponse> => {
+  const response = await fetch(databricksUrl(config, pathOrUrl), {
+    method: body ? "POST" : "GET",
+    headers: {
+      "Accept": "application/json",
+      "Authorization": `Bearer ${stringConfig(config, "token")}`,
+      ...(body ? { "Content-Type": "application/json" } : {})
+    },
+    ...(body ? { body: JSON.stringify(body) } : {}),
+    ...(signal ? { signal } : {})
+  });
+  const text = await response.text();
+  if (!response.ok) {
+    throw new Error(`DATABRICKS_SQL_REQUEST_FAILED:${response.status}:${text.slice(0, 500)}`);
+  }
+  const parsed: unknown = text ? JSON.parse(text) : {};
+  if (!isRecord(parsed)) {
+    throw new Error("DATABRICKS_SQL_JSON_RESULT_INVALID");
+  }
+  return parsed as DatabricksStatementResponse;
+};
+
+const databricksUrl = (config: Record<string, unknown>, pathOrUrl: string): string => {
+  if (/^https?:\/\//iu.test(pathOrUrl)) {
+    return pathOrUrl;
+  }
+  const host = stringConfig(config, "host").replace(/^https?:\/\//iu, "");
+  return `https://${host}${pathOrUrl.startsWith("/") ? "" : "/"}${pathOrUrl}`;
+};
+
+const databricksWarehouseId = (config: Record<string, unknown>): string => {
+  const configured = optionalStringConfig(config, "warehouseId");
+  if (configured) {
+    return configured;
+  }
+  const match = /\/warehouses\/([^/?#]+)/iu.exec(stringConfig(config, "path"));
+  if (!match?.[1]) {
+    throw new Error("DATABRICKS_WAREHOUSE_ID_REQUIRED");
+  }
+  return match[1];
+};
+
+const databricksColumns = (response: DatabricksStatementResponse): string[] =>
+  (response.manifest?.schema?.columns ?? []).map((column) => column.name);
+
+const delay = async (ms: number, signal?: AbortSignal | undefined): Promise<void> =>
+  await new Promise((resolve, reject) => {
+    const cleanup = (): void => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", abort);
+    };
+    const abort = (): void => {
+      cleanup();
+      reject(signal?.reason instanceof Error ? signal.reason : new Error("RUN_CANCELLED"));
+    };
+    const timer = setTimeout(() => {
+      cleanup();
+      resolve();
+    }, ms);
+    signal?.addEventListener("abort", abort, { once: true });
+  });
+
+const sparkOperationRows = async (
+  hive: typeof HiveDriverModule,
+  operation: HiveOperationLike,
+  signal?: AbortSignal | undefined
+): Promise<Record<string, unknown>[]> => {
+  operation.setMaxRows(1000);
+  try {
+    const utils = new hive.HiveUtils(hive.thrift.TCLIService_types);
+    await utils.waitUntilReady(operation as never);
+    await utils.fetchAll(operation as never);
+    throwIfAborted(signal);
+    const result = utils.getResult(operation as never).getValue() as unknown;
+    return Array.isArray(result) ? result.filter(isRecord) : [];
+  } finally {
+    await operation.close().catch(() => undefined);
+  }
+};
+
+const sparkConnectionOptions = (config: Record<string, unknown>): Record<string, unknown> => ({
+  host: stringConfig(config, "host"),
+  port: numberConfig(config, "port", 10000),
+  path: stringConfig(config, "path", "cliservice"),
+  options: {
+    connectTimeout: numberConfig(config, "timeoutMs", 30000),
+    timeout: numberConfig(config, "timeoutMs", 30000)
+  }
+});
+
+const sparkAuthProvider = (hive: typeof HiveDriverModule, config: Record<string, unknown>): unknown => {
+  const authMode = stringConfig(config, "auth", "none");
+  if (authMode !== "plain") {
+    return new hive.auth.NoSaslAuthentication();
+  }
+  const credentials = {
+    username: stringConfig(config, "username"),
+    password: stringConfig(config, "password")
+  };
+  return stringConfig(config, "transport", "tcp") === "http"
+    ? new hive.auth.PlainHttpAuthentication(credentials)
+    : new hive.auth.PlainTcpAuthentication(credentials);
+};
+
+const arrayRowsToRecords = (columns: string[], data: unknown[][]): Record<string, unknown>[] =>
+  data.map((row) => Object.fromEntries(columns.map((column, index) => [column, row[index] ?? null])));
+
+const searchClientOptions = (config: Record<string, unknown>): Record<string, unknown> => {
+  const username = optionalStringConfig(config, "username");
+  const password = optionalStringConfig(config, "password");
+  const apiKey = optionalStringConfig(config, "apiKey");
+  return {
+    node: optionalStringConfig(config, "node") ?? optionalStringConfig(config, "url") ?? searchNodeUrl(config),
+    ...(username && password ? { auth: { username, password } } : {}),
+    ...(apiKey ? { auth: { apiKey } } : {})
+  };
+};
+
+const searchNodeUrl = (config: Record<string, unknown>): string =>
+  `${booleanConfig(config, "secure", false) ? "https" : "http"}://`
+  + `${stringConfig(config, "host")}:${numberConfig(config, "port", 9200)}`;
+
+const searchIndexPattern = (config: Record<string, unknown>): string => stringConfig(config, "indexPattern", "*");
+
+const searchMappingsToSchema = (mappings: unknown): Omit<SchemaSummary, "datasource_id"> => {
+  if (!isRecord(mappings)) {
+    return { tables: [] };
+  }
+  return {
+    tables: Object.entries(mappings).map(([index, value]) => ({
+      name: index,
+      columns: searchMappingColumns(value)
+    }))
+  };
+};
+
+const searchMappingColumns = (mapping: unknown): SchemaSummary["tables"][number]["columns"] => {
+  const properties = searchMappingProperties(mapping);
+  return Object.entries(flattenSearchProperties(properties)).map(([name, type]) => ({
+    name,
+    type: type.toUpperCase()
+  }));
+};
+
+const searchMappingProperties = (mapping: unknown): Record<string, unknown> => {
+  if (!isRecord(mapping)) {
+    return {};
+  }
+  const mappings = isRecord(mapping.mappings) ? mapping.mappings : mapping;
+  return isRecord(mappings.properties) ? mappings.properties : {};
+};
+
+const flattenSearchProperties = (properties: Record<string, unknown>, prefix = ""): Record<string, string> => {
+  const columns: Record<string, string> = {};
+  Object.entries(properties).forEach(([name, descriptor]) => {
+    const column = prefix ? `${prefix}.${name}` : name;
+    if (!isRecord(descriptor)) {
+      columns[column] = "unknown";
+      return;
+    }
+    if (typeof descriptor.type === "string") {
+      columns[column] = descriptor.type;
+    }
+    if (isRecord(descriptor.properties)) {
+      Object.assign(columns, flattenSearchProperties(descriptor.properties, column));
+    }
+  });
+  return columns;
+};
+
+const searchHitsToTableResult = (result: unknown): TableResult => {
+  const hitsContainer = isRecord(result) && isRecord(result.hits) ? result.hits : {};
+  const rawHits = isRecord(hitsContainer) && Array.isArray(hitsContainer.hits) ? hitsContainer.hits : [];
+  const rows = rawHits.filter(isRecord).map((hit) => flattenDocument({
+    _id: hit._id,
+    ...(isRecord(hit._source) ? hit._source : {})
+  }));
+  return rowsToTableResult(rows);
+};
+
+const applyStandardLimit = (sql: string, limit: number): string => {
+  if (/\bLIMIT\s+\d+\b/iu.test(sql)) {
+    return sql;
+  }
+
+  return `SELECT * FROM (${sql}) AS readonly_query LIMIT ${limit}`;
+};
+
+const applyTopLimit = (sql: string, limit: number): string => {
+  if (/\bSELECT\s+TOP\s*\(/iu.test(sql)) {
+    return sql;
+  }
+
+  return `SELECT TOP (${limit}) * FROM (${sql}) AS readonly_query`;
+};
+
+const applyRowNumLimit = (sql: string, limit: number): string => `SELECT * FROM (${sql}) WHERE ROWNUM <= ${limit}`;
+
+const applyAccessLimit = (sql: string, limit: number): string => {
+  if (/\bSELECT\s+TOP\s+\d+\b/iu.test(sql)) {
+    return sql;
+  }
+
+  return `SELECT TOP ${limit} * FROM (${sql}) AS readonly_query`;
+};
+
+const parseLimitedSimpleSelect = (sql: string, defaultLimit: number): LimitedSimpleSelect => {
+  const match = /^SELECT\s+(.+?)\s+FROM\s+([`"\w.-]+)(?:\s+LIMIT\s+(\d+))?$/iu.exec(sql);
+  if (!match) {
+    throw new Error("SIMPLE_SELECT_REQUIRED");
+  }
+  const rawColumns = match[1] ?? "*";
+  const table = unquoteIdentifier((match[2] ?? "").trim());
+  const limit = Math.min(Number(match[3] ?? defaultLimit), defaultLimit);
+  return {
+    columns: rawColumns.trim() === "*"
+      ? []
+      : rawColumns.split(",").map((column) => unquoteIdentifier(column.trim())).filter(Boolean),
+    limit,
+    table
+  };
+};
+
+const inferDocumentColumns = (rows: Record<string, unknown>[]): SchemaSummary["tables"][number]["columns"] => {
+  const columns = new Map<string, string>();
+  rows.map(flattenDocument).forEach((row) => {
+    Object.entries(row).forEach(([key, value]) => {
+      if (!columns.has(key)) {
+        columns.set(key, inferColumnType([row], key) || typeof value);
+      }
+    });
+  });
+  return [...columns.entries()].map(([name, type]) => ({ name, type: type.toUpperCase() }));
+};
+
+const flattenDocument = (row: Record<string, unknown>): Record<string, unknown> =>
+  Object.fromEntries(Object.entries(row).map(([key, value]) => [
+    key,
+    isRecord(value) || Array.isArray(value) ? JSON.stringify(value) : value
+  ]));
+
+const redisPreviewValue = async (client: RedisReadonlyClient, key: string, type: string): Promise<string | null> => {
+  if (type === "string") {
+    return await client.get(key);
+  }
+  if (type === "hash") {
+    return JSON.stringify(await client.hGetAll(key));
+  }
+  if (type === "list") {
+    return JSON.stringify(await client.lRange(key, 0, 4));
+  }
+  if (type === "set") {
+    return JSON.stringify((await client.sMembers(key)).slice(0, 5));
+  }
+  if (type === "zset") {
+    return JSON.stringify(await client.zRange(key, 0, 4));
+  }
+  return null;
+};
+
+const accessConnectionString = (config: Record<string, unknown>): string => {
+  const configured = optionalStringConfig(config, "connectionString");
+  if (configured) {
+    return configured;
+  }
+  const path = stringConfig(config, "path");
+  return `Driver={Microsoft Access Driver (*.mdb, *.accdb)};DBQ=${path};`;
+};
+
 const quoteIdentifier = (identifier: string): string => `"${identifier.replaceAll('"', '""')}"`;
 
 const quoteMysqlIdentifier = (identifier: string): string => `\`${identifier.replaceAll("`", "``")}\``;
 
 const quoteClickHouseIdentifier = (identifier: string): string => `\`${identifier.replaceAll("`", "``")}\``;
 
+const quoteSnowflakeIdentifier = (identifier: string): string => `"${identifier.replaceAll('"', '""')}"`;
+
+const quoteSqlServerIdentifier = (identifier: string): string => `[${identifier.replaceAll("]", "]]")}]`;
+
+const quoteOracleIdentifier = (identifier: string): string => `"${identifier.replaceAll('"', '""').toUpperCase()}"`;
+
+const quoteAccessIdentifier = (identifier: string): string => `[${identifier.replaceAll("]", "]]")}]`;
+
+const quoteBigQueryIdentifier = (...parts: string[]): string => `\`${parts.map((part) => part.replaceAll("`", "")).join(".")}\``;
+
+const quoteTrinoIdentifier = (identifier: string): string => `"${identifier.replaceAll('"', '""')}"`;
+
 const clickHouseLiteral = (value: string): string => `'${value.replaceAll("\\", "\\\\").replaceAll("'", "\\'")}'`;
+
+const sqlLiteral = (value: string): string => `'${value.replaceAll("'", "''")}'`;
+
+const trinoServerUrl = (config: Record<string, unknown>): string =>
+  optionalStringConfig(config, "server")
+  ?? optionalStringConfig(config, "url")
+  ?? `${booleanConfig(config, "secure", false) ? "https" : "http"}://`
+    + `${stringConfig(config, "host")}:${numberConfig(config, "port", 8080)}`;
+
+const trinoStatementUrl = (config: Record<string, unknown>): string =>
+  new URL("v1/statement", `${trinoServerUrl(config).replace(/\/$/u, "")}/`).toString();
 
 const withClickHouseJsonFormat = (sql: string): string =>
   /\bFORMAT\s+\w+\s*$/iu.test(sql)
@@ -1162,12 +2879,12 @@ const schemaRowsToSummary = (
 ): Omit<SchemaSummary, "datasource_id"> => {
   const tables = new Map<string, SchemaSummary["tables"][number]>();
   rows.forEach((row) => {
-    const tableName = requiredRecordString(row, tableKey);
+    const tableName = requiredRecordStringLoose(row, tableKey);
     const table = tables.get(tableName) ?? { name: tableName, columns: [] };
     table.columns.push({
-      name: requiredRecordString(row, columnKey),
-      type: requiredRecordString(row, typeKey),
-      nullable: requiredRecordString(row, nullableKey).toUpperCase() === "YES"
+      name: requiredRecordStringLoose(row, columnKey),
+      type: requiredRecordStringLoose(row, typeKey),
+      nullable: requiredRecordStringLoose(row, nullableKey).toUpperCase() === "YES"
     });
     tables.set(tableName, table);
   });
@@ -1401,14 +3118,6 @@ const hasMultipleStatements = (sql: string): boolean => {
 };
 
 const stripQuotedSql = (sql: string): string => sql.replace(/'([^']|'')*'/gu, "''").replace(/"([^"]|"")*"/gu, '""');
-
-const applyLimit = (sql: string, limit: number): string => {
-  if (/\bLIMIT\s+\d+\b/iu.test(sql)) {
-    return sql;
-  }
-
-  return `SELECT * FROM (${sql}) AS readonly_query LIMIT ${limit}`;
-};
 
 const withTimeout = async <T>(
   promise: Promise<T>,

@@ -38,7 +38,7 @@ Current active workspace modules:
 | `apps/api` | Single backend runtime service. Exposes health check, CopilotKit/AG-UI agent endpoint, and `/api/v1` config management API. Creates per-request user/session/run context from AG-UI `RunAgentInput`, persists the same AG-UI event stream it returns to the frontend, and assembles server-authoritative conversation history before Mastra runs. | Node `http` server, `@copilotkit/runtime`, `@ag-ui/client` `AbstractAgent`, `@ag-ui/mastra`, `@ag-ui/mcp-middleware`, `@open-data-agent/agent-runtime`, `@open-data-agent/metadata`, `@open-data-agent/data-gateway`. |
 | `apps/web` | Frontend data-task workspace. Connects to the backend CopilotKit/AG-UI endpoint via `NEXT_PUBLIC_AGENT_RUNTIME_URL`. Part of root npm workspaces (`@open-data-agent/web`). | Next.js 15 (App Router), React 19, `@copilotkit/react-core/v2`, Tailwind 4, Vitest. |
 | `packages/agent-runtime` | Mastra DataAgent factory, ReAct prompt, run context, tool registry, tool-level policy, context governance, collaboration/workspace tools, Knowledge tool, and Mastra Skill tools. Keeps Data Gateway behind typed tools. | `@mastra/core/agent`, `@mastra/core/tools`, `@mastra/core/workspace` skills, Zod tool schemas, `inspect_schema`, `run_sql_readonly`, `retrieve_knowledge`, `skill` / `skill_search` / `skill_read`, AG-UI `ACTIVITY_SNAPSHOT` / `CUSTOM`, inspect-before-SQL enforcement, selected datasource enforcement, max SQL call count, ToolObservationAdapter registry. |
-| `packages/data-gateway` | Datasource registry facade, schema inspection, preview, readonly SQL execution, SQL guard, audit log, and result artifact creation. | `LocalDataGateway`, `node:sqlite`, CSV parser, `read-excel-file`, internal datasource adapters for DuckDB demo, SQLite, CSV, XLSX, PostgreSQL, MySQL. |
+| `packages/data-gateway` | Datasource registry facade, schema inspection, preview, readonly SQL execution, SQL guard, audit log, and result artifact creation. | `LocalDataGateway`, `node:sqlite`, CSV/XLSX readers, DuckDB, PostgreSQL/MySQL-compatible adapters, ClickHouse, Snowflake, BigQuery, SQL Server, Oracle, MongoDB, Redis, Trino/Presto, Spark, Databricks, Elasticsearch/OpenSearch, and related datasource adapters. |
 | `packages/metadata` | Local persistence for users, sessions, runs, run events, conversation messages/summaries, config resources, encrypted secrets, jobs, datasource registry, SQL audit logs, file assets, file refs, artifacts. | `node:sqlite` `DatabaseSync`, repository classes, migrations, `RunEventWriter`, conversation repositories, `EncryptedSecretStore`. |
 | `packages/contracts` | Shared TypeScript contracts for API result, persisted AG-UI run events, tools, artifacts, env schema. | Type-only DTOs, AG-UI `BaseEvent`-backed `RunEventEnvelope`, `ENV_VARIABLE_SPECS`, `createEnvConfig`, API result helpers. |
 | `packages/providers` | Model provider selection and env-driven model adapter creation. | `@ai-sdk/openai` for OpenAI-compatible `/chat/completions`; Mastra model router object for other providers; mock marker when no `LLM_API_KEY`. |
@@ -232,6 +232,7 @@ The backend intentionally exposes a small surface:
 - `GET /healthz`
 - `POST /api/copilotkit`
 - `/api/v1/datasources`
+- `/api/v1/datasource-types`
 - `/api/v1/knowledge-bases`
 - `/api/v1/files`
 - `/api/v1/mcp-servers`
@@ -302,6 +303,12 @@ Important constraints:
   protocol.
 - Tool implementations live under `packages/agent-runtime/src/tools/`; the package root stays limited to agent assembly,
   prompt, provider wiring, and public exports.
+
+Supported databases:
+
+- Use `GET /api/v1/datasource-types` to discover currently enabled datasource adapters and required fields.
+- See [Supported Databases](docs/engineering/supported-databases.md) for the full list, registration examples, and
+  agent run selection flow.
 
 ## Persistence Grain
 
