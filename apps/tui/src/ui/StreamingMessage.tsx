@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { Box, Text } from 'ink';
 import type { DisplayMessage, LiveToolCallRecord } from '../state/index.js';
 import { MarkdownText } from './MarkdownText.js';
@@ -19,12 +19,29 @@ export const StreamingMessage: React.FC<StreamingMessageProps> = ({
   allToolCalls,
   maxContentLength,
 }) => {
-  // If no elements, show "Thinking..." for streaming messages
-  if (message.elements.length === 0 && message.isStreaming) {
+  const showThinking = message.elements.length === 0 && Boolean(message.isStreaming);
+  const [thinkingTick, setThinkingTick] = useState(0);
+
+  useEffect(() => {
+    if (!showThinking) return;
+
+    const timer = setInterval(() => {
+      setThinkingTick((tick) => (tick + 1) % 8);
+    }, 360);
+
+    return () => clearInterval(timer);
+  }, [showThinking]);
+
+  // If no elements, show a light pulsing placeholder while waiting for the first token/tool.
+  if (showThinking) {
+    const dotCount = thinkingTick % 4;
+    const thinkingText = `thinking${'.'.repeat(dotCount)}${' '.repeat(3 - dotCount)}`;
+    const bright = thinkingTick % 2 === 0;
+
     return (
       <Box flexDirection="column" paddingLeft={2}>
-        <Text dimColor>
-          Thinking... <Text>▊</Text>
+        <Text color={bright ? 'white' : 'gray'} dimColor={!bright}>
+          {thinkingText}
         </Text>
       </Box>
     );

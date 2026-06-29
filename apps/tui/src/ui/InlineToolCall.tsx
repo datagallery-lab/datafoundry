@@ -55,7 +55,9 @@ export const InlineToolCall: React.FC<InlineToolCallProps> = ({
   const getDuration = (): string => {
     if (!toolCall.startedAtMs) return '';
 
-    const endTime = toolCall.finishedAtMs || Date.now();
+    const endTime = toolCall.finishedAtMs ?? (
+      toolCall.status === 'running' ? Date.now() : toolCall.startedAtMs
+    );
     const elapsedMs = endTime - toolCall.startedAtMs;
 
     if (elapsedMs < 1000) {

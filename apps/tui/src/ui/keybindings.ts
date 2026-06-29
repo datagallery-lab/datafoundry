@@ -180,9 +180,7 @@ export const KEYBINDINGS: KeybindingAction[] = [
   { key: 'Ctrl+L', description: 'Clear screen', category: 'system' },
 
   // Navigation shortcuts
-  { key: 'Tab', description: 'Switch tab', category: 'navigation' },
-  { key: 'Ctrl+T', description: 'Toggle tab', category: 'navigation' },
-  { key: '1/2/3', description: 'Quick tab switch', category: 'navigation' },
+  { key: '/tab', description: 'Switch tab', category: 'navigation' },
 
   // Session shortcuts
   { key: 'Ctrl+N', description: 'New session', category: 'session' },
@@ -235,7 +233,7 @@ export function getKeybindingsHelp(): string {
  */
 export function getStatusBarShortcuts(): Array<{ key: string; action: string }> {
   return [
-    { key: 'Tab', action: 'Switch' },
+    { key: '/tab', action: 'Switch' },
     { key: '↑/↓', action: 'History' },
     { key: 'Ctrl+N', action: 'New' },
     { key: 'Ctrl+L', action: 'Clear' },
@@ -247,14 +245,23 @@ export function getStatusBarShortcuts(): Array<{ key: string; action: string }> 
  * Default command suggestions
  */
 export const DEFAULT_COMMANDS = [
+  '/tab chat',
+  '/tab stats',
+  '/tab config',
+  '/tab outputs',
+  '/chat',
+  '/stats',
+  '/config',
+  '/outputs',
+  '/help',
+  '/status',
+  '/clear',
+  '/reset',
+  '/exit',
   'show tables',
   'describe table',
   'show schema',
   'explain query',
   'show stats',
   'show history',
-  'clear',
-  'help',
-  'exit',
-  'reset',
 ];

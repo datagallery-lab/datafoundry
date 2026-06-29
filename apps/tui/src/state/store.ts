@@ -163,25 +163,16 @@ class StateStore {
       return;
     }
 
-    // Detect new tool call starts and insert into message elements
-    if (event.type === "TOOL_CALL_START") {
-      const toolCallId = typeof event.toolCallId === 'string'
-        ? event.toolCallId
-        : `tool-${Date.now()}`;
-
-      // Insert tool call element into the last assistant message
-      const stateWithToolCall = insertToolCallIntoLastMessage(this.state, toolCallId);
-
-      // Merge with LiveRun update
-      const newState: TuiAppState = {
-        ...stateWithToolCall,
-        ...newLiveRun,
-        sessionStats: this.state.sessionStats,
-        workspaceConfig: this.state.workspaceConfig,
-      };
-
-      this.setState(newState);
-      return;
+    const previousToolCallIds = new Set(this.state.toolCalls.map((toolCall) => toolCall.id));
+    const newToolCallIds = newLiveRun.toolCalls
+      .filter((toolCall) => !previousToolCallIds.has(toolCall.id))
+      .map((toolCall) => toolCall.id);
+    let stateWithNewToolCalls: TuiAppState = this.state;
+    for (const toolCallId of newToolCallIds) {
+      stateWithNewToolCalls = insertToolCallIntoLastMessage(
+        stateWithNewToolCalls,
+        toolCallId,
+      ) as TuiAppState;
     }
 
     // Detect run completion and accumulate stats
@@ -201,7 +192,7 @@ class StateStore {
 
     // Merge back with TUI-specific fields
     const newState: TuiAppState = {
-      ...this.state,
+      ...stateWithNewToolCalls,
       ...newLiveRun,
       sessionStats: newSessionStats,
     };

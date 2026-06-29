@@ -19,6 +19,8 @@ export const ArtifactCard: React.FC<ArtifactCardProps> = ({ artifact }) => {
         return '📝';
       case 'dashboard':
         return '📈';
+      case 'file':
+        return '📄';
       default:
         return '📄';
     }
@@ -36,6 +38,8 @@ export const ArtifactCard: React.FC<ArtifactCardProps> = ({ artifact }) => {
         return '[SQL]';
       case 'report':
         return '[Report]';
+      case 'file':
+        return '[File]';
       default:
         return '';
     }
@@ -72,7 +76,10 @@ export const ArtifactCard: React.FC<ArtifactCardProps> = ({ artifact }) => {
         return (
           <Box flexDirection="column" paddingLeft={2}>
             <Text dimColor>
-              Unit: {artifact.detail.unit}, Points: {artifact.detail.points.length}
+              Points: {artifact.detail.points.length}
+              {artifact.detail.series?.length ? `, Series: ${artifact.detail.series.length}` : ''}
+              {artifact.detail.unit ? `, Unit: ${artifact.detail.unit}` : ''}
+              {artifact.detail.chartType ? `, Type: ${artifact.detail.chartType}` : ''}
             </Text>
           </Box>
         );
@@ -83,6 +90,22 @@ export const ArtifactCard: React.FC<ArtifactCardProps> = ({ artifact }) => {
             <Text dimColor>
               Sections: {artifact.detail.sections.length}
             </Text>
+          </Box>
+        );
+
+      case 'file':
+        return (
+          <Box flexDirection="column" paddingLeft={2}>
+            <Text dimColor>Path: {artifact.detail.path}</Text>
+            <Text dimColor>
+              {artifact.detail.size !== undefined ? `Size: ${artifact.detail.size} bytes` : 'Size: unknown'}
+              {artifact.detail.tool ? `, Tool: ${artifact.detail.tool}` : ''}
+            </Text>
+            {artifact.detail.content && (
+              <Box flexDirection="column" marginTop={1}>
+                <Text dimColor>{artifact.detail.content.slice(0, 240)}</Text>
+              </Box>
+            )}
           </Box>
         );
 
@@ -118,6 +141,14 @@ export const ArtifactCard: React.FC<ArtifactCardProps> = ({ artifact }) => {
       <Box paddingLeft={2}>
         <Text>{artifact.summary}</Text>
       </Box>
+
+      {(artifact.fileId || artifact.downloadUrl || artifact.previewAvailable) && (
+        <Box flexDirection="column" paddingLeft={2}>
+          {artifact.fileId && <Text dimColor>file_id: {artifact.fileId}</Text>}
+          {artifact.downloadUrl && <Text dimColor>download: {artifact.downloadUrl}</Text>}
+          {artifact.previewAvailable && <Text dimColor>preview available</Text>}
+        </Box>
+      )}
 
       {/* Artifact details */}
       {renderDetail()}

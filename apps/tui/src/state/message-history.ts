@@ -240,6 +240,12 @@ export function insertToolCallIntoLastMessage(
   if (lastIndex >= 0) {
     const lastMsg = messages[lastIndex];
     if (lastMsg && lastMsg.role === "assistant") {
+      if (lastMsg.elements.some((element) =>
+        element.type === 'tool_call' && element.toolCallId === toolCallId
+      )) {
+        return state;
+      }
+
       const now = Date.now();
       const elements = [
         ...lastMsg.elements,

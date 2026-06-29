@@ -57,8 +57,9 @@ npm run start:tui -- --debug
 | `/skill <action>` | Skill 管理 | `/skill list` |
 | `/mcp <action>` | MCP 服务器管理 | `/mcp list` |
 | `/kb <action>` | 知识库管理 | `/kb list` |
-| `/config [show\|capabilities]` | 查看配置 | `/config` |
-| `/stats` | 显示统计信息 | `/stats` |
+| `/tab <name>` | 切换视图（chat/stats/config/outputs） | `/tab outputs` |
+| `/chat` `/stats` `/config` `/outputs` | 直接切换到对应视图 | `/stats` |
+| `/status` | 显示当前会话状态 | `/status` |
 | `/export [filename]` | 导出对话 | `/export chat.json` |
 | `/clear` | 清空对话 | `/clear` |
 | `/exit` | 退出程序 | `/exit` |
@@ -68,7 +69,6 @@ npm run start:tui -- --debug
 | 快捷键 | 功能 |
 |--------|------|
 | `Ctrl+C` | 退出程序 |
-| `Ctrl+T` / `1-3` | 切换 Tab |
 | `Tab` | 命令自动补全 |
 | `↑` / `↓` | 历史命令导航 |
 | `Ctrl+U` | 清空当前输入 |

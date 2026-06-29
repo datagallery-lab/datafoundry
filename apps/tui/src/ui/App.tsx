@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Box, Text, useApp, useInput } from 'ink';
 import { Header } from './Header.js';
 import { ChatArea } from './ChatArea.js';
+import { OutputsView } from './OutputsView.js';
 import { ActivityPanel } from './ActivityPanel.js';
 import { InputBox } from './InputBox.js';
 import { KeybindingsHelp } from './KeybindingsHelp.js';
@@ -19,7 +20,11 @@ interface AppProps {
   datasourceId: string | undefined;
 }
 
-type TabType = 'chat' | 'stats' | 'config';
+type TabType = 'chat' | 'stats' | 'config' | 'outputs';
+type CommandNotice = {
+  message: string;
+  kind: 'info' | 'error';
+};
 const MAX_VISIBLE_CHAT_MESSAGES = 40;
 
 const formatDirectory = (directory: string): string => {
@@ -49,6 +54,7 @@ export const App: React.FC<AppProps> = ({ client, datasourceId }) => {
   const [state, setState] = useState<TuiAppState>(store.getState());
   const [activeTab, setActiveTab] = useState<TabType>('chat');
   const [inputFocused, setInputFocused] = useState(false);
+  const [commandNotice, setCommandNotice] = useState<CommandNotice | null>(null);
   const [retryCount, setRetryCount] = useState(0);
 
   // Subscribe to state changes
@@ -88,15 +94,6 @@ export const App: React.FC<AppProps> = ({ client, datasourceId }) => {
       return;
     }
 
-    // Ctrl+T - Toggle tab (cycle through tabs)
-    if (key.ctrl && input === 't') {
-      const tabs: TabType[] = ['chat', 'stats', 'config'];
-      const currentIndex = tabs.indexOf(activeTab);
-      const nextIndex = (currentIndex + 1) % tabs.length;
-      setActiveTab(tabs[nextIndex]);
-      return;
-    }
-
     // Ctrl+N - New session (reset and create new thread)
     if (key.ctrl && input === 'n') {
       store.reset();
@@ -106,20 +103,6 @@ export const App: React.FC<AppProps> = ({ client, datasourceId }) => {
       return;
     }
 
-    // Tab navigation shortcuts
-    if (key.tab) {
-      // Cycle through tabs
-      const tabs: TabType[] = ['chat', 'stats', 'config'];
-      const currentIndex = tabs.indexOf(activeTab);
-      const nextIndex = (currentIndex + 1) % tabs.length;
-      setActiveTab(tabs[nextIndex]);
-    } else if (input === '1') {
-      setActiveTab('chat');
-    } else if (input === '2') {
-      setActiveTab('stats');
-    } else if (input === '3') {
-      setActiveTab('config');
-    }
   });
 
   // Handle user input submission
@@ -141,9 +124,8 @@ export const App: React.FC<AppProps> = ({ client, datasourceId }) => {
 
   // Handle command execution
   const handleCommandExecution = async (input: string) => {
-    // Add user message to chat history
-    store.addUserMessage(input);
     store.clearInputBuffer();
+    setCommandNotice(null);
 
     try {
       // Prepare command context
@@ -164,7 +146,8 @@ export const App: React.FC<AppProps> = ({ client, datasourceId }) => {
       if (result.success) {
         // Check for special actions
         if (result.data && typeof result.data === 'object') {
-          const action = (result.data as { action?: string }).action;
+          const commandData = result.data as { action?: string; tab?: unknown };
+          const action = commandData.action;
 
           if (action === 'clear_history') {
             // Clear messages but keep thread
@@ -176,29 +159,38 @@ export const App: React.FC<AppProps> = ({ client, datasourceId }) => {
             store.getState().messages = [];
             setState(store.getState());
           } else if (action === 'exit_application') {
-            store.addAssistantMessage(result.message, false);
             if ('dispose' in client && typeof client.dispose === 'function') {
               client.dispose();
             }
             exit();
             return;
+          } else if (action === 'switch_tab') {
+            const tab = commandData.tab;
+            if (tab === 'chat' || tab === 'stats' || tab === 'config' || tab === 'outputs') {
+              setActiveTab(tab);
+            }
           }
         }
 
-        // Add command result as system message
-        store.addAssistantMessage(result.message, false);
+        setCommandNotice({ message: result.message, kind: 'info' });
       } else {
-        // Add error message
-        store.addAssistantMessage(`Command error: ${result.message}`, false);
+        setCommandNotice({
+          message: `Command error: ${result.message}`,
+          kind: 'error',
+        });
       }
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
-      store.addAssistantMessage(`Command execution failed: ${errorMessage}`, false);
+      setCommandNotice({
+        message: `Command execution failed: ${errorMessage}`,
+        kind: 'error',
+      });
     }
   };
 
   // Handle agent query execution
   const handleAgentQuery = async (input: string) => {
+    setCommandNotice(null);
     // Add user message to chat history
     store.addUserMessage(input);
     store.clearInputBuffer();
@@ -423,9 +415,7 @@ export const App: React.FC<AppProps> = ({ client, datasourceId }) => {
 
   const { chatWidth, panelWidth } = getContentWidth();
   const visibleMessages = state.messages.slice(-MAX_VISIBLE_CHAT_MESSAGES);
-  const visibleArtifacts = state.runStatus === 'running'
-    ? []
-    : state.artifacts.slice(-3);
+  const visibleArtifacts = state.artifacts;
   const modelName = resolveModelName(state);
   const directory = formatDirectory(process.env.PWD || process.cwd());
   const liveActivity = state.runStatus === 'running'
@@ -443,10 +433,11 @@ export const App: React.FC<AppProps> = ({ client, datasourceId }) => {
 
   // Render tab navigation
   const renderTabs = () => {
-    const tabs: Array<{ key: TabType; label: string; shortcut: string }> = [
-      { key: 'chat', label: 'Chat', shortcut: '1' },
-      { key: 'stats', label: 'Stats', shortcut: '2' },
-      { key: 'config', label: 'Config', shortcut: '3' },
+    const tabs: Array<{ key: TabType; label: string }> = [
+      { key: 'chat', label: 'Chat' },
+      { key: 'stats', label: 'Stats' },
+      { key: 'config', label: 'Config' },
+      { key: 'outputs', label: 'Outputs' },
     ];
 
     return (
@@ -459,7 +450,7 @@ export const App: React.FC<AppProps> = ({ client, datasourceId }) => {
               bold={activeTab === tab.key}
               dimColor={activeTab !== tab.key}
             >
-              [{tab.shortcut}] {tab.label}
+              {tab.label}
             </Text>
           </React.Fragment>
         ))}
@@ -605,15 +596,30 @@ export const App: React.FC<AppProps> = ({ client, datasourceId }) => {
           <Box flexDirection="column" flexGrow={1}>
             {renderStatsPanel()}
           </Box>
-        ) : (
+        ) : activeTab === 'config' ? (
           <Box flexDirection="column" flexGrow={1}>
             {renderConfigPanel()}
+          </Box>
+        ) : (
+          <Box flexDirection="column" flexGrow={1}>
+            <OutputsView
+              artifacts={visibleArtifacts}
+              events={state.events}
+            />
           </Box>
         )}
       </Box>
 
       {/* Status bar with keyboard shortcuts */}
       {activeTab !== 'chat' && renderStatusBar()}
+
+      {commandNotice && (
+        <Box paddingX={1} flexShrink={0}>
+          <Text color={commandNotice.kind === 'error' ? 'red' : 'cyan'}>
+            {commandNotice.message}
+          </Text>
+        </Box>
+      )}
 
       {/* Input box at the bottom */}
       <InputBox

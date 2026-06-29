@@ -80,15 +80,15 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
       {artifacts.length > 0 && (
         <Box flexDirection="column" marginTop={1} paddingTop={1} borderStyle="single" borderTop>
           <Box marginBottom={1}>
-            <Text bold color="magenta">Artifacts</Text>
+            <Text bold color="magenta">Recent Artifacts</Text>
             <Text dimColor> ({artifacts.length})</Text>
           </Box>
           <Box flexDirection="column">
-            {artifacts.slice(-3).map((artifact) => (
+            {artifacts.slice(0, 3).map((artifact) => (
               <ArtifactCard key={artifact.id} artifact={artifact} />
             ))}
             {artifacts.length > 3 && (
-              <Text dimColor>... and {artifacts.length - 3} more</Text>
+              <Text dimColor>... and {artifacts.length - 3} more. Open [4] Outputs for all.</Text>
             )}
           </Box>
         </Box>
