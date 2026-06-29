@@ -256,7 +256,6 @@ export const DEFAULT_COMMANDS = [
   '/help',
   '/status',
   '/resume',
-  '/resume list',
   '/clear',
   '/reset',
   '/exit',

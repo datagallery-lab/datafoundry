@@ -1,7 +1,6 @@
 import React, { useEffect, useRef } from 'react';
 import { Box, Text } from 'ink';
 import type { DisplayMessage, DataArtifact, LiveToolCallRecord } from '../state/index.js';
-import { ArtifactCard } from './ArtifactCard.js';
 import { MessageBubble } from './MessageBubble.js';
 import { ToolCallsView } from './ToolCallsView.js';
 
@@ -42,14 +41,6 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
 
   return (
     <Box flexDirection="column" flexGrow={1}>
-      {/* Title */}
-      <Box marginBottom={1}>
-        <Text bold color="cyan">Chat History</Text>
-        {messageCount > 0 && (
-          <Text dimColor> ({messageCount} messages)</Text>
-        )}
-      </Box>
-
       {/* Message list */}
       <Box flexDirection="column" flexGrow={1}>
         {messages.length === 0 && messageCount === 0 ? (
@@ -76,21 +67,12 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
         )}
       </Box>
 
-      {/* Artifacts section */}
+      {/* Artifacts notice */}
       {artifacts.length > 0 && (
-        <Box flexDirection="column" marginTop={1} paddingTop={1} borderStyle="single" borderTop>
-          <Box marginBottom={1}>
-            <Text bold color="magenta">Recent Artifacts</Text>
-            <Text dimColor> ({artifacts.length})</Text>
-          </Box>
-          <Box flexDirection="column">
-            {artifacts.slice(0, 3).map((artifact) => (
-              <ArtifactCard key={artifact.id} artifact={artifact} />
-            ))}
-            {artifacts.length > 3 && (
-              <Text dimColor>... and {artifacts.length - 3} more. Open [4] Outputs for all.</Text>
-            )}
-          </Box>
+        <Box marginTop={1} paddingTop={1} borderStyle="single" borderTop>
+          <Text color="magenta">
+            New outputs available ({artifacts.length}). Use /outputs to view them.
+          </Text>
         </Box>
       )}
     </Box>

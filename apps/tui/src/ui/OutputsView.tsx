@@ -31,7 +31,7 @@ export const OutputsView: React.FC<OutputsViewProps> = ({ artifacts, events }) =
       ) : (
         <Box flexDirection="column">
           <Box marginBottom={1}>
-            <Text dimColor>最新产出排在前面。Chat 页只显示最近 3 个摘要。</Text>
+            <Text dimColor>最新产出排在前面。Chat 页只提示有新产出，详情通过 /outputs 查看。</Text>
           </Box>
           {artifacts.map((artifact, index) => (
             <Box key={artifact.id} flexDirection="column" marginBottom={1}>

@@ -124,16 +124,17 @@ export const resetCommand: Command = {
 
 export const resumeCommand: Command = {
   name: 'resume',
-  description: 'Resume a server session (/resume [latest|list|sessionId])',
+  description: 'Resume a server session with picker (/resume [latest|list|sessionId])',
   execute: async (args) => {
     const target = args[0]?.trim();
-    if (target === 'list') {
+    if (!target || target === 'list') {
       return {
         success: true,
         message: 'Loading recent sessions...',
-        data: { action: 'list_sessions' },
+        data: { action: 'open_picker' },
       };
     }
+
     return {
       success: true,
       message: 'Loading session...',

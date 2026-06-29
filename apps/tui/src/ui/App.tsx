@@ -1,17 +1,22 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { Box, Text, useApp, useInput } from 'ink';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
+import { Box, Static, Text, useApp, useInput } from 'ink';
 import { randomUUID } from 'node:crypto';
-import { Header } from './Header.js';
+import { SessionBanner, StatusFooter } from './Header.js';
 import { ChatArea } from './ChatArea.js';
+import { MessageBubble } from './MessageBubble.js';
 import { OutputsView } from './OutputsView.js';
 import { ActivityPanel } from './ActivityPanel.js';
 import { InputBox } from './InputBox.js';
 import { KeybindingsHelp } from './KeybindingsHelp.js';
+import { SessionPicker } from './SessionPicker.js';
 import { getStatusBarShortcuts } from './keybindings.js';
 import { AssistantTextStreamBuffer, type AssistantTextFlush } from './assistant-stream-buffer.js';
 import {
   restoreSessionConversation,
   store,
+  type DisplayMessage,
+  type LiveToolCallRecord,
+  type MessageElement,
   type TuiAppState,
 } from '../state/index.js';
 import { getMessageTextContent } from '../state/message-history.js';
@@ -29,6 +34,7 @@ interface AppProps {
     enabled: boolean;
     sessionId?: string | undefined;
   } | undefined;
+  onStaticOutputReset?: (() => void) | undefined;
 }
 
 type TabType = 'chat' | 'stats' | 'config' | 'outputs';
@@ -37,6 +43,91 @@ type CommandNotice = {
   kind: 'info' | 'error';
 };
 const MAX_VISIBLE_CHAT_MESSAGES = 40;
+
+type StaticBanner = {
+  kind: 'banner';
+  id: string;
+  threadId: string | undefined;
+  connectionStatus: TuiAppState['connectionStatus'];
+  runStatus: TuiAppState['runStatus'];
+  modelName: string;
+  directory: string;
+};
+
+type StaticChatMessage = {
+  kind: 'message';
+  id: string;
+  message: DisplayMessage;
+  toolCalls: LiveToolCallRecord[];
+};
+
+type StaticItem = StaticBanner | StaticChatMessage;
+
+const isToolCallElement = (
+  element: MessageElement,
+): element is Extract<MessageElement, { type: 'tool_call' }> => {
+  return element.type === 'tool_call';
+};
+
+const referencedToolCallsAreStable = (
+  message: DisplayMessage,
+  toolCalls: LiveToolCallRecord[],
+  runStatus: TuiAppState['runStatus'],
+): boolean => {
+  if (runStatus !== 'running') return true;
+
+  for (const element of message.elements) {
+    if (!isToolCallElement(element)) continue;
+
+    const toolCall = toolCalls.find((item) => item.id === element.toolCallId);
+    if (!toolCall || toolCall.status === 'running') {
+      return false;
+    }
+  }
+
+  return true;
+};
+
+const isMessageReadyForStatic = (
+  message: DisplayMessage,
+  index: number,
+  messages: DisplayMessage[],
+  runStatus: TuiAppState['runStatus'],
+  toolCalls: LiveToolCallRecord[],
+): boolean => {
+  if (message.isStreaming) return false;
+
+  if (message.role !== 'assistant') return true;
+
+  const isLastMessage = index === messages.length - 1;
+  if (runStatus === 'running' && isLastMessage) return false;
+
+  return referencedToolCallsAreStable(message, toolCalls, runStatus);
+};
+
+const snapshotStaticMessage = (
+  message: DisplayMessage,
+  toolCalls: LiveToolCallRecord[],
+): StaticChatMessage => {
+  const referencedToolCallIds = new Set(
+    message.elements
+      .filter(isToolCallElement)
+      .map((element) => element.toolCallId),
+  );
+
+  return {
+    kind: 'message',
+    id: message.id,
+    message: {
+      ...message,
+      isStreaming: false,
+      elements: message.elements.map((element) => ({ ...element })),
+    },
+    toolCalls: toolCalls
+      .filter((toolCall) => referencedToolCallIds.has(toolCall.id))
+      .map((toolCall) => ({ ...toolCall })),
+  };
+};
 
 const createThreadId = (): string => {
   try {
@@ -68,13 +159,6 @@ const resolveModelName = (state: TuiAppState): string => {
   return modelName || model?.name || 'server default';
 };
 
-const formatSessionListItem = (session: SessionListItem): string => {
-  const title = session.title?.trim() || 'Untitled session';
-  const timestamp = session.lastMessageAt ?? session.updatedAt ?? session.createdAt;
-  const suffix = timestamp ? ` · ${new Date(timestamp).toLocaleString()}` : '';
-  return `  ${session.threadId} · ${title}${suffix}`;
-};
-
 const formatSessionApiError = (error: unknown): string => {
   if (
     error instanceof ConfigClientError &&
@@ -91,13 +175,35 @@ export const App: React.FC<AppProps> = ({
   configClient,
   datasourceId,
   initialResume,
+  onStaticOutputReset,
 }) => {
   const { exit } = useApp();
   const [state, setState] = useState<TuiAppState>(store.getState());
   const [activeTab, setActiveTab] = useState<TabType>('chat');
   const [inputFocused, setInputFocused] = useState(false);
   const [commandNotice, setCommandNotice] = useState<CommandNotice | null>(null);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [pickerSessions, setPickerSessions] = useState<SessionListItem[]>([]);
+  const [pickerLoading, setPickerLoading] = useState(false);
+  const [pickerError, setPickerError] = useState<string | undefined>(undefined);
   const [retryCount, setRetryCount] = useState(0);
+  const [staticItems, setStaticItems] = useState<StaticItem[]>(() => {
+    // Seed the banner once at initialization
+    const modelName = resolveModelName(store.getState());
+    const directory = formatDirectory(process.env.PWD || process.cwd());
+    const currentState = store.getState();
+
+    return [{
+      kind: 'banner',
+      id: 'banner',
+      threadId: currentState.threadId,
+      connectionStatus: currentState.connectionStatus,
+      runStatus: currentState.runStatus,
+      modelName,
+      directory,
+    }];
+  });
+  const staticMessageIds = useRef<Set<string>>(new Set());
   const startupResumeAttempted = useRef(false);
 
   // Subscribe to state changes
@@ -107,6 +213,30 @@ export const App: React.FC<AppProps> = ({
     });
     return unsubscribe;
   }, []);
+
+  useEffect(() => {
+    const snapshots: StaticChatMessage[] = [];
+
+    state.messages.forEach((message, index) => {
+      if (staticMessageIds.current.has(message.id)) return;
+      if (!isMessageReadyForStatic(
+        message,
+        index,
+        state.messages,
+        state.runStatus,
+        state.toolCalls,
+      )) {
+        return;
+      }
+
+      staticMessageIds.current.add(message.id);
+      snapshots.push(snapshotStaticMessage(message, state.toolCalls));
+    });
+
+    if (snapshots.length > 0) {
+      setStaticItems((previous) => [...previous, ...snapshots]);
+    }
+  }, [state.messages, state.runStatus, state.toolCalls]);
 
   // Initialize connection monitoring if client supports it
   useEffect(() => {
@@ -173,6 +303,9 @@ export const App: React.FC<AppProps> = ({
       const restored = restoreSessionConversation(conversation);
       store.restoreSession(restored);
       setActiveTab('chat');
+      if (!startup) {
+        onStaticOutputReset?.();
+      }
       setCommandNotice({
         kind: 'info',
         message: `Resumed session ${restored.title ? `"${restored.title}" ` : ''}(${restored.threadId}).`,
@@ -185,45 +318,48 @@ export const App: React.FC<AppProps> = ({
     }
   }
 
-  async function listHistoricalSessions(): Promise<void> {
-    if (!configClient) {
+  async function openSessionPicker(): Promise<void> {
+    if (store.getState().runStatus === 'running') {
       setCommandNotice({
         kind: 'error',
-        message: 'Session listing requires a live backend; it is not available in demo mode.',
+        message: 'Cannot resume another session while a run is active.',
       });
       return;
     }
 
-    try {
-      const response = await configClient.listSessions({ limit: 10 });
-      if (response.sessions.length === 0) {
-        setCommandNotice({ kind: 'info', message: 'No server sessions found.' });
-        return;
-      }
-
-      const lines = [
-        'Recent sessions:',
-        ...response.sessions.map(formatSessionListItem),
-        '',
-        'Use /resume <sessionId> to switch.',
-      ];
-      setCommandNotice({ kind: 'info', message: lines.join('\n') });
-    } catch (error) {
+    if (!configClient) {
       setCommandNotice({
         kind: 'error',
-        message: `Failed to list sessions: ${formatSessionApiError(error)}`,
+        message: 'Session resume requires a live backend; it is not available in demo mode.',
       });
+      return;
+    }
+
+    setCommandNotice(null);
+    setPickerOpen(true);
+    setPickerLoading(true);
+    setPickerError(undefined);
+    setPickerSessions([]);
+
+    try {
+      const response = await configClient.listSessions({ limit: 50 });
+      setPickerSessions(response.sessions);
+    } catch (error) {
+      setPickerError(formatSessionApiError(error));
+    } finally {
+      setPickerLoading(false);
     }
   }
 
   // Handle global keyboard shortcuts
   useInput((input, key) => {
     // Ignore input when typing in the input box
-    if (inputFocused) return;
+    if (pickerOpen || inputFocused) return;
 
     // Ctrl+L - Clear screen (reset chat messages)
     if (key.ctrl && input === 'l') {
       store.clearMessages();
+      onStaticOutputReset?.();
       return;
     }
 
@@ -231,6 +367,7 @@ export const App: React.FC<AppProps> = ({
     if (key.ctrl && input === 'n') {
       store.startNewSession(createThreadId());
       setActiveTab('chat');
+      onStaticOutputReset?.();
       return;
     }
 
@@ -282,9 +419,11 @@ export const App: React.FC<AppProps> = ({
 
           if (action === 'clear_history') {
             store.clearMessages();
+            onStaticOutputReset?.();
           } else if (action === 'reset_session') {
             store.startNewSession(createThreadId());
             setActiveTab('chat');
+            onStaticOutputReset?.();
           } else if (action === 'exit_application') {
             if ('dispose' in client && typeof client.dispose === 'function') {
               client.dispose();
@@ -302,8 +441,8 @@ export const App: React.FC<AppProps> = ({
               : undefined;
             await restoreHistoricalSession(sessionId);
             return;
-          } else if (action === 'list_sessions') {
-            await listHistoricalSessions();
+          } else if (action === 'open_picker' || action === 'list_sessions') {
+            await openSessionPicker();
             return;
           }
         }
@@ -550,7 +689,14 @@ export const App: React.FC<AppProps> = ({
   };
 
   const { chatWidth, panelWidth } = getContentWidth();
+  const renderedStaticMessageIds = useMemo(
+    () => new Set(staticItems.filter((item): item is StaticChatMessage => item.kind === 'message').map((item) => item.id)),
+    [staticItems],
+  );
   const visibleMessages = state.messages.slice(-MAX_VISIBLE_CHAT_MESSAGES);
+  const dynamicMessages = visibleMessages.filter(
+    (message) => !renderedStaticMessageIds.has(message.id),
+  );
   const visibleArtifacts = state.artifacts;
   const modelName = resolveModelName(state);
   const directory = formatDirectory(process.env.PWD || process.cwd());
@@ -577,7 +723,7 @@ export const App: React.FC<AppProps> = ({
     ];
 
     return (
-      <Box marginBottom={1}>
+      <Box marginBottom={0}>
         {tabs.map((tab, index) => (
           <React.Fragment key={tab.key}>
             {index > 0 && <Text color="gray"> | </Text>}
@@ -677,92 +823,136 @@ export const App: React.FC<AppProps> = ({
   };
 
   return (
-    <Box flexDirection="column" height="100%">
-      {/* Header: Session info and status */}
-      <Header
-        threadId={state.threadId}
-        connectionStatus={state.connectionStatus}
-        runStatus={state.runStatus}
-        lastError={state.lastError}
-        modelName={modelName}
-        directory={directory}
-      />
+    <>
+      <Static items={staticItems}>
+        {(item) => {
+          if (item.kind === 'banner') {
+            return (
+              <Box key={item.id} paddingX={1} marginBottom={1}>
+                <SessionBanner
+                  threadId={item.threadId}
+                  connectionStatus={item.connectionStatus}
+                  runStatus={item.runStatus}
+                  modelName={item.modelName}
+                  directory={item.directory}
+                />
+              </Box>
+            );
+          }
 
-      {/* Tab Navigation */}
-      <Box paddingX={1}>
-        {renderTabs()}
-      </Box>
-
-      {/* Main content area */}
-      <Box flexDirection="row" flexGrow={1}>
-        {activeTab === 'chat' ? (
-          <>
-            {/* Chat area: Message history (70% width) */}
-            <Box
-              flexDirection="column"
-              width={showLiveActivity ? `${chatWidth}%` : '100%'}
-              paddingX={1}
-            >
-              <ChatArea
-                messages={visibleMessages}
-                artifacts={visibleArtifacts}
-                totalMessageCount={state.messages.length}
-                toolCalls={state.toolCalls}
+          return (
+            <Box key={item.id} flexDirection="column" marginBottom={1} paddingX={1}>
+              <MessageBubble
+                message={item.message}
+                allToolCalls={item.toolCalls}
               />
             </Box>
+          );
+        }}
+      </Static>
 
-            {/* Activity panel: Plan and tool call progress (30% width) */}
-            {showLiveActivity && (
-              <Box
-                flexDirection="column"
-                width={`${panelWidth}%`}
-                borderStyle="single"
-                borderColor="cyan"
-                paddingX={1}
-              >
-                <ActivityPanel
-                  plan={liveActivity.plan}
-                  toolCalls={liveActivity.toolCalls}
-                  events={liveActivity.events}
+      {pickerOpen ? (
+        <Box flexDirection="column">
+          <SessionPicker
+            sessions={pickerSessions}
+            loading={pickerLoading}
+            error={pickerError}
+            onSelect={(sessionId) => {
+              setPickerOpen(false);
+              void restoreHistoricalSession(sessionId);
+            }}
+            onCancel={() => {
+              setPickerOpen(false);
+            }}
+          />
+        </Box>
+      ) : (
+        <Box flexDirection="column">
+          {/* Main content area */}
+          <Box flexDirection="row" flexGrow={1}>
+            {activeTab === 'chat' ? (
+              <>
+                {/* Chat area: Message history (70% width) */}
+                <Box
+                  flexDirection="column"
+                  width={showLiveActivity ? `${chatWidth}%` : '100%'}
+                  paddingX={1}
+                >
+                  <ChatArea
+                    messages={dynamicMessages}
+                    artifacts={visibleArtifacts}
+                    totalMessageCount={state.messages.length}
+                    toolCalls={state.toolCalls}
+                  />
+                </Box>
+
+                {/* Activity panel: Plan and tool call progress (30% width) */}
+                {showLiveActivity && (
+                  <Box
+                    flexDirection="column"
+                    width={`${panelWidth}%`}
+                    borderStyle="single"
+                    borderColor="cyan"
+                    paddingX={1}
+                  >
+                    <ActivityPanel
+                      plan={liveActivity.plan}
+                      toolCalls={liveActivity.toolCalls}
+                      events={liveActivity.events}
+                    />
+                  </Box>
+                )}
+              </>
+            ) : activeTab === 'stats' ? (
+              <Box flexDirection="column" flexGrow={1}>
+                {renderStatsPanel()}
+              </Box>
+            ) : activeTab === 'config' ? (
+              <Box flexDirection="column" flexGrow={1}>
+                {renderConfigPanel()}
+              </Box>
+            ) : (
+              <Box flexDirection="column" flexGrow={1}>
+                <OutputsView
+                  artifacts={visibleArtifacts}
+                  events={state.events}
                 />
               </Box>
             )}
-          </>
-        ) : activeTab === 'stats' ? (
-          <Box flexDirection="column" flexGrow={1}>
-            {renderStatsPanel()}
           </Box>
-        ) : activeTab === 'config' ? (
-          <Box flexDirection="column" flexGrow={1}>
-            {renderConfigPanel()}
-          </Box>
-        ) : (
-          <Box flexDirection="column" flexGrow={1}>
-            <OutputsView
-              artifacts={visibleArtifacts}
-              events={state.events}
-            />
-          </Box>
-        )}
-      </Box>
 
-      {/* Status bar with keyboard shortcuts */}
-      {activeTab !== 'chat' && renderStatusBar()}
+          {/* Status bar with keyboard shortcuts */}
+          {activeTab !== 'chat' && renderStatusBar()}
 
-      {commandNotice && (
-        <Box paddingX={1} flexShrink={0}>
-          <Text color={commandNotice.kind === 'error' ? 'red' : 'cyan'}>
-            {commandNotice.message}
-          </Text>
+          {commandNotice && (
+            <Box paddingX={1} flexShrink={0}>
+              <Text color={commandNotice.kind === 'error' ? 'red' : 'cyan'}>
+                {commandNotice.message}
+              </Text>
+            </Box>
+          )}
+
+          {/* Tab Navigation */}
+          <Box paddingX={1}>
+            {renderTabs()}
+          </Box>
+
+          {/* Input box at the bottom */}
+          <InputBox
+            onChange={handleInputChange}
+            onSubmit={handleSubmit}
+            disabled={state.connectionStatus !== 'connected' || state.runStatus === 'running'}
+          />
+
+          {/* Pinned status footer below input box */}
+          <StatusFooter
+            connectionStatus={state.connectionStatus}
+            runStatus={state.runStatus}
+            modelName={modelName}
+            directory={directory}
+          />
         </Box>
       )}
-
-      {/* Input box at the bottom */}
-      <InputBox
-        onChange={handleInputChange}
-        onSubmit={handleSubmit}
-        disabled={state.connectionStatus !== 'connected' || state.runStatus === 'running'}
-      />
-    </Box>
+    </>
   );
 };

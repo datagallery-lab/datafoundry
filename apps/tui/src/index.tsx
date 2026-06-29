@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { render } from "ink";
+import { render, type Instance } from "ink";
 import { randomUUID } from "node:crypto";
 import React from "react";
 import { ConfigClient } from "./config/index.js";
@@ -100,6 +100,48 @@ const client = demoMode
       },
     });
 
+let appInstance: Instance | undefined;
+let renderGeneration = 0;
+let staticOutputResetScheduled = false;
+
+function clearTerminal(): void {
+  if (!process.stdout.isTTY) return;
+  process.stdout.write("\u001B[2J\u001B[3J\u001B[H");
+}
+
+function createAppElement(): React.ReactElement {
+  return React.createElement(App, {
+    key: renderGeneration,
+    client,
+    datasourceId,
+    ...(configClient ? { configClient } : {}),
+    ...(initialResume && renderGeneration === 0 ? { initialResume } : {}),
+    onStaticOutputReset: resetStaticOutput,
+  });
+}
+
+function mountApp(): void {
+  appInstance = render(createAppElement());
+}
+
+function resetStaticOutput(): void {
+  if (staticOutputResetScheduled) return;
+  staticOutputResetScheduled = true;
+
+  queueMicrotask(() => {
+    try {
+      const previousInstance = appInstance;
+      renderGeneration += 1;
+
+      previousInstance?.unmount();
+      clearTerminal();
+      mountApp();
+    } finally {
+      staticOutputResetScheduled = false;
+    }
+  });
+}
+
 try {
   store.setConnectionStatus(demoMode ? "connected" : "disconnected");
   if (!initialResume?.enabled) {
@@ -109,14 +151,7 @@ try {
     seedDemoState(datasourceId);
   }
 
-  render(
-    React.createElement(App, {
-      client,
-      datasourceId,
-      ...(configClient ? { configClient } : {}),
-      ...(initialResume ? { initialResume } : {}),
-    }),
-  );
+  mountApp();
 } catch (error) {
   console.error("Failed to start TUI:", error);
   process.exit(1);
