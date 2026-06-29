@@ -1,5 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Box, Text, useApp, useInput } from 'ink';
+import { randomUUID } from 'node:crypto';
 import { Header } from './Header.js';
 import { ChatArea } from './ChatArea.js';
 import { OutputsView } from './OutputsView.js';
@@ -8,16 +9,26 @@ import { InputBox } from './InputBox.js';
 import { KeybindingsHelp } from './KeybindingsHelp.js';
 import { getStatusBarShortcuts } from './keybindings.js';
 import { AssistantTextStreamBuffer, type AssistantTextFlush } from './assistant-stream-buffer.js';
-import { store, type TuiAppState } from '../state/index.js';
+import {
+  restoreSessionConversation,
+  store,
+  type TuiAppState,
+} from '../state/index.js';
 import { getMessageTextContent } from '../state/message-history.js';
 import type { AgentClient, AgentMessage, RunAgentInput } from '../protocol/types.js';
 import { classifyError, formatErrorMessage, errorLogger } from '../protocol/error-handler.js';
 import { commandProcessor } from '../commands/index.js';
 import type { CommandContext } from '../commands/types.js';
+import { ConfigClientError, type ConfigClient, type SessionListItem } from '../config/index.js';
 
 interface AppProps {
   client: AgentClient;
+  configClient?: ConfigClient | undefined;
   datasourceId: string | undefined;
+  initialResume?: {
+    enabled: boolean;
+    sessionId?: string | undefined;
+  } | undefined;
 }
 
 type TabType = 'chat' | 'stats' | 'config' | 'outputs';
@@ -26,6 +37,14 @@ type CommandNotice = {
   kind: 'info' | 'error';
 };
 const MAX_VISIBLE_CHAT_MESSAGES = 40;
+
+const createThreadId = (): string => {
+  try {
+    return randomUUID();
+  } catch {
+    return `thread-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  }
+};
 
 const formatDirectory = (directory: string): string => {
   const homeDirectory = process.env.HOME;
@@ -49,13 +68,37 @@ const resolveModelName = (state: TuiAppState): string => {
   return modelName || model?.name || 'server default';
 };
 
-export const App: React.FC<AppProps> = ({ client, datasourceId }) => {
+const formatSessionListItem = (session: SessionListItem): string => {
+  const title = session.title?.trim() || 'Untitled session';
+  const timestamp = session.lastMessageAt ?? session.updatedAt ?? session.createdAt;
+  const suffix = timestamp ? ` · ${new Date(timestamp).toLocaleString()}` : '';
+  return `  ${session.threadId} · ${title}${suffix}`;
+};
+
+const formatSessionApiError = (error: unknown): string => {
+  if (
+    error instanceof ConfigClientError &&
+    error.statusCode === 404 &&
+    error.message.includes('Unknown API resource: sessions')
+  ) {
+    return 'The connected API process does not support /api/v1/sessions. Rebuild/restart the API server, then retry /resume.';
+  }
+  return error instanceof Error ? error.message : String(error);
+};
+
+export const App: React.FC<AppProps> = ({
+  client,
+  configClient,
+  datasourceId,
+  initialResume,
+}) => {
   const { exit } = useApp();
   const [state, setState] = useState<TuiAppState>(store.getState());
   const [activeTab, setActiveTab] = useState<TabType>('chat');
   const [inputFocused, setInputFocused] = useState(false);
   const [commandNotice, setCommandNotice] = useState<CommandNotice | null>(null);
   const [retryCount, setRetryCount] = useState(0);
+  const startupResumeAttempted = useRef(false);
 
   // Subscribe to state changes
   useEffect(() => {
@@ -78,6 +121,101 @@ export const App: React.FC<AppProps> = ({ client, datasourceId }) => {
     };
   }, [client]);
 
+  useEffect(() => {
+    if (!initialResume?.enabled || startupResumeAttempted.current) return;
+    if (state.connectionStatus !== 'connected') return;
+    startupResumeAttempted.current = true;
+    void restoreHistoricalSession(initialResume.sessionId, true);
+  }, [initialResume?.enabled, initialResume?.sessionId, state.connectionStatus]);
+
+  async function restoreHistoricalSession(
+    requestedSessionId?: string | undefined,
+    startup = false,
+  ): Promise<void> {
+    if (store.getState().runStatus === 'running') {
+      setCommandNotice({
+        kind: 'error',
+        message: 'Cannot resume another session while a run is active.',
+      });
+      return;
+    }
+
+    if (!configClient) {
+      setCommandNotice({
+        kind: 'error',
+        message: 'Session resume requires a live backend; it is not available in demo mode.',
+      });
+      return;
+    }
+
+    setCommandNotice({
+      kind: 'info',
+      message: requestedSessionId
+        ? `Loading session ${requestedSessionId}...`
+        : 'Loading latest session...',
+    });
+
+    try {
+      let sessionId = requestedSessionId;
+      if (!sessionId) {
+        const response = await configClient.listSessions({ limit: 1 });
+        sessionId = response.sessions[0]?.threadId ?? response.sessions[0]?.id;
+        if (!sessionId) {
+          setCommandNotice({
+            kind: startup ? 'info' : 'error',
+            message: 'No server sessions found.',
+          });
+          return;
+        }
+      }
+
+      const conversation = await configClient.getSessionConversation(sessionId);
+      const restored = restoreSessionConversation(conversation);
+      store.restoreSession(restored);
+      setActiveTab('chat');
+      setCommandNotice({
+        kind: 'info',
+        message: `Resumed session ${restored.title ? `"${restored.title}" ` : ''}(${restored.threadId}).`,
+      });
+    } catch (error) {
+      setCommandNotice({
+        kind: 'error',
+        message: `Resume failed: ${formatSessionApiError(error)}`,
+      });
+    }
+  }
+
+  async function listHistoricalSessions(): Promise<void> {
+    if (!configClient) {
+      setCommandNotice({
+        kind: 'error',
+        message: 'Session listing requires a live backend; it is not available in demo mode.',
+      });
+      return;
+    }
+
+    try {
+      const response = await configClient.listSessions({ limit: 10 });
+      if (response.sessions.length === 0) {
+        setCommandNotice({ kind: 'info', message: 'No server sessions found.' });
+        return;
+      }
+
+      const lines = [
+        'Recent sessions:',
+        ...response.sessions.map(formatSessionListItem),
+        '',
+        'Use /resume <sessionId> to switch.',
+      ];
+      setCommandNotice({ kind: 'info', message: lines.join('\n') });
+    } catch (error) {
+      setCommandNotice({
+        kind: 'error',
+        message: `Failed to list sessions: ${formatSessionApiError(error)}`,
+      });
+    }
+  }
+
   // Handle global keyboard shortcuts
   useInput((input, key) => {
     // Ignore input when typing in the input box
@@ -85,20 +223,13 @@ export const App: React.FC<AppProps> = ({ client, datasourceId }) => {
 
     // Ctrl+L - Clear screen (reset chat messages)
     if (key.ctrl && input === 'l') {
-      // Clear messages but keep thread and session
-      const currentState = store.getState();
-      store.reset();
-      if (currentState.threadId) {
-        store.setThreadId(currentState.threadId);
-      }
+      store.clearMessages();
       return;
     }
 
     // Ctrl+N - New session (reset and create new thread)
     if (key.ctrl && input === 'n') {
-      store.reset();
-      const newThreadId = `thread-${Date.now()}`;
-      store.setThreadId(newThreadId);
+      store.startNewSession(createThreadId());
       setActiveTab('chat');
       return;
     }
@@ -146,18 +277,14 @@ export const App: React.FC<AppProps> = ({ client, datasourceId }) => {
       if (result.success) {
         // Check for special actions
         if (result.data && typeof result.data === 'object') {
-          const commandData = result.data as { action?: string; tab?: unknown };
+          const commandData = result.data as { action?: string; tab?: unknown; sessionId?: unknown };
           const action = commandData.action;
 
           if (action === 'clear_history') {
-            // Clear messages but keep thread
-            store.getState().messages = [];
-            setState(store.getState());
+            store.clearMessages();
           } else if (action === 'reset_session') {
-            // Reset entire session
-            store.setThreadId(null);
-            store.getState().messages = [];
-            setState(store.getState());
+            store.startNewSession(createThreadId());
+            setActiveTab('chat');
           } else if (action === 'exit_application') {
             if ('dispose' in client && typeof client.dispose === 'function') {
               client.dispose();
@@ -169,6 +296,15 @@ export const App: React.FC<AppProps> = ({ client, datasourceId }) => {
             if (tab === 'chat' || tab === 'stats' || tab === 'config' || tab === 'outputs') {
               setActiveTab(tab);
             }
+          } else if (action === 'resume_session') {
+            const sessionId = typeof commandData.sessionId === 'string'
+              ? commandData.sessionId
+              : undefined;
+            await restoreHistoricalSession(sessionId);
+            return;
+          } else if (action === 'list_sessions') {
+            await listHistoricalSessions();
+            return;
           }
         }
 
@@ -198,7 +334,7 @@ export const App: React.FC<AppProps> = ({ client, datasourceId }) => {
     // Prepare stable run input material. Retry attempts should not append
     // duplicate chat messages or send retry UI text back as model history.
     const currentState = store.getState();
-    const threadId = currentState.threadId || `thread-${Date.now()}`;
+    const threadId = currentState.threadId || createThreadId();
     if (!currentState.threadId) {
       store.setThreadId(threadId);
     }

@@ -2,6 +2,7 @@ import { createInitialTuiState, type TuiSessionState } from "./tui-state.js";
 import {
   reduceLiveRunEvent,
   type LiveRun,
+  type LiveToolCallRecord,
   createInitialSessionUsage,
   deriveRunUsage,
   accumulateSessionUsage,
@@ -12,6 +13,7 @@ import {
   addUserMessage,
   addAssistantMessage,
   appendToLastAssistantMessage,
+  clearMessages,
   finalizeLastAssistantMessage,
   updateLastAssistantMessage,
   insertToolCallIntoLastMessage,
@@ -22,6 +24,7 @@ import {
   clearInputBuffer,
   setThreadId,
 } from "./tui-state.js";
+import type { DisplayMessage } from "./tui-state.js";
 import type { WorkspaceConfigStore } from "./data-task-state.js";
 
 /**
@@ -270,6 +273,54 @@ class StateStore {
   setThreadId(threadId: string | null): void {
     const newState = setThreadId(this.state, threadId);
     this.setState(newState as TuiAppState);
+  }
+
+  /**
+   * Clear chat messages while preserving the current session.
+   */
+  clearMessages(): void {
+    const newState = clearMessages(this.state);
+    this.setState(newState as TuiAppState, true);
+  }
+
+  /**
+   * Start a fresh session with a known thread id.
+   */
+  startNewSession(threadId: string): void {
+    this.setState({
+      ...createInitialTuiState(),
+      workspaceConfig: this.state.workspaceConfig,
+      sessionStats: createInitialSessionUsage(),
+      connectionStatus: this.state.connectionStatus,
+      threadId,
+    }, true);
+  }
+
+  /**
+   * Replace visible state with a server-authoritative session conversation.
+   */
+  restoreSession(input: {
+    threadId: string;
+    messages: DisplayMessage[];
+    toolCalls?: LiveToolCallRecord[] | undefined;
+  }): void {
+    const initial = createInitialTuiState();
+    this.setState({
+      ...this.state,
+      plan: initial.plan,
+      events: initial.events,
+      artifacts: initial.artifacts,
+      audits: initial.audits,
+      runStatus: initial.runStatus,
+      errorMessage: undefined,
+      toolCalls: input.toolCalls ?? [],
+      runStartedAt: undefined,
+      runFinishedAt: undefined,
+      tokenUsage: undefined,
+      messages: input.messages,
+      sessionStats: createInitialSessionUsage(),
+      threadId: input.threadId,
+    }, true);
   }
 
   /**

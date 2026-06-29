@@ -122,6 +122,29 @@ export const resetCommand: Command = {
   },
 };
 
+export const resumeCommand: Command = {
+  name: 'resume',
+  description: 'Resume a server session (/resume [latest|list|sessionId])',
+  execute: async (args) => {
+    const target = args[0]?.trim();
+    if (target === 'list') {
+      return {
+        success: true,
+        message: 'Loading recent sessions...',
+        data: { action: 'list_sessions' },
+      };
+    }
+    return {
+      success: true,
+      message: 'Loading session...',
+      data: {
+        action: 'resume_session',
+        ...(target && target !== 'latest' ? { sessionId: target } : {}),
+      },
+    };
+  },
+};
+
 export const exitCommand: Command = {
   name: 'exit',
   description: 'Exit the TUI application',
@@ -146,6 +169,7 @@ function getAllCommands(): Command[] {
     configCommand,
     outputsCommand,
     resetCommand,
+    resumeCommand,
     exitCommand,
   ];
 }
