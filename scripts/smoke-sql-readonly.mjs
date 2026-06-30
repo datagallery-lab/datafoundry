@@ -1,12 +1,13 @@
-import { LocalDataGateway } from "../packages/data-gateway/dist/index.js";
+import { LocalDataGateway, createDemoDuckDbConfig } from "../packages/data-gateway/dist/index.js";
 import { createMetadataStore } from "../packages/metadata/dist/index.js";
-import { mkdirSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 
 const stamp = Date.now();
 const root = `storage/sql-smoke/${stamp}`;
 const metadataPath = `${root}/metadata.sqlite`;
 const sqlitePath = `${root}/orders.sqlite`;
+const duckdbDemoPath = `${root}/api-duckdb-demo.duckdb`;
 mkdirSync(root, { recursive: true });
 createSqliteFixture(sqlitePath);
 
@@ -38,7 +39,7 @@ try {
     id: "duckdb-demo",
     name: "DuckDB Demo",
     type: "duckdb",
-    config: { mode: "demo" }
+    config: { ...createDemoDuckDbConfig(), path: duckdbDemoPath }
   });
 
   const selectResult = await gateway.runSqlReadonly({
@@ -81,6 +82,24 @@ try {
     limit: 2
   });
   assert(demoResult.row_count === 2, `DuckDB demo row_count expected 2, got ${demoResult.row_count}`);
+  assert(existsSync(duckdbDemoPath), "DuckDB demo should create and query a real .duckdb file");
+
+  const demoAggregateResult = await gateway.runSqlReadonly({
+    user_id,
+    datasource_id: "duckdb-demo",
+    sql: [
+      "SELECT channel, COUNT(*) AS orders, SUM(gmv) AS total_gmv",
+      "FROM orders GROUP BY channel ORDER BY total_gmv DESC"
+    ].join(" "),
+    limit: 5
+  });
+  assert(
+    demoAggregateResult.row_count === 3,
+    `DuckDB demo aggregate row_count expected 3, got ${demoAggregateResult.row_count}`
+  );
+  assert(demoAggregateResult.columns.includes("channel"), "DuckDB demo aggregate should include channel");
+  assert(demoAggregateResult.columns.includes("orders"), "DuckDB demo aggregate should include orders");
+  assert(demoAggregateResult.columns.includes("total_gmv"), "DuckDB demo aggregate should include total_gmv");
 
   for (const sql of [
     "DELETE FROM orders",

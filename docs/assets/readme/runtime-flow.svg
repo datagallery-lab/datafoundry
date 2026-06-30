@@ -1,6 +1,6 @@
 <svg width="1200" height="560" viewBox="0 0 1200 560" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
   <title id="title">DataAgent compatibility banner</title>
-  <desc id="desc">A visual banner showing DataAgent as a compatibility-first runtime with ready-to-use protocol, model, tool, file, memory, artifact, and client integrations.</desc>
+  <desc id="desc">A compatibility-first runtime diagram with custom pictograms for clients, protocols, tools, audit, models, memory, files, RAG, artifacts, and skills.</desc>
   <defs>
     <filter id="softShadow" x="-30" y="-30" width="1260" height="620" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
       <feDropShadow dx="0" dy="18" stdDeviation="20" flood-color="#0F172A" flood-opacity="0.12"/>
@@ -26,7 +26,8 @@
       .coreTitle { font: 900 36px Avenir Next, Manrope, ui-sans-serif, system-ui, sans-serif; fill: #FFFFFF; }
       .coreText { font: 780 15px Avenir Next, Manrope, ui-sans-serif, system-ui, sans-serif; fill: #D8E7FF; }
       .label { font: 850 12px Avenir Next, Manrope, ui-sans-serif, system-ui, sans-serif; fill: #334155; letter-spacing: .04em; }
-      .darkLabel { font: 850 12px Avenir Next, Manrope, ui-sans-serif, system-ui, sans-serif; fill: #D8E7FF; letter-spacing: .04em; }
+      .stroke { fill: none; stroke-width: 3.4; stroke-linecap: round; stroke-linejoin: round; }
+      .thin { fill: none; stroke-width: 2.3; stroke-linecap: round; stroke-linejoin: round; }
     </style>
   </defs>
 
@@ -40,9 +41,12 @@
     <rect x="406" y="140" width="388" height="272" rx="34" stroke="url(#glass)" stroke-width="2" stroke-opacity="0.82"/>
     <path d="M468 244c64-64 194-86 284-16" stroke="#60A5FA" stroke-opacity="0.38" stroke-width="16" stroke-linecap="round"/>
     <path d="M458 328c86 58 206 56 286-8" stroke="#34D399" stroke-opacity="0.34" stroke-width="16" stroke-linecap="round"/>
-    <circle cx="600" cy="278" r="76" fill="#0F766E" fill-opacity="0.26"/>
-    <circle cx="600" cy="278" r="48" fill="#14B8A6"/>
-    <path d="M580 278h40M600 258v40" stroke="#FFFFFF" stroke-width="8" stroke-linecap="round"/>
+    <circle cx="600" cy="278" r="78" fill="#0F766E" fill-opacity="0.22"/>
+    <circle cx="600" cy="278" r="49" fill="#14B8A6"/>
+    <path d="M582 284c12 10 24 10 36 0" stroke="#FFFFFF" stroke-width="6" stroke-linecap="round"/>
+    <path d="M576 268c15-18 33-18 48 0" stroke="#FFFFFF" stroke-width="6" stroke-linecap="round"/>
+    <circle cx="586" cy="279" r="4" fill="#FFFFFF"/>
+    <circle cx="614" cy="279" r="4" fill="#FFFFFF"/>
     <text x="600" y="374" class="coreTitle" text-anchor="middle">DataAgent</text>
     <text x="600" y="400" class="coreText" text-anchor="middle">ready on day one</text>
   </g>
@@ -50,104 +54,132 @@
   <g filter="url(#cardShadow)">
     <rect x="92" y="112" width="134" height="92" rx="26" fill="#EFF6FF" stroke="#BFDBFE"/>
     <rect x="136" y="134" width="46" height="46" rx="16" fill="#DBEAFE" stroke="#93C5FD"/>
-    <path d="M149 157h20M159 147v20" stroke="#2563EB" stroke-width="4" stroke-linecap="round"/>
+    <g transform="translate(159 157)" stroke="#2563EB">
+      <rect x="-15" y="-11" width="30" height="20" rx="4" class="stroke"/>
+      <path d="M-7 14h14M0 9v5" class="thin"/>
+      <path d="M-9-4h8M-9 2h14" class="thin"/>
+      <circle cx="10" cy="-4" r="2" fill="#2563EB" stroke="none"/>
+    </g>
     <text x="159" y="191" class="label" text-anchor="middle">GUI</text>
 
     <rect x="250" y="112" width="134" height="92" rx="26" fill="#F5F3FF" stroke="#DDD6FE"/>
     <rect x="294" y="134" width="46" height="46" rx="16" fill="#EDE9FE" stroke="#C4B5FD"/>
-    <path d="M304 153h26M304 165h18" stroke="#7C3AED" stroke-width="4" stroke-linecap="round"/>
+    <g transform="translate(317 157)" stroke="#7C3AED">
+      <rect x="-15" y="-12" width="30" height="24" rx="4" class="stroke"/>
+      <path d="M-8-4l5 4-5 4M1 5h10" class="thin"/>
+    </g>
     <text x="317" y="191" class="label" text-anchor="middle">TUI</text>
   </g>
 
   <g filter="url(#cardShadow)">
     <rect x="82" y="232" width="132" height="92" rx="26" fill="#ECFEFF" stroke="#A5F3FC"/>
     <rect x="125" y="254" width="46" height="46" rx="16" fill="#CFFAFE" stroke="#67E8F9"/>
-    <path d="M136 277c12-16 24-16 36 0" stroke="#0891B2" stroke-width="4" stroke-linecap="round"/>
+    <g transform="translate(148 277)" stroke="#0891B2">
+      <path d="M-15 2c6-10 14-14 24-12 8 2 13 7 16 14" class="stroke"/>
+      <path d="M-9 8c5-5 11-7 18-5" class="thin"/>
+      <circle cx="-14" cy="2" r="3" fill="#0891B2" stroke="none"/>
+      <circle cx="25" cy="4" r="3" fill="#0891B2" stroke="none"/>
+    </g>
     <text x="148" y="311" class="label" text-anchor="middle">AG-UI</text>
 
     <rect x="236" y="232" width="132" height="92" rx="26" fill="#F0FDF4" stroke="#BBF7D0"/>
     <rect x="279" y="254" width="46" height="46" rx="16" fill="#DCFCE7" stroke="#86EFAC"/>
-    <path d="M290 276l8 8 18-22" stroke="#16A34A" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+    <g transform="translate(302 277)" stroke="#16A34A">
+      <path d="M-12-5h10M2-5h10M-2-5v10M-8 5h16" class="stroke"/>
+      <path d="M-16-11h8v12h-8zM8-11h8v12H8z" class="thin"/>
+      <circle cx="0" cy="11" r="3" fill="#16A34A" stroke="none"/>
+    </g>
     <text x="302" y="311" class="label" text-anchor="middle">MCP</text>
   </g>
 
   <g filter="url(#cardShadow)">
     <rect x="106" y="352" width="134" height="92" rx="26" fill="#FFF7ED" stroke="#FED7AA"/>
     <rect x="150" y="374" width="46" height="46" rx="16" fill="#FFEDD5" stroke="#FDBA74"/>
-    <path d="M162 394h22M173 383v22" stroke="#EA580C" stroke-width="4" stroke-linecap="round"/>
+    <g transform="translate(173 397)" stroke="#EA580C">
+      <path d="M-13 10l12-12 6 6-12 12" class="stroke"/>
+      <path d="M3-9l6-6 6 6-6 6" class="stroke"/>
+      <path d="M-15-11h9M-11-15v8" class="thin"/>
+    </g>
     <text x="173" y="431" class="label" text-anchor="middle">Tools</text>
 
     <rect x="264" y="352" width="134" height="92" rx="26" fill="#FDF2F8" stroke="#FBCFE8"/>
     <rect x="308" y="374" width="46" height="46" rx="16" fill="#FCE7F3" stroke="#F9A8D4"/>
-    <path d="M320 388h22M320 402h22" stroke="#DB2777" stroke-width="4" stroke-linecap="round"/>
+    <g transform="translate(331 397)" stroke="#DB2777">
+      <rect x="-13" y="-14" width="26" height="28" rx="4" class="stroke"/>
+      <path d="M-6-6h12M-6 1h8M-6 8h5" class="thin"/>
+      <path d="M5 9l4 4 8-10" class="stroke"/>
+    </g>
     <text x="331" y="431" class="label" text-anchor="middle">Audit</text>
   </g>
 
   <g filter="url(#cardShadow)">
     <rect x="816" y="112" width="134" height="92" rx="26" fill="#EFF6FF" stroke="#BFDBFE"/>
     <rect x="860" y="134" width="46" height="46" rx="16" fill="#DBEAFE" stroke="#93C5FD"/>
-    <path d="M872 156h22M883 145v22" stroke="#2563EB" stroke-width="4" stroke-linecap="round"/>
+    <g transform="translate(883 157)" stroke="#2563EB">
+      <path d="M0-15l14 8v16L0 17l-14-8V-7z" class="stroke"/>
+      <path d="M-14-7L0 1l14-8M0 1v16" class="thin"/>
+      <path d="M-6-18h12" class="thin"/>
+    </g>
     <text x="883" y="191" class="label" text-anchor="middle">Models</text>
 
     <rect x="974" y="112" width="134" height="92" rx="26" fill="#F0FDF4" stroke="#BBF7D0"/>
     <rect x="1018" y="134" width="46" height="46" rx="16" fill="#DCFCE7" stroke="#86EFAC"/>
-    <path d="M1029 159h24M1041 147v24" stroke="#16A34A" stroke-width="4" stroke-linecap="round"/>
+    <g transform="translate(1041 157)" stroke="#16A34A">
+      <path d="M-14 3c0-10 7-17 16-17 8 0 14 5 14 13 0 7-5 12-12 12H-1" class="stroke"/>
+      <path d="M-5-4c7-5 15-1 14 6-.5 4-4 6-8 6" class="thin"/>
+      <path d="M-12 7h10v9" class="thin"/>
+    </g>
     <text x="1041" y="191" class="label" text-anchor="middle">Memory</text>
   </g>
 
   <g filter="url(#cardShadow)">
     <rect x="832" y="232" width="132" height="92" rx="26" fill="#F5F3FF" stroke="#DDD6FE"/>
     <rect x="875" y="254" width="46" height="46" rx="16" fill="#EDE9FE" stroke="#C4B5FD"/>
-    <path d="M887 267h22M887 281h22" stroke="#7C3AED" stroke-width="4" stroke-linecap="round"/>
+    <g transform="translate(898 277)" stroke="#7C3AED">
+      <path d="M-16-8h11l4 5h17v18h-32z" class="stroke"/>
+      <path d="M-8 5h16M-8 11h10" class="thin"/>
+    </g>
     <text x="898" y="311" class="label" text-anchor="middle">Files</text>
 
     <rect x="986" y="232" width="132" height="92" rx="26" fill="#ECFEFF" stroke="#A5F3FC"/>
     <rect x="1029" y="254" width="46" height="46" rx="16" fill="#CFFAFE" stroke="#67E8F9"/>
-    <path d="M1040 276l8 8 18-22" stroke="#0891B2" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+    <g transform="translate(1052 277)" stroke="#0891B2">
+      <path d="M-12-14h17l7 7v20h-24z" class="thin"/>
+      <path d="M5-14v7h7" class="thin"/>
+      <circle cx="2" cy="3" r="8" class="stroke"/>
+      <path d="M8 9l8 8" class="stroke"/>
+    </g>
     <text x="1052" y="311" class="label" text-anchor="middle">RAG</text>
   </g>
 
   <g filter="url(#cardShadow)">
     <rect x="802" y="352" width="134" height="92" rx="26" fill="#FFF7ED" stroke="#FED7AA"/>
     <rect x="846" y="374" width="46" height="46" rx="16" fill="#FFEDD5" stroke="#FDBA74"/>
-    <path d="M858 386h22v20h-22z" stroke="#EA580C" stroke-width="4" stroke-linejoin="round"/>
+    <g transform="translate(869 397)" stroke="#EA580C">
+      <path d="M-14-8l14-8 14 8v16L0 16l-14-8z" class="stroke"/>
+      <path d="M-14-8L0 0l14-8M0 0v16" class="thin"/>
+      <path d="M12-17l2-4 2 4 4 2-4 2-2 4-2-4-4-2z" fill="#EA580C" stroke="none"/>
+    </g>
     <text x="869" y="431" class="label" text-anchor="middle">Artifacts</text>
 
     <rect x="960" y="352" width="134" height="92" rx="26" fill="#FDF2F8" stroke="#FBCFE8"/>
     <rect x="1004" y="374" width="46" height="46" rx="16" fill="#FCE7F3" stroke="#F9A8D4"/>
-    <path d="M1016 398h22M1027 387v22" stroke="#DB2777" stroke-width="4" stroke-linecap="round"/>
+    <g transform="translate(1027 397)" stroke="#DB2777">
+      <path d="M0-16l5 10 11 2-8 8 2 11L0 9l-10 6 2-11-8-8 11-2z" class="stroke"/>
+      <path d="M-17 14h34" class="thin"/>
+    </g>
     <text x="1027" y="431" class="label" text-anchor="middle">Skills</text>
   </g>
 
   <g filter="url(#cardShadow)">
     <rect x="318" y="472" width="564" height="36" rx="18" fill="#FFFFFF" stroke="#E2E8F0"/>
-    <g transform="translate(354 481)">
-      <circle cx="9" cy="9" r="9" fill="#14B8A6"/>
-      <path d="M5 9l3 3 6-7" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-    </g>
-    <g transform="translate(432 481)">
-      <circle cx="9" cy="9" r="9" fill="#2563EB"/>
-      <path d="M5 9h8M9 5v8" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round"/>
-    </g>
-    <g transform="translate(510 481)">
-      <circle cx="9" cy="9" r="9" fill="#EA580C"/>
-      <path d="M5 6h8v8H5z" stroke="#FFFFFF" stroke-width="2" stroke-linejoin="round"/>
-    </g>
-    <g transform="translate(588 481)">
-      <circle cx="9" cy="9" r="9" fill="#7C3AED"/>
-      <path d="M5 8h8M5 12h8" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round"/>
-    </g>
-    <g transform="translate(666 481)">
-      <circle cx="9" cy="9" r="9" fill="#DB2777"/>
-      <path d="M5 9h8" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round"/>
-    </g>
-    <g transform="translate(744 481)">
-      <circle cx="9" cy="9" r="9" fill="#0891B2"/>
-      <path d="M5 10c4-6 8-6 12 0" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round"/>
-    </g>
-    <g transform="translate(822 481)">
-      <circle cx="9" cy="9" r="9" fill="#0F172A"/>
-      <path d="M6 6h6v6H6z" stroke="#FFFFFF" stroke-width="2" stroke-linejoin="round"/>
-    </g>
+    <path d="M358 490h484" stroke="#CBD5E1" stroke-width="2" stroke-linecap="round" stroke-dasharray="2 16"/>
+    <circle cx="363" cy="490" r="8" fill="#14B8A6"/>
+    <circle cx="441" cy="490" r="8" fill="#2563EB"/>
+    <circle cx="519" cy="490" r="8" fill="#EA580C"/>
+    <circle cx="597" cy="490" r="8" fill="#7C3AED"/>
+    <circle cx="675" cy="490" r="8" fill="#DB2777"/>
+    <circle cx="753" cy="490" r="8" fill="#0891B2"/>
+    <circle cx="831" cy="490" r="8" fill="#0F172A"/>
   </g>
 </svg>

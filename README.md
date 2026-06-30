@@ -1,11 +1,11 @@
-<p align="center">
-  <img src="docs/assets/readme/hero.png" alt="DataAgent workbench preview" width="100%">
-</p>
-
 <h1 align="center">DataAgent 🚀</h1>
 
 <p align="center">
   A TypeScript data-agent runtime and workbench for safe, auditable analysis over databases, files, knowledge, and generated artifacts.
+</p>
+
+<p align="center">
+  English · <a href="README_zh.md">简体中文</a>
 </p>
 
 <p align="center">
@@ -14,14 +14,10 @@
   <a href="docs/README.md"><strong>Docs</strong></a>
   ·
   <a href="docs/engineering/supported-databases.md"><strong>Supported Databases</strong></a>
-</p>
-
-<p align="center">
-  <img alt="Node.js 22+" src="https://img.shields.io/badge/Node.js-22%2B-339933?style=for-the-badge&logo=nodedotjs&logoColor=white">
-  <img alt="TypeScript" src="https://img.shields.io/badge/TypeScript-5.8-3178C6?style=for-the-badge&logo=typescript&logoColor=white">
-  <img alt="Mastra" src="https://img.shields.io/badge/Mastra-Agent_Runtime-111827?style=for-the-badge">
-  <img alt="AG-UI" src="https://img.shields.io/badge/AG--UI-Protocol-14B8A6?style=for-the-badge">
-  <img alt="CopilotKit" src="https://img.shields.io/badge/CopilotKit-Frontend_Runtime-F97316?style=for-the-badge">
+  ·
+  <a href="#-contributing"><strong>Contributing</strong></a>
+  ·
+  <a href="#-license"><strong>License</strong></a>
 </p>
 
 ## ✨ Why DataAgent
@@ -31,20 +27,11 @@ auditable events, durable outputs, and a frontend protocol that can replay the w
 
 DataAgent puts those pieces behind one runtime:
 
-<table>
-  <tr>
-    <td><strong>Schema-first analysis</strong><br/>The agent inspects datasource structure before it can run read-only SQL.</td>
-    <td><strong>Context governance</strong><br/>Conversation history, memory, tool results, files, and knowledge sources are compiled under one budget.</td>
-  </tr>
-  <tr>
-    <td><strong>Auditable execution</strong><br/>AG-UI events, SQL audit logs, artifacts, and session history are persisted as replayable records.</td>
-    <td><strong>File and artifact lifecycle</strong><br/>Uploads, workspace files, generated outputs, and KB imports share the same deduplicated asset layer.</td>
-  </tr>
-</table>
-
-<p align="center">
-  <img src="docs/assets/readme/capability-cards.png" alt="DataAgent capabilities" width="100%">
-</p>
+- 🔎 **Schema-first analysis** — the agent inspects datasource structure before it can run read-only SQL.
+- 🧠 **Governed context** — conversation history, memory, tool results, files, and knowledge sources are compiled under one budget.
+- 🧾 **Auditable execution** — AG-UI events, SQL audit logs, artifacts, and session history are persisted as replayable records.
+- 📦 **Unified assets** — uploads, workspace files, generated outputs, and KB imports share the same deduplicated asset layer.
+- 🧩 **Protocol-ready runtime** — CopilotKit / AG-UI clients consume the same events, run state, artifacts, and replay data.
 
 ## 🗄️ Bring Your Data Stack
 
@@ -134,6 +121,16 @@ npm run smoke:docs
 
 Use targeted smoke checks for the package you touch. `package.json` lists the full verification set.
 
+## 🤝 Contributing
+
+DataAgent is moving quickly, so small, well-scoped contributions are easiest to review.
+
+1. Open an issue or discussion for behavioral changes, protocol changes, datasource adapters, and agent-policy changes.
+2. Keep pull requests focused on one runtime boundary or feature area.
+3. Run `npm run build` and the targeted smoke checks for the packages you touched.
+4. Update docs when a change affects setup, APIs, datasource configuration, event behavior, or user-visible output.
+5. Do not commit credentials, local databases, generated storage, or private benchmark data.
+
 ## 🛣️ Roadmap
 
 <table>
@@ -172,3 +169,7 @@ Use targeted smoke checks for the package you touch. `package.json` lists the fu
 
 DataAgent is under active development. Current code and passing smoke checks are the source of truth; dated planning and
 review documents are kept for context but should not override implemented runtime behavior.
+
+## 📄 License
+
+Apache License 2.0. See [LICENSE](LICENSE).

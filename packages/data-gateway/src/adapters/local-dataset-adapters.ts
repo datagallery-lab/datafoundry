@@ -6,38 +6,36 @@ import type {
   SchemaSummary,
   TableResult
 } from "../types.js";
-import { readFileSync } from "node:fs";
+import { demoDuckDbPath } from "../demo-duckdb.js";
+import { DuckDbAdapter } from "./local-sql-adapters.js";
+import { mkdirSync, readFileSync } from "node:fs";
+import { dirname } from "node:path";
 import readXlsxFile from "read-excel-file/node";
+import type * as DuckDbModule from "duckdb";
+
+const INSERT_BATCH_SIZE = 500;
 
 export class DuckDbDemoAdapter implements DataSourceAdapter {
   constructor(private readonly config: Record<string, unknown>) {}
 
   async inspectSchema(input: AdapterExecutionInput = {}): Promise<Omit<SchemaSummary, "datasource_id">> {
     throwIfAborted(input.signal);
-    const tables = demoTables(this.config);
-
-    return {
-      tables: tables.map((table) => ({
-        name: table.name,
-        columns: table.columns.map((column) => ({ name: column, type: inferColumnType(table.rows, column) }))
-      }))
-    };
+    return await (await this.fileAdapter(input.signal)).inspectSchema(input);
   }
 
   async previewTable(input: AdapterPreviewInput): Promise<TableResult> {
     throwIfAborted(input.signal);
-    const table = demoTables(this.config).find((candidate) => candidate.name === input.table);
-
-    if (!table) {
-      throw new Error(`Table not found: ${input.table}`);
-    }
-
-    return objectRowsToTableResult(table.rows.slice(0, input.limit), table.columns);
+    return await (await this.fileAdapter(input.signal)).previewTable(input);
   }
 
   async runSqlReadonly(input: AdapterSqlInput): Promise<TableResult> {
     throwIfAborted(input.signal);
-    return executeSimpleSelectOnTables(demoTables(this.config), input.sql, input.limit);
+    return await (await this.fileAdapter(input.signal)).runSqlReadonly(input);
+  }
+
+  private async fileAdapter(signal?: AbortSignal | undefined): Promise<DuckDbAdapter> {
+    const path = await ensureDemoDuckDbFile(this.config, signal);
+    return new DuckDbAdapter({ ...this.config, mode: "file", path });
   }
 }
 
@@ -71,15 +69,15 @@ export class CsvAdapter implements DataSourceAdapter {
 
   async runSqlReadonly(input: AdapterSqlInput): Promise<TableResult> {
     throwIfAborted(input.signal);
-    return executeSimpleSelectOnTables([this.readTable(input.limit, input.signal)], input.sql, input.limit);
+    return await executeReadonlySqlOnTables([this.readTable(undefined, input.signal)], input.sql, input.limit, input.signal);
   }
 
-  private readTable(limit: number, signal?: AbortSignal | undefined): DatasetTable {
+  private readTable(limit?: number | undefined, signal?: AbortSignal | undefined): DatasetTable {
     throwIfAborted(signal);
     const filePath = stringConfig(this.config, "file_path");
     const raw = readFileSync(filePath, "utf8");
     throwIfAborted(signal);
-    const parsedRows = parseCsv(raw, limit + 1);
+    const parsedRows = parseCsv(raw, limit === undefined ? Number.POSITIVE_INFINITY : limit + 1);
     const columns = parsedRows[0] ?? [];
     const rows = parsedRows.slice(1).map((row) => columnsToObject(columns, row));
 
@@ -121,16 +119,16 @@ export class XlsxAdapter implements DataSourceAdapter {
 
   async runSqlReadonly(input: AdapterSqlInput): Promise<TableResult> {
     throwIfAborted(input.signal);
-    return executeSimpleSelectOnTables([await this.readTable(input.limit, input.signal)], input.sql, input.limit);
+    return await executeReadonlySqlOnTables([await this.readTable(undefined, input.signal)], input.sql, input.limit, input.signal);
   }
 
-  private async readTable(limit: number, signal?: AbortSignal | undefined): Promise<DatasetTable> {
+  private async readTable(limit?: number | undefined, signal?: AbortSignal | undefined): Promise<DatasetTable> {
     throwIfAborted(signal);
     const filePath = stringConfig(this.config, "file_path");
     const rows = normalizeXlsxRows(await readXlsxFile(filePath, { dateFormat: "yyyy-mm-dd" }));
     throwIfAborted(signal);
     const columns = (rows[0] ?? []).map((value: unknown) => String(value ?? ""));
-    const objectRows = rows.slice(1, limit + 1).map((row) => columnsToObject(columns, row));
+    const objectRows = rows.slice(1, limit === undefined ? undefined : limit + 1).map((row) => columnsToObject(columns, row));
 
     return {
       name: stringConfig(this.config, "table_name", "dataset"),
@@ -146,56 +144,199 @@ type DatasetTable = {
   rows: Record<string, unknown>[];
 };
 
-const executeSimpleSelectOnTables = (tables: DatasetTable[], sql: string, limit: number): TableResult => {
-  const parsed = parseSimpleSelect(sql);
-  const table = tables.find((candidate) => candidate.name === parsed.table);
+const ensureDemoDuckDbFile = async (
+  config: Record<string, unknown>,
+  signal?: AbortSignal | undefined
+): Promise<string> => {
+  const path = stringConfig(config, "path", demoDuckDbPath());
+  mkdirSync(dirname(path), { recursive: true });
+  const duckdb = await loadDuckDb();
+  const database = new duckdb.Database(path);
+  const connection = database.connect();
 
-  if (!table) {
-    throw new Error(`Table not found: ${parsed.table}`);
+  try {
+    const rows = await duckDbAll(connection, [
+      "SELECT COUNT(*) AS count",
+      "FROM information_schema.tables",
+      "WHERE table_schema = 'main' AND table_name = 'orders'"
+    ].join(" "), signal);
+    if (recordNumberLoose(rows[0], "count") === 0) {
+      const tables = demoTables(config);
+      if (tables.length === 0) {
+        throw new Error("Demo DuckDB datasource has no tables to seed.");
+      }
+      for (const table of tables) {
+        await loadTableIntoDuckDb(connection, table, signal);
+      }
+    }
+  } finally {
+    await duckDbClose(connection);
+    await duckDbCloseDatabase(database);
   }
 
-  const columns = parsed.columns.length === 1 && parsed.columns[0] === "*" ? table.columns : parsed.columns;
-  const rows = table.rows.slice(0, Math.min(parsed.limit ?? limit, limit));
-
-  return objectRowsToTableResult(rows, columns);
+  return path;
 };
 
-type ParsedSimpleSelect = {
-  columns: string[];
-  table: string;
-  limit?: number;
+const executeReadonlySqlOnTables = async (
+  tables: DatasetTable[],
+  sql: string,
+  limit: number,
+  signal?: AbortSignal | undefined
+): Promise<TableResult> => {
+  const duckdb = await loadDuckDb();
+  const database = new duckdb.Database(":memory:");
+  const connection = database.connect();
+
+  try {
+    for (const table of tables) {
+      await loadTableIntoDuckDb(connection, table, signal);
+    }
+
+    const rows = await duckDbAll(connection, applyStandardLimit(sql, limit), signal);
+    return rowsToTableResult(rows);
+  } finally {
+    await duckDbClose(connection);
+    await duckDbCloseDatabase(database);
+  }
 };
 
-const parseSimpleSelect = (sql: string): ParsedSimpleSelect => {
-  const directMatch = /^SELECT\s+(.+?)\s+FROM\s+("?[\w-]+"?)\s*(?:LIMIT\s+(\d+))?$/iu.exec(sql);
+const loadTableIntoDuckDb = async (
+  connection: DuckDbModule.Connection,
+  table: DatasetTable,
+  signal?: AbortSignal | undefined
+): Promise<void> => {
+  throwIfAborted(signal);
+  const columnTypes = new Map(table.columns.map((column) => [column, inferDuckDbColumnType(table.rows, column)]));
+  const columnDefinitions = table.columns
+    .map((column) => `${quoteIdentifier(column)} ${columnTypes.get(column) ?? "VARCHAR"}`)
+    .join(", ");
+  await duckDbRun(connection, `CREATE TABLE ${quoteIdentifier(table.name)} (${columnDefinitions})`, signal);
 
-  if (directMatch) {
-    return {
-      columns: parseSelectedColumns(directMatch[1] ?? "*"),
-      table: unquoteIdentifier(directMatch[2] ?? ""),
-      ...(directMatch[3] ? { limit: Number.parseInt(directMatch[3], 10) } : {})
+  if (table.rows.length === 0) {
+    return;
+  }
+
+  for (let offset = 0; offset < table.rows.length; offset += INSERT_BATCH_SIZE) {
+    const batchRows = table.rows.slice(offset, offset + INSERT_BATCH_SIZE);
+    const rowsSql = batchRows
+      .map((row) => `(${table.columns.map((column) => sqlLiteral(row[column], columnTypes.get(column))).join(", ")})`)
+      .join(", ");
+    await duckDbRun(connection, `INSERT INTO ${quoteIdentifier(table.name)} VALUES ${rowsSql}`, signal);
+  }
+};
+
+const loadDuckDb = async (): Promise<typeof DuckDbModule> => {
+  const loaded = await import("duckdb") as unknown as { default?: typeof DuckDbModule } & typeof DuckDbModule;
+  return loaded.default ?? loaded;
+};
+
+const duckDbRun = async (
+  connection: DuckDbModule.Connection,
+  sql: string,
+  signal?: AbortSignal | undefined
+): Promise<void> =>
+  await new Promise((resolve, reject) => {
+    const abort = (): void => {
+      reject(signal?.reason instanceof Error ? signal.reason : new Error("RUN_CANCELLED"));
     };
-  }
+    signal?.addEventListener("abort", abort, { once: true });
+    connection.run(sql, (error) => {
+      signal?.removeEventListener("abort", abort);
+      if (error) {
+        reject(error);
+      } else {
+        resolve();
+      }
+    });
+  });
 
-  const wrappedMatch = /^SELECT\s+\*\s+FROM\s+\((SELECT\s+.+)\)\s+AS\s+readonly_query\s+LIMIT\s+(\d+)$/iu.exec(sql);
-
-  if (wrappedMatch) {
-    const inner = parseSimpleSelect(wrappedMatch[1] ?? "");
-
-    return {
-      ...inner,
-      limit: Number.parseInt(wrappedMatch[2] ?? "100", 10)
+const duckDbAll = async (
+  connection: DuckDbModule.Connection,
+  sql: string,
+  signal?: AbortSignal | undefined
+): Promise<DuckDbModule.TableData> =>
+  await new Promise((resolve, reject) => {
+    const abort = (): void => {
+      reject(signal?.reason instanceof Error ? signal.reason : new Error("RUN_CANCELLED"));
     };
+    signal?.addEventListener("abort", abort, { once: true });
+    connection.all(sql, (error, rows) => {
+      signal?.removeEventListener("abort", abort);
+      if (error) {
+        reject(error);
+      } else {
+        resolve(rows);
+      }
+    });
+  });
+
+const duckDbClose = async (connection: DuckDbModule.Connection): Promise<void> =>
+  await new Promise((resolve, reject) => {
+    connection.close((error) => error ? reject(error) : resolve());
+  });
+
+const duckDbCloseDatabase = async (database: DuckDbModule.Database): Promise<void> =>
+  await new Promise((resolve, reject) => {
+    database.close((error) => error ? reject(error) : resolve());
+  });
+
+const applyStandardLimit = (sql: string, limit: number): string => {
+  if (/\bLIMIT\s+\d+\b/iu.test(sql)) {
+    return sql;
   }
 
-  throw new Error("Only simple SELECT column list FROM table queries are supported for file/demo data sources.");
+  return `SELECT * FROM (${sql}) AS readonly_query LIMIT ${limit}`;
 };
 
-const parseSelectedColumns = (rawColumns: string): string[] =>
-  rawColumns
-    .split(",")
-    .map((column) => unquoteIdentifier(column.trim()))
-    .filter((column) => column.length > 0);
+const rowsToTableResult = (rows: unknown[]): TableResult => {
+  const objectRows = rows.filter(isRecord);
+  const columns = Array.from(new Set(objectRows.flatMap((row) => Object.keys(row))));
+
+  return objectRowsToTableResult(objectRows, columns);
+};
+
+const recordNumberLoose = (row: unknown, key: string): number => {
+  if (!isRecord(row)) {
+    return 0;
+  }
+
+  const value = row[key] ?? row[key.toUpperCase()] ?? row[key.toLowerCase()];
+  const numericValue = typeof value === "bigint" ? Number(value) : Number(value);
+  return Number.isFinite(numericValue) ? numericValue : 0;
+};
+
+const inferDuckDbColumnType = (rows: Record<string, unknown>[], column: string): string => {
+  const values = rows
+    .map((row) => row[column])
+    .filter((value) => value !== null && value !== undefined && value !== "");
+
+  if (values.length > 0 && values.every((value) => typeof value === "number" || Number.isFinite(Number(value)))) {
+    return "DOUBLE";
+  }
+
+  if (values.length > 0 && values.every((value) => typeof value === "boolean")) {
+    return "BOOLEAN";
+  }
+
+  return "VARCHAR";
+};
+
+const sqlLiteral = (value: unknown, columnType?: string | undefined): string => {
+  if (value === null || value === undefined || value === "") {
+    return "NULL";
+  }
+
+  if (columnType === "DOUBLE") {
+    const numericValue = Number(value);
+    return Number.isFinite(numericValue) ? String(numericValue) : "NULL";
+  }
+
+  if (columnType === "BOOLEAN") {
+    return value === true ? "TRUE" : "FALSE";
+  }
+
+  return `'${String(value).replaceAll("'", "''")}'`;
+};
 
 const normalizeXlsxRows = (value: unknown): unknown[][] => {
   if (Array.isArray(value) && value.every(Array.isArray)) {
@@ -218,20 +359,6 @@ const objectRowsToTableResult = (rows: Record<string, unknown>[], columns: strin
   rows: rows.map((row) => columns.map((column) => row[column] ?? null)),
   row_count: rows.length
 });
-
-const inferColumnType = (rows: Record<string, unknown>[], column: string): string => {
-  const value = rows.find((row) => row[column] !== null && row[column] !== undefined)?.[column];
-
-  if (typeof value === "number") {
-    return Number.isInteger(value) ? "INTEGER" : "DOUBLE";
-  }
-
-  if (typeof value === "boolean") {
-    return "BOOLEAN";
-  }
-
-  return "TEXT";
-};
 
 const inferCsvColumnType = (rows: Record<string, unknown>[], column: string): string => {
   const values = rows
@@ -348,8 +475,7 @@ const stringConfig = (config: Record<string, unknown>, key: string, defaultValue
   throw new Error(`Missing config value: ${key}`);
 };
 
-const unquoteIdentifier = (identifier: string): string =>
-  identifier.replace(/^"/u, "").replace(/"$/u, "").replaceAll('""', '"');
+const quoteIdentifier = (identifier: string): string => `"${identifier.replaceAll('"', '""')}"`;
 
 const throwIfAborted = (signal?: AbortSignal | undefined): void => {
   if (signal?.aborted) {

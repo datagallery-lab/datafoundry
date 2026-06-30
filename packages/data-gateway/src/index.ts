@@ -73,6 +73,8 @@ import { randomUUID } from "node:crypto";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
+export { createDemoDuckDbConfig, demoDuckDbPath } from "./demo-duckdb.js";
+
 export type {
   AdapterExecutionInput,
   AdapterPreviewInput,

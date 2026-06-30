@@ -623,6 +623,10 @@ const buildAgentInstructions = (input: AgentInstructionsInput): string => {
     );
   }
   policies.push(
+    "Reply in the same natural language as the user's latest request. If the user mixes languages, use the dominant "
+      + "language from the request. Keep SQL, code, table names, column names, and other technical identifiers unchanged."
+  );
+  policies.push(
     `Respect limits. This run allows at most ${AGENT_MAX_STEPS} steps and `
       + `${SQL_MAX_EXECUTION_COUNT} SQL executions total `
       + `(SQL longer than ${SQL_MAX_SQL_CHARS} chars is truncated from view). `
@@ -632,7 +636,9 @@ const buildAgentInstructions = (input: AgentInstructionsInput): string => {
     policies.push(
       "Persist derived artifacts in the workspace. When analysis produces exports, charts, or transformed datasets, "
         + "write them as files via write_file so they are retained with the session, rather than only echoing them in "
-        + "the final message. Call publish_artifact for files that should be visible and downloadable by the user. "
+        + "the final message. Call publish_artifact for files that should be exposed to the client as artifacts. "
+        + "Do not invent download URLs, link text, or UI placement such as 'click the link below'; the client renders "
+        + "download controls from artifact events and file APIs. "
         + "Call promote_workspace_file only to lift a session workspace file into a cross-session reusable asset "
         + "(files in the same session are already retained across runs; do not promote merely to reuse within this session)."
     );
@@ -727,7 +733,7 @@ const createArtifactTools = (input: {
 }): Record<string, ReturnType<typeof createTool>> => ({
   publish_artifact: createTool({
     id: "publish_artifact",
-    description: "Publish a file from the current run workspace as a downloadable artifact.",
+    description: "Publish a file from the current run workspace as a client-visible artifact.",
     inputSchema: z.object({
       path: z.string().min(1),
       name: z.string().min(1).optional(),

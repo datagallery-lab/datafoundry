@@ -13,7 +13,7 @@ import {
 } from "@open-data-agent/agent-runtime";
 import { LocalArtifactService } from "@open-data-agent/artifacts";
 import { type MeResponse, createEnvConfig, createErrorResult, createSuccessResult } from "@open-data-agent/contracts";
-import { LocalDataGateway } from "@open-data-agent/data-gateway";
+import { LocalDataGateway, createDemoDuckDbConfig } from "@open-data-agent/data-gateway";
 import { LocalFileAssetService } from "@open-data-agent/files";
 import { LocalKnowledgeService } from "@open-data-agent/knowledge";
 import {
@@ -773,19 +773,26 @@ const sendJson = (response: ServerResponse, statusCode: number, body: unknown): 
 };
 
 const ensureDemoDataSource = (metadataStore: MetadataStore, userId: string, datasourceId: string): void => {
+  const demoConfig = createDemoDuckDbConfig();
+
   try {
     const current = metadataStore.dataSources.get({
       user_id: userId,
       datasource_id: datasourceId
     });
     const config = JSON.parse(current.config_json) as Record<string, unknown>;
-    if (config.builtin !== true || config.defaultEnabled !== true) {
+    if (
+      config.builtin !== true
+      || config.defaultEnabled !== true
+      || config.mode !== "demo"
+      || config.path !== demoConfig.path
+    ) {
       metadataStore.dataSources.create({
         user_id: userId,
         id: current.id,
         name: current.name,
         type: current.type,
-        config: { ...config, builtin: true, defaultEnabled: true, mode: "demo" },
+        config: { ...config, ...demoConfig },
         ...(current.description ? { description: current.description } : {}),
         status: current.status
       });
@@ -796,7 +803,7 @@ const ensureDemoDataSource = (metadataStore: MetadataStore, userId: string, data
       id: datasourceId,
       name: "API DuckDB Demo",
       type: "duckdb",
-      config: { builtin: true, defaultEnabled: true, mode: "demo" },
+      config: demoConfig,
       description: "Default demo datasource for agent runtime smoke runs."
     });
   }
