@@ -1,9 +1,8 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { Box, Static, Text, useApp, useInput } from 'ink';
+import React, { useState, useEffect, useRef } from 'react';
+import { Box, Text, useApp, useInput, useStdin, useStdout } from 'ink';
 import { randomUUID } from 'node:crypto';
 import { SessionBanner, StatusFooter } from './Header.js';
-import { ChatArea } from './ChatArea.js';
-import { MessageBubble } from './MessageBubble.js';
+import { ChatArea, estimateChatRows } from './ChatArea.js';
 import { OutputsView } from './OutputsView.js';
 import { ActivityPanel } from './ActivityPanel.js';
 import { InputBox } from './InputBox.js';
@@ -11,12 +10,10 @@ import { KeybindingsHelp } from './KeybindingsHelp.js';
 import { SessionPicker } from './SessionPicker.js';
 import { getStatusBarShortcuts } from './keybindings.js';
 import { AssistantTextStreamBuffer, type AssistantTextFlush } from './assistant-stream-buffer.js';
+import { wheelScrollDelta } from '../input/mouse-wheel.js';
 import {
   restoreSessionConversation,
   store,
-  type DisplayMessage,
-  type LiveToolCallRecord,
-  type MessageElement,
   type TuiAppState,
 } from '../state/index.js';
 import { getMessageTextContent } from '../state/message-history.js';
@@ -34,99 +31,12 @@ interface AppProps {
     enabled: boolean;
     sessionId?: string | undefined;
   } | undefined;
-  onStaticOutputReset?: (() => void) | undefined;
 }
 
 type TabType = 'chat' | 'stats' | 'config' | 'outputs';
 type CommandNotice = {
   message: string;
   kind: 'info' | 'error';
-};
-const MAX_VISIBLE_CHAT_MESSAGES = 40;
-
-type StaticBanner = {
-  kind: 'banner';
-  id: string;
-  threadId: string | undefined;
-  connectionStatus: TuiAppState['connectionStatus'];
-  runStatus: TuiAppState['runStatus'];
-  modelName: string;
-  directory: string;
-};
-
-type StaticChatMessage = {
-  kind: 'message';
-  id: string;
-  message: DisplayMessage;
-  toolCalls: LiveToolCallRecord[];
-};
-
-type StaticItem = StaticBanner | StaticChatMessage;
-
-const isToolCallElement = (
-  element: MessageElement,
-): element is Extract<MessageElement, { type: 'tool_call' }> => {
-  return element.type === 'tool_call';
-};
-
-const referencedToolCallsAreStable = (
-  message: DisplayMessage,
-  toolCalls: LiveToolCallRecord[],
-  runStatus: TuiAppState['runStatus'],
-): boolean => {
-  if (runStatus !== 'running') return true;
-
-  for (const element of message.elements) {
-    if (!isToolCallElement(element)) continue;
-
-    const toolCall = toolCalls.find((item) => item.id === element.toolCallId);
-    if (!toolCall || toolCall.status === 'running') {
-      return false;
-    }
-  }
-
-  return true;
-};
-
-const isMessageReadyForStatic = (
-  message: DisplayMessage,
-  index: number,
-  messages: DisplayMessage[],
-  runStatus: TuiAppState['runStatus'],
-  toolCalls: LiveToolCallRecord[],
-): boolean => {
-  if (message.isStreaming) return false;
-
-  if (message.role !== 'assistant') return true;
-
-  const isLastMessage = index === messages.length - 1;
-  if (runStatus === 'running' && isLastMessage) return false;
-
-  return referencedToolCallsAreStable(message, toolCalls, runStatus);
-};
-
-const snapshotStaticMessage = (
-  message: DisplayMessage,
-  toolCalls: LiveToolCallRecord[],
-): StaticChatMessage => {
-  const referencedToolCallIds = new Set(
-    message.elements
-      .filter(isToolCallElement)
-      .map((element) => element.toolCallId),
-  );
-
-  return {
-    kind: 'message',
-    id: message.id,
-    message: {
-      ...message,
-      isStreaming: false,
-      elements: message.elements.map((element) => ({ ...element })),
-    },
-    toolCalls: toolCalls
-      .filter((toolCall) => referencedToolCallIds.has(toolCall.id))
-      .map((toolCall) => ({ ...toolCall })),
-  };
 };
 
 const createThreadId = (): string => {
@@ -175,9 +85,10 @@ export const App: React.FC<AppProps> = ({
   configClient,
   datasourceId,
   initialResume,
-  onStaticOutputReset,
 }) => {
   const { exit } = useApp();
+  const { stdin } = useStdin();
+  const { stdout } = useStdout();
   const [state, setState] = useState<TuiAppState>(store.getState());
   const [activeTab, setActiveTab] = useState<TabType>('chat');
   const [inputFocused, setInputFocused] = useState(false);
@@ -187,24 +98,28 @@ export const App: React.FC<AppProps> = ({
   const [pickerLoading, setPickerLoading] = useState(false);
   const [pickerError, setPickerError] = useState<string | undefined>(undefined);
   const [retryCount, setRetryCount] = useState(0);
-  const [staticItems, setStaticItems] = useState<StaticItem[]>(() => {
-    // Seed the banner once at initialization
-    const modelName = resolveModelName(store.getState());
-    const directory = formatDirectory(process.env.PWD || process.cwd());
-    const currentState = store.getState();
-
-    return [{
-      kind: 'banner',
-      id: 'banner',
-      threadId: currentState.threadId,
-      connectionStatus: currentState.connectionStatus,
-      runStatus: currentState.runStatus,
-      modelName,
-      directory,
-    }];
-  });
-  const staticMessageIds = useRef<Set<string>>(new Set());
+  const [chatScrollbackRows, setChatScrollbackRows] = useState(0);
   const startupResumeAttempted = useRef(false);
+  const terminalRows = stdout.rows ?? 40;
+  const terminalColumns = stdout.columns ?? 100;
+  const visibleMessages = state.messages;
+  const chatViewportRows = Math.max(5, terminalRows - (commandNotice ? 15 : 14));
+  const chatContentRows = estimateChatRows({
+    messages: visibleMessages,
+    artifacts: state.artifacts,
+    totalMessageCount: state.messages.length,
+    columns: terminalColumns,
+  });
+  const maxChatScrollbackRows = Math.max(0, chatContentRows - chatViewportRows);
+
+  const clampChatScrollback = (value: number): number => {
+    return Math.max(0, Math.min(maxChatScrollbackRows, value));
+  };
+
+  const scrollChatBy = (delta: number): void => {
+    if (activeTab !== 'chat' || delta === 0) return;
+    setChatScrollbackRows((current) => clampChatScrollback(current + delta));
+  };
 
   // Subscribe to state changes
   useEffect(() => {
@@ -215,28 +130,22 @@ export const App: React.FC<AppProps> = ({
   }, []);
 
   useEffect(() => {
-    const snapshots: StaticChatMessage[] = [];
+    setChatScrollbackRows((current) => Math.max(0, Math.min(maxChatScrollbackRows, current)));
+  }, [maxChatScrollbackRows]);
 
-    state.messages.forEach((message, index) => {
-      if (staticMessageIds.current.has(message.id)) return;
-      if (!isMessageReadyForStatic(
-        message,
-        index,
-        state.messages,
-        state.runStatus,
-        state.toolCalls,
-      )) {
-        return;
+  useEffect(() => {
+    const onData = (chunk: Buffer | string) => {
+      const delta = wheelScrollDelta(chunk.toString());
+      if (delta !== 0) {
+        scrollChatBy(delta);
       }
+    };
 
-      staticMessageIds.current.add(message.id);
-      snapshots.push(snapshotStaticMessage(message, state.toolCalls));
-    });
-
-    if (snapshots.length > 0) {
-      setStaticItems((previous) => [...previous, ...snapshots]);
-    }
-  }, [state.messages, state.runStatus, state.toolCalls]);
+    stdin.prependListener('data', onData);
+    return () => {
+      stdin.off('data', onData);
+    };
+  }, [stdin, activeTab, maxChatScrollbackRows]);
 
   // Initialize connection monitoring if client supports it
   useEffect(() => {
@@ -303,9 +212,7 @@ export const App: React.FC<AppProps> = ({
       const restored = restoreSessionConversation(conversation);
       store.restoreSession(restored);
       setActiveTab('chat');
-      if (!startup) {
-        onStaticOutputReset?.();
-      }
+      setChatScrollbackRows(0);
       setCommandNotice({
         kind: 'info',
         message: `Resumed session ${restored.title ? `"${restored.title}" ` : ''}(${restored.threadId}).`,
@@ -356,10 +263,30 @@ export const App: React.FC<AppProps> = ({
     // Ignore input when typing in the input box
     if (pickerOpen || inputFocused) return;
 
+    if (activeTab === 'chat' && key.pageUp) {
+      scrollChatBy(Math.max(3, Math.floor(chatViewportRows * 0.8)));
+      return;
+    }
+
+    if (activeTab === 'chat' && key.pageDown) {
+      scrollChatBy(-Math.max(3, Math.floor(chatViewportRows * 0.8)));
+      return;
+    }
+
+    if (activeTab === 'chat' && key.home) {
+      setChatScrollbackRows(maxChatScrollbackRows);
+      return;
+    }
+
+    if (activeTab === 'chat' && key.end) {
+      setChatScrollbackRows(0);
+      return;
+    }
+
     // Ctrl+L - Clear screen (reset chat messages)
     if (key.ctrl && input === 'l') {
       store.clearMessages();
-      onStaticOutputReset?.();
+      setChatScrollbackRows(0);
       return;
     }
 
@@ -367,7 +294,7 @@ export const App: React.FC<AppProps> = ({
     if (key.ctrl && input === 'n') {
       store.startNewSession(createThreadId());
       setActiveTab('chat');
-      onStaticOutputReset?.();
+      setChatScrollbackRows(0);
       return;
     }
 
@@ -419,11 +346,11 @@ export const App: React.FC<AppProps> = ({
 
           if (action === 'clear_history') {
             store.clearMessages();
-            onStaticOutputReset?.();
+            setChatScrollbackRows(0);
           } else if (action === 'reset_session') {
             store.startNewSession(createThreadId());
             setActiveTab('chat');
-            onStaticOutputReset?.();
+            setChatScrollbackRows(0);
           } else if (action === 'exit_application') {
             if ('dispose' in client && typeof client.dispose === 'function') {
               client.dispose();
@@ -466,6 +393,7 @@ export const App: React.FC<AppProps> = ({
   // Handle agent query execution
   const handleAgentQuery = async (input: string) => {
     setCommandNotice(null);
+    setChatScrollbackRows(0);
     // Add user message to chat history
     store.addUserMessage(input);
     store.clearInputBuffer();
@@ -689,14 +617,6 @@ export const App: React.FC<AppProps> = ({
   };
 
   const { chatWidth, panelWidth } = getContentWidth();
-  const renderedStaticMessageIds = useMemo(
-    () => new Set(staticItems.filter((item): item is StaticChatMessage => item.kind === 'message').map((item) => item.id)),
-    [staticItems],
-  );
-  const visibleMessages = state.messages.slice(-MAX_VISIBLE_CHAT_MESSAGES);
-  const dynamicMessages = visibleMessages.filter(
-    (message) => !renderedStaticMessageIds.has(message.id),
-  );
   const visibleArtifacts = state.artifacts;
   const modelName = resolveModelName(state);
   const directory = formatDirectory(process.env.PWD || process.cwd());
@@ -824,32 +744,15 @@ export const App: React.FC<AppProps> = ({
 
   return (
     <>
-      <Static items={staticItems}>
-        {(item) => {
-          if (item.kind === 'banner') {
-            return (
-              <Box key={item.id} paddingX={1} marginBottom={1}>
-                <SessionBanner
-                  threadId={item.threadId}
-                  connectionStatus={item.connectionStatus}
-                  runStatus={item.runStatus}
-                  modelName={item.modelName}
-                  directory={item.directory}
-                />
-              </Box>
-            );
-          }
-
-          return (
-            <Box key={item.id} flexDirection="column" marginBottom={1} paddingX={1}>
-              <MessageBubble
-                message={item.message}
-                allToolCalls={item.toolCalls}
-              />
-            </Box>
-          );
-        }}
-      </Static>
+      <Box paddingX={1} marginBottom={1}>
+        <SessionBanner
+          threadId={state.threadId}
+          connectionStatus={state.connectionStatus}
+          runStatus={state.runStatus}
+          modelName={modelName}
+          directory={directory}
+        />
+      </Box>
 
       {pickerOpen ? (
         <Box flexDirection="column">
@@ -879,10 +782,12 @@ export const App: React.FC<AppProps> = ({
                   paddingX={1}
                 >
                   <ChatArea
-                    messages={dynamicMessages}
+                    messages={visibleMessages}
                     artifacts={visibleArtifacts}
                     totalMessageCount={state.messages.length}
                     toolCalls={state.toolCalls}
+                    viewportRows={chatViewportRows}
+                    scrollbackRows={chatScrollbackRows}
                   />
                 </Box>
 

@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Box, Text } from 'ink';
 import type { DisplayMessage, LiveToolCallRecord } from '../state/index.js';
-import { MarkdownText } from './MarkdownText.js';
+import { MarkdownText, StreamingMarkdownText } from './MarkdownText.js';
 import { InlineToolCall } from './InlineToolCall.js';
 
 interface StreamingMessageProps {
@@ -65,7 +65,11 @@ export const StreamingMessage: React.FC<StreamingMessageProps> = ({
 
           return (
             <Box key={`element-${index}`} flexDirection="column">
-              <MarkdownText content={visibleContent} />
+              {message.isStreaming && isLastElement ? (
+                <StreamingMarkdownText content={visibleContent} />
+              ) : (
+                <MarkdownText content={visibleContent} />
+              )}
             </Box>
           );
         } else if (element.type === 'tool_call') {

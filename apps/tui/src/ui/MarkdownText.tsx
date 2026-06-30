@@ -1,5 +1,6 @@
-import React from 'react';
+import React, { useMemo, useRef } from 'react';
 import { Box, Text } from 'ink';
+import { useThrottledText } from './use-throttled-text.js';
 
 interface MarkdownTextProps {
   content: string;
@@ -10,7 +11,7 @@ interface MarkdownTextProps {
  */
 export const MarkdownText: React.FC<MarkdownTextProps> = ({ content }) => {
   // Split content into blocks (paragraphs, tables, etc.)
-  const blocks = parseMarkdownBlocks(content);
+  const blocks = useMemo(() => parseMarkdownBlocks(content), [content]);
 
   return (
     <Box flexDirection="column">
@@ -19,6 +20,30 @@ export const MarkdownText: React.FC<MarkdownTextProps> = ({ content }) => {
           {renderBlock(block)}
         </Box>
       ))}
+    </Box>
+  );
+};
+
+export const StreamingMarkdownText: React.FC<MarkdownTextProps> = ({ content }) => {
+  const throttled = useThrottledText(content, 50);
+  const stablePrefixRef = useRef('');
+
+  if (!throttled.startsWith(stablePrefixRef.current)) {
+    stablePrefixRef.current = '';
+  }
+
+  const boundary = findLastStableBlockBoundary(throttled);
+  if (boundary > stablePrefixRef.current.length) {
+    stablePrefixRef.current = throttled.slice(0, boundary);
+  }
+
+  const stablePrefix = stablePrefixRef.current;
+  const unstableSuffix = throttled.slice(stablePrefix.length);
+
+  return (
+    <Box flexDirection="column">
+      {stablePrefix ? <MarkdownText content={stablePrefix} /> : null}
+      {unstableSuffix ? <MarkdownText content={unstableSuffix} /> : null}
     </Box>
   );
 };
@@ -78,6 +103,31 @@ function parseMarkdownBlocks(content: string): MarkdownBlock[] {
   }
 
   return blocks;
+}
+
+function findLastStableBlockBoundary(input: string): number {
+  let inCode = false;
+  const lines = input.replace(/\r\n/g, '\n').split('\n');
+  let offset = 0;
+  let stable = 0;
+
+  for (const line of lines) {
+    const nextOffset = offset + line.length + 1;
+    if (line.trim().startsWith('```')) {
+      inCode = !inCode;
+    }
+    if (!inCode && line.trim() === '') {
+      stable = Math.min(nextOffset, input.length);
+    }
+    offset = nextOffset;
+  }
+
+  const lastNewline = input.lastIndexOf('\n');
+  if (!inCode && lastNewline > stable) {
+    stable = lastNewline + 1;
+  }
+
+  return stable;
 }
 
 function parseMarkdownTable(lines: string[]): MarkdownBlock | null {

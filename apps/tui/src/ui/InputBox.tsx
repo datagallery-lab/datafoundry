@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Box, Text, useInput, useStdin } from 'ink';
+import { isMouseInput } from '../input/mouse-wheel.js';
 import { CommandHistory, CommandCompletion, DEFAULT_COMMANDS } from './keybindings.js';
 
 interface InputBoxProps {
@@ -38,6 +39,10 @@ export const InputBox: React.FC<InputBoxProps> = ({
   // Handle keyboard input
   useInput(
     (input, key) => {
+      if (isMouseInput(input)) {
+        return;
+      }
+
       // Handle Enter key
       if (key.return) {
         const submittedValue = localValue.trim();

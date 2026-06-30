@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { render, type Instance } from "ink";
+import { render } from "ink";
 import { randomUUID } from "node:crypto";
 import React from "react";
 import { ConfigClient } from "./config/index.js";
@@ -7,6 +7,7 @@ import { CopilotKitClient } from "./protocol/copilotkit-client.js";
 import { DemoCopilotKitClient } from "./protocol/demo-client.js";
 import { seedDemoState } from "./state/demo-state.js";
 import { store } from "./state/store.js";
+import { withAlternateScreen } from "./terminal-screen.js";
 import { App } from "./ui/App.js";
 
 const args = process.argv.slice(2);
@@ -100,59 +101,33 @@ const client = demoMode
       },
     });
 
-let appInstance: Instance | undefined;
-let renderGeneration = 0;
-let staticOutputResetScheduled = false;
-
-function clearTerminal(): void {
-  if (!process.stdout.isTTY) return;
-  process.stdout.write("\u001B[2J\u001B[3J\u001B[H");
-}
-
 function createAppElement(): React.ReactElement {
   return React.createElement(App, {
-    key: renderGeneration,
     client,
     datasourceId,
     ...(configClient ? { configClient } : {}),
-    ...(initialResume && renderGeneration === 0 ? { initialResume } : {}),
-    onStaticOutputReset: resetStaticOutput,
+    ...(initialResume ? { initialResume } : {}),
   });
 }
 
-function mountApp(): void {
-  appInstance = render(createAppElement());
-}
-
-function resetStaticOutput(): void {
-  if (staticOutputResetScheduled) return;
-  staticOutputResetScheduled = true;
-
-  queueMicrotask(() => {
-    try {
-      const previousInstance = appInstance;
-      renderGeneration += 1;
-
-      previousInstance?.unmount();
-      clearTerminal();
-      mountApp();
-    } finally {
-      staticOutputResetScheduled = false;
+async function main(): Promise<void> {
+  try {
+    store.setConnectionStatus(demoMode ? "connected" : "disconnected");
+    if (!initialResume?.enabled) {
+      store.setThreadId(randomUUID());
     }
-  });
+    if (demoMode) {
+      seedDemoState(datasourceId);
+    }
+
+    await withAlternateScreen(async () => {
+      const instance = render(createAppElement());
+      await instance.waitUntilExit();
+    });
+  } catch (error) {
+    console.error("Failed to start TUI:", error);
+    process.exitCode = 1;
+  }
 }
 
-try {
-  store.setConnectionStatus(demoMode ? "connected" : "disconnected");
-  if (!initialResume?.enabled) {
-    store.setThreadId(randomUUID());
-  }
-  if (demoMode) {
-    seedDemoState(datasourceId);
-  }
-
-  mountApp();
-} catch (error) {
-  console.error("Failed to start TUI:", error);
-  process.exit(1);
-}
+await main();
