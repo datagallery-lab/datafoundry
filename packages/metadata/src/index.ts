@@ -81,6 +81,8 @@ export type InteractionRecord = {
   tool_call_id: string;
   tool_name: "ask_user" | "submit_plan";
   payload_json: string;
+  /** Full mastra_suspend interrupt payload for HITL resume after refresh. */
+  interrupt_event_json?: string;
   status: "pending" | "resolved" | "canceled";
   resume_fingerprint?: string;
   response_json?: string;
@@ -446,12 +448,19 @@ export class InteractionRepository {
     tool_call_id: string;
     tool_name: InteractionRecord["tool_name"];
     payload: unknown;
+    interrupt_event?: unknown;
   }): InteractionRecord {
     const createdAt = new Date().toISOString();
+    const interruptEventJson =
+      input.interrupt_event === undefined
+        ? null
+        : typeof input.interrupt_event === "string"
+          ? input.interrupt_event
+          : JSON.stringify(input.interrupt_event);
     this.db.prepare(`
       INSERT INTO interactions (
-        id, user_id, session_id, run_id, tool_call_id, tool_name, payload_json, status, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?)
+        id, user_id, session_id, run_id, tool_call_id, tool_name, payload_json, interrupt_event_json, status, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)
       ON CONFLICT(user_id, run_id, tool_call_id) DO NOTHING
     `).run(
       input.id,
@@ -461,9 +470,25 @@ export class InteractionRepository {
       input.tool_call_id,
       input.tool_name,
       JSON.stringify(input.payload),
+      interruptEventJson,
       createdAt
     );
     return this.getByToolCall(input);
+  }
+
+  listPendingBySession(input: { user_id: string; session_id: string }): InteractionRecord[] {
+    return this.db
+      .prepare(`
+        SELECT *
+        FROM interactions
+        WHERE user_id = ?
+          AND session_id = ?
+          AND status = 'pending'
+        ORDER BY created_at ASC
+      `)
+      .all(input.user_id, input.session_id)
+      .map((row) => mapInteractionRow(row))
+      .filter((record): record is InteractionRecord => Boolean(record));
   }
 
   getByToolCall(input: { user_id: string; run_id: string; tool_call_id: string }): InteractionRecord {
@@ -870,7 +895,7 @@ export class RunRepository {
       FROM runs
       WHERE user_id = ?
         AND session_id = ?
-        AND status IN ('queued', 'running')
+        AND status IN ('queued', 'running', 'suspended')
     `;
 
     if (input.exclude_run_id) {
@@ -2138,6 +2163,9 @@ const runMigrations = (db: DatabaseSync): void => {
   runSchemaMigration(db, "0008_config_schema", "Ensure configuration schema", () => {
     initializeConfigSchema(db);
   });
+  runSchemaMigration(db, "0009_interaction_interrupt_event", "Ensure interaction interrupt event column", () => {
+    ensureInteractionInterruptEventColumn(db);
+  });
 };
 
 const initializeSchemaMigrationTable = (db: DatabaseSync): void => {
@@ -2214,6 +2242,14 @@ const ensureSessionTitleColumns = (db: DatabaseSync): void => {
   }
   if (!hasLastMessageAt) {
     db.exec("ALTER TABLE sessions ADD COLUMN last_message_at TEXT");
+  }
+};
+
+const ensureInteractionInterruptEventColumn = (db: DatabaseSync): void => {
+  const hasColumn = db.prepare("PRAGMA table_info(interactions)").all()
+    .some((row) => isRecord(row) && row.name === "interrupt_event_json");
+  if (!hasColumn) {
+    db.exec("ALTER TABLE interactions ADD COLUMN interrupt_event_json TEXT");
   }
 };
 
@@ -2676,6 +2712,7 @@ const mapInteractionRow = (row: unknown): Optional<InteractionRecord> => {
   const resumeFingerprint = optionalString(row.resume_fingerprint);
   const responseJson = optionalString(row.response_json);
   const resolvedAt = optionalString(row.resolved_at);
+  const interruptEventJson = optionalString(row.interrupt_event_json);
   return {
     id: requiredString(row, "id"),
     user_id: requiredString(row, "user_id"),
@@ -2684,6 +2721,7 @@ const mapInteractionRow = (row: unknown): Optional<InteractionRecord> => {
     tool_call_id: requiredString(row, "tool_call_id"),
     tool_name: requiredString(row, "tool_name") as InteractionRecord["tool_name"],
     payload_json: requiredString(row, "payload_json"),
+    ...(interruptEventJson ? { interrupt_event_json: interruptEventJson } : {}),
     status: requiredString(row, "status") as InteractionRecord["status"],
     ...(resumeFingerprint ? { resume_fingerprint: resumeFingerprint } : {}),
     ...(responseJson ? { response_json: responseJson } : {}),

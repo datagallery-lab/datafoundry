@@ -425,6 +425,9 @@ class DataAgentAgUiAgent extends AbstractAgent {
           emit,
           fileAssetService: this.input.fileAssetService,
           flushCompletedMemory: (flushInput) => memoryAssembly.flushCompletedMemory(flushInput),
+          flushDraftsMemory: () => {
+            memoryAssembly.flushDraftsMemory();
+          },
           memoryExtractionTimeoutMs: this.input.memoryExtractionTimeoutMs,
           metadataStore: this.input.metadataStore,
           runId,

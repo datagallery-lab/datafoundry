@@ -75,6 +75,20 @@ try {
   const runtime = new InteractionRuntimeAdapter(store, userId, sessionId, runId);
   const requested = runtime.capture(createCustomEvent("on_interrupt", JSON.stringify(interrupt)));
   assert(requested?.name === "interaction.requested", "interrupt should project to interaction.requested");
+  const stored = store.interactions.getByToolCall({
+    user_id: userId,
+    run_id: runId,
+    tool_call_id: interrupt.toolCallId
+  });
+  assert(
+    stored.interrupt_event_json?.includes("mastra_suspend"),
+    "interrupt_event_json should be persisted for restored resume"
+  );
+  const pending = store.interactions.listPendingBySession({
+    user_id: userId,
+    session_id: sessionId
+  });
+  assert(pending.length === 1, "pending interaction should be listed by session");
 
   const resume = extractInteractionResume({
     threadId: sessionId,

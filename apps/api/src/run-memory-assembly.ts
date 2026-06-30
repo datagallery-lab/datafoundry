@@ -24,6 +24,7 @@ export type RunMemoryAssembly = {
   conversationMessages: RunAgentInput["messages"];
   longTermMemories: LongTermMemoryRecord[];
   flushCompletedMemory(input: { emit(event: BaseEvent): void; signal: AbortSignal }): Promise<void>;
+  flushDraftsMemory(): ConversationMessageRecord[];
 };
 
 type CreateRunMemoryAssemblyInput = {
@@ -114,6 +115,18 @@ export const createRunMemoryAssembly = async (
     conversationMemoryObserver,
     conversationMessages,
     longTermMemories,
+    flushDraftsMemory: () => {
+      const assistantRecords = conversationMemoryObserver.flushDrafts();
+      const lastAssistantRecord = assistantRecords.at(-1);
+      if (lastAssistantRecord) {
+        input.metadataStore.sessions.touchLastMessage({
+          user_id: input.userId,
+          session_id: input.sessionId,
+          last_message_at: lastAssistantRecord.created_at
+        });
+      }
+      return assistantRecords;
+    },
     flushCompletedMemory: async ({ emit, signal }) => {
       const assistantRecords = await conversationMemoryObserver.flushCompleted({ signal });
       const lastAssistantRecord = assistantRecords.at(-1);

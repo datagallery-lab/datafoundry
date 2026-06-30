@@ -9,6 +9,7 @@ const CAPABILITIES = {
   "chat.imageInput": true,
   "conversation.memory": true,
   "conversation.title": true,
+  "interaction.resume": true,
   "datasource.fieldMasking": true,
   "datasource.extendedTypes": true,
   "datasource.introspectionPolicy": true,

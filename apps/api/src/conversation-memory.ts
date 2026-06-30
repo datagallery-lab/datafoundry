@@ -322,6 +322,18 @@ export class ConversationMemoryEventObserver {
   }
 
   async flushCompleted(input: { signal?: AbortSignal | undefined } = {}): Promise<ConversationMessageRecord[]> {
+    const records = this.persistAssistantDrafts();
+    throwIfAborted(input.signal);
+    await this.maybeCreateSummary(input.signal);
+    return records;
+  }
+
+  /** Persist in-flight assistant drafts without summarization (e.g. on HITL suspend). */
+  flushDrafts(): ConversationMessageRecord[] {
+    return this.persistAssistantDrafts();
+  }
+
+  private persistAssistantDrafts(): ConversationMessageRecord[] {
     const maxMessageChars = normalizePolicy({
       ...this.input.policy,
       ...(this.input.maxMessageChars ? { maxMessageChars: this.input.maxMessageChars } : {})
@@ -348,8 +360,6 @@ export class ConversationMemoryEventObserver {
       }));
     }
     this.drafts.clear();
-    throwIfAborted(input.signal);
-    await this.maybeCreateSummary(input.signal);
     return records;
   }
 

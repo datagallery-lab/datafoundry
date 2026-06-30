@@ -1,4 +1,4 @@
-import type { ArtifactSummary } from "@open-data-agent/contracts";
+import type { ArtifactSummary, ArtifactType } from "@open-data-agent/contracts";
 import type { CreateArtifactInput } from "@open-data-agent/artifacts";
 import fs from "node:fs";
 import path from "node:path";
@@ -15,11 +15,34 @@ type FileSnapshotEntry = {
   mtimeMs: number;
 };
 
+/**
+ * Create a file-backed (downloadable / promotable) artifact from an absolute path.
+ * The returned summary carries `file_id` / `download_url` so the frontend renders
+ * preview, download and "add to workspace" actions — mirroring SQL result artifacts.
+ */
+export type CreateFileBackedArtifact = (input: {
+  type: ArtifactType;
+  name: string;
+  source_path: string;
+  preview_json?: unknown;
+}) => Promise<ArtifactSummary & { download_url?: string; file_id?: string }>;
+
 export type WorkspaceArtifactRecorderInput = {
   tools: Record<string, ExecutableTool>;
-  runDir: string;
+  /**
+   * The agent's writable session directory (the filesystem basePath for
+   * write_file / edit_file and the cwd for execute_command). Relative tool paths
+   * resolve against this directory.
+   */
+  sessionDir: string;
   runContext: AgentRunContext;
   emitter: AgUiEventEmitter;
+  /**
+   * Preferred path: register the produced file as a durable, downloadable artifact
+   * (file asset backed). When absent or it throws, we fall back to a preview-only
+   * artifact via `createArtifact`.
+   */
+  createFileArtifact?: CreateFileBackedArtifact;
   createArtifact: (input: CreateArtifactInput) => Promise<ArtifactSummary>;
 };
 
@@ -65,12 +88,12 @@ const wrapToolWithArtifactRecording = (
     ...tool,
     execute: async (...args: unknown[]) => {
       const beforeSnapshot =
-        toolName === "execute_command" ? await snapshotDirectory(input.runDir) : undefined;
+        toolName === "execute_command" ? await snapshotDirectory(input.sessionDir) : undefined;
       const result = await execute(...args);
 
       try {
         if (toolName === "execute_command") {
-          const afterSnapshot = await snapshotDirectory(input.runDir);
+          const afterSnapshot = await snapshotDirectory(input.sessionDir);
           const changedPaths = diffSnapshots(beforeSnapshot ?? new Map(), afterSnapshot);
           for (const relativePath of changedPaths) {
             await recordFileArtifact({
@@ -108,15 +131,19 @@ const extractPathFromArgs = (value: unknown): string | undefined => {
 };
 
 const recordFileArtifact = async (input: {
-  runDir: string;
+  sessionDir: string;
   runContext: AgentRunContext;
   emitter: AgUiEventEmitter;
+  createFileArtifact?: CreateFileBackedArtifact;
   createArtifact: (input: CreateArtifactInput) => Promise<ArtifactSummary>;
   toolName: string;
   relativePath: string;
 }): Promise<void> => {
-  const absolutePath = path.resolve(input.runDir, input.relativePath);
-  if (!absolutePath.startsWith(`${input.runDir}${path.sep}`) && absolutePath !== input.runDir) {
+  const absolutePath = path.resolve(input.sessionDir, input.relativePath);
+  if (
+    !absolutePath.startsWith(`${input.sessionDir}${path.sep}`) &&
+    absolutePath !== input.sessionDir
+  ) {
     throw new Error("WORKSPACE_ARTIFACT_PATH_ESCAPE");
   }
 
@@ -137,6 +164,27 @@ const recordFileArtifact = async (input: {
     run_dir_relative: true,
     ...(textPreview !== undefined ? { content: textPreview, content_type: "text" as const } : {}),
   };
+
+  // Prefer a file-backed artifact so the produced file is downloadable and can be
+  // promoted to the workspace, matching the SQL result artifact experience. Fall back
+  // to a preview-only artifact when no file asset service is wired or registration fails.
+  if (input.createFileArtifact) {
+    try {
+      const artifact = await input.createFileArtifact({
+        type: "file",
+        name: input.relativePath,
+        source_path: absolutePath,
+        preview_json,
+      });
+      input.emitter.emit(createArtifactEvent(artifact));
+      return;
+    } catch (error) {
+      console.warn(
+        `[workspace-artifact-recorder] file-backed artifact failed for ${input.toolName}, falling back to preview:`,
+        error instanceof Error ? error.message : error,
+      );
+    }
+  }
 
   const artifact = await input.createArtifact({
     user_id: input.runContext.user_id,

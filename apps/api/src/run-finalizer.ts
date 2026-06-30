@@ -12,6 +12,7 @@ type RunFinalizerInput = {
   emit(event: BaseEvent): void;
   fileAssetService: FileAssetService;
   flushCompletedMemory(input: { emit(event: BaseEvent): void; signal: AbortSignal }): Promise<void>;
+  flushDraftsMemory?(): void;
   memoryExtractionTimeoutMs: number;
   metadataStore: MetadataStore;
   runId: string;
@@ -31,6 +32,7 @@ export class RunFinalizer {
   }
 
   suspend(): void {
+    this.input.flushDraftsMemory?.();
     this.input.metadataStore.runs.updateStatus({
       user_id: this.input.userId,
       run_id: this.input.runId,

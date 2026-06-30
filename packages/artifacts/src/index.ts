@@ -10,6 +10,15 @@ import type {
 import { type FileAssetService, fileAssetRefDto, mimeTypeForFilename } from "@open-data-agent/files";
 import { artifactRecordToSummary, type MetadataStore } from "@open-data-agent/metadata";
 import { randomUUID } from "node:crypto";
+import { basename } from "node:path";
+
+const resolveArtifactMimeType = (name: string, sourcePath: string): string => {
+  const mimeFromName = mimeTypeForFilename(name);
+  if (mimeFromName !== "application/octet-stream") {
+    return mimeFromName;
+  }
+  return mimeTypeForFilename(basename(sourcePath));
+};
 
 export type CreateArtifactInput = {
   user_id: string;
@@ -182,11 +191,12 @@ export class LocalArtifactService implements ArtifactService {
       session_id: input.session_id,
       run_id: input.run_id,
       filename: input.name,
-      declared_mime_type: mimeTypeForFilename(input.name),
+      declared_mime_type: resolveArtifactMimeType(input.name, input.source_path),
       source: "artifact",
       path: input.source_path,
       metadata: input.metadata
     });
+    const mimeType = resolveArtifactMimeType(input.name, input.source_path);
     const record = this.metadataStore.artifacts.create({
       user_id: input.user_id,
       session_id: input.session_id,
@@ -194,7 +204,7 @@ export class LocalArtifactService implements ArtifactService {
       id: randomUUID(),
       type: input.type,
       name: input.name,
-      mime_type: mimeTypeForFilename(input.name),
+      mime_type: mimeType,
       file_asset_ref_id: file.ref.id,
       preview_json: input.preview_json,
       metadata_json: {

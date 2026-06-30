@@ -41,7 +41,8 @@ export class InteractionRuntimeAdapter {
       run_id: this.runId,
       tool_call_id: interrupt.toolCallId,
       tool_name: interrupt.toolName,
-      payload: interrupt.suspendPayload
+      payload: interrupt.suspendPayload,
+      interrupt_event: readInterruptEventValue(event, interrupt)
     });
     return createCustomEvent("interaction.requested", {
       interaction_id: interaction.id,
@@ -122,6 +123,25 @@ const parseInterruptEvent = (event: BaseEvent): InteractionInterrupt | undefined
     return undefined;
   }
   return parseInterruptValue(event.value);
+};
+
+const readInterruptEventValue = (
+  event: BaseEvent,
+  interrupt: InteractionInterrupt
+): unknown => {
+  const customEvent = event as BaseEvent & { value?: unknown };
+  if (customEvent.value !== undefined) {
+    return customEvent.value;
+  }
+  return {
+    type: "mastra_suspend",
+    args: interrupt.args,
+    resumeSchema: interrupt.resumeSchema,
+    runId: interrupt.runId,
+    suspendPayload: interrupt.suspendPayload,
+    toolCallId: interrupt.toolCallId,
+    toolName: interrupt.toolName
+  };
 };
 
 const parseInterruptValue = (value: unknown): InteractionInterrupt => {

@@ -32,6 +32,7 @@ import {
   type ConversationSummaryRecord,
   type DataSourceRecord,
   type FileAssetRefSource,
+  type InteractionRecord,
   type JobRecord,
   type MetadataStore,
   type QueryHistoryRecord,
@@ -324,6 +325,10 @@ const handleSessionRequest = async (
     runId,
     events: context.metadataStore.runEvents.listByRun({ user_id: context.userId, run_id: runId })
   }));
+  const pendingInteractions = context.metadataStore.interactions.listPendingBySession({
+    user_id: context.userId,
+    session_id: sessionId
+  });
 
   return ok({
     sessionId,
@@ -333,7 +338,11 @@ const handleSessionRequest = async (
     messages: messages.map(conversationMessageDto),
     ...(latestSummary ? { summary: conversationSummaryDto(latestSummary) } : {}),
     runEventRefs: runEventGroups.map(({ runId, events }) => runEventRefDto(runId, events)),
-    toolCalls: runEventGroups.flatMap(({ runId, events }) => toolCallPairDtos(runId, events))
+    toolCalls: runEventGroups.flatMap(({ runId, events }) => toolCallPairDtos(runId, events)),
+    pendingInteractions: pendingInteractions.map(pendingInteractionDto),
+    restorableCustomEvents: runEventGroups.flatMap(({ runId, events }) =>
+      restorableCustomEventDtos(runId, events)
+    )
   });
 };
 
@@ -1520,12 +1529,13 @@ const handleArtifactRequest = async (
       ? safeDownloadNameWithExtension(artifact.name, "xlsx")
       : format === "csv"
         ? safeDownloadNameWithExtension(artifact.name, "csv")
-        : safeDownloadName(artifact.name, content.mimeType);
+        : safeDownloadName(artifact.name, content.mimeType, artifact.type, artifact.mime_type);
+    const responseMimeType = resolveArtifactContentType(artifact, content.mimeType);
     return {
       body: content.body,
       headers: {
         "Content-Disposition": `${segments[1] === "download" ? "attachment" : "inline"}; filename="${filename}"`,
-        "Content-Type": content.mimeType
+        "Content-Type": responseMimeType
       },
       status: 200
     };
@@ -1605,6 +1615,68 @@ const runEventRefDto = (runId: string, events: RunEventRecord[]): Record<string,
   ...(events[0] ? { firstSeq: events[0].seq } : {}),
   ...(events.at(-1) ? { lastSeq: events.at(-1)?.seq } : {})
 });
+
+const RESTORABLE_CUSTOM_EVENT_NAMES = new Set([
+  "token_usage",
+  "token_usage.correlation",
+  "workspace.metadata",
+  "sandbox.output",
+  "goal.updated",
+  "sql_audit"
+]);
+
+const pendingInteractionDto = (interaction: InteractionRecord): Record<string, unknown> => {
+  const payload = parseJsonValue(interaction.payload_json);
+  const interruptEvent = interaction.interrupt_event_json
+    ? parseJsonValue(interaction.interrupt_event_json)
+    : undefined;
+  const resumeSchema =
+    interruptEvent && typeof interruptEvent === "object" && interruptEvent !== null
+      ? (interruptEvent as Record<string, unknown>).resumeSchema
+      : undefined;
+  return {
+    interactionId: interaction.id,
+    runId: interaction.run_id,
+    toolCallId: interaction.tool_call_id,
+    toolName: interaction.tool_name,
+    ...(interruptEvent !== undefined ? { interruptEvent } : {}),
+    ...(payload !== undefined ? { payload } : {}),
+    ...(resumeSchema !== undefined ? { resumeSchema } : {})
+  };
+};
+
+const restorableCustomEventDtos = (
+  runId: string,
+  events: RunEventRecord[]
+): Array<Record<string, unknown>> =>
+  events.flatMap((eventRecord) => {
+    const event = parseRecord(eventRecord.payload_json);
+    if (stringValue(event.type) !== "CUSTOM") {
+      return [];
+    }
+    const name = stringValue(event.name);
+    if (!name || !RESTORABLE_CUSTOM_EVENT_NAMES.has(name)) {
+      return [];
+    }
+    const value = event.value ?? event.payload ?? event.content;
+    if (value === undefined) {
+      return [];
+    }
+    return [{
+      runId,
+      seq: eventRecord.seq,
+      name,
+      value
+    }];
+  });
+
+const parseJsonValue = (value: string): unknown => {
+  try {
+    return JSON.parse(value) as unknown;
+  } catch {
+    return undefined;
+  }
+};
 
 const toolCallPairDtos = (runId: string, events: RunEventRecord[]): Array<Record<string, unknown>> => {
   const calls = new Map<string, {
@@ -2079,15 +2151,57 @@ const safeSheetName = (name: string): string => {
   return (sheet || "Artifact").slice(0, 31);
 };
 
-const safeDownloadName = (name: string, mimeType: string): string => {
+const resolveArtifactContentType = (
+  artifact: { type: string; mime_type?: string | undefined },
+  contentMimeType: string,
+): string => {
+  if (artifact.mime_type && artifact.mime_type !== "application/octet-stream") {
+    return artifact.mime_type;
+  }
+  if (contentMimeType && contentMimeType !== "application/octet-stream") {
+    return contentMimeType;
+  }
+  switch (artifact.type) {
+    case "table":
+      return "text/csv; charset=utf-8";
+    case "markdown":
+      return "text/markdown; charset=utf-8";
+    case "html":
+      return "text/html; charset=utf-8";
+    default:
+      return contentMimeType || "application/octet-stream";
+  }
+};
+
+const safeDownloadName = (
+  name: string,
+  mimeType: string,
+  artifactType?: string,
+  declaredMimeType?: string | null,
+): string => {
   const safe = basename(name).replace(/[^a-zA-Z0-9._-]+/gu, "-") || "artifact";
   if (safe.includes(".")) {
     return safe;
   }
-  if (mimeType === XLSX_MIME_TYPE) {
+  const effectiveMime = declaredMimeType && declaredMimeType !== "application/octet-stream"
+    ? declaredMimeType
+    : mimeType;
+  if (effectiveMime === XLSX_MIME_TYPE || effectiveMime.includes("spreadsheetml")) {
     return `${safe}.xlsx`;
   }
-  return `${safe}.${mimeType.startsWith("text/csv") ? "csv" : "json"}`;
+  if (effectiveMime.startsWith("text/csv") || artifactType === "table") {
+    return `${safe}.csv`;
+  }
+  if (effectiveMime.startsWith("text/markdown") || artifactType === "markdown") {
+    return `${safe}.md`;
+  }
+  if (effectiveMime.startsWith("text/html") || artifactType === "html") {
+    return `${safe}.html`;
+  }
+  if (effectiveMime.startsWith("text/")) {
+    return `${safe}.txt`;
+  }
+  return `${safe}.json`;
 };
 
 const safeDownloadNameWithExtension = (name: string, extension: string): string => {

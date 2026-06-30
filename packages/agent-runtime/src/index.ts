@@ -347,11 +347,29 @@ export const createDataAgent = async (
     requestContext: {},
     workspace: runWorkspace.workspace
   });
+  const workspaceArtifactService = input.artifactService;
   const workspaceTools = wrapWorkspaceToolsWithArtifactRecording({
     tools: workspaceToolsRaw,
-    runDir: runWorkspace.runDir,
+    sessionDir: runWorkspace.sessionDir,
     runContext: input.runContext,
     emitter: input.emitter,
+    ...(workspaceArtifactService
+      ? {
+          createFileArtifact: (artifactInput) =>
+            workspaceArtifactService.createArtifactFromFile({
+              user_id: input.runContext.user_id,
+              session_id: input.runContext.session_id,
+              run_id: input.runContext.run_id,
+              workspace_id: input.runContext.workspace_id ?? "default",
+              type: artifactInput.type,
+              name: artifactInput.name,
+              source_path: artifactInput.source_path,
+              ...(artifactInput.preview_json !== undefined
+                ? { preview_json: artifactInput.preview_json }
+                : {})
+            })
+        }
+      : {}),
     createArtifact: (artifactInput) => input.dataGateway.createArtifact(artifactInput)
   });
   const skillTools = runWorkspace.workspace.skills ? createSkillTools(runWorkspace.workspace.skills) : {};

@@ -54,6 +54,7 @@ export const createArtifactEvent = (artifact: ArtifactSummary & {
     title: artifact.name,
     summary: artifactEventSummary(artifact),
     preview_available: artifact.preview_json !== undefined,
+    ...(artifact.preview_json !== undefined ? { preview_json: artifact.preview_json } : {}),
     ...(artifact.download_url ? { download_url: artifact.download_url } : {}),
     ...(artifact.file_id ? { file_id: artifact.file_id } : {})
   });

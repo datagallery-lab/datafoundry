@@ -141,7 +141,7 @@ try {
   const artifactRecords = [];
   const tools = wrapWorkspaceToolsWithArtifactRecording({
     tools: toolsRaw,
-    runDir: runWorkspace.runDir,
+    sessionDir: runWorkspace.sessionDir,
     runContext,
     emitter: {
       emit: (event) => {
