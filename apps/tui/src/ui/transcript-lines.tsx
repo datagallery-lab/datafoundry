@@ -59,6 +59,7 @@ const INDENT = '  ';
 const INDENT_WIDTH = 2;
 const MAX_ELEMENT_LINES = 1000;
 const MAX_TABLE_ROWS = 12;
+const MIN_TABLE_CELL_WIDTH = 3;
 
 /** Total display-column budget for a single chat row (mirrors the old estimate). */
 export function chatContentWidth(columns: number): number {
@@ -380,39 +381,76 @@ function pushTableLines(
   if (rows.length === 0) {
     return;
   }
-  const headers = rows[0];
-  const bodyRows = rows.slice(1);
   const columnCount = rows.reduce((max, row) => Math.max(max, row.length), 0);
-  const columnWidths = Array.from({ length: columnCount }, (_, column) =>
-    rows.reduce((max, row) => Math.max(max, cellVisibleWidth(row[column] ?? '')), 3),
-  );
+  if (columnCount === 0) {
+    return;
+  }
 
+  const maxRenderableColumns = Math.max(1, Math.floor((bodyWidth - 1) / (MIN_TABLE_CELL_WIDTH + 3)));
+  const visibleColumnCount = Math.min(columnCount, maxRenderableColumns);
+  const hiddenColumnCount = columnCount - visibleColumnCount;
+  const headers = normalizeTableCells(rows[0] ?? [], visibleColumnCount);
+  const bodyRows = rows.slice(1);
+  const hiddenColumnNote =
+    hiddenColumnCount > 0
+      ? `... ${hiddenColumnCount} more ${hiddenColumnCount === 1 ? 'column' : 'columns'} hidden ...`
+      : undefined;
+  const hiddenRowCount = Math.max(0, bodyRows.length - MAX_TABLE_ROWS);
+  const hiddenRowNote =
+    hiddenRowCount > 0
+      ? `... ${hiddenRowCount} more ${hiddenRowCount === 1 ? 'row' : 'rows'}; open /outputs for full content ...`
+      : undefined;
+  const displayRows = bodyRows.slice(0, MAX_TABLE_ROWS).map((row) => normalizeTableCells(row, visibleColumnCount));
+  const tableRowsForWidth = [headers, ...displayRows];
+  const desiredColumnWidths = Array.from({ length: visibleColumnCount }, (_, column) =>
+    tableRowsForWidth.reduce((max, row) => Math.max(max, cellVisibleWidth(row[column] ?? '')), MIN_TABLE_CELL_WIDTH),
+  );
+  const noteWidth = Math.max(
+    0,
+    ...[hiddenColumnNote, hiddenRowNote]
+      .filter((note): note is string => note !== undefined)
+      .map((note) => textWidth(` ${note} `) + 2),
+  );
+  const columnWidths = expandTableColumnWidths(
+    fitTableColumnWidths(desiredColumnWidths, bodyWidth),
+    bodyWidth,
+    noteWidth,
+  );
+  const tableWidth = tableDisplayWidth(columnWidths);
+
+  push(
+    `${keyBase}:top`,
+    <StyledLine key={`${keyBase}:top`} segments={tableBorderSegments(columnWidths, 'top')} />,
+  );
   push(
     `${keyBase}:head`,
-    <StyledLine
-      key={`${keyBase}:head`}
-      segments={truncateSegments(tableRowSegments(headers, columnWidths, alignments, true), bodyWidth)}
-    />,
+    <StyledLine key={`${keyBase}:head`} segments={tableRowSegments(headers, columnWidths, alignments, true)} />,
   );
-
-  const separator = `| ${columnWidths.map((width) => '-'.repeat(Math.max(1, width))).join(' | ')} |`;
   push(
     `${keyBase}:sep`,
-    <StyledLine key={`${keyBase}:sep`} segments={[{ text: truncateToWidth(separator, bodyWidth), dimColor: true }]} />,
+    <StyledLine key={`${keyBase}:sep`} segments={tableBorderSegments(columnWidths, 'middle')} />,
   );
 
-  bodyRows.slice(0, MAX_TABLE_ROWS).forEach((row, rowIndex) => {
+  displayRows.forEach((row, rowIndex) => {
     const key = `${keyBase}:r${rowIndex}`;
-    const segments = truncateSegments(tableRowSegments(row, columnWidths, alignments, false), bodyWidth);
+    const segments = tableRowSegments(row, columnWidths, alignments, false);
     push(key, <StyledLine key={key} segments={segments} />);
   });
 
-  if (bodyRows.length > MAX_TABLE_ROWS) {
-    const hidden = bodyRows.length - MAX_TABLE_ROWS;
-    const key = `${keyBase}:more`;
-    const text = truncateToWidth(`... ${hidden} more rows; open /outputs for full content ...`, bodyWidth);
-    push(key, <StyledLine key={key} segments={[{ text, dimColor: true }]} />);
+  if (hiddenColumnNote) {
+    const key = `${keyBase}:moreCols`;
+    push(key, <StyledLine key={key} segments={tableNoteSegments(hiddenColumnNote, tableWidth)} />);
   }
+
+  if (hiddenRowNote) {
+    const key = `${keyBase}:more`;
+    push(key, <StyledLine key={key} segments={tableNoteSegments(hiddenRowNote, tableWidth)} />);
+  }
+
+  push(
+    `${keyBase}:bottom`,
+    <StyledLine key={`${keyBase}:bottom`} segments={tableBorderSegments(columnWidths, 'bottom')} />,
+  );
 }
 
 function tableRowSegments(
@@ -421,20 +459,33 @@ function tableRowSegments(
   alignments: TableAlignment[],
   isHeader: boolean,
 ): StyledSegment[] {
-  const segments: StyledSegment[] = [{ text: '| ' }];
+  const segments: StyledSegment[] = [{ text: '│', dimColor: true }];
   columnWidths.forEach((width, column) => {
     const align: TableAlignment = isHeader ? 'left' : alignments[column] ?? 'left';
-    for (const segment of inlinePaddedCell(cells[column] ?? '', width, align)) {
+    segments.push({ text: ' ' });
+    for (const segment of inlinePaddedCell(cells[column] ?? '', width, align, isHeader)) {
       segments.push(segment);
     }
-    segments.push({ text: ' | ' });
+    segments.push({ text: ' ' });
+    segments.push({ text: '│', dimColor: true });
   });
-  return isHeader ? segments.map((segment) => ({ ...segment, bold: true })) : segments;
+  return segments;
 }
 
-function inlinePaddedCell(text: string, width: number, align: TableAlignment): StyledSegment[] {
-  const runs = parseInlineRuns(text);
-  const visible = runs.reduce((sum, run) => sum + textWidth(run.text), 0);
+function inlinePaddedCell(
+  text: string,
+  width: number,
+  align: TableAlignment,
+  isHeader: boolean,
+): StyledSegment[] {
+  const rawSegments = parseInlineRuns(text).map((run): StyledSegment => ({
+    text: run.text,
+    bold: isHeader || run.bold,
+    code: run.code,
+    color: isHeader && !run.code ? 'cyan' : undefined,
+  }));
+  const content = truncateSegmentsWithEllipsis(rawSegments, width);
+  const visible = segmentsWidth(content);
   const extra = Math.max(0, width - visible);
   const left = align === 'right' ? extra : align === 'center' ? Math.floor(extra / 2) : 0;
   const right = extra - left;
@@ -442,9 +493,7 @@ function inlinePaddedCell(text: string, width: number, align: TableAlignment): S
   if (left > 0) {
     segments.push({ text: ' '.repeat(left) });
   }
-  for (const run of runs) {
-    segments.push({ text: run.text, bold: run.bold, code: run.code });
-  }
+  segments.push(...content);
   if (right > 0) {
     segments.push({ text: ' '.repeat(right) });
   }
@@ -455,8 +504,106 @@ function cellVisibleWidth(text: string): number {
   return parseInlineRuns(text).reduce((sum, run) => sum + textWidth(run.text), 0);
 }
 
-/** Clip a styled row to `width` display columns (used to keep tables in bounds). */
-function truncateSegments(segments: StyledSegment[], width: number): StyledSegment[] {
+function normalizeTableCells(cells: string[], columnCount: number): string[] {
+  return Array.from({ length: columnCount }, (_, column) => cells[column] ?? '');
+}
+
+function fitTableColumnWidths(desiredWidths: number[], bodyWidth: number): number[] {
+  const columnCount = desiredWidths.length;
+  const availableCellWidth = Math.max(columnCount, bodyWidth - (3 * columnCount + 1));
+  const minWidth = availableCellWidth >= columnCount * MIN_TABLE_CELL_WIDTH ? MIN_TABLE_CELL_WIDTH : 1;
+  const widths = Array.from({ length: columnCount }, () => minWidth);
+  let remaining = availableCellWidth - columnCount * minWidth;
+  const extras = desiredWidths.map((desired, index) => ({
+    index,
+    extra: Math.max(0, desired - minWidth),
+  }));
+
+  while (remaining > 0) {
+    let progressed = false;
+    for (const column of extras) {
+      if (remaining <= 0) {
+        break;
+      }
+      if (widths[column.index] - minWidth >= column.extra) {
+        continue;
+      }
+      widths[column.index] += 1;
+      remaining -= 1;
+      progressed = true;
+    }
+    if (!progressed) {
+      break;
+    }
+  }
+  return widths;
+}
+
+function expandTableColumnWidths(widths: number[], bodyWidth: number, targetTableWidth: number): number[] {
+  const expanded = [...widths];
+  const safeTarget = Math.min(bodyWidth, Math.max(tableDisplayWidth(expanded), targetTableWidth));
+  while (tableDisplayWidth(expanded) < safeTarget) {
+    for (let index = 0; index < expanded.length && tableDisplayWidth(expanded) < safeTarget; index += 1) {
+      expanded[index] += 1;
+    }
+  }
+  return expanded;
+}
+
+function tableDisplayWidth(columnWidths: number[]): number {
+  return columnWidths.reduce((sum, width) => sum + width, 0) + 3 * columnWidths.length + 1;
+}
+
+function tableBorderSegments(
+  columnWidths: number[],
+  position: 'top' | 'middle' | 'bottom',
+): StyledSegment[] {
+  const chars =
+    position === 'top'
+      ? { left: '┌', join: '┬', right: '┐' }
+      : position === 'middle'
+        ? { left: '├', join: '┼', right: '┤' }
+        : { left: '└', join: '┴', right: '┘' };
+  const segments: StyledSegment[] = [{ text: chars.left, dimColor: true }];
+  columnWidths.forEach((width, index) => {
+    segments.push({ text: '─'.repeat(width + 2), dimColor: true });
+    segments.push({ text: index === columnWidths.length - 1 ? chars.right : chars.join, dimColor: true });
+  });
+  return segments;
+}
+
+function tableNoteSegments(text: string, tableWidth: number): StyledSegment[] {
+  const innerWidth = Math.max(1, tableWidth - 2);
+  const clipped = truncateToWidth(` ${text} `, innerWidth);
+  const padding = Math.max(0, innerWidth - textWidth(clipped));
+  return [
+    { text: '│', dimColor: true },
+    { text: clipped + ' '.repeat(padding), dimColor: true },
+    { text: '│', dimColor: true },
+  ];
+}
+
+function segmentsWidth(segments: StyledSegment[]): number {
+  return segments.reduce((sum, segment) => sum + textWidth(segment.text), 0);
+}
+
+function truncateSegmentsWithEllipsis(segments: StyledSegment[], width: number): StyledSegment[] {
+  const safeWidth = Math.max(0, Math.floor(width));
+  if (segmentsWidth(segments) <= safeWidth) {
+    return segments;
+  }
+  const ellipsis = '…';
+  const ellipsisWidth = textWidth(ellipsis);
+  if (safeWidth <= ellipsisWidth) {
+    return [{ text: ellipsis, dimColor: true }];
+  }
+  const result = clipSegments(segments, safeWidth - ellipsisWidth);
+  result.push({ text: ellipsis, dimColor: true });
+  return result;
+}
+
+/** Clip a styled row to `width` display columns. */
+function clipSegments(segments: StyledSegment[], width: number): StyledSegment[] {
   const safeWidth = Math.max(0, Math.floor(width));
   const result: StyledSegment[] = [];
   let used = 0;
