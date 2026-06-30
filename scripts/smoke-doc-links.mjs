@@ -1,7 +1,7 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, normalize, relative } from "node:path";
 
-const roots = ["README.md", "docs", ".docs-internal"].filter(existsSync);
+const roots = ["README.md", "README_zh.md", "docs", ".docs-internal", "apps/api/AGENTS.md", "apps/web/AGENTS.md", "apps/tui/AGENTS.md", "apps/web/README.md", "apps/tui/README.md"].filter(existsSync);
 const files = roots.flatMap((root) => collectDocFiles(root)).sort();
 
 const brokenLinks = [];
@@ -96,10 +96,14 @@ function scanSensitiveContent(file, text) {
       pattern: /\b(?:API_KEY|TOKEN|SECRET|PASSWORD|PASSWD)\s*=\s*(?!replace-with-your-key|你的_API_Key|<[^>]+>|\.\.\.)\S+/i
     }
   ];
+  const publicOnlyChecks = [
+    { label: "public release placeholder wording", pattern: /待确认|未确认|未核实|占位|后续补充|可能支持/ }
+  ];
+  const activeChecks = isPublicDoc(file) ? [...checks, ...publicOnlyChecks] : checks;
 
   const lines = text.split("\n");
   for (const [index, line] of lines.entries()) {
-    for (const check of checks) {
+    for (const check of activeChecks) {
       if (check.pattern.test(line)) {
         sensitiveMatches.push({ file, label: check.label, line: index + 1 });
       }
@@ -108,7 +112,7 @@ function scanSensitiveContent(file, text) {
 }
 
 function isPublicDoc(file) {
-  return file === "README.md" || file.startsWith(`docs${"/"}`);
+  return file === "README.md" || file === "README_zh.md" || file.startsWith(`docs${"/"}`);
 }
 
 function pointsToInternalDocs(path) {

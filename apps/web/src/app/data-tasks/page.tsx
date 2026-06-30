@@ -18,7 +18,7 @@ import {
   useRenderTool,
 } from "@copilotkit/react-core/v2";
 import { Children, cloneElement, isValidElement, useCallback, createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
-import type { ComponentProps, ComponentType, MouseEvent, ReactNode } from "react";
+import type { ComponentProps, ComponentType, MouseEvent, PointerEvent as ReactPointerEvent, ReactNode } from "react";
 import { z } from "zod";
 import {
   buildMentionResources,
@@ -176,9 +176,14 @@ import { normalizeSqlTable } from "./table-rows";
 import {
   chatPaneClassName,
   getWorkspaceGridTemplateColumns,
+  LEFT_PANEL_MAX_WIDTH,
+  LEFT_PANEL_MIN_WIDTH,
   resolveSidebarExpandPreferences,
+  RIGHT_PANEL_MAX_WIDTH,
+  RIGHT_PANEL_MIN_WIDTH,
 } from "./workspace-layout";
 import { usePanelResize } from "./hooks/use-panel-resize";
+import { useLeftPanelResize } from "./hooks/use-left-panel-resize";
 import { useChatColumnWidth } from "./hooks/use-chat-column-width";
 import { useWorkspaceResponsiveLayout } from "./hooks/use-workspace-responsive-layout";
 import { useWorkspaceViewportWidth } from "./hooks/use-workspace-viewport-width";
@@ -499,7 +504,7 @@ function DataTaskWorkspace() {
   const [configActionError, setConfigActionError] = useState<string | null>(null);
   const [sessionSyncError, setSessionSyncError] = useState<string | null>(null);
   const [runCancelBusy, setRunCancelBusy] = useState(false);
-  // Layer-2 per-run override (DESIGN.md): `@`-selected capabilities for the next
+  // Layer-2 per-run override (data-tasks-workbench-design.md): `@`-selected capabilities for the next
   // run only. Cleared after each send so it never mutates workspace defaults.
   const [perRunSelection, setPerRunSelection] = useState<PerRunSelection>(
     emptyPerRunSelection,
@@ -550,6 +555,15 @@ function DataTaskWorkspace() {
     enabled: !configPanel && !workspaceFilesPanelOpen,
   });
 
+  const {
+    width: leftPanelWidth,
+    isResizing: isLeftPanelResizing,
+    onResizeStart: onLeftPanelResizeStart,
+    resetWidth: resetLeftPanelWidth,
+  } = useLeftPanelResize({
+    enabled: !configPanel && !workspaceFilesPanelOpen && !userSidebarCollapsed,
+  });
+
   const sidePanelOpen = Boolean(configPanel) || workspaceFilesPanelOpen;
   const {
     containerRef: gridRef,
@@ -567,6 +581,7 @@ function DataTaskWorkspace() {
     userSidebarCollapsed,
     userRightPanelOpen,
     rightPanelWidth,
+    leftPanelWidth,
     enabled: !sidePanelOpen && layoutHydrated,
   });
 
@@ -595,6 +610,7 @@ function DataTaskWorkspace() {
         viewportWidth: workspaceViewportWidth,
         userRightPanelOpen,
         rightPanelWidth,
+        leftPanelWidth,
       });
       setUserSidebarCollapsed(next.userSidebarCollapsed);
       setUserRightPanelOpen(next.userRightPanelOpen);
@@ -606,6 +622,7 @@ function DataTaskWorkspace() {
     workspaceViewportWidth,
     userRightPanelOpen,
     rightPanelWidth,
+    leftPanelWidth,
   ]);
 
   const closeTaskConsole = useCallback(() => {
@@ -1188,7 +1205,10 @@ function DataTaskWorkspace() {
       ref={gridRef}
       className={[
         "grid h-screen min-h-[560px] overflow-hidden bg-surface-subtle text-foreground",
-        isRightPanelResizing || isAutoLayout || isViewportResizing
+        isRightPanelResizing ||
+        isLeftPanelResizing ||
+        isAutoLayout ||
+        isViewportResizing
           ? ""
           : "transition-[grid-template-columns] duration-300",
       ].join(" ")}
@@ -1198,6 +1218,7 @@ function DataTaskWorkspace() {
           isRightPanelOpen: canDockRightPanel && rightPanelOpen,
           sidebarCollapsed,
           rightPanelWidth,
+          leftPanelWidth,
         }),
       }}
     >
@@ -1206,6 +1227,10 @@ function DataTaskWorkspace() {
         activeConfigPanel={configPanel}
         activeFilesPanel={workspaceFilesPanelOpen}
         collapsed={sidebarCollapsed}
+        leftPanelWidth={leftPanelWidth}
+        isLeftPanelResizing={isLeftPanelResizing}
+        onLeftPanelResizeStart={onLeftPanelResizeStart}
+        onResetLeftPanelWidth={resetLeftPanelWidth}
         filteredSessions={filteredSessions}
         query={query}
         sessionCount={sessions.length}
@@ -1334,7 +1359,11 @@ function DataTaskWorkspace() {
           }}
         >
           <PanelResizeHandle
+            edge="left"
             width={rightPanelWidth}
+            minWidth={RIGHT_PANEL_MIN_WIDTH}
+            maxWidth={RIGHT_PANEL_MAX_WIDTH}
+            label="Resize task console"
             isResizing={isRightPanelResizing}
             onResizeStart={onRightPanelResizeStart}
             onReset={resetRightPanelWidth}
@@ -3688,6 +3717,10 @@ type SessionPaneProps = {
   activeConfigPanel: WorkspaceConfigPanelKey | null;
   activeFilesPanel: boolean;
   collapsed: boolean;
+  leftPanelWidth: number;
+  isLeftPanelResizing: boolean;
+  onLeftPanelResizeStart: (event: ReactPointerEvent<HTMLElement>) => void;
+  onResetLeftPanelWidth: () => void;
   filteredSessions: ChatSession[];
   query: string;
   sessionCount: number;
@@ -3711,6 +3744,10 @@ function SessionPane({
   activeConfigPanel,
   activeFilesPanel,
   collapsed,
+  leftPanelWidth,
+  isLeftPanelResizing,
+  onLeftPanelResizeStart,
+  onResetLeftPanelWidth,
   filteredSessions,
   query,
   sessionCount,
@@ -3777,7 +3814,24 @@ function SessionPane({
   }
 
   return (
-    <aside className="flex h-full min-h-0 w-[320px] min-w-[320px] max-w-[320px] shrink-0 flex-col overflow-hidden border-r border-border bg-surface-subtle">
+    <aside
+      className="relative z-30 flex h-full min-h-0 shrink-0 flex-col overflow-hidden border-r border-border bg-surface-subtle"
+      style={{
+        width: leftPanelWidth,
+        minWidth: leftPanelWidth,
+        maxWidth: leftPanelWidth,
+      }}
+    >
+      <PanelResizeHandle
+        edge="right"
+        width={leftPanelWidth}
+        minWidth={LEFT_PANEL_MIN_WIDTH}
+        maxWidth={LEFT_PANEL_MAX_WIDTH}
+        label="Resize workspace sidebar"
+        isResizing={isLeftPanelResizing}
+        onResizeStart={onLeftPanelResizeStart}
+        onReset={onResetLeftPanelWidth}
+      />
       <SessionPaneContent
         activeSessionId={activeSessionId}
         activeConfigPanel={activeConfigPanel}

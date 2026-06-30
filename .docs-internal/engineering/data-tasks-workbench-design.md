@@ -1,5 +1,6 @@
-# Data Agent Session Page — Design
+# Data Tasks Workbench — Design
 
+> **Code:** `apps/web/src/app/data-tasks/`  
 > **Last verified against code:** 2026-06-24  
 > **Maintenance:** When changing `TaskConsole`, layout/responsive behavior, config
 > REST integration, or design tokens, update this document in the same change.
@@ -10,13 +11,13 @@ This page (`/data-tasks`) is a **data-agent workbench** built on CopilotKit v2
 the backend actually streams. There is no mock scenario or scripted demo.
 
 The backend protocol surface is the source of truth for what is renderable; see
-[copilotkit-ag-ui-frontend-protocol.md](../../../../../.docs-internal/engineering/copilotkit-ag-ui-frontend-protocol.md).
+[docs/zh/reference/agent-runtime.md](../../docs/zh/reference/agent-runtime.md).
 This document describes how the page maps that protocol to UI.
 
 ## Layout
 
 Three-column responsive grid, driven by
-[workspace-layout.ts](./workspace-layout.ts) rather than static Tailwind
+[workspace-layout.ts](../../apps/web/src/app/data-tasks/workspace-layout.ts) rather than static Tailwind
 breakpoints:
 
 ```
@@ -58,8 +59,8 @@ Layout behavior:
   right console first, then collapse the left panel. User preferences are
   restored when space returns.
 - When the viewport cannot fit a docked right panel (`canDockRightPanel` in
-  [workspace-layout.ts](./workspace-layout.ts)), `TaskConsole` opens in
-  [TaskConsoleDrawer.tsx](./components/task-console/TaskConsoleDrawer.tsx)
+  [workspace-layout.ts](../../apps/web/src/app/data-tasks/workspace-layout.ts)), `TaskConsole` opens in
+  [TaskConsoleDrawer.tsx](../../apps/web/src/app/data-tasks/components/task-console/TaskConsoleDrawer.tsx)
   (full-screen overlay, Esc / backdrop dismiss) instead of the grid column. The
   chat header「打开控制台」button opens the drawer on narrow viewports.
 - Opening `WorkspaceConfigPanel` makes the workspace two-column: left config
@@ -68,12 +69,12 @@ Layout behavior:
 
 ## Workspace configuration model (DB / KB / MCP / LLM / Skill)
 
-State + schema live in [data-task-state.ts](./data-task-state.ts); UI lives in
-[page.tsx](./page.tsx). Backend config I/O is handled by
-[use-workspace-config-api.ts](./hooks/use-workspace-config-api.ts), which wraps
+State + schema live in [data-task-state.ts](../../apps/web/src/app/data-tasks/data-task-state.ts); UI lives in
+[page.tsx](../../apps/web/src/app/data-tasks/page.tsx). Backend config I/O is handled by
+[use-workspace-config-api.ts](../../apps/web/src/app/data-tasks/hooks/use-workspace-config-api.ts), which wraps
 `lib/config-api`. The backend-side contract and runtime capability surface:
 
-- [config-management-api.md](../../../../../.docs-internal/engineering/config-management-api.md)
+- [docs/zh/reference/configuration-api.md](../../docs/zh/reference/configuration-api.md)
   — REST contract for config management and the **`run_config` merge model**
   section (server-side merge of workspace defaults, session overrides, and per-run
   selections).
@@ -230,7 +231,7 @@ Two `useAgentContext` items (+ `forwardedProps.datasourceId`):
 - `datasource_id` — the one field the backend currently honors (protocol §2).
 - `run_config` — single forward-compatible payload built by `buildRunConfig`
   matching the **`run_config` merge model** in
-  [config-management-api.md](../../../../../.docs-internal/engineering/config-management-api.md);
+  [docs/zh/reference/configuration-api.md](../../docs/zh/reference/configuration-api.md);
   **ids / selections only, no secrets**:
 
 ```jsonc
@@ -332,9 +333,9 @@ flowchart LR
 
 - The `CopilotKit` provider points at `NEXT_PUBLIC_AGENT_RUNTIME_URL`
   (default `http://127.0.0.1:8787/api/copilotkit`) with `agentId="dataAgent"`.
-- [use-data-agent-run.ts](./use-data-agent-run.ts) subscribes to the agent and
+- [use-data-agent-run.tsx](../../apps/web/src/app/data-tasks/use-data-agent-run.tsx) subscribes to the agent and
   reduces the AG-UI stream into a `LiveRun` via
-  [live-run-state.ts](./live-run-state.ts).
+  [live-run-state.ts](../../apps/web/src/app/data-tasks/live-run-state.ts).
 - Events consumed: `RUN_STARTED/FINISHED/ERROR`, `STATE_SNAPSHOT/DELTA`,
   `ACTIVITY_SNAPSHOT/DELTA` (plan + step), `TOOL_CALL_*`, and
   `CUSTOM` (`sql_audit`, `artifact`, `token_usage`, `workspace.metadata`,
@@ -474,8 +475,8 @@ The middle→right linkage mirrors the Step / Tool hierarchy:
 
 ## Design tokens and visual semantics
 
-The workbench uses Tailwind v4 CSS variables from [globals.css](../globals.css)
-and shared class bundles from [ui-tokens.ts](./ui-tokens.ts). New UI should prefer
+The workbench uses Tailwind v4 CSS variables from [globals.css](../../apps/web/src/app/globals.css)
+and shared class bundles from [ui-tokens.ts](../../apps/web/src/app/data-tasks/ui-tokens.ts). New UI should prefer
 semantic tokens over hardcoded `slate-*` / `blue-*` colors so the dense dashboard
 can evolve consistently.
 

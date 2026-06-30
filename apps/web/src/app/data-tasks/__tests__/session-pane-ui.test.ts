@@ -9,6 +9,7 @@ import {
   isSessionRunActive,
 } from "../session-pane-ui";
 import type { WorkspaceConfigStore } from "../data-task-state";
+import { LEFT_PANEL_MAX_WIDTH } from "../workspace-layout";
 
 function item(id: string, name = id) {
   return { id, name, description: `${name} desc`, enabled: true };
@@ -65,7 +66,7 @@ describe("session pane ui conventions", () => {
     const classes = getCollapsedWorkspacePreviewClassNames();
 
     expect(classes.panel).toContain("absolute");
-    expect(classes.panel).toContain("w-[320px]");
+    expect(classes.panel).toContain(`w-[${LEFT_PANEL_MAX_WIDTH}px]`);
     expect(classes.panel).toContain("-translate-x-2");
     expect(classes.panel).toContain("opacity-0");
     expect(classes.panel).toContain("transition-[opacity,transform]");

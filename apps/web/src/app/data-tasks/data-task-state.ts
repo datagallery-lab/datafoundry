@@ -1,5 +1,7 @@
 import {
   clampRightPanelWidth,
+  clampLeftPanelWidth,
+  LEFT_PANEL_DEFAULT_WIDTH,
   RIGHT_PANEL_DEFAULT_WIDTH,
 } from "./workspace-layout";
 
@@ -686,6 +688,7 @@ export const DEFAULT_SKILL_ID = DATA_SKILLS[0].id;
 
 const ACTIVE_LLM_STORAGE_KEY = "data-tasks:active-llm:v2";
 const RIGHT_PANEL_WIDTH_STORAGE_KEY = "data-tasks:right-panel-width:v2";
+const LEFT_PANEL_WIDTH_STORAGE_KEY = "data-tasks:left-panel-width:v1";
 
 export function loadRightPanelWidth(): number {
   if (typeof window === "undefined") return RIGHT_PANEL_DEFAULT_WIDTH;
@@ -707,6 +710,33 @@ export function persistRightPanelWidth(width: number): void {
   try {
     window.localStorage.setItem(
       RIGHT_PANEL_WIDTH_STORAGE_KEY,
+      String(Math.round(width)),
+    );
+  } catch {
+    // Ignore quota errors — width stays in-memory.
+  }
+}
+
+export function loadLeftPanelWidth(): number {
+  if (typeof window === "undefined") return LEFT_PANEL_DEFAULT_WIDTH;
+  try {
+    const raw = window.localStorage.getItem(LEFT_PANEL_WIDTH_STORAGE_KEY);
+    const fallback = LEFT_PANEL_DEFAULT_WIDTH;
+    const stored =
+      raw && Number.isFinite(Number.parseFloat(raw)) && Number.parseFloat(raw) > 0
+        ? Number.parseFloat(raw)
+        : fallback;
+    return clampLeftPanelWidth(stored);
+  } catch {
+    return LEFT_PANEL_DEFAULT_WIDTH;
+  }
+}
+
+export function persistLeftPanelWidth(width: number): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(
+      LEFT_PANEL_WIDTH_STORAGE_KEY,
       String(Math.round(width)),
     );
   } catch {

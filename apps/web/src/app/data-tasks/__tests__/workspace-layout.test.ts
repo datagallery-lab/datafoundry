@@ -2,11 +2,15 @@ import { describe, expect, it } from "vitest";
 import {
   canDockRightPanel,
   chatPaneClassName,
+  clampLeftPanelWidth,
   clampRightPanelWidth,
   fixedGridColumn,
   getChatInputReservedWidth,
   getRequiredWorkspaceWidth,
   getWorkspaceGridTemplateColumns,
+  LEFT_PANEL_DEFAULT_WIDTH,
+  LEFT_PANEL_MAX_WIDTH,
+  LEFT_PANEL_MIN_WIDTH,
   RIGHT_PANEL_DEFAULT_WIDTH,
   RIGHT_PANEL_MAX_WIDTH,
   RIGHT_PANEL_MIN_WIDTH,
@@ -26,7 +30,7 @@ describe("workspace layout", () => {
         rightPanelWidth: 400,
       }),
     ).toBe(
-      `${fixedGridColumn(320)} minmax(${CHAT_MIN_WIDTH}px, 1fr) ${fixedGridColumn(400)}`,
+      `${fixedGridColumn(LEFT_PANEL_DEFAULT_WIDTH)} minmax(${CHAT_MIN_WIDTH}px, 1fr) ${fixedGridColumn(400)}`,
     );
   });
 
@@ -47,12 +51,26 @@ describe("workspace layout", () => {
         isRightPanelOpen: false,
         sidebarCollapsed: false,
       }),
-    ).toBe(`${fixedGridColumn(320)} minmax(${CHAT_MIN_WIDTH}px, 1fr)`);
+    ).toBe(`${fixedGridColumn(LEFT_PANEL_DEFAULT_WIDTH)} minmax(${CHAT_MIN_WIDTH}px, 1fr)`);
   });
 
   it("does not cap the chat surface width", () => {
     expect(chatPaneClassName).not.toContain("max-w");
     expect(chatPaneClassName).toContain("w-full");
+  });
+});
+
+describe("clampLeftPanelWidth", () => {
+  it("never drops below the minimum width", () => {
+    expect(clampLeftPanelWidth(100)).toBe(LEFT_PANEL_MIN_WIDTH);
+  });
+
+  it("caps at the absolute maximum", () => {
+    expect(clampLeftPanelWidth(400)).toBe(LEFT_PANEL_MAX_WIDTH);
+  });
+
+  it("keeps a requested width within bounds", () => {
+    expect(clampLeftPanelWidth(240)).toBe(240);
   });
 });
 
@@ -182,7 +200,7 @@ describe("getRequiredWorkspaceWidth", () => {
         rightPanelOpen: true,
         rightPanelWidth: 360,
       }),
-    ).toBe(320 + 360 + getChatInputReservedWidth());
+    ).toBe(LEFT_PANEL_DEFAULT_WIDTH + 360 + getChatInputReservedWidth());
   });
 });
 

@@ -1,68 +1,74 @@
 # 支持的数据源
 
-Open Data Agent 通过 Data Gateway 管理数据源。客户端只负责注册、测试、选择和展示；真实连接、schema 检查、只读查询、安全策略和审计由后端执行。
+这篇文档面向准备接入数据源的用户。读完后，你可以选择试用路径，查看支持类型，并知道哪些字段会作为凭据处理。
+
+DataAgent 通过 Data Gateway 管理数据源。客户端负责注册、测试和选择；后端负责真实连接、schema 检查、只读查询、安全策略和审计。
 
 ## 推荐试用路径
 
-首次体验建议使用内置 DuckDB 演示数据源，不需要准备自己的数据库。接入自有数据时，建议按下面顺序验证：
+| 阶段 | 类型 | 适合场景 |
+| --- | --- | --- |
+| 第一次试用 | DuckDB demo | 不准备数据库，直接跑通分析链路。 |
+| 本地文件 | SQLite、CSV、Excel、DuckDB file | 验证文件分析、上传和表格产出。 |
+| 常见服务端数据库 | PostgreSQL、MySQL | 验证真实连接、schema 抓取和只读 SQL。 |
+| 外部服务 | 云数仓、搜索、NoSQL、湖仓 | 需要服务、网络、账号和凭据。 |
 
-1. 本地文件或内置 demo：DuckDB、SQLite、CSV、Excel。
-2. 常见关系型数据库：PostgreSQL、MySQL。
-3. 云数仓、湖仓、搜索和 NoSQL 数据源。
+## 类型与字段
 
-## 当前类型
+`GET /api/v1/datasource-types` 返回后端支持的类型、字段和是否启用。前端应按接口返回值渲染表单。
 
-| 类型 | 说明 |
-| --- | --- |
-| `duckdb` | 内置 demo、DuckDB 文件或内存分析。 |
-| `sqlite` | 本地 SQLite 文件。 |
-| `csv` | CSV 文件。 |
-| `xlsx` | Excel 文件。 |
-| `postgresql` | PostgreSQL 只读连接。 |
-| `mysql` | MySQL 只读连接。 |
-| `clickhouse` | ClickHouse HTTP 连接。 |
-| `snowflake` | Snowflake 数据仓库。 |
-| `bigquery` | BigQuery 数据仓库。 |
-| `sqlserver` | Microsoft SQL Server。 |
-| `oracle` | Oracle Database。 |
-| `mongodb` | MongoDB collection 以 table-like 方式进入工具边界。 |
-| `redis` | Redis keyspace 以受限映射方式进入工具边界。 |
-| `elasticsearch` | Elasticsearch index 以 table-like 方式进入工具边界。 |
-| `opensearch` | OpenSearch index 以 table-like 方式进入工具边界。 |
-| `starrocks` | StarRocks。 |
-| `trino` | Trino。 |
-| `presto` | Presto。 |
-| `spark` | Spark SQL。 |
-| `databricks` | Databricks SQL。 |
-| `redshift` | Amazon Redshift。 |
-| `doris` | Apache Doris。 |
-| `mariadb` | MariaDB。 |
-| `tidb` | TiDB。 |
-| `oceanbase` | OceanBase。 |
-| `greenplum` | Greenplum。 |
-| `gaussdb` | GaussDB。 |
-| `access` | Microsoft Access 文件。 |
-
-部分外部服务适配器需要对应服务、网络和凭据才能完成真实环境验证。公开演示建议优先使用 DuckDB demo、SQLite、CSV、Excel、PostgreSQL 或 MySQL。
+| 类型 | 字段 | 凭据字段 | 说明 |
+| --- | --- | --- | --- |
+| `duckdb` | `mode`, `path` | 无 | `mode=demo` 使用内置数据；`mode=file` 指向 DuckDB 文件。 |
+| `sqlite` | `path` | 无 | 本地 SQLite 文件。 |
+| `csv` | `file_path` | 无 | CSV 文件，作为表格数据源。 |
+| `xlsx` | `file_path` | 无 | Excel 文件。 |
+| `postgresql` | `host`, `port`, `database`, `schema`, `username`, `password` | `password` | PostgreSQL 只读连接。 |
+| `mysql` | `host`, `port`, `database`, `schema`, `username`, `password` | `password` | MySQL 只读连接。 |
+| `clickhouse` | `host`, `port`, `database`, `username`, `password`, `secure` | `password` | ClickHouse HTTP JSON 接口。 |
+| `snowflake` | `account`, `warehouse`, `database`, `schema`, `role`, `username`, `password` | `password` | Snowflake 数据仓库。 |
+| `bigquery` | `projectId`, `dataset`, `location`, `credentialsJson`, `keyFilename` | `credentialsJson` | BigQuery 数据仓库。 |
+| `sqlserver` | `host`, `port`, `database`, `schema`, `username`, `password` | `password` | Microsoft SQL Server。 |
+| `oracle` | `connectString`, `schema`, `username`, `password` | `password` | Oracle Database。 |
+| `mongodb` | `uri`, `database`, `sampleSize` | `uri` | collection 映射为 table-like 对象。 |
+| `gaussdb` | `host`, `port`, `database`, `schema`, `username`, `password` | `password` | GaussDB PostgreSQL-compatible。 |
+| `access` | `connectionString`, `path` | `connectionString` | Microsoft Access over ODBC。 |
+| `redis` | `url`, `keyPattern`, `database` | `url` | keyspace 映射为 `redis_keys` 伪表。 |
+| `starrocks` | `host`, `port`, `database`, `schema`, `username`, `password` | `password` | StarRocks MySQL-compatible。 |
+| `trino` | `host`, `port`, `catalog`, `schema`, `username`, `password`, `secure` | `password` | Trino REST API。 |
+| `presto` | `host`, `port`, `catalog`, `schema`, `username`, `password`, `secure` | `password` | Presto REST API。 |
+| `spark` | `host`, `port`, `catalog`, `schema`, `transport`, `auth`, `username`, `password` | `password` | Spark Thrift Server。 |
+| `databricks` | `host`, `path`, `warehouseId`, `token`, `catalog`, `schema` | `token` | Databricks SQL Warehouse。 |
+| `redshift` | `host`, `port`, `database`, `schema`, `username`, `password` | `password` | Amazon Redshift。 |
+| `elasticsearch` | `node`, `url`, `indexPattern`, `username`, `password`, `apiKey` | `node`, `url`, `password`, `apiKey` | index 映射为 table-like 对象。 |
+| `opensearch` | `node`, `url`, `indexPattern`, `username`, `password`, `apiKey` | `node`, `url`, `password`, `apiKey` | index 映射为 table-like 对象。 |
+| `doris` | `host`, `port`, `database`, `schema`, `username`, `password` | `password` | Apache Doris。 |
+| `mariadb` | `host`, `port`, `database`, `schema`, `username`, `password` | `password` | MariaDB。 |
+| `tidb` | `host`, `port`, `database`, `schema`, `username`, `password` | `password` | TiDB。 |
+| `oceanbase` | `host`, `port`, `database`, `schema`, `username`, `password` | `password` | OceanBase。 |
+| `greenplum` | `host`, `port`, `database`, `schema`, `username`, `password` | `password` | Greenplum。 |
 
 ## 发现类型 schema
-
-可以通过接口读取当前后端支持的类型和参数 schema：
 
 ```bash
 curl http://127.0.0.1:8787/api/v1/datasource-types
 ```
 
-前端应根据接口返回的字段 schema 渲染表单，而不是硬编码所有数据源参数。
+响应里的 `parameters[]` 会标出字段名、类型、必填状态、默认值和选项。
 
 ## 凭据边界
 
-- 创建或更新数据源时可以提交连接凭据。
-- 读接口不会返回明文密码、Token 或完整连接串。
-- Agent run 只接收数据源 ID 和选择信息，不接收明文凭据。
-- SQL 执行由 Data Gateway 统一做只读限制、超时、行数限制和审计。
+- 创建或更新数据源时可以提交凭据。
+- 读接口只返回 `secretRef`、`hasSecret` 或同等标记。
+- Agent run 只接收数据源 ID 和选择信息。
+- SQL 执行由 Data Gateway 做只读限制、超时、行数限制和审计。
+
+## 非 SQL 类型
+
+MongoDB、Redis、Elasticsearch 和 OpenSearch 不暴露原生命令或 DSL。Data Gateway 会把 collection、keyspace 或 index 映射成受限的 table-like 对象，让 Agent 走统一工具边界。
 
 ## 延伸阅读
 
-- 接入步骤请看 [数据源指南](../guides/data-sources.md)。
-- 配置接口请看 [配置 API 参考](configuration-api.md)。
+- 接入步骤：[数据源指南](../guides/data-sources.md)
+- 配置接口：[配置 API 参考](configuration-api.md)
+- REST 端点：[REST API 参考](rest-api.md)

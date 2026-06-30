@@ -9,17 +9,14 @@ Only expose:
 - `GET /healthz`
 - `POST /api/copilotkit` (+ CORS `OPTIONS`)
 
-**Planned (not yet implemented)** — see
-[`docs/engineering/2026-06-25-backend-requirements.md`](../../docs/engineering/2026-06-25-backend-requirements.md)
-and the latest increment
-[`docs/engineering/2026-06-26-backend-requirements.md`](../../docs/engineering/2026-06-26-backend-requirements.md):
+**Planned (not yet implemented)** — track against public REST docs and capability checks:
 
 - R-004 — `GET /api/v1/artifacts/:id` (+ `/preview`, `/download`) — artifact metadata / inline preview / attachment download
 - R-002 — AG-UI `CUSTOM(name="token_usage")` — LLM input/output token usage per run (no REST)
 - R-007 — `POST /api/v1/chat/uploads` — chat file upload to session workspace
 
 Do **not** add REST CRUD here unless documented in
-[`docs/engineering/config-management-api.md`](../../docs/engineering/config-management-api.md).
+[`docs/zh/reference/configuration-api.md`](../../docs/zh/reference/configuration-api.md).
 
 ## Architecture
 
@@ -27,14 +24,13 @@ Do **not** add REST CRUD here unless documented in
 - Agent orchestration: `@ag-ui/mastra` → `@open-data-agent/agent-runtime` → typed tools → Data Gateway.
 - Data Gateway and Metadata are **internal**; not exposed to the frontend directly.
 
-## Implementation docs (read in order)
+## Docs (read in order)
 
-1. [`docs/engineering/copilotkit-ag-ui-frontend-protocol.md`](../../docs/engineering/copilotkit-ag-ui-frontend-protocol.md)
-2. [`docs/engineering/config-management-api.md`](../../docs/engineering/config-management-api.md)
-3. [`docs/engineering/2026-06-25-backend-requirements.md`](../../docs/engineering/2026-06-25-backend-requirements.md)
-4. [`docs/engineering/2026-06-26-backend-requirements.md`](../../docs/engineering/2026-06-26-backend-requirements.md)
-5. [`docs/engineering/2026-06-27-backend-requirements.md`](../../docs/engineering/2026-06-27-backend-requirements.md)
-6. [`docs/engineering/2026-06-27-frontend-capability-status.md`](../../docs/engineering/2026-06-27-frontend-capability-status.md)
+1. [`docs/zh/reference/agent-runtime.md`](../../docs/zh/reference/agent-runtime.md)
+2. [`docs/zh/reference/configuration-api.md`](../../docs/zh/reference/configuration-api.md)
+3. [`docs/zh/reference/rest-api.md`](../../docs/zh/reference/rest-api.md)
+4. [`.docs-internal/engineering/copilotkit-ag-ui-frontend-protocol.md`](../../.docs-internal/engineering/copilotkit-ag-ui-frontend-protocol.md)
+5. [`.docs-internal/engineering/config-management-api.md`](../../.docs-internal/engineering/config-management-api.md)
 
 ## Code conventions
 

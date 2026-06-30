@@ -1,6 +1,7 @@
-# CopilotKit Protocol Client
+# TUI Protocol Client
 
-Node client for the DataAgent CopilotKit single-route runtime.
+> **Code:** `apps/tui/src/protocol/`  
+> **Maintenance:** Update when changing CopilotKit client request shape or SSE parsing.
 
 ## Request Shape
 

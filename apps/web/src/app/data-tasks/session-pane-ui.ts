@@ -1,5 +1,6 @@
 import type { WorkspaceConfigStore } from "./data-task-state";
 import type { LiveRunStatus } from "./live-run-state";
+import { LEFT_PANEL_MAX_WIDTH } from "./workspace-layout";
 
 export type SessionListIconSlot = "session" | "running" | "pin" | "none";
 
@@ -112,7 +113,7 @@ export function getCollapsedWorkspaceRailCopy() {
 export function getCollapsedWorkspacePreviewClassNames() {
   return {
     panel:
-      "absolute left-full top-0 ml-3 flex w-[320px] max-h-[min(720px,calc(100vh-24px))] -translate-x-2 overflow-visible rounded-2xl border border-border bg-surface-subtle opacity-0 shadow-2xl ring-1 ring-black/5 transition-[opacity,transform] duration-200 ease-out before:absolute before:-left-3 before:top-0 before:h-full before:w-3 before:content-[''] pointer-events-none group-hover:pointer-events-auto group-hover:translate-x-0 group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:translate-x-0 group-focus-within:opacity-100",
+      `absolute left-full top-0 ml-3 flex w-[${LEFT_PANEL_MAX_WIDTH}px] max-h-[min(720px,calc(100vh-24px))] -translate-x-2 overflow-visible rounded-2xl border border-border bg-surface-subtle opacity-0 shadow-2xl ring-1 ring-black/5 transition-[opacity,transform] duration-200 ease-out before:absolute before:-left-3 before:top-0 before:h-full before:w-3 before:content-[''] pointer-events-none group-hover:pointer-events-auto group-hover:translate-x-0 group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:translate-x-0 group-focus-within:opacity-100`,
     content:
       "flex min-h-0 w-full flex-col overflow-hidden rounded-2xl border border-white/60 bg-surface-subtle",
     sessionList: "max-h-64 overflow-y-auto p-2",

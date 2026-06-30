@@ -1,7 +1,8 @@
-# Tokenizer Cache Implementation Note
+# Tokenizer Cache
 
-更新时间：2026-06-22
-状态：基础缓存已实现；request path 预加载尚未实施
+> **Code:** `packages/agent-runtime/src/context/token-counter.ts`  
+> **Updated:** 2026-06-22  
+> **Status:** 基础缓存已实现；request path 预加载尚未实施
 
 ## Current Behavior
 

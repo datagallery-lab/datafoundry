@@ -49,7 +49,7 @@ Context Sources
 - 摘要模型的具体 provider 选择。
 - Knowledge retrieval 的召回和 rerank 算法。
 
-这些事项保留在仓库根目录的 `todo_list.md`。
+这些事项作为后续迭代工作跟踪，不在本文档展开。
 
 ## 3. 当前实现
 

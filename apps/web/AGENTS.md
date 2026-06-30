@@ -10,21 +10,21 @@ Next.js frontend (`@open-data-agent/web`) for the data-task workbench.
 
 ## Page scope
 
-Primary UI: `/data-tasks` — design doc at
-[`src/app/data-tasks/DESIGN.md`](src/app/data-tasks/DESIGN.md).
+Primary UI: `/data-tasks`.
 
-## Implementation docs (read in order)
+## Docs (read in order)
 
-1. [`copilotkit-ag-ui-frontend-protocol.md`](../../.docs-internal/engineering/copilotkit-ag-ui-frontend-protocol.md)
-2. [`src/app/data-tasks/DESIGN.md`](src/app/data-tasks/DESIGN.md)
-3. [`config-management-api.md`](../../.docs-internal/engineering/config-management-api.md) (when wiring config REST)
-4. [`backend-rest-api-reference.md`](../../.docs-internal/engineering/backend-rest-api-reference.md) (when wiring REST endpoints)
+1. [`docs/zh/reference/agent-runtime.md`](../../docs/zh/reference/agent-runtime.md)
+2. [`.docs-internal/engineering/data-tasks-workbench-design.md`](../../.docs-internal/engineering/data-tasks-workbench-design.md)
+3. [`docs/zh/reference/configuration-api.md`](../../docs/zh/reference/configuration-api.md) (when wiring config REST)
+4. [`docs/zh/reference/rest-api.md`](../../docs/zh/reference/rest-api.md) (when wiring REST endpoints)
 
 ## Code conventions
 
 - Workspace config (DB/KB/MCP/LLM/Skill) state lives in `data-task-state.ts`; only expose fields the backend can actually consume.
 - Render AG-UI events the backend streams; do not mock agent responses in production paths.
 - Avoid SSR/client layout mismatch for localStorage-driven layout (hydration).
+- When changing workbench layout, config REST integration, or design tokens, update `.docs-internal/engineering/data-tasks-workbench-design.md` in the same change.
 
 ## Verify
 

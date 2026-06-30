@@ -6,7 +6,7 @@
 关联：
 
 - [copilotkit-ag-ui-frontend-protocol.md](./copilotkit-ag-ui-frontend-protocol.md)（AG-UI run 协议，配置 run 时如何透传）
-- [apps/web/src/app/data-tasks/DESIGN.md](../../apps/web/src/app/data-tasks/DESIGN.md)（前端三层配置模型）
+- [data-tasks-workbench-design.md](./data-tasks-workbench-design.md)（前端三层配置模型）
 
 ## 1. 背景与定位
 

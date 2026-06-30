@@ -11,6 +11,7 @@ type UseWorkspaceResponsiveLayoutOptions = {
   userSidebarCollapsed: boolean;
   userRightPanelOpen: boolean;
   rightPanelWidth: number;
+  leftPanelWidth: number;
   enabled: boolean;
 };
 
@@ -31,6 +32,7 @@ export function useWorkspaceResponsiveLayout({
   userSidebarCollapsed,
   userRightPanelOpen,
   rightPanelWidth,
+  leftPanelWidth,
   enabled,
 }: UseWorkspaceResponsiveLayoutOptions): UseWorkspaceResponsiveLayoutResult {
   return useMemo(() => {
@@ -53,6 +55,7 @@ export function useWorkspaceResponsiveLayout({
       userSidebarCollapsed,
       userRightPanelOpen: dockable ? userRightPanelOpen : false,
       rightPanelWidth,
+      leftPanelWidth,
     });
 
     return {
@@ -68,5 +71,6 @@ export function useWorkspaceResponsiveLayout({
     userSidebarCollapsed,
     userRightPanelOpen,
     rightPanelWidth,
+    leftPanelWidth,
   ]);
 }

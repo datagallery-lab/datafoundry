@@ -1,134 +1,167 @@
 # TUI 指南
 
-TUI 是 Open Data Agent 的终端用户界面，适合远程服务器、开发者工作流、命令行偏好用户和需要快速验证后端能力的场景。
-
-与 Web 工作台相比，TUI 更强调键盘操作、命令系统、实时流式反馈和导出能力。
+这篇文档面向终端用户、远程服务器用户和开发者。读完后，你可以启动 TUI、连接后端、选择数据源或 Skill、恢复服务端会话，并在终端里查看运行过程和产出。
 
 ## 启动方式
 
-### 连接真实后端
-
-先启动后端或完整开发服务：
+先启动完整开发服务或后端：
 
 ```bash
 npm run dev
 ```
 
-然后启动 TUI：
+启动 TUI：
 
 ```bash
 npm run start:tui
 ```
 
-如果后端地址不是默认地址，可以显式指定：
+指定后端运行入口：
 
 ```bash
 npm run start:tui -- --runtime-url http://127.0.0.1:8787/api/copilotkit
 ```
 
-### 演示模式
+指定默认数据源和 Agent 名称：
 
-演示模式不需要后端，适合快速查看界面、布局和命令系统：
+```bash
+npm run start:tui -- --datasource-id api-duckdb-demo --agent dataAgent
+```
+
+恢复最近的服务端会话：
+
+```bash
+npm run start:tui -- --resume
+```
+
+恢复指定 thread/session：
+
+```bash
+npm run start:tui -- --resume thread-001
+```
+
+演示模式不连接后端，适合查看布局、命令系统和模拟事件流：
 
 ```bash
 npm run start:tui -- --demo
 ```
 
-### 调试模式
-
-调试模式会输出更多运行信息：
+查看 CLI 参数：
 
 ```bash
-npm run start:tui -- --debug
-```
-
-日志默认写入：
-
-```text
-~/.dataagent/tui.log
+npm run start:tui -- --help
 ```
 
 ## 主要视图
 
-TUI 采用 3 个主要视图：
+TUI 使用四个视图：
 
+| 视图 | 用途 |
+| --- | --- |
+| Chat | 与 Agent 对话，查看流式回复、工具调用和结果。 |
+| Stats | 查看会话统计、步骤进度和运行状态。 |
+| Config | 查看工作区配置和资源状态。 |
+| Outputs | 查看本次会话产出。 |
 
-| 视图     | 用途                             |
-| ------ | ------------------------------ |
-| Chat   | 与 Agent 对话，查看实时响应、工具调用和分析结果。   |
-| Stats  | 查看当前任务统计、步骤进度和运行状态。            |
-| Config | 查看或管理数据源、模型、Skill、MCP 和知识库等配置。 |
+使用 `/tab <name>` 切换视图，也可以直接输入 `/chat`、`/stats`、`/config`、`/outputs`。
 
+## Slash 命令
 
-你可以使用 `Ctrl+T` 或数字键 `1-3` 切换视图。
+输入 `/` 后可以用 `Tab` 补全。当前注册的内置命令如下：
 
-## 常用命令
+| 命令 | 作用 | 示例 |
+| --- | --- | --- |
+| `/help` | 查看可用命令。 | `/help` |
+| `/clear` | 清空当前聊天记录。 | `/clear` |
+| `/status` | 查看 thread、消息数、当前数据源和 Skill。 | `/status` |
+| `/tab <chat\|stats\|config\|outputs>` | 切换视图。 | `/tab outputs` |
+| `/chat` | 切到 Chat 视图。 | `/chat` |
+| `/stats` | 切到 Stats 视图。 | `/stats` |
+| `/config` | 切到 Config 视图。 | `/config` |
+| `/outputs` | 切到 Outputs 视图。 | `/outputs` |
+| `/datasource` | 列出或选择数据源。 | `/datasource list` |
+| `/skill` | 打开 Skill 选择器、列出或选择 Skill。 | `/skill show` |
+| `/reset` | 创建新的本地会话。 | `/reset` |
+| `/resume [latest\|list\|sessionId]` | 恢复服务端历史会话。 | `/resume list` |
+| `/exit` | 退出 TUI。 | `/exit` |
 
-TUI 支持 Slash 命令。输入 `/` 后可以使用 `Tab` 补全。
+`/datasource` 支持这些用法：
 
+```text
+/datasource
+/datasource list
+/datasource current
+/datasource select <id>
+/datasource <id>
+```
 
-| 命令                     | 作用             | 示例                   |
-| ---------------------- | -------------- | -------------------- |
-| `/help [command]`      | 查看帮助           | `/help datasource`   |
-| `/datasource <action>` | 管理数据源          | `/datasource list`   |
-| `/model <action>`      | 管理或切换模型        | `/model switch <id>` |
-| `/skill <action>`      | 管理 Skill       | `/skill list`        |
-| `/mcp <action>`        | 管理 MCP Server  | `/mcp list`          |
-| `/kb <action>`         | 管理知识库          | `/kb list`           |
-| `/config [show         | capabilities]` | 查看配置或能力              |
-| `/stats`               | 查看统计信息         | `/stats`             |
-| `/export [filename]`   | 导出对话           | `/export chat.json`  |
-| `/clear`               | 清空当前对话         | `/clear`             |
-| `/exit`                | 退出程序           | `/exit`              |
+`/skill` 支持这些用法：
 
-
-具体 action 是否可用取决于当前后端能力和本地配置。
+```text
+/skill
+/skill show
+/skill current
+/skill select <id>
+/skill <id>
+/<skill-id>
+```
 
 ## 快捷键
 
+| 快捷键 | 功能 |
+| --- | --- |
+| `Ctrl+C` | 退出程序。 |
+| `Ctrl+L` | 清空聊天显示。 |
+| `Ctrl+N` | 创建新会话。 |
+| `PageUp` / `PageDown` | 在 Chat 视图滚动。 |
+| `Home` / `End` | 跳到 Chat 滚动区顶部或底部。 |
+| `Tab` | 在输入框内补全命令。 |
+| `↑` / `↓` | 浏览输入历史。 |
+| `Ctrl+U` | 清空当前输入。 |
+| `Ctrl+W` | 删除当前输入里的前一个词。 |
+| `Enter` | 发送消息或执行命令。 |
 
-| 快捷键              | 功能      |
-| ---------------- | ------- |
-| `Ctrl+C`         | 退出程序。   |
-| `Ctrl+T` / `1-3` | 切换视图。   |
-| `Tab`            | 命令自动补全。 |
-| `↑` / `↓`        | 浏览历史命令。 |
-| `Ctrl+U`         | 清空当前输入。 |
+## 运行行为
 
+连接真实后端时，TUI 会把自然语言输入发送到 `/api/copilotkit`，并把当前数据源、启用资源和 Skill 选择写入 `run_config`。后端返回 AG-UI 事件后，TUI 会在 Chat、Stats 和 Outputs 视图展示文本、工具调用、运行状态和产出。
 
-## 典型使用流程
+`/resume` 依赖 `/api/v1/sessions` 和 `/api/v1/sessions/:id/conversation`。后端不可用或服务端不支持会话接口时，TUI 会在命令提示区显示错误。
+
+演示模式使用本地模拟事件和内置 demo 状态。它不会调用真实后端，也不能恢复服务端会话。
+
+## 典型流程
 
 1. 启动后端和 TUI。
-2. 使用 `/config capabilities` 查看当前后端能力。
-3. 使用 `/datasource list` 查看可用数据源。
-4. 直接输入自然语言问题，例如：
+2. 运行 `/status` 查看当前 thread、数据源和 Skill。
+3. 运行 `/datasource list` 查看可用数据源。
+4. 需要指定数据源时，运行 `/datasource select api-duckdb-demo`。
+5. 输入问题：
 
 ```text
 帮我查看当前数据源有哪些表，并统计 orders 表各渠道 GMV。
 ```
 
-1. 在 Chat 视图观察流式回复和工具调用。
-2. 使用 `/stats` 查看任务状态。
-3. 使用 `/export chat.json` 导出对话记录。
+6. 在 Chat 视图观察流式回复和工具调用。
+7. 运行 `/stats` 查看运行状态。
+8. 运行 `/outputs` 查看产出。
 
 ## 与 Web 工作台的区别
 
+| 维度 | Web 工作台 | TUI |
+| --- | --- | --- |
+| 使用环境 | 浏览器、本地演示、业务分析。 | SSH、远程服务器、终端工作流。 |
+| 操作方式 | 点击、输入框、控制台。 | 键盘和 slash 命令。 |
+| 追溯展示 | 右侧控制台、步骤详情和追溯列表。 | Chat、Stats 和 Outputs 视图。 |
+| 资源操作 | 表单创建、测试、导入和预览。 | 选择数据源和 Skill，查看配置状态。 |
 
-| 维度   | Web 工作台        | TUI             |
-| ---- | -------------- | --------------- |
-| 主要用户 | 试用用户、业务分析、客户演示 | 终端用户、开发者、远程环境   |
-| 操作方式 | 图形界面、点击和输入框    | 键盘、Slash 命令     |
-| 追溯展示 | 右侧控制台和详情页      | Chat / Stats 视图 |
-| 结果查看 | 表格、图表、SQL、报告预览 | 文本和表格渲染，适合导出    |
-| 环境依赖 | 浏览器和前端服务       | 终端和后端服务         |
+需要完整视觉演示时，用 Web 工作台。需要在 SSH 或轻量终端环境验证 Agent 运行链路时，用 TUI。
 
-
-如果你需要完整视觉演示，优先使用 Web 工作台。如果你需要在 SSH、CI 或轻量终端环境中验证能力，TUI 更方便。
-
-## 排查建议
+## 排查
 
 - 无法连接后端：确认 `npm run dev` 或 `npm run dev:api` 正在运行。
-- 模型无响应：检查根目录 `.env` 中的模型配置。
-- 命令不可用：先运行 `/config capabilities` 查看当前环境支持情况。
-- 输出异常：使用 `--debug` 启动，并查看 `~/.dataagent/tui.log`。
+- 后端地址变更：用 `--runtime-url` 指定完整 `/api/copilotkit` 地址。
+- 模型无响应：检查根目录 `.env` 中的 `LLM_PROVIDER`、`LLM_MODEL`、`LLM_BASE_URL` 和 `LLM_API_KEY`。
+- 会话无法恢复：确认后端 `/api/v1/sessions` 接口可访问，并使用真实后端模式启动。
+- 命令没有效果：运行 `/help` 查看当前注册命令，再检查命令提示区的错误信息。
 
+继续阅读：[Web 工作台指南](web-workbench.md)。

@@ -17,6 +17,7 @@ Open Data Agent 是一个面向数据分析场景的 AI 工作台。它把自然
 | 查看支持的数据源 | [支持的数据源](reference/supported-datasources.md) |
 | 了解 API 和集成方式 | [REST API 参考](reference/rest-api.md)、[配置 API 参考](reference/configuration-api.md) 与 [Agent Runtime 参考](reference/agent-runtime.md) |
 | 了解系统结构 | [架构概览](architecture/overview.md) |
+| 检查安全边界 | [安全说明](security.md) |
 
 ## 推荐体验路径
 
@@ -30,6 +31,6 @@ Open Data Agent 是一个面向数据分析场景的 AI 工作台。它把自然
 
 ## 文档边界
 
-本目录聚焦对外阅读体验，不包含项目管理信息、实现计划、AI 协作记录、历史重构日志或来源敏感的早期讨论。部分高级能力可能处于本地开发模式或实验阶段，文档会在对应章节标注。
+本目录聚焦对外阅读体验，不包含项目管理信息、实现计划、AI 协作记录、历史重构日志或来源敏感的早期讨论。公开文档只描述当前代码、配置、脚本和本地 README 能确认的能力。
 
 如果你是二次开发或集成方，请优先阅读 `reference/` 和 `architecture/`；如果你只是试用产品，`overview.md`、`quick-start.md`、`capabilities.md` 和 `guides/` 已覆盖主要路径。

@@ -8,7 +8,11 @@ export const CHAT_INPUT_PREFERRED_WIDTH = 768;
 export const CHAT_INPUT_MIN_WIDTH = 360;
 /** Horizontal margin around the chat input within the middle column. */
 export const CHAT_INPUT_HORIZONTAL_PADDING = 32;
-export const LEFT_PANEL_WIDTH_EXPANDED = 320;
+export const LEFT_PANEL_MIN_WIDTH = 200;
+export const LEFT_PANEL_MAX_WIDTH = 280;
+export const LEFT_PANEL_DEFAULT_WIDTH = 260;
+/** @deprecated Use {@link LEFT_PANEL_DEFAULT_WIDTH} — expanded width is user-resizable. */
+export const LEFT_PANEL_WIDTH_EXPANDED = LEFT_PANEL_DEFAULT_WIDTH;
 export const LEFT_PANEL_WIDTH_COLLAPSED = 56;
 
 /** Width the middle column must reserve for the chat input at full size. */
@@ -21,22 +25,34 @@ export function fixedGridColumn(width: number): string {
   return `minmax(${width}px, ${width}px)`;
 }
 
-export function getLeftPanelWidth(sidebarCollapsed: boolean): number {
+export function clampLeftPanelWidth(width: number): number {
+  return Math.max(
+    LEFT_PANEL_MIN_WIDTH,
+    Math.min(width, LEFT_PANEL_MAX_WIDTH),
+  );
+}
+
+export function getLeftPanelWidth(
+  sidebarCollapsed: boolean,
+  leftPanelWidth: number = LEFT_PANEL_DEFAULT_WIDTH,
+): number {
   return sidebarCollapsed
     ? LEFT_PANEL_WIDTH_COLLAPSED
-    : LEFT_PANEL_WIDTH_EXPANDED;
+    : clampLeftPanelWidth(leftPanelWidth);
 }
 
 export function getRequiredWorkspaceWidth({
   sidebarCollapsed,
   rightPanelOpen,
   rightPanelWidth,
+  leftPanelWidth = LEFT_PANEL_DEFAULT_WIDTH,
 }: {
   sidebarCollapsed: boolean;
   rightPanelOpen: boolean;
   rightPanelWidth: number;
+  leftPanelWidth?: number;
 }): number {
-  const left = getLeftPanelWidth(sidebarCollapsed);
+  const left = getLeftPanelWidth(sidebarCollapsed, leftPanelWidth);
   const right = rightPanelOpen ? rightPanelWidth : 0;
   return left + right + getChatInputReservedWidth();
 }
@@ -46,13 +62,17 @@ export function getWorkspaceGridTemplateColumns({
   isRightPanelOpen,
   sidebarCollapsed,
   rightPanelWidth = RIGHT_PANEL_DEFAULT_WIDTH,
+  leftPanelWidth = LEFT_PANEL_DEFAULT_WIDTH,
 }: {
   isConfigPanelOpen: boolean;
   isRightPanelOpen: boolean;
   sidebarCollapsed: boolean;
   rightPanelWidth?: number;
+  leftPanelWidth?: number;
 }): string {
-  const leftColumn = fixedGridColumn(getLeftPanelWidth(sidebarCollapsed));
+  const leftColumn = fixedGridColumn(
+    getLeftPanelWidth(sidebarCollapsed, leftPanelWidth),
+  );
   const chatColumn = `minmax(${CHAT_MIN_WIDTH}px, 1fr)`;
 
   if (isConfigPanelOpen || !isRightPanelOpen) {
@@ -84,11 +104,13 @@ export function resolveResponsiveSidebars({
   userSidebarCollapsed,
   userRightPanelOpen,
   rightPanelWidth,
+  leftPanelWidth = LEFT_PANEL_DEFAULT_WIDTH,
 }: {
   viewportWidth: number;
   userSidebarCollapsed: boolean;
   userRightPanelOpen: boolean;
   rightPanelWidth: number;
+  leftPanelWidth?: number;
 }): {
   sidebarCollapsed: boolean;
   rightPanelOpen: boolean;
@@ -101,6 +123,7 @@ export function resolveResponsiveSidebars({
       sidebarCollapsed,
       rightPanelOpen,
       rightPanelWidth,
+      leftPanelWidth,
     }) > viewportWidth;
 
   // Prefer collapsing the left sidebar before closing the console when the user
@@ -125,10 +148,12 @@ export function resolveSidebarExpandPreferences({
   viewportWidth,
   userRightPanelOpen,
   rightPanelWidth,
+  leftPanelWidth = LEFT_PANEL_DEFAULT_WIDTH,
 }: {
   viewportWidth: number;
   userRightPanelOpen: boolean;
   rightPanelWidth: number;
+  leftPanelWidth?: number;
 }): {
   userSidebarCollapsed: false;
   userRightPanelOpen: boolean;
@@ -139,6 +164,7 @@ export function resolveSidebarExpandPreferences({
       sidebarCollapsed: false,
       rightPanelOpen,
       rightPanelWidth,
+      leftPanelWidth,
     }) > viewportWidth;
 
   if (expandedWidthExceedsViewport(nextRightPanelOpen) && nextRightPanelOpen) {

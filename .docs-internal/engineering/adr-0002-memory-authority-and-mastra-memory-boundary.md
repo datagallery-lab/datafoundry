@@ -171,6 +171,6 @@ Neutral:
 
 ## Related Documents
 
-- `docs/engineering/2026-06-23-memory-context-prompt-walkthrough.html`
+- [mastra-memory-controlled-integration.html](./mastra-memory-controlled-integration.html)
 - `docs/plans/2026-06-23-memory-context-source-unification.md`
 - `docs/plans/2026-06-23-mastra-memory-controlled-integration.md`

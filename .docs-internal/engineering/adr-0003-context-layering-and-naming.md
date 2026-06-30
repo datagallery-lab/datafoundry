@@ -571,8 +571,8 @@ Negative:
 
 ## Related Documents
 
-- `docs/engineering/context-governance-pipeline.svg`
-- `docs/engineering/context-governance-pipeline.mmd`
-- `docs/engineering/adr-0002-memory-authority-and-mastra-memory-boundary.md`
-- `docs/plans/2026-06-23-memory-context-source-unification.md`
-- `docs/engineering/2026-06-23-memory-context-prompt-walkthrough.html`
+- [context-governance-pipeline.svg](./context-governance-pipeline.svg)
+- [context-governance-pipeline.mmd](./context-governance-pipeline.mmd)
+- [adr-0002-memory-authority-and-mastra-memory-boundary.md](./adr-0002-memory-authority-and-mastra-memory-boundary.md)
+- [mastra-memory-controlled-integration.html](./mastra-memory-controlled-integration.html)
+- [agent-context-architecture.html](./agent-context-architecture.html)

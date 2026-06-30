@@ -5,6 +5,10 @@
 </p>
 
 <p align="center">
+  English · <a href="README_zh.md">简体中文</a>
+</p>
+
+<p align="center">
   <a href="docs/zh/quick-start.md"><strong>Quick Start</strong></a>
   ·
   <a href="docs/README.md"><strong>Docs</strong></a>

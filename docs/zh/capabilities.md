@@ -1,87 +1,112 @@
 # 能力全览
 
-本文从外部使用者视角说明 Open Data Agent 当前覆盖的能力，以及这些能力在 Web、TUI 和 API/后端中的支持情况。
+这篇文档面向评估 DataAgent 能力范围的用户。读完后，你可以判断 Web、TUI 和 API 分别能做什么，以及哪些能力受后端 capability 或外部资源配置影响。
 
-状态说明：
+状态判断以当前代码为准：
 
-- **可用：** 当前主路径可使用。
-- **部分可用：** 核心链路存在，但可能依赖环境、配置或仍有产品化限制。
-- **开发模式：** 适合本地试用或开发集成，不代表生产级多用户方案。
-- **实验性：** 能力已接入或有入口，但不建议作为正式交付承诺。
+| 状态 | 判断方式 |
+| --- | --- |
+| 可直接试用 | 本地 `npm run dev` 后，配好模型 Key，用内置 DuckDB demo 可以跑通。 |
+| 需要配置 | 功能入口已接入，需要你提供模型 Key、数据库凭据、文件、MCP Server 或 Skill package。 |
+| 受 capability 控制 | 读取 `GET /api/v1/capabilities`，按返回值启用或隐藏相关入口。 |
+| 本地开发边界 | 本地默认身份和默认 workspace 可用；生产鉴权、租户隔离和运维策略需要单独设计。 |
 
 ## 总览
 
-| 能力 | Web 工作台 | TUI | API/后端 | 状态说明 |
+| 能力 | Web 工作台 | TUI | 后端/API | 检查方式 |
 | --- | --- | --- | --- | --- |
-| 自然语言数据分析 | 可用 | 可用 | 可用 | 通过 Agent 工具执行数据分析，不要求用户手写 SQL。 |
-| 内置演示数据源 | 可用 | 可用 | 可用 | 默认 DuckDB demo，适合首次体验。 |
-| 数据源注册与测试 | 可用 | 可用 | 可用 | 支持发现类型、创建、测试连接、抓取 schema。 |
-| 只读 SQL 执行 | 可用 | 可用 | 可用 | Agent 先检查 schema，再通过受控工具执行。 |
-| 模型配置 | 可用 | 可用 | 可用 | 支持 OpenAI-compatible 模型服务和服务端默认模型。 |
-| 分析追溯 | 可用 | 可用 | 可用 | 展示步骤、工具调用、SQL 和结果。 |
-| 结果产出 | 可用 | 部分可用 | 可用 | Web 适合预览表格、图表、SQL 和报告；TUI 适合查看与导出。 |
-| 会话/任务管理 | 可用 | 部分可用 | 可用 | Web 提供多任务列表；后端保存服务端权威对话历史。 |
-| 文件资产 | 部分可用 | 部分可用 | 可用 | 支持文件上传、下载和 run 内引用，产品入口仍在完善。 |
-| 知识库 | 部分可用 | 可用入口 | 可用 | 支持资源管理和检索边界，完整体验取决于部署配置。 |
-| MCP 工具 | 高级入口 | 可用入口 | 可用 | 适合扩展外部工具，需按环境配置。 |
-| Skill | 高级入口 | 可用入口 | 可用 | 支持上传、选择和 run 内自动筛选，适合高级用户或开发者。 |
-| REST 配置 API | 不直接使用 | 不直接使用 | 可用 | 用于资源管理、测试、预览和下载。 |
-| AG-UI 运行协议 | 内置使用 | 内置使用 | 可用 | Agent run 通过 `/api/copilotkit` 启动。 |
+| 自然语言数据分析 | 可直接试用 | 可直接试用 | 可直接试用 | 配好 LLM Key，使用 `api-duckdb-demo` 提问。 |
+| 内置 DuckDB demo | 可直接试用 | 可直接试用 | 可直接试用 | 数据源列表包含 `api-duckdb-demo`。 |
+| 数据源注册与测试 | 可直接试用 | 可选择已配置数据源 | 可直接试用 | `GET /api/v1/datasource-types`，`POST /api/v1/datasources/:id/test`。 |
+| schema 抓取与表预览 | 可直接试用 | 通过 Agent 工具查看结果 | 可直接试用 | `POST /api/v1/datasources/:id/introspect`，`GET /schema`，`GET /tables/:table/preview`。 |
+| 只读 SQL 分析 | 可直接试用 | 可直接试用 | 可直接试用 | Agent run 先检查 schema，再通过工具执行查询。 |
+| 模型配置 | 需要配置 | 使用服务端模型配置 | 需要配置 | `.env` 或 `/api/v1/model-profiles`。 |
+| 分析追溯 | 可直接试用 | 可直接试用 | 可直接试用 | 查看步骤、工具调用、run events 和 SQL audit。 |
+| Artifact 产出 | 可直接试用 | 可查看会话产出 | 受 capability 控制 | `artifact.list`、`artifact.export`、`artifact.promote`。 |
+| 会话历史 | 可直接试用 | 可用 `/resume` 恢复 | 受 capability 控制 | `conversation.memory`、`conversation.title`。 |
+| 工作区文件 | 可查看、下载、删除 | 通过 run_config 使用已启用文件 | 受 capability 控制 | `files`，`GET/POST /api/v1/files`。 |
+| 对话附件 | 可直接试用 | 不提供附件上传命令 | 受 capability 控制 | `chat.fileUpload`，`POST /api/v1/chat/uploads`。 |
+| 图片输入 | 输入组件受开关控制 | 不提供图片输入命令 | 受 capability 控制 | `chat.imageInput`。 |
+| 知识库 | 需要配置 | 可随启用资源进入 run_config | 受 capability 控制 | `knowledge`、`kb.chunking`、`kb.citationPolicy`。 |
+| MCP 工具 | 需要配置 | 可随启用资源进入 run_config | 受 capability 控制 | `mcp`、`mcp.stdio`、`mcp.toolPolicy`。 |
+| Skill | 需要配置 | 可用 `/skill` 选择 | 受 capability 控制 | `skills`、`skill.resourceBinding`。 |
+| 取消运行 | 可直接试用 | 无 slash 命令 | 可直接试用 | `POST /api/v1/runs/:id/cancel`。 |
 
-## 核心分析能力
+## 后端 capability keys
 
-Open Data Agent 的主线能力是「让 Agent 在可追溯、可审计的边界内完成数据分析」：
+`GET /api/v1/capabilities` 返回以下 key。客户端按这些 key 控制 UI、运行配置和资源入口：
 
-1. 用户选择数据源和模型。
-2. 用户用自然语言提出问题。
-3. Agent 检查 schema，避免盲目猜表和字段。
-4. Agent 生成并执行只读 SQL。
-5. 系统记录步骤、SQL、工具结果和产出。
-6. 用户查看结论，并导出表格、图表或报告。
+| Key | 控制内容 |
+| --- | --- |
+| `artifact.export` | 产物导出。 |
+| `artifact.list` | 会话产物列表。 |
+| `artifact.promote` | 文件型产物加入工作区。 |
+| `chat.fileUpload` | 对话附件上传。 |
+| `chat.imageInput` | 图片输入。 |
+| `conversation.memory` | 服务端会话记忆。 |
+| `conversation.title` | 会话标题保存。 |
+| `interaction.resume` | 刷新或切换会话后的人工交互恢复。 |
+| `datasource.fieldMasking` | 数据源字段脱敏配置。 |
+| `datasource.extendedTypes` | 扩展数据源类型。 |
+| `datasource.introspectionPolicy` | schema 抓取策略。 |
+| `datasource.queryPolicy` | 查询行数、超时和写入限制策略。 |
+| `datasource.samplePolicy` | 样本预览策略。 |
+| `datasource.server` | 服务端数据库连接字段。 |
+| `files` | 工作区文件资产。 |
+| `kb.chunking` | 知识库分块配置。 |
+| `kb.citationPolicy` | 知识库引用策略。 |
+| `kb.scope` | 知识库作用域。 |
+| `llm.advancedSampling` | 模型扩展采样参数。 |
+| `llm.samplingParams` | 模型采样参数。 |
+| `knowledge` | Knowledge 资源进入运行时。 |
+| `mcp` | MCP 资源进入运行时。 |
+| `mcp.stdio` | stdio MCP Server 配置。 |
+| `mcp.toolPolicy` | MCP 工具策略。 |
+| `skill.resourceBinding` | Skill 资源绑定。 |
+| `skills` | Skill 资源进入运行时。 |
 
-这条链路是 Web 和 TUI 都应优先覆盖的主路径。
+## Web 工作台
 
-## Web 工作台能力
+Web 工作台适合本地演示和日常分析：
 
-Web 工作台是默认图形化入口，适合演示和日常使用：
-
-- 三栏布局：左侧管理资源和任务，中间对话，右侧查看追溯、产出和详情。
-- 数据任务：每个问题可以作为独立任务管理，支持切换、搜索、重命名、置顶和删除。
-- 资源管理：左侧工作区管理 Data Sources、Knowledge、Agent Tools（MCP + Skill）和 Assets。
-- 运行控制：模型选择位于对话输入框旁，支持启用/关闭会话资源、停止运行和查看运行状态。
-- 结果产出：表格可搜索和导出，图表可预览，SQL 和报告可追溯。
+- 左侧管理会话和工作区资源。
+- 中间展示对话、步骤卡片和人工确认。
+- 右侧展示概览、追溯、产出、步骤详情和工作区文件。
+- 输入框支持模型选择、资源开关、`@` 提及、附件上传和停止运行。
+- 会话列表通过服务端 `/api/v1/sessions` 恢复历史。
 
 详见 [Web 工作台指南](guides/web-workbench.md)。
 
-## TUI 能力
+## TUI
 
-TUI 是终端入口，适合远程环境、开发者和偏命令行的使用方式：
+TUI 适合远程服务器和终端工作流：
 
-- Chat / Stats / Config 三个主要视图。
-- 支持实时流式响应和进度追踪。
-- 支持数据源、模型、Skill、MCP、知识库等 Slash 命令。
-- 支持表格数据渲染、命令补全、历史命令导航和对话导出。
-- 支持演示模式，无需后端即可体验界面和命令系统。
+- 支持 Chat、Stats、Config、Outputs 视图。
+- 支持 `/datasource` 选择数据源。
+- 支持 `/skill` 选择 Skill。
+- 支持 `/resume` 恢复服务端历史会话。
+- 支持 `--demo` 查看本地模拟事件流。
+- 支持 `Tab` 命令补全、输入历史和 Chat 视图滚动。
 
-详见 [TUI 指南](guides/tui.md)。
+当前注册命令以 [TUI 指南](guides/tui.md) 为准。
 
-## API 与集成能力
+## API 与集成
 
-Open Data Agent 后端提供两类接口：
+后端提供两类入口：
 
-- Agent run：通过 CopilotKit / AG-UI 入口 `/api/copilotkit` 发起。
-- 资源管理：通过 `/api/v1/*` REST API 管理数据源、模型、知识库、MCP、Skill、文件和产出。
+| 入口 | 用途 |
+| --- | --- |
+| `POST /api/copilotkit` | 启动 Agent run，返回 AG-UI 事件流。 |
+| `/api/v1/*` | 管理资源、文件、会话、产出和配置。 |
 
-后端不提供任意 SQL 直通接口。数据分析必须经过 Agent 工具边界，从而保留 schema 检查、只读策略、审计和产出管理。
-
-详见 [配置 API 参考](reference/configuration-api.md) 与 [REST API 参考](reference/rest-api.md)。
+集成方应通过配置 API 管理资源，通过 Agent Runtime 启动分析。数据源凭据只在资源创建或更新时提交。
 
 ## 安全边界
 
-当前产品默认遵循以下边界：
+- 客户端不能把数据库密码、模型 API Key、MCP Token 放进 Agent run body。
+- 读接口不返回明文凭据。
+- SQL 执行经过只读限制、行数限制、超时和审计。
+- 本地开发身份只用于试用和开发集成。
+- 生产部署需要正式鉴权、Secret 管理、审计导出和运维监控。
 
-- 凭据只在创建或更新资源时提交，读接口不回传明文。
-- 数据源查询默认只读。
-- SQL 执行经过 guard、limit、timeout、allowlist、mask 和 audit。
-- 前端和 TUI 不能通过 Agent run body 传入明文凭据。
-- 本地开发模式下的身份头只用于试用和开发，不代表生产鉴权方案。
+继续阅读：[安全说明](security.md)。
