@@ -445,17 +445,27 @@ export const skillCommand: Command = {
           'Usage:',
           '  /skill',
           '  /skill list',
+          '  /skill show',
           '  /skill current',
           '  /skill select <id>',
           '  /skill <id>',
+          '  /<skill-id>',
         ].join('\n'),
+      };
+    }
+
+    if (!rawAction || action === 'list' || action === 'picker') {
+      return {
+        success: true,
+        message: 'Loading skills...',
+        data: { action: 'open_skill_picker' },
       };
     }
 
     const result = await loadSkillChoices(context);
     const choices = result.choices;
 
-    if (LIST_ACTIONS.has(action)) {
+    if (action === 'show' || action === 'ls') {
       return {
         success: true,
         message: formatChoiceList(
@@ -482,8 +492,9 @@ export const skillCommand: Command = {
     const requestedId = SELECT_ACTIONS.has(action) ? args[1] : rawAction;
     if (!requestedId) {
       return {
-        success: false,
-        message: 'Usage: /skill select <id>',
+        success: true,
+        message: 'Loading skills...',
+        data: { action: 'open_skill_picker' },
       };
     }
 

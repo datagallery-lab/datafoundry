@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Box, Text, useApp, useInput, useStdin, useStdout } from 'ink';
 import { randomUUID } from 'node:crypto';
 import { StatusFooter } from './Header.js';
@@ -9,7 +9,8 @@ import { InputBox } from './InputBox.js';
 import { WorkspaceFrame, chatViewportRows } from './workspace-layout.js';
 import { KeybindingsHelp } from './KeybindingsHelp.js';
 import { SessionPicker } from './SessionPicker.js';
-import { getStatusBarShortcuts } from './keybindings.js';
+import { ResourcePicker, type ResourcePickerItem } from './ResourcePicker.js';
+import { DEFAULT_COMMANDS, getStatusBarShortcuts } from './keybindings.js';
 import { AssistantTextStreamBuffer, type AssistantTextFlush } from './assistant-stream-buffer.js';
 import { wheelScrollDelta } from '../input/mouse-wheel.js';
 import {
@@ -25,8 +26,8 @@ import { getMessageTextContent } from '../state/message-history.js';
 import type { AgentClient, AgentMessage, RunAgentInput } from '../protocol/types.js';
 import { classifyError, formatErrorMessage, errorLogger } from '../protocol/error-handler.js';
 import { commandProcessor } from '../commands/index.js';
-import type { CommandContext } from '../commands/types.js';
-import { ConfigClientError, type ConfigClient, type SessionListItem } from '../config/index.js';
+import type { CommandContext, CommandResult } from '../commands/types.js';
+import { ConfigClientError, type ConfigClient, type SessionListItem, type Skill } from '../config/index.js';
 
 interface AppProps {
   client: AgentClient;
@@ -139,6 +140,65 @@ const formatSessionApiError = (error: unknown): string => {
   return error instanceof Error ? error.message : String(error);
 };
 
+const formatSkillApiError = (error: unknown): string => {
+  return error instanceof Error ? error.message : String(error);
+};
+
+const localSkillPickerItems = (
+  items: WorkspaceConfigItem[],
+  activeSkillId?: string | undefined,
+): ResourcePickerItem[] => {
+  return items.map((item) => {
+    const format = item.settings?.packageFormat ?? 'unknown';
+    const detailParts = [
+      `format=${format}`,
+      item.enabled ? 'enabled' : 'disabled',
+      item.builtin ? 'builtin' : undefined,
+    ].filter(Boolean);
+
+    return {
+      id: item.id,
+      name: item.name,
+      description: item.description,
+      detail: detailParts.join(', '),
+      enabled: item.enabled,
+      active: item.id === activeSkillId,
+    };
+  });
+};
+
+const apiSkillPickerItems = (
+  skills: Skill[],
+  activeSkillId?: string | undefined,
+): ResourcePickerItem[] => {
+  return skills.map((skill) => {
+    const enabled = skill.defaultEnabled !== false;
+    const detailParts = [
+      `format=${skill.packageFormat}`,
+      skill.validationStatus ? `validation=${skill.validationStatus}` : undefined,
+      skill.builtin ? 'builtin' : undefined,
+    ].filter(Boolean);
+
+    return {
+      id: skill.id,
+      name: skill.name,
+      description: skill.description,
+      detail: detailParts.join(', '),
+      enabled,
+      active: skill.id === activeSkillId,
+    };
+  });
+};
+
+const findSkillPickerItem = (
+  items: ResourcePickerItem[],
+  requestedId: string,
+): ResourcePickerItem | undefined => {
+  return items.find((item) => item.id === requestedId)
+    ?? items.find((item) => item.name === requestedId)
+    ?? items.find((item) => item.id.toLowerCase() === requestedId.toLowerCase());
+};
+
 export const App: React.FC<AppProps> = ({
   client,
   configClient,
@@ -158,10 +218,18 @@ export const App: React.FC<AppProps> = ({
   const [activeSkillId, setActiveSkillId] = useState<string | undefined>(
     () => firstEnabledSkillId(store.getState()),
   );
-  const [pickerOpen, setPickerOpen] = useState(false);
+  const [sessionPickerOpen, setSessionPickerOpen] = useState(false);
   const [pickerSessions, setPickerSessions] = useState<SessionListItem[]>([]);
   const [pickerLoading, setPickerLoading] = useState(false);
   const [pickerError, setPickerError] = useState<string | undefined>(undefined);
+  const [skillPickerOpen, setSkillPickerOpen] = useState(false);
+  const [skillPickerItems, setSkillPickerItems] = useState<ResourcePickerItem[]>([]);
+  const [skillShortcutItems, setSkillShortcutItems] = useState<ResourcePickerItem[]>(
+    () => localSkillPickerItems(store.getState().workspaceConfig.skill, activeSkillId),
+  );
+  const [skillPickerLoading, setSkillPickerLoading] = useState(false);
+  const [skillPickerError, setSkillPickerError] = useState<string | undefined>(undefined);
+  const [skillPickerWarning, setSkillPickerWarning] = useState<string | undefined>(undefined);
   const [retryCount, setRetryCount] = useState(0);
   const [chatScrollbackRows, setChatScrollbackRows] = useState(0);
   const startupResumeAttempted = useRef(false);
@@ -190,6 +258,14 @@ export const App: React.FC<AppProps> = ({
     startup,
   });
   const maxChatScrollbackRows = Math.max(0, chatContentRows - chatViewportRowCount);
+  const pickerOpen = sessionPickerOpen || skillPickerOpen;
+  const inputCommands = useMemo(
+    () => uniqueStrings([
+      ...DEFAULT_COMMANDS,
+      ...skillShortcutItems.map((item) => `/${item.id}`),
+    ]),
+    [skillShortcutItems],
+  );
 
   useEffect(() => {
     if (!activeDatasourceId) {
@@ -216,6 +292,34 @@ export const App: React.FC<AppProps> = ({
     });
     return unsubscribe;
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    const localItems = localSkillPickerItems(state.workspaceConfig.skill, activeSkillId);
+    setSkillShortcutItems(localItems);
+
+    if (!configClient) {
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    configClient.listSkills()
+      .then((skills) => {
+        if (!cancelled) {
+          setSkillShortcutItems(apiSkillPickerItems(skills, activeSkillId));
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setSkillShortcutItems(localItems);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [configClient, state.workspaceConfig.skill, activeSkillId]);
 
   useEffect(() => {
     setChatScrollbackRows((current) => Math.max(0, Math.min(maxChatScrollbackRows, current)));
@@ -331,7 +435,8 @@ export const App: React.FC<AppProps> = ({
     }
 
     setCommandNotice(null);
-    setPickerOpen(true);
+    setSessionPickerOpen(true);
+    setSkillPickerOpen(false);
     setPickerLoading(true);
     setPickerError(undefined);
     setPickerSessions([]);
@@ -344,6 +449,97 @@ export const App: React.FC<AppProps> = ({
     } finally {
       setPickerLoading(false);
     }
+  }
+
+  async function openSkillPicker(): Promise<void> {
+    setCommandNotice(null);
+    setSkillPickerOpen(true);
+    setSessionPickerOpen(false);
+    setSkillPickerLoading(true);
+    setSkillPickerError(undefined);
+    setSkillPickerWarning(undefined);
+    setSkillPickerItems([]);
+
+    const localItems = localSkillPickerItems(
+      store.getState().workspaceConfig.skill,
+      activeSkillId,
+    );
+
+    if (!configClient) {
+      setSkillPickerItems(localItems);
+      setSkillPickerLoading(false);
+      return;
+    }
+
+    try {
+      const skills = await configClient.listSkills();
+      const items = apiSkillPickerItems(skills, activeSkillId);
+      setSkillPickerItems(items);
+      setSkillShortcutItems(items);
+    } catch (error) {
+      setSkillPickerItems(localItems);
+      setSkillShortcutItems(localItems);
+      if (localItems.length > 0) {
+        setSkillPickerWarning(`Backend skill list failed: ${formatSkillApiError(error)}`);
+      } else {
+        setSkillPickerError(`Failed to load skills: ${formatSkillApiError(error)}`);
+      }
+    } finally {
+      setSkillPickerLoading(false);
+    }
+  }
+
+  async function resolveSkillShortcut(commandName: string): Promise<ResourcePickerItem | undefined> {
+    const cachedChoice = findSkillPickerItem(skillShortcutItems, commandName);
+    if (cachedChoice) {
+      return cachedChoice;
+    }
+
+    const localItems = localSkillPickerItems(
+      store.getState().workspaceConfig.skill,
+      activeSkillId,
+    );
+    const localChoice = findSkillPickerItem(localItems, commandName);
+    if (localChoice) {
+      return localChoice;
+    }
+
+    if (!configClient) {
+      return undefined;
+    }
+
+    try {
+      const skills = await configClient.listSkills();
+      const items = apiSkillPickerItems(skills, activeSkillId);
+      setSkillShortcutItems(items);
+      return findSkillPickerItem(items, commandName);
+    } catch {
+      setSkillShortcutItems(localItems);
+      return undefined;
+    }
+  }
+
+  async function executeCommandOrSkillShortcut(
+    input: string,
+    commandContext: CommandContext,
+  ): Promise<CommandResult> {
+    const { commandName } = commandProcessor.parseCommand(input);
+    if (commandName && !commandProcessor.hasCommand(commandName)) {
+      const skill = await resolveSkillShortcut(commandName);
+      if (skill) {
+        return {
+          success: true,
+          message: `Skill selected: ${skill.name} (${skill.id})`,
+          data: {
+            action: 'select_skill',
+            skillId: skill.id,
+            label: skill.name,
+          },
+        };
+      }
+    }
+
+    return commandProcessor.executeCommand(input, commandContext);
   }
 
   function selectDatasourceForSession(nextDatasourceId: string): void {
@@ -467,7 +663,7 @@ export const App: React.FC<AppProps> = ({
       };
 
       // Execute command
-      const result = await commandProcessor.executeCommand(input, commandContext);
+      const result = await executeCommandOrSkillShortcut(input, commandContext);
 
       // Handle command result
       if (result.success) {
@@ -508,6 +704,9 @@ export const App: React.FC<AppProps> = ({
             return;
           } else if (action === 'open_picker' || action === 'list_sessions') {
             await openSessionPicker();
+            return;
+          } else if (action === 'open_skill_picker') {
+            await openSkillPicker();
             return;
           } else if (action === 'select_datasource') {
             if (typeof commandData.datasourceId === 'string') {
@@ -908,18 +1107,40 @@ export const App: React.FC<AppProps> = ({
 
   return (
     <>
-      {pickerOpen ? (
+      {sessionPickerOpen ? (
         <Box flexDirection="column">
           <SessionPicker
             sessions={pickerSessions}
             loading={pickerLoading}
             error={pickerError}
             onSelect={(sessionId) => {
-              setPickerOpen(false);
+              setSessionPickerOpen(false);
               void restoreHistoricalSession(sessionId);
             }}
             onCancel={() => {
-              setPickerOpen(false);
+              setSessionPickerOpen(false);
+            }}
+          />
+        </Box>
+      ) : skillPickerOpen ? (
+        <Box flexDirection="column">
+          <ResourcePicker
+            title="Select a skill"
+            items={skillPickerItems}
+            loading={skillPickerLoading}
+            error={skillPickerError}
+            warning={skillPickerWarning}
+            emptyMessage="No skills configured."
+            onSelect={(item) => {
+              setSkillPickerOpen(false);
+              selectSkillForSession(item.id);
+              setCommandNotice({
+                kind: 'info',
+                message: `Skill selected: ${item.name} (${item.id}).`,
+              });
+            }}
+            onCancel={() => {
+              setSkillPickerOpen(false);
             }}
           />
         </Box>
@@ -1005,6 +1226,7 @@ export const App: React.FC<AppProps> = ({
                 onChange={handleInputChange}
                 onSubmit={handleSubmit}
                 disabled={state.connectionStatus !== 'connected' || state.runStatus === 'running'}
+                commands={inputCommands}
               />
 
               {activeTab !== 'chat' && (

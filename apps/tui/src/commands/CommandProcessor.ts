@@ -62,6 +62,13 @@ export class CommandProcessor {
   }
 
   /**
+   * Check whether a command or alias is already registered.
+   */
+  hasCommand(commandName: string): boolean {
+    return this.commands.has(commandName);
+  }
+
+  /**
    * Execute a command
    */
   async executeCommand(input: string, context: CommandContext): Promise<CommandResult> {

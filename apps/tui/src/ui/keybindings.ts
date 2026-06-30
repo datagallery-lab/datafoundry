@@ -258,6 +258,7 @@ export const DEFAULT_COMMANDS = [
   '/datasource select ',
   '/skill',
   '/skill list',
+  '/skill show',
   '/skill select ',
   '/help',
   '/status',
