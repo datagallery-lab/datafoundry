@@ -10,7 +10,7 @@
 import { buildChatLines, countChatLines, chatContentWidth } from './dist/ui/transcript-lines.js';
 import { textWidth, wrapToWidth, truncateToWidth } from './dist/ui/text-width.js';
 import { chatViewportRows } from './dist/ui/workspace-layout.js';
-import type { DisplayMessage } from './dist/state/index.js';
+import type { DisplayMessage, LiveToolCallRecord, MessageElement } from './dist/state/index.js';
 
 let failures = 0;
 function check(condition: boolean, message: string): void {
@@ -34,6 +34,28 @@ function textMessage(id: string, content: string): DisplayMessage {
     isStreaming: false,
     elements: [{ type: 'text', content, timestamp: Date.now() }],
   };
+}
+
+function elementMessage(id: string, elements: MessageElement[]): DisplayMessage {
+  return {
+    id,
+    role: 'assistant',
+    timestamp: Date.now(),
+    isStreaming: false,
+    elements,
+  };
+}
+
+function textElement(content: string): MessageElement {
+  return { type: 'text', content, timestamp: Date.now() };
+}
+
+function toolElement(toolCallId: string): MessageElement {
+  return { type: 'tool_call', toolCallId, timestamp: Date.now() };
+}
+
+function toolRecord(id: string): LiveToolCallRecord {
+  return { id, name: 'inspect_schema', status: 'success' };
 }
 
 // --- text width ---
@@ -74,6 +96,49 @@ check(
   countChatLines({ messages: [textMessage('m3', '中'.repeat(60))], artifacts: [], columns }) >
     countChatLines({ messages: [textMessage('m3b', 'x'.repeat(60))], artifacts: [], columns }),
   'CJK content is taller than equal-length ASCII content',
+);
+
+// --- block spacing: exactly one blank row between text and tool calls ---
+const toolCalls: LiveToolCallRecord[] = [toolRecord('tc1'), toolRecord('tc2')];
+
+// header + "a" + 1 blank + tool line + trailing blank = 5 rows.
+const paddedTextThenTool = elementMessage('s1', [textElement('a\n\n\n'), toolElement('tc1')]);
+check(
+  countChatLines({ messages: [paddedTextThenTool], artifacts: [], toolCalls, columns }) === 5,
+  'text + tool = header + text + 1 blank + tool + trailing blank (5 rows)',
+);
+
+// Trailing newlines the model emits before a tool must not inflate the gap.
+const tightTextThenTool = elementMessage('s2', [textElement('a'), toolElement('tc1')]);
+check(
+  countChatLines({ messages: [paddedTextThenTool], artifacts: [], toolCalls, columns }) ===
+    countChatLines({ messages: [tightTextThenTool], artifacts: [], toolCalls, columns }),
+  'trailing newlines before a tool add no extra rows',
+);
+
+// text -> tool -> text: a single blank between each of the three blocks.
+// header + "a" + blank + tool + blank + "b" + trailing blank = 7 rows.
+const textToolText = elementMessage('s3', [textElement('a'), toolElement('tc1'), textElement('b')]);
+check(
+  countChatLines({ messages: [textToolText], artifacts: [], toolCalls, columns }) === 7,
+  'text/tool/text join with one blank between each block (7 rows)',
+);
+
+// A whitespace-only text element (e.g. the lone "\n\n" before a tool) is skipped
+// entirely, so it adds neither a block nor a separator.
+const emptyTextBetween = elementMessage('s4', [textElement('a'), textElement('\n\n\n'), toolElement('tc1')]);
+check(
+  countChatLines({ messages: [emptyTextBetween], artifacts: [], toolCalls, columns }) ===
+    countChatLines({ messages: [tightTextThenTool], artifacts: [], toolCalls, columns }),
+  'whitespace-only text elements are skipped (no phantom block or blank)',
+);
+
+// Two adjacent tool calls keep a single blank between them.
+// header + "a" + blank + tool + blank + tool + trailing blank = 7 rows.
+const textToolTool = elementMessage('s5', [textElement('a'), toolElement('tc1'), toolElement('tc2')]);
+check(
+  countChatLines({ messages: [textToolTool], artifacts: [], toolCalls, columns }) === 7,
+  'adjacent tool calls keep exactly one blank between them (7 rows)',
 );
 
 // --- deterministic, stable slicing ---

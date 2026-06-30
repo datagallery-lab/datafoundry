@@ -91,7 +91,8 @@ export function buildChatLines(input: BuildChatLinesInput): VisualLine[] {
   }
 
   if (input.artifacts.length > 0) {
-    push('artifacts:before', blankNode('artifacts:before'));
+    // The preceding message/spacer already trails a blank row, so emit the
+    // notice directly to keep a single-line gap consistent with the rest.
     const text = truncateToWidth(
       `New outputs available (${input.artifacts.length}). Use /outputs to view them.`,
       contentWidth,
@@ -105,6 +106,35 @@ export function buildChatLines(input: BuildChatLinesInput): VisualLine[] {
 /** Convenience for callers that only need the row count (e.g. scroll clamps). */
 export function countChatLines(input: BuildChatLinesInput): number {
   return buildChatLines(input).length;
+}
+
+/**
+ * Collapse the blank-line padding models tend to emit around tool calls so
+ * blocks join with a single separator row (DataDock-style spacing). Leading and
+ * trailing blank lines are dropped, and any internal run of blanks collapses to
+ * one. A whitespace-only element returns '' so the caller can skip it entirely
+ * (e.g. the lone "\n\n" a model streams right before invoking a tool).
+ */
+function normalizeBlankLines(content: string): string {
+  const lines = content.split('\n');
+  while (lines.length > 0 && (lines[0] ?? '').trim() === '') {
+    lines.shift();
+  }
+  while (lines.length > 0 && (lines[lines.length - 1] ?? '').trim() === '') {
+    lines.pop();
+  }
+
+  const collapsed: string[] = [];
+  let previousBlank = false;
+  for (const line of lines) {
+    const isBlank = line.trim() === '';
+    if (isBlank && previousBlank) {
+      continue;
+    }
+    collapsed.push(line);
+    previousBlank = isBlank;
+  }
+  return collapsed.join('\n');
 }
 
 function pushMessageLines(
@@ -122,11 +152,29 @@ function pushMessageLines(
     return;
   }
 
+  let blocksEmitted = 0;
   let emittedLines = 0;
+
+  // Exactly one blank row between consecutive blocks (text/tool); none before
+  // the first so the header stays glued to its content. Mirrors DataDock's
+  // uniform marginTop={1} spacing within the flat single-row line model.
+  const separate = (key: string): void => {
+    if (blocksEmitted > 0) {
+      push(key, blankNode(key));
+    }
+  };
+
   message.elements.forEach((element, elementIndex) => {
+    const keyBase = `m:${message.id}:e${elementIndex}`;
+
     if (element.type === 'text') {
-      const keyBase = `m:${message.id}:e${elementIndex}`;
-      pushMarkdownLines(element.content, bodyWidth, keyBase, (key, node) => {
+      const normalized = normalizeBlankLines(element.content);
+      if (normalized === '') {
+        return;
+      }
+      separate(`${keyBase}:gap`);
+      blocksEmitted += 1;
+      pushMarkdownLines(normalized, bodyWidth, keyBase, (key, node) => {
         if (emittedLines >= MAX_ELEMENT_LINES) {
           return;
         }
@@ -141,8 +189,9 @@ function pushMessageLines(
     if (!toolCall) {
       return;
     }
-    const key = `m:${message.id}:e${elementIndex}:tool`;
-    push(`${key}:gap`, blankNode(`${key}:gap`));
+    const key = `${keyBase}:tool`;
+    separate(`${key}:gap`);
+    blocksEmitted += 1;
     push(
       key,
       <Box key={key} paddingLeft={INDENT_WIDTH}>
