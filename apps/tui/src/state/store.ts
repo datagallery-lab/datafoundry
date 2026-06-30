@@ -25,7 +25,10 @@ import {
   setThreadId,
 } from "./tui-state.js";
 import type { DisplayMessage } from "./tui-state.js";
-import type { WorkspaceConfigStore } from "./data-task-state.js";
+import {
+  loadWorkspaceConfig,
+  type WorkspaceConfigStore,
+} from "./data-task-state.js";
 
 /**
  * Extended TUI state with workspace configuration and session statistics
@@ -381,48 +384,8 @@ class StateStore {
   }
 }
 
-/**
- * Default workspace configuration for TUI
- */
-function createDefaultWorkspaceConfig(): WorkspaceConfigStore {
-  return {
-    db: [
-      {
-        id: "api-duckdb-demo",
-        name: "api-duckdb-demo",
-        description: "DuckDB 演示数据源",
-        enabled: true,
-        builtin: true,
-        settings: {
-          datasourceId: "api-duckdb-demo",
-          type: "duckdb",
-          mode: "readonly",
-        },
-      },
-    ],
-    kb: [],
-    mcp: [],
-    llm: [
-      {
-        id: "server-default",
-        name: "服务端默认",
-        description: "使用 dataAgent 服务端环境变量配置",
-        enabled: true,
-        builtin: true,
-        settings: {
-          provider: "服务端 (LLM_PROVIDER)",
-          baseUrl: "服务端 (LLM_BASE_URL)",
-          apiKey: "",
-          modelName: "服务端 (LLM_MODEL)",
-        },
-      },
-    ],
-    skill: [],
-  };
-}
-
 // Export singleton instance
-export const store = new StateStore(createDefaultWorkspaceConfig());
+export const store = new StateStore(loadWorkspaceConfig());
 
 // Export types (avoid duplicate export of TuiAppState)
 export type { Selector };

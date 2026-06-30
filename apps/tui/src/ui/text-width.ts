@@ -166,6 +166,121 @@ export function truncateToWidth(text: string, width: number, ellipsis = "…"): 
   return `${result}${ellipsis}`;
 }
 
+/** A styled inline run produced by the Markdown parser (markup stripped). */
+export interface StyledRun {
+  text: string;
+  bold?: boolean | undefined;
+  code?: boolean | undefined;
+}
+
+/** A styled fragment of a rendered row. Superset of {@link StyledRun}. */
+export interface StyledSegment {
+  text: string;
+  bold?: boolean | undefined;
+  code?: boolean | undefined;
+  color?: string | undefined;
+  dimColor?: boolean | undefined;
+}
+
+interface WrapUnit {
+  ch: string;
+  width: number;
+  bold: boolean;
+  code: boolean;
+  isSpace: boolean;
+}
+
+/**
+ * Wrap a sequence of styled runs to `width` display columns, preserving inline
+ * styles. This is the styled-segment generalization of {@link wrapToWidth}:
+ * greedy, grapheme-safe, prefers breaking at the last space that fits.
+ *
+ * `firstPrefix`/`contPrefix` are prepended to the first and continuation rows
+ * respectively and counted against the width budget, which is how list markers,
+ * quote bars, and hanging indents stay aligned. When only `firstPrefix` is
+ * given, continuation rows are indented with equal-width spaces.
+ */
+export function wrapStyledRuns(
+  runs: StyledRun[],
+  width: number,
+  firstPrefix?: StyledSegment,
+  contPrefix?: StyledSegment,
+): StyledSegment[][] {
+  const prefixWidth = firstPrefix ? textWidth(firstPrefix.text) : 0;
+  const safeWidth = Math.max(1, Math.floor(width) - prefixWidth);
+
+  const units: WrapUnit[] = [];
+  for (const run of runs) {
+    for (const segment of graphemes(run.text)) {
+      units.push({
+        ch: segment,
+        width: graphemeWidth(segment),
+        bold: run.bold === true,
+        code: run.code === true,
+        isSpace: segment === ' ',
+      });
+    }
+  }
+
+  const rows: WrapUnit[][] = [];
+  let current: WrapUnit[] = [];
+  let currentWidth = 0;
+  let lastSpaceIndex = -1;
+
+  for (const unit of units) {
+    if (currentWidth + unit.width > safeWidth && current.length > 0) {
+      if (lastSpaceIndex >= 0 && lastSpaceIndex < current.length) {
+        const head = current.slice(0, lastSpaceIndex);
+        const tail = current.slice(lastSpaceIndex + 1);
+        rows.push(head);
+        current = tail;
+        currentWidth = tail.reduce((sum, item) => sum + item.width, 0);
+      } else {
+        rows.push(current);
+        current = [];
+        currentWidth = 0;
+      }
+      lastSpaceIndex = -1;
+    }
+
+    // Don't carry the breaking space to the start of a continuation row.
+    if (unit.isSpace && current.length === 0 && rows.length > 0) {
+      continue;
+    }
+
+    current.push(unit);
+    currentWidth += unit.width;
+    if (unit.isSpace) {
+      lastSpaceIndex = current.length - 1;
+    }
+  }
+
+  if (current.length > 0 || rows.length === 0) {
+    rows.push(current);
+  }
+
+  const continuation = contPrefix ?? (firstPrefix ? { text: ' '.repeat(Math.max(0, prefixWidth)) } : undefined);
+
+  return rows.map((row, rowIndex) => {
+    const segments = coalesceUnits(row);
+    const prefix = rowIndex === 0 ? firstPrefix : continuation;
+    return prefix ? [prefix, ...segments] : segments;
+  });
+}
+
+function coalesceUnits(units: WrapUnit[]): StyledSegment[] {
+  const segments: StyledSegment[] = [];
+  for (const unit of units) {
+    const last = segments[segments.length - 1];
+    if (last && last.bold === unit.bold && last.code === unit.code && last.color === undefined && last.dimColor === undefined) {
+      last.text += unit.ch;
+    } else {
+      segments.push({ text: unit.ch, bold: unit.bold, code: unit.code });
+    }
+  }
+  return segments;
+}
+
 function isZeroWidthCodePoint(codePoint: number): boolean {
   return (
     (codePoint >= 0x0300 && codePoint <= 0x036f) ||

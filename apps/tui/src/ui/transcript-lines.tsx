@@ -8,7 +8,22 @@ import type {
   LiveToolCallRecord,
 } from '../state/index.js';
 import { InlineToolCall } from './InlineToolCall.js';
-import { textWidth, truncateToWidth, wrapToWidth } from './text-width.js';
+import {
+  graphemeWidth,
+  graphemes,
+  textWidth,
+  truncateToWidth,
+  wrapStyledRuns,
+  wrapToWidth,
+  type StyledRun,
+  type StyledSegment,
+} from './text-width.js';
+import {
+  boundCodeLines,
+  parseInlineRuns,
+  parseMarkdownLines,
+  type TableAlignment,
+} from './markdown.js';
 
 /**
  * A single terminal row. The chat viewport renders these one-per-row and slices
@@ -44,6 +59,7 @@ const INDENT = '  ';
 const INDENT_WIDTH = 2;
 const MAX_ELEMENT_LINES = 1000;
 const MAX_TABLE_ROWS = 12;
+const MIN_TABLE_CELL_WIDTH = 3;
 
 /** Total display-column budget for a single chat row (mirrors the old estimate). */
 export function chatContentWidth(columns: number): number {
@@ -91,7 +107,8 @@ export function buildChatLines(input: BuildChatLinesInput): VisualLine[] {
   }
 
   if (input.artifacts.length > 0) {
-    push('artifacts:before', blankNode('artifacts:before'));
+    // The preceding message/spacer already trails a blank row, so emit the
+    // notice directly to keep a single-line gap consistent with the rest.
     const text = truncateToWidth(
       `New outputs available (${input.artifacts.length}). Use /outputs to view them.`,
       contentWidth,
@@ -105,6 +122,35 @@ export function buildChatLines(input: BuildChatLinesInput): VisualLine[] {
 /** Convenience for callers that only need the row count (e.g. scroll clamps). */
 export function countChatLines(input: BuildChatLinesInput): number {
   return buildChatLines(input).length;
+}
+
+/**
+ * Collapse the blank-line padding models tend to emit around tool calls so
+ * blocks join with a single separator row (DataDock-style spacing). Leading and
+ * trailing blank lines are dropped, and any internal run of blanks collapses to
+ * one. A whitespace-only element returns '' so the caller can skip it entirely
+ * (e.g. the lone "\n\n" a model streams right before invoking a tool).
+ */
+function normalizeBlankLines(content: string): string {
+  const lines = content.split('\n');
+  while (lines.length > 0 && (lines[0] ?? '').trim() === '') {
+    lines.shift();
+  }
+  while (lines.length > 0 && (lines[lines.length - 1] ?? '').trim() === '') {
+    lines.pop();
+  }
+
+  const collapsed: string[] = [];
+  let previousBlank = false;
+  for (const line of lines) {
+    const isBlank = line.trim() === '';
+    if (isBlank && previousBlank) {
+      continue;
+    }
+    collapsed.push(line);
+    previousBlank = isBlank;
+  }
+  return collapsed.join('\n');
 }
 
 function pushMessageLines(
@@ -122,11 +168,29 @@ function pushMessageLines(
     return;
   }
 
+  let blocksEmitted = 0;
   let emittedLines = 0;
+
+  // Exactly one blank row between consecutive blocks (text/tool); none before
+  // the first so the header stays glued to its content. Mirrors DataDock's
+  // uniform marginTop={1} spacing within the flat single-row line model.
+  const separate = (key: string): void => {
+    if (blocksEmitted > 0) {
+      push(key, blankNode(key));
+    }
+  };
+
   message.elements.forEach((element, elementIndex) => {
+    const keyBase = `m:${message.id}:e${elementIndex}`;
+
     if (element.type === 'text') {
-      const keyBase = `m:${message.id}:e${elementIndex}`;
-      pushMarkdownLines(element.content, bodyWidth, keyBase, (key, node) => {
+      const normalized = normalizeBlankLines(element.content);
+      if (normalized === '') {
+        return;
+      }
+      separate(`${keyBase}:gap`);
+      blocksEmitted += 1;
+      pushMarkdownLines(normalized, bodyWidth, keyBase, (key, node) => {
         if (emittedLines >= MAX_ELEMENT_LINES) {
           return;
         }
@@ -141,8 +205,9 @@ function pushMessageLines(
     if (!toolCall) {
       return;
     }
-    const key = `m:${message.id}:e${elementIndex}:tool`;
-    push(`${key}:gap`, blankNode(`${key}:gap`));
+    const key = `${keyBase}:tool`;
+    separate(`${key}:gap`);
+    blocksEmitted += 1;
     push(
       key,
       <Box key={key} paddingLeft={INDENT_WIDTH}>
@@ -158,10 +223,12 @@ function pushMessageLines(
 }
 
 /**
- * Turn one text element into rows: blank lines stay blank, tables render with
- * CJK-aware column widths, and every other line is hard-wrapped to bodyWidth and
- * indented. No inline markdown styling is applied (parity with the prior plain
- * MarkdownText renderer), which keeps each row a single flat string.
+ * Render one text element as Markdown into single-row lines. Block structure
+ * (headings, lists, quotes, fenced code, tables) is parsed once, then each
+ * parsed line is emitted as one or more pre-wrapped rows so the viewport slice
+ * math stays exact. Inline `code` and **bold** are styled; markup never leaks as
+ * literal text. Keys are content-stable (line index + row index) so streaming
+ * appends don't re-key earlier rows.
  */
 function pushMarkdownLines(
   content: string,
@@ -169,122 +236,422 @@ function pushMarkdownLines(
   keyBase: string,
   push: (key: string, node: React.ReactNode) => void,
 ): void {
-  const rawLines = content.split('\n');
-  let index = 0;
+  const parsed = boundCodeLines(parseMarkdownLines(content));
+  let codeLang = '';
 
-  while (index < rawLines.length) {
-    const line = rawLines[index] ?? '';
-
-    if (line.trim().startsWith('|')) {
-      const tableLines: string[] = [];
-      let cursor = index;
-      while (cursor < rawLines.length && (rawLines[cursor] ?? '').trim().startsWith('|')) {
-        tableLines.push(rawLines[cursor] ?? '');
-        cursor += 1;
+  parsed.forEach((line, lineIndex) => {
+    const lineKey = `${keyBase}:k${lineIndex}`;
+    switch (line.kind) {
+      case 'blank':
+        push(lineKey, blankNode(lineKey));
+        return;
+      case 'codeFence':
+        codeLang = line.open ? line.lang : '';
+        pushFenceLine(line.open, line.lang, bodyWidth, lineKey, push);
+        return;
+      case 'code':
+        pushCodeLines(line.text, codeLang, bodyWidth, lineKey, push);
+        return;
+      case 'heading':
+        pushStyledRows(parseInlineRuns(line.text), bodyWidth, lineKey, push, {
+          bold: true,
+          blockColor: 'cyan',
+        });
+        return;
+      case 'paragraph':
+        pushStyledRows(parseInlineRuns(line.text), bodyWidth, lineKey, push, {});
+        return;
+      case 'bullet':
+        pushStyledRows(parseInlineRuns(line.text), bodyWidth, lineKey, push, {
+          firstPrefix: { text: '- ', color: 'cyan' },
+          contPrefix: { text: '  ' },
+        });
+        return;
+      case 'ordered': {
+        const marker = `${line.index} `;
+        pushStyledRows(parseInlineRuns(line.text), bodyWidth, lineKey, push, {
+          firstPrefix: { text: marker, color: 'cyan' },
+          contPrefix: { text: ' '.repeat(textWidth(marker)) },
+        });
+        return;
       }
-      const table = parseTable(tableLines);
-      if (table) {
-        pushTableLines(table, bodyWidth, `${keyBase}:t${index}`, push);
-        index = cursor;
-        continue;
-      }
+      case 'quote':
+        pushStyledRows(parseInlineRuns(line.text), bodyWidth, lineKey, push, {
+          firstPrefix: { text: '│ ', color: 'gray' },
+          contPrefix: { text: '│ ', color: 'gray' },
+          blockColor: 'gray',
+        });
+        return;
+      case 'table':
+        pushTableLines(line.rows, line.alignments, bodyWidth, lineKey, push);
+        return;
     }
-
-    if (line.trim() === '') {
-      push(`${keyBase}:b${index}`, blankNode(`${keyBase}:b${index}`));
-    } else {
-      const chunks = wrapToWidth(line, bodyWidth);
-      chunks.forEach((chunk, chunkIndex) => {
-        const key = `${keyBase}:l${index}_${chunkIndex}`;
-        push(key, <Text key={key}>{INDENT + chunk}</Text>);
-      });
-    }
-    index += 1;
-  }
+  });
 }
 
-interface ParsedTable {
-  headers: string[];
-  rows: string[][];
+interface BlockStyle {
+  bold?: boolean | undefined;
+  blockColor?: string | undefined;
+  firstPrefix?: StyledSegment | undefined;
+  contPrefix?: StyledSegment | undefined;
 }
 
-function parseTable(lines: string[]): ParsedTable | null {
-  if (lines.length < 2) {
-    return null;
-  }
-  const headers = splitTableRow(lines[0] ?? '');
-  if (headers.length === 0) {
-    return null;
-  }
-  if (!(lines[1] ?? '').includes('---')) {
-    return null;
-  }
-
-  const rows: string[][] = [];
-  for (let index = 2; index < lines.length; index += 1) {
-    const cells = splitTableRow(lines[index] ?? '');
-    if (cells.length === 0) {
-      continue;
-    }
-    while (cells.length < headers.length) {
-      cells.push('');
-    }
-    rows.push(cells.slice(0, headers.length));
-  }
-
-  return { headers, rows };
+function pushStyledRows(
+  runs: StyledRun[],
+  bodyWidth: number,
+  keyBase: string,
+  push: (key: string, node: React.ReactNode) => void,
+  style: BlockStyle,
+): void {
+  const rows = wrapStyledRuns(runs, bodyWidth, style.firstPrefix, style.contPrefix);
+  rows.forEach((segments, rowIndex) => {
+    const key = `${keyBase}_${rowIndex}`;
+    const styled =
+      style.bold || style.blockColor !== undefined
+        ? segments.map((segment) => applyBlockStyle(segment, style))
+        : segments;
+    push(key, <StyledLine key={key} segments={styled} />);
+  });
 }
 
-function splitTableRow(line: string): string[] {
-  return line
-    .split('|')
-    .map((cell) => cell.trim())
-    .filter((cell) => cell !== '');
+function applyBlockStyle(segment: StyledSegment, style: BlockStyle): StyledSegment {
+  // Preserve an explicit prefix color (list marker / quote bar) and never
+  // recolor inline code, which keeps its own emphasis.
+  if (segment.color !== undefined || segment.code) {
+    return style.bold ? { ...segment, bold: true } : segment;
+  }
+  const next: StyledSegment = { ...segment };
+  if (style.bold) {
+    next.bold = true;
+  }
+  if (style.blockColor !== undefined) {
+    next.color = style.blockColor;
+  }
+  return next;
 }
 
-function pushTableLines(
-  table: ParsedTable,
+function pushFenceLine(
+  open: boolean,
+  lang: string,
+  bodyWidth: number,
+  key: string,
+  push: (key: string, node: React.ReactNode) => void,
+): void {
+  const label = open && lang ? `─── ${lang} ───` : '───';
+  push(key, <StyledLine key={key} segments={[{ text: truncateToWidth(label, bodyWidth), dimColor: true }]} />);
+}
+
+function pushCodeLines(
+  text: string,
+  lang: string,
   bodyWidth: number,
   keyBase: string,
   push: (key: string, node: React.ReactNode) => void,
 ): void {
-  const columnWidths = table.headers.map((header, columnIndex) => {
-    const bodyMax = table.rows.reduce(
-      (max, row) => Math.max(max, textWidth(row[columnIndex] ?? '')),
-      0,
-    );
-    return Math.max(textWidth(header), bodyMax);
+  const color = codeColor(text, lang);
+  const chunks = wrapToWidth(text.length === 0 ? ' ' : text, bodyWidth);
+  chunks.forEach((chunk, chunkIndex) => {
+    const key = `${keyBase}_c${chunkIndex}`;
+    push(key, <StyledLine key={key} segments={[{ text: chunk, color }]} />);
   });
-
-  const renderRow = (cells: string[]): string => {
-    const padded = columnWidths.map((width, columnIndex) => padToWidth(cells[columnIndex] ?? '', width));
-    return truncateToWidth(`| ${padded.join(' | ')} |`, bodyWidth);
-  };
-
-  const headerKey = `${keyBase}:head`;
-  push(headerKey, <Text key={headerKey} bold>{INDENT + renderRow(table.headers)}</Text>);
-
-  const separator = columnWidths.map((width) => '-'.repeat(Math.max(1, width)));
-  const separatorText = truncateToWidth(`| ${separator.join(' | ')} |`, bodyWidth);
-  push(`${keyBase}:sep`, <Text key={`${keyBase}:sep`} dimColor>{INDENT + separatorText}</Text>);
-
-  const visibleRows = table.rows.slice(0, MAX_TABLE_ROWS);
-  visibleRows.forEach((row, rowIndex) => {
-    const key = `${keyBase}:r${rowIndex}`;
-    push(key, <Text key={key}>{INDENT + renderRow(row)}</Text>);
-  });
-
-  if (table.rows.length > MAX_TABLE_ROWS) {
-    const hidden = table.rows.length - MAX_TABLE_ROWS;
-    const key = `${keyBase}:more`;
-    const text = truncateToWidth(`... ${hidden} more rows; open /outputs for full content ...`, bodyWidth);
-    push(key, <Text key={key} dimColor>{INDENT + text}</Text>);
-  }
 }
 
-function padToWidth(value: string, width: number): string {
-  const extra = Math.max(0, width - textWidth(value));
-  return `${value}${' '.repeat(extra)}`;
+function codeColor(text: string, lang: string): string {
+  if (lang === 'diff') {
+    if (text.startsWith('+')) {
+      return 'green';
+    }
+    if (text.startsWith('-')) {
+      return 'red';
+    }
+    if (text.startsWith('@@')) {
+      return 'cyan';
+    }
+  }
+  return 'yellow';
+}
+
+function pushTableLines(
+  rows: string[][],
+  alignments: TableAlignment[],
+  bodyWidth: number,
+  keyBase: string,
+  push: (key: string, node: React.ReactNode) => void,
+): void {
+  if (rows.length === 0) {
+    return;
+  }
+  const columnCount = rows.reduce((max, row) => Math.max(max, row.length), 0);
+  if (columnCount === 0) {
+    return;
+  }
+
+  const maxRenderableColumns = Math.max(1, Math.floor((bodyWidth - 1) / (MIN_TABLE_CELL_WIDTH + 3)));
+  const visibleColumnCount = Math.min(columnCount, maxRenderableColumns);
+  const hiddenColumnCount = columnCount - visibleColumnCount;
+  const headers = normalizeTableCells(rows[0] ?? [], visibleColumnCount);
+  const bodyRows = rows.slice(1);
+  const hiddenColumnNote =
+    hiddenColumnCount > 0
+      ? `... ${hiddenColumnCount} more ${hiddenColumnCount === 1 ? 'column' : 'columns'} hidden ...`
+      : undefined;
+  const hiddenRowCount = Math.max(0, bodyRows.length - MAX_TABLE_ROWS);
+  const hiddenRowNote =
+    hiddenRowCount > 0
+      ? `... ${hiddenRowCount} more ${hiddenRowCount === 1 ? 'row' : 'rows'}; open /outputs for full content ...`
+      : undefined;
+  const displayRows = bodyRows.slice(0, MAX_TABLE_ROWS).map((row) => normalizeTableCells(row, visibleColumnCount));
+  const tableRowsForWidth = [headers, ...displayRows];
+  const desiredColumnWidths = Array.from({ length: visibleColumnCount }, (_, column) =>
+    tableRowsForWidth.reduce((max, row) => Math.max(max, cellVisibleWidth(row[column] ?? '')), MIN_TABLE_CELL_WIDTH),
+  );
+  const noteWidth = Math.max(
+    0,
+    ...[hiddenColumnNote, hiddenRowNote]
+      .filter((note): note is string => note !== undefined)
+      .map((note) => textWidth(` ${note} `) + 2),
+  );
+  const columnWidths = expandTableColumnWidths(
+    fitTableColumnWidths(desiredColumnWidths, bodyWidth),
+    bodyWidth,
+    noteWidth,
+  );
+  const tableWidth = tableDisplayWidth(columnWidths);
+
+  push(
+    `${keyBase}:top`,
+    <StyledLine key={`${keyBase}:top`} segments={tableBorderSegments(columnWidths, 'top')} />,
+  );
+  push(
+    `${keyBase}:head`,
+    <StyledLine key={`${keyBase}:head`} segments={tableRowSegments(headers, columnWidths, alignments, true)} />,
+  );
+  push(
+    `${keyBase}:sep`,
+    <StyledLine key={`${keyBase}:sep`} segments={tableBorderSegments(columnWidths, 'middle')} />,
+  );
+
+  displayRows.forEach((row, rowIndex) => {
+    const key = `${keyBase}:r${rowIndex}`;
+    const segments = tableRowSegments(row, columnWidths, alignments, false);
+    push(key, <StyledLine key={key} segments={segments} />);
+  });
+
+  if (hiddenColumnNote) {
+    const key = `${keyBase}:moreCols`;
+    push(key, <StyledLine key={key} segments={tableNoteSegments(hiddenColumnNote, tableWidth)} />);
+  }
+
+  if (hiddenRowNote) {
+    const key = `${keyBase}:more`;
+    push(key, <StyledLine key={key} segments={tableNoteSegments(hiddenRowNote, tableWidth)} />);
+  }
+
+  push(
+    `${keyBase}:bottom`,
+    <StyledLine key={`${keyBase}:bottom`} segments={tableBorderSegments(columnWidths, 'bottom')} />,
+  );
+}
+
+function tableRowSegments(
+  cells: string[],
+  columnWidths: number[],
+  alignments: TableAlignment[],
+  isHeader: boolean,
+): StyledSegment[] {
+  const segments: StyledSegment[] = [{ text: '│', dimColor: true }];
+  columnWidths.forEach((width, column) => {
+    const align: TableAlignment = isHeader ? 'left' : alignments[column] ?? 'left';
+    segments.push({ text: ' ' });
+    for (const segment of inlinePaddedCell(cells[column] ?? '', width, align, isHeader)) {
+      segments.push(segment);
+    }
+    segments.push({ text: ' ' });
+    segments.push({ text: '│', dimColor: true });
+  });
+  return segments;
+}
+
+function inlinePaddedCell(
+  text: string,
+  width: number,
+  align: TableAlignment,
+  isHeader: boolean,
+): StyledSegment[] {
+  const rawSegments = parseInlineRuns(text).map((run): StyledSegment => ({
+    text: run.text,
+    bold: isHeader || run.bold,
+    code: run.code,
+    color: isHeader && !run.code ? 'cyan' : undefined,
+  }));
+  const content = truncateSegmentsWithEllipsis(rawSegments, width);
+  const visible = segmentsWidth(content);
+  const extra = Math.max(0, width - visible);
+  const left = align === 'right' ? extra : align === 'center' ? Math.floor(extra / 2) : 0;
+  const right = extra - left;
+  const segments: StyledSegment[] = [];
+  if (left > 0) {
+    segments.push({ text: ' '.repeat(left) });
+  }
+  segments.push(...content);
+  if (right > 0) {
+    segments.push({ text: ' '.repeat(right) });
+  }
+  return segments;
+}
+
+function cellVisibleWidth(text: string): number {
+  return parseInlineRuns(text).reduce((sum, run) => sum + textWidth(run.text), 0);
+}
+
+function normalizeTableCells(cells: string[], columnCount: number): string[] {
+  return Array.from({ length: columnCount }, (_, column) => cells[column] ?? '');
+}
+
+function fitTableColumnWidths(desiredWidths: number[], bodyWidth: number): number[] {
+  const columnCount = desiredWidths.length;
+  const availableCellWidth = Math.max(columnCount, bodyWidth - (3 * columnCount + 1));
+  const minWidth = availableCellWidth >= columnCount * MIN_TABLE_CELL_WIDTH ? MIN_TABLE_CELL_WIDTH : 1;
+  const widths = Array.from({ length: columnCount }, () => minWidth);
+  let remaining = availableCellWidth - columnCount * minWidth;
+  const extras = desiredWidths.map((desired, index) => ({
+    index,
+    extra: Math.max(0, desired - minWidth),
+  }));
+
+  while (remaining > 0) {
+    let progressed = false;
+    for (const column of extras) {
+      if (remaining <= 0) {
+        break;
+      }
+      if (widths[column.index] - minWidth >= column.extra) {
+        continue;
+      }
+      widths[column.index] += 1;
+      remaining -= 1;
+      progressed = true;
+    }
+    if (!progressed) {
+      break;
+    }
+  }
+  return widths;
+}
+
+function expandTableColumnWidths(widths: number[], bodyWidth: number, targetTableWidth: number): number[] {
+  const expanded = [...widths];
+  const safeTarget = Math.min(bodyWidth, Math.max(tableDisplayWidth(expanded), targetTableWidth));
+  while (tableDisplayWidth(expanded) < safeTarget) {
+    for (let index = 0; index < expanded.length && tableDisplayWidth(expanded) < safeTarget; index += 1) {
+      expanded[index] += 1;
+    }
+  }
+  return expanded;
+}
+
+function tableDisplayWidth(columnWidths: number[]): number {
+  return columnWidths.reduce((sum, width) => sum + width, 0) + 3 * columnWidths.length + 1;
+}
+
+function tableBorderSegments(
+  columnWidths: number[],
+  position: 'top' | 'middle' | 'bottom',
+): StyledSegment[] {
+  const chars =
+    position === 'top'
+      ? { left: '┌', join: '┬', right: '┐' }
+      : position === 'middle'
+        ? { left: '├', join: '┼', right: '┤' }
+        : { left: '└', join: '┴', right: '┘' };
+  const segments: StyledSegment[] = [{ text: chars.left, dimColor: true }];
+  columnWidths.forEach((width, index) => {
+    segments.push({ text: '─'.repeat(width + 2), dimColor: true });
+    segments.push({ text: index === columnWidths.length - 1 ? chars.right : chars.join, dimColor: true });
+  });
+  return segments;
+}
+
+function tableNoteSegments(text: string, tableWidth: number): StyledSegment[] {
+  const innerWidth = Math.max(1, tableWidth - 2);
+  const clipped = truncateToWidth(` ${text} `, innerWidth);
+  const padding = Math.max(0, innerWidth - textWidth(clipped));
+  return [
+    { text: '│', dimColor: true },
+    { text: clipped + ' '.repeat(padding), dimColor: true },
+    { text: '│', dimColor: true },
+  ];
+}
+
+function segmentsWidth(segments: StyledSegment[]): number {
+  return segments.reduce((sum, segment) => sum + textWidth(segment.text), 0);
+}
+
+function truncateSegmentsWithEllipsis(segments: StyledSegment[], width: number): StyledSegment[] {
+  const safeWidth = Math.max(0, Math.floor(width));
+  if (segmentsWidth(segments) <= safeWidth) {
+    return segments;
+  }
+  const ellipsis = '…';
+  const ellipsisWidth = textWidth(ellipsis);
+  if (safeWidth <= ellipsisWidth) {
+    return [{ text: ellipsis, dimColor: true }];
+  }
+  const result = clipSegments(segments, safeWidth - ellipsisWidth);
+  result.push({ text: ellipsis, dimColor: true });
+  return result;
+}
+
+/** Clip a styled row to `width` display columns. */
+function clipSegments(segments: StyledSegment[], width: number): StyledSegment[] {
+  const safeWidth = Math.max(0, Math.floor(width));
+  const result: StyledSegment[] = [];
+  let used = 0;
+  for (const segment of segments) {
+    if (used >= safeWidth) {
+      break;
+    }
+    let text = '';
+    for (const grapheme of graphemes(segment.text)) {
+      const advance = graphemeWidth(grapheme);
+      if (used + advance > safeWidth) {
+        used = safeWidth;
+        break;
+      }
+      text += grapheme;
+      used += advance;
+    }
+    if (text.length > 0) {
+      result.push({ ...segment, text });
+    }
+  }
+  return result;
+}
+
+const StyledLine: React.FC<{ segments: StyledSegment[] }> = ({ segments }) => (
+  <Text>
+    {INDENT}
+    {segments.map((segment, index) => renderSegment(segment, index))}
+  </Text>
+);
+
+function renderSegment(segment: StyledSegment, key: number): React.ReactNode {
+  const color = segment.color ?? (segment.code ? 'yellow' : undefined);
+  const props: { bold?: boolean; color?: string; dimColor?: boolean } = {};
+  if (segment.bold) {
+    props.bold = true;
+  }
+  if (color !== undefined) {
+    props.color = color;
+  }
+  if (segment.dimColor) {
+    props.dimColor = true;
+  }
+  return (
+    <Text key={key} {...props}>
+      {segment.text}
+    </Text>
+  );
 }
 
 function pushStartupLines(

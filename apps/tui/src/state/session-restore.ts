@@ -1,4 +1,5 @@
 import type {
+  ConversationMessage,
   ConversationToolCall,
   SessionConversation,
 } from "../config/index.js";
@@ -23,6 +24,11 @@ export function restoreSessionConversation(
   };
 }
 
+/**
+ * Map a persisted conversation to the same interleaved layout the live run path
+ * produces: one assistant block per run whose elements alternate between text
+ * segments and the tool calls each segment triggered, ordered chronologically.
+ */
 export function conversationToDisplayMessages(
   dto: SessionConversation,
 ): DisplayMessage[] {
@@ -30,43 +36,196 @@ export function conversationToDisplayMessages(
     (left, right) => left.position - right.position,
   );
   const toolCallsByRun = groupToolCallsByRun(dto.toolCalls);
-  const attachedRunIds = new Set<string>();
+  // The live path stamps an assistant turn when its run starts (i.e. the user
+  // message time), so reuse that here instead of the run-end flush timestamps
+  // carried by the persisted assistant messages.
+  const runStartTimestamps = userTimestampsByRun(sortedMessages);
+
   const messages: DisplayMessage[] = [];
+  let index = 0;
 
-  for (const entry of sortedMessages) {
-    const content = entry.contentText.trim();
-    if (!content) continue;
+  while (index < sortedMessages.length) {
+    const entry = sortedMessages[index];
 
-    const timestamp = timestampFromIso(entry.createdAt, Date.now());
-    const elements: MessageElement[] = [];
-
-    if (entry.role === "assistant" && !attachedRunIds.has(entry.runId)) {
-      const runToolCalls = toolCallsByRun.get(entry.runId) ?? [];
-      for (const toolCall of runToolCalls) {
-        elements.push({
-          type: "tool_call",
-          toolCallId: toolCall.toolCallId,
+    if (entry.role !== "assistant") {
+      const content = entry.contentText.trim();
+      if (content) {
+        const timestamp = timestampFromIso(entry.createdAt, Date.now());
+        messages.push({
+          id: entry.messageId ?? entry.id,
+          role: entry.role,
           timestamp,
+          elements: [{ type: "text", content, timestamp }],
         });
       }
-      attachedRunIds.add(entry.runId);
+      index += 1;
+      continue;
     }
 
-    elements.push({
-      type: "text",
-      content,
-      timestamp,
-    });
+    // Merge the contiguous block of assistant messages sharing this runId into a
+    // single turn, matching the live path's single streaming assistant message.
+    const runId = entry.runId;
+    const runEntries: ConversationMessage[] = [];
+    while (
+      index < sortedMessages.length &&
+      sortedMessages[index].role === "assistant" &&
+      sortedMessages[index].runId === runId
+    ) {
+      runEntries.push(sortedMessages[index]);
+      index += 1;
+    }
 
-    messages.push({
-      id: entry.messageId ?? entry.id,
-      role: entry.role,
-      timestamp,
-      elements,
-    });
+    const block = buildAssistantRunBlock(
+      runId,
+      runEntries,
+      toolCallsByRun.get(runId) ?? [],
+      runStartTimestamps.get(runId),
+    );
+    if (block) {
+      messages.push(block);
+    }
   }
 
   return messages;
+}
+
+type AssistantSegment = { entry: ConversationMessage; content: string };
+
+/**
+ * Build a single assistant turn for one run, interleaving each text segment with
+ * the tool calls it triggered (`text, tools, text, tools, ...`).
+ */
+function buildAssistantRunBlock(
+  runId: string,
+  runEntries: ConversationMessage[],
+  runToolCalls: ConversationToolCall[],
+  runStartTimestamp: number | undefined,
+): DisplayMessage | undefined {
+  const segments: AssistantSegment[] = runEntries
+    .map((entry) => ({ entry, content: entry.contentText.trim() }))
+    .filter((segment) => segment.content.length > 0);
+
+  if (segments.length === 0 && runToolCalls.length === 0) {
+    return undefined;
+  }
+
+  const fallbackTimestamp = timestampFromIso(runEntries[0]?.createdAt, Date.now());
+  const timestamp = runStartTimestamp ?? fallbackTimestamp;
+
+  const elements: MessageElement[] = [];
+
+  if (segments.length === 0) {
+    // The run produced tool calls but no surviving assistant text; still render
+    // the tool calls so the turn is not dropped.
+    for (const toolCall of runToolCalls) {
+      elements.push({ type: "tool_call", toolCallId: toolCall.toolCallId, timestamp });
+    }
+  } else {
+    const toolsBySegment = assignToolCallsToSegments(segments, runToolCalls);
+    segments.forEach((segment, segmentIndex) => {
+      elements.push({ type: "text", content: segment.content, timestamp });
+      for (const toolCall of toolsBySegment[segmentIndex] ?? []) {
+        elements.push({ type: "tool_call", toolCallId: toolCall.toolCallId, timestamp });
+      }
+    });
+  }
+
+  const id =
+    segments[0]?.entry.messageId ??
+    segments[0]?.entry.id ??
+    runEntries[0]?.messageId ??
+    runEntries[0]?.id ??
+    `run-${runId}`;
+
+  return {
+    id,
+    role: "assistant",
+    timestamp,
+    elements,
+  };
+}
+
+/**
+ * Group a run's tool calls under the text segment that triggered them. Tools are
+ * linked via `parentMessageId`; any without a resolvable parent are distributed
+ * across segments in event order as a fallback.
+ */
+function assignToolCallsToSegments(
+  segments: AssistantSegment[],
+  runToolCalls: ConversationToolCall[],
+): ConversationToolCall[][] {
+  const toolsBySegment: ConversationToolCall[][] = segments.map(() => []);
+  if (segments.length === 0 || runToolCalls.length === 0) {
+    return toolsBySegment;
+  }
+
+  const sortedTools = [...runToolCalls].sort(
+    (left, right) => toolCallSortKey(left) - toolCallSortKey(right),
+  );
+
+  const segmentIndexById = new Map<string, number>();
+  segments.forEach((segment, segmentIndex) => {
+    segmentIndexById.set(segment.entry.messageId ?? segment.entry.id, segmentIndex);
+  });
+
+  const unassigned: ConversationToolCall[] = [];
+  for (const toolCall of sortedTools) {
+    const segmentIndex = toolCall.parentMessageId
+      ? segmentIndexById.get(toolCall.parentMessageId)
+      : undefined;
+    if (segmentIndex !== undefined) {
+      toolsBySegment[segmentIndex].push(toolCall);
+    } else {
+      unassigned.push(toolCall);
+    }
+  }
+
+  distributeUnassignedToolCalls(toolsBySegment, unassigned);
+  return toolsBySegment;
+}
+
+/**
+ * Spread tool calls that could not be linked to a segment across the available
+ * segments in order: one each when they fit, otherwise the overflow trails the
+ * final segment (mirrors the web restore fallback).
+ */
+function distributeUnassignedToolCalls(
+  toolsBySegment: ConversationToolCall[][],
+  unassigned: ConversationToolCall[],
+): void {
+  const segmentCount = toolsBySegment.length;
+  if (segmentCount === 0 || unassigned.length === 0) {
+    return;
+  }
+
+  if (unassigned.length <= segmentCount) {
+    unassigned.forEach((toolCall, toolIndex) => {
+      toolsBySegment[toolIndex].push(toolCall);
+    });
+    return;
+  }
+
+  for (let toolIndex = 0; toolIndex < segmentCount - 1; toolIndex += 1) {
+    toolsBySegment[toolIndex].push(unassigned[toolIndex]);
+  }
+  const lastSegmentIndex = segmentCount - 1;
+  for (let toolIndex = segmentCount - 1; toolIndex < unassigned.length; toolIndex += 1) {
+    toolsBySegment[lastSegmentIndex].push(unassigned[toolIndex]);
+  }
+}
+
+/** Earliest user-message timestamp per run, used to stamp assistant turns. */
+function userTimestampsByRun(
+  sortedMessages: ConversationMessage[],
+): Map<string, number> {
+  const timestamps = new Map<string, number>();
+  for (const entry of sortedMessages) {
+    if (entry.role !== "user" || timestamps.has(entry.runId)) {
+      continue;
+    }
+    timestamps.set(entry.runId, timestampFromIso(entry.createdAt, Date.now()));
+  }
+  return timestamps;
 }
 
 export function conversationToToolCalls(

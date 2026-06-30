@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Box, Text, useApp, useInput, useStdin, useStdout } from 'ink';
 import { randomUUID } from 'node:crypto';
 import { StatusFooter } from './Header.js';
@@ -9,7 +9,8 @@ import { InputBox } from './InputBox.js';
 import { WorkspaceFrame, chatViewportRows } from './workspace-layout.js';
 import { KeybindingsHelp } from './KeybindingsHelp.js';
 import { SessionPicker } from './SessionPicker.js';
-import { getStatusBarShortcuts } from './keybindings.js';
+import { ResourcePicker, type ResourcePickerItem } from './ResourcePicker.js';
+import { DEFAULT_COMMANDS, getStatusBarShortcuts } from './keybindings.js';
 import { AssistantTextStreamBuffer, type AssistantTextFlush } from './assistant-stream-buffer.js';
 import { wheelScrollDelta } from '../input/mouse-wheel.js';
 import {
@@ -17,12 +18,16 @@ import {
   store,
   type TuiAppState,
 } from '../state/index.js';
+import {
+  persistWorkspaceConfig,
+  type WorkspaceConfigItem,
+} from '../state/data-task-state.js';
 import { getMessageTextContent } from '../state/message-history.js';
 import type { AgentClient, AgentMessage, RunAgentInput } from '../protocol/types.js';
 import { classifyError, formatErrorMessage, errorLogger } from '../protocol/error-handler.js';
 import { commandProcessor } from '../commands/index.js';
-import type { CommandContext } from '../commands/types.js';
-import { ConfigClientError, type ConfigClient, type SessionListItem } from '../config/index.js';
+import type { CommandContext, CommandResult } from '../commands/types.js';
+import { ConfigClientError, type ConfigClient, type SessionListItem, type Skill } from '../config/index.js';
 
 interface AppProps {
   client: AgentClient;
@@ -70,6 +75,60 @@ const resolveModelName = (state: TuiAppState): string => {
   return modelName || model?.name || 'server default';
 };
 
+const datasourceIdForItem = (item: WorkspaceConfigItem): string => {
+  return item.settings?.datasourceId?.trim() || item.id;
+};
+
+const firstEnabledDatasourceId = (state: TuiAppState): string | undefined => {
+  const item = state.workspaceConfig.db.find((candidate) => candidate.enabled)
+    ?? state.workspaceConfig.db[0];
+  return item ? datasourceIdForItem(item) : undefined;
+};
+
+const firstEnabledSkillId = (state: TuiAppState): string | undefined => {
+  return state.workspaceConfig.skill.find((item) => item.enabled)?.id
+    ?? state.workspaceConfig.skill[0]?.id;
+};
+
+const uniqueStrings = (values: Array<string | undefined>): string[] => {
+  return [...new Set(values.filter((value): value is string => !!value))];
+};
+
+const enabledItemIds = (items: WorkspaceConfigItem[]): string[] => {
+  return items.filter((item) => item.enabled).map((item) => item.id);
+};
+
+const buildTuiRunConfig = (
+  state: TuiAppState,
+  activeDatasourceId: string | undefined,
+  activeSkillId: string | undefined,
+): Record<string, unknown> => {
+  const enabledDatasourceIds = activeDatasourceId
+    ? [activeDatasourceId]
+    : uniqueStrings(state.workspaceConfig.db
+        .filter((item) => item.enabled)
+        .map((item) => datasourceIdForItem(item)));
+  const enabledSkillIds = uniqueStrings([
+    ...(activeSkillId ? [activeSkillId] : []),
+    ...enabledItemIds(state.workspaceConfig.skill),
+  ]);
+
+  return {
+    enabledDatasourceIds,
+    enabledKnowledgeIds: enabledItemIds(state.workspaceConfig.kb),
+    enabledMcpServerIds: enabledItemIds(state.workspaceConfig.mcp),
+    enabledSkillIds,
+    ...(activeDatasourceId ? { activeDatasourceId } : {}),
+    ...(activeSkillId ? { activeSkillId } : {}),
+    mentioned: {
+      db: activeDatasourceId ? [activeDatasourceId] : [],
+      kb: [],
+      mcp: [],
+      skill: activeSkillId ? [activeSkillId] : [],
+    },
+  };
+};
+
 const formatSessionApiError = (error: unknown): string => {
   if (
     error instanceof ConfigClientError &&
@@ -79,6 +138,65 @@ const formatSessionApiError = (error: unknown): string => {
     return 'The connected API process does not support /api/v1/sessions. Rebuild/restart the API server, then retry /resume.';
   }
   return error instanceof Error ? error.message : String(error);
+};
+
+const formatSkillApiError = (error: unknown): string => {
+  return error instanceof Error ? error.message : String(error);
+};
+
+const localSkillPickerItems = (
+  items: WorkspaceConfigItem[],
+  activeSkillId?: string | undefined,
+): ResourcePickerItem[] => {
+  return items.map((item) => {
+    const format = item.settings?.packageFormat ?? 'unknown';
+    const detailParts = [
+      `format=${format}`,
+      item.enabled ? 'enabled' : 'disabled',
+      item.builtin ? 'builtin' : undefined,
+    ].filter(Boolean);
+
+    return {
+      id: item.id,
+      name: item.name,
+      description: item.description,
+      detail: detailParts.join(', '),
+      enabled: item.enabled,
+      active: item.id === activeSkillId,
+    };
+  });
+};
+
+const apiSkillPickerItems = (
+  skills: Skill[],
+  activeSkillId?: string | undefined,
+): ResourcePickerItem[] => {
+  return skills.map((skill) => {
+    const enabled = skill.defaultEnabled !== false;
+    const detailParts = [
+      `format=${skill.packageFormat}`,
+      skill.validationStatus ? `validation=${skill.validationStatus}` : undefined,
+      skill.builtin ? 'builtin' : undefined,
+    ].filter(Boolean);
+
+    return {
+      id: skill.id,
+      name: skill.name,
+      description: skill.description,
+      detail: detailParts.join(', '),
+      enabled,
+      active: skill.id === activeSkillId,
+    };
+  });
+};
+
+const findSkillPickerItem = (
+  items: ResourcePickerItem[],
+  requestedId: string,
+): ResourcePickerItem | undefined => {
+  return items.find((item) => item.id === requestedId)
+    ?? items.find((item) => item.name === requestedId)
+    ?? items.find((item) => item.id.toLowerCase() === requestedId.toLowerCase());
 };
 
 export const App: React.FC<AppProps> = ({
@@ -94,10 +212,24 @@ export const App: React.FC<AppProps> = ({
   const [activeTab, setActiveTab] = useState<TabType>('chat');
   const [inputFocused, setInputFocused] = useState(false);
   const [commandNotice, setCommandNotice] = useState<CommandNotice | null>(null);
-  const [pickerOpen, setPickerOpen] = useState(false);
+  const [activeDatasourceId, setActiveDatasourceId] = useState<string | undefined>(
+    () => datasourceId || firstEnabledDatasourceId(store.getState()),
+  );
+  const [activeSkillId, setActiveSkillId] = useState<string | undefined>(
+    () => firstEnabledSkillId(store.getState()),
+  );
+  const [sessionPickerOpen, setSessionPickerOpen] = useState(false);
   const [pickerSessions, setPickerSessions] = useState<SessionListItem[]>([]);
   const [pickerLoading, setPickerLoading] = useState(false);
   const [pickerError, setPickerError] = useState<string | undefined>(undefined);
+  const [skillPickerOpen, setSkillPickerOpen] = useState(false);
+  const [skillPickerItems, setSkillPickerItems] = useState<ResourcePickerItem[]>([]);
+  const [skillShortcutItems, setSkillShortcutItems] = useState<ResourcePickerItem[]>(
+    () => localSkillPickerItems(store.getState().workspaceConfig.skill, activeSkillId),
+  );
+  const [skillPickerLoading, setSkillPickerLoading] = useState(false);
+  const [skillPickerError, setSkillPickerError] = useState<string | undefined>(undefined);
+  const [skillPickerWarning, setSkillPickerWarning] = useState<string | undefined>(undefined);
   const [retryCount, setRetryCount] = useState(0);
   const [chatScrollbackRows, setChatScrollbackRows] = useState(0);
   const startupResumeAttempted = useRef(false);
@@ -126,6 +258,23 @@ export const App: React.FC<AppProps> = ({
     startup,
   });
   const maxChatScrollbackRows = Math.max(0, chatContentRows - chatViewportRowCount);
+  const pickerOpen = sessionPickerOpen || skillPickerOpen;
+  const inputCommands = useMemo(
+    () => uniqueStrings([
+      ...DEFAULT_COMMANDS,
+      ...skillShortcutItems.map((item) => `/${item.id}`),
+    ]),
+    [skillShortcutItems],
+  );
+
+  useEffect(() => {
+    if (!activeDatasourceId) {
+      setActiveDatasourceId(firstEnabledDatasourceId(state));
+    }
+    if (!activeSkillId) {
+      setActiveSkillId(firstEnabledSkillId(state));
+    }
+  }, [activeDatasourceId, activeSkillId, state.workspaceConfig]);
 
   const clampChatScrollback = (value: number): number => {
     return Math.max(0, Math.min(maxChatScrollbackRows, value));
@@ -143,6 +292,34 @@ export const App: React.FC<AppProps> = ({
     });
     return unsubscribe;
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    const localItems = localSkillPickerItems(state.workspaceConfig.skill, activeSkillId);
+    setSkillShortcutItems(localItems);
+
+    if (!configClient) {
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    configClient.listSkills()
+      .then((skills) => {
+        if (!cancelled) {
+          setSkillShortcutItems(apiSkillPickerItems(skills, activeSkillId));
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setSkillShortcutItems(localItems);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [configClient, state.workspaceConfig.skill, activeSkillId]);
 
   useEffect(() => {
     setChatScrollbackRows((current) => Math.max(0, Math.min(maxChatScrollbackRows, current)));
@@ -258,7 +435,8 @@ export const App: React.FC<AppProps> = ({
     }
 
     setCommandNotice(null);
-    setPickerOpen(true);
+    setSessionPickerOpen(true);
+    setSkillPickerOpen(false);
     setPickerLoading(true);
     setPickerError(undefined);
     setPickerSessions([]);
@@ -270,6 +448,138 @@ export const App: React.FC<AppProps> = ({
       setPickerError(formatSessionApiError(error));
     } finally {
       setPickerLoading(false);
+    }
+  }
+
+  async function openSkillPicker(): Promise<void> {
+    setCommandNotice(null);
+    setSkillPickerOpen(true);
+    setSessionPickerOpen(false);
+    setSkillPickerLoading(true);
+    setSkillPickerError(undefined);
+    setSkillPickerWarning(undefined);
+    setSkillPickerItems([]);
+
+    const localItems = localSkillPickerItems(
+      store.getState().workspaceConfig.skill,
+      activeSkillId,
+    );
+
+    if (!configClient) {
+      setSkillPickerItems(localItems);
+      setSkillPickerLoading(false);
+      return;
+    }
+
+    try {
+      const skills = await configClient.listSkills();
+      const items = apiSkillPickerItems(skills, activeSkillId);
+      setSkillPickerItems(items);
+      setSkillShortcutItems(items);
+    } catch (error) {
+      setSkillPickerItems(localItems);
+      setSkillShortcutItems(localItems);
+      if (localItems.length > 0) {
+        setSkillPickerWarning(`Backend skill list failed: ${formatSkillApiError(error)}`);
+      } else {
+        setSkillPickerError(`Failed to load skills: ${formatSkillApiError(error)}`);
+      }
+    } finally {
+      setSkillPickerLoading(false);
+    }
+  }
+
+  async function resolveSkillShortcut(commandName: string): Promise<ResourcePickerItem | undefined> {
+    const cachedChoice = findSkillPickerItem(skillShortcutItems, commandName);
+    if (cachedChoice) {
+      return cachedChoice;
+    }
+
+    const localItems = localSkillPickerItems(
+      store.getState().workspaceConfig.skill,
+      activeSkillId,
+    );
+    const localChoice = findSkillPickerItem(localItems, commandName);
+    if (localChoice) {
+      return localChoice;
+    }
+
+    if (!configClient) {
+      return undefined;
+    }
+
+    try {
+      const skills = await configClient.listSkills();
+      const items = apiSkillPickerItems(skills, activeSkillId);
+      setSkillShortcutItems(items);
+      return findSkillPickerItem(items, commandName);
+    } catch {
+      setSkillShortcutItems(localItems);
+      return undefined;
+    }
+  }
+
+  async function executeCommandOrSkillShortcut(
+    input: string,
+    commandContext: CommandContext,
+  ): Promise<CommandResult> {
+    const { commandName } = commandProcessor.parseCommand(input);
+    if (commandName && !commandProcessor.hasCommand(commandName)) {
+      const skill = await resolveSkillShortcut(commandName);
+      if (skill) {
+        return {
+          success: true,
+          message: `Skill selected: ${skill.name} (${skill.id})`,
+          data: {
+            action: 'select_skill',
+            skillId: skill.id,
+            label: skill.name,
+          },
+        };
+      }
+    }
+
+    return commandProcessor.executeCommand(input, commandContext);
+  }
+
+  function selectDatasourceForSession(nextDatasourceId: string): void {
+    setActiveDatasourceId(nextDatasourceId);
+
+    const currentConfig = store.getState().workspaceConfig;
+    let found = false;
+    const nextDb = currentConfig.db.map((item) => {
+      const itemDatasourceId = datasourceIdForItem(item);
+      const selected = item.id === nextDatasourceId || itemDatasourceId === nextDatasourceId;
+      if (selected) {
+        found = true;
+      }
+      return { ...item, enabled: selected };
+    });
+
+    if (found) {
+      const nextConfig = { ...currentConfig, db: nextDb };
+      store.setWorkspaceConfig(nextConfig);
+      persistWorkspaceConfig(nextConfig);
+    }
+  }
+
+  function selectSkillForSession(nextSkillId: string): void {
+    setActiveSkillId(nextSkillId);
+
+    const currentConfig = store.getState().workspaceConfig;
+    let found = false;
+    const nextSkills = currentConfig.skill.map((item) => {
+      const selected = item.id === nextSkillId;
+      if (selected) {
+        found = true;
+      }
+      return { ...item, enabled: selected };
+    });
+
+    if (found) {
+      const nextConfig = { ...currentConfig, skill: nextSkills };
+      store.setWorkspaceConfig(nextConfig);
+      persistWorkspaceConfig(nextConfig);
     }
   }
 
@@ -342,7 +652,10 @@ export const App: React.FC<AppProps> = ({
       const currentState = store.getState();
       const commandContext: CommandContext = {
         client,
-        datasourceId,
+        ...(configClient ? { configClient } : {}),
+        ...(activeDatasourceId ? { datasourceId: activeDatasourceId } : {}),
+        ...(activeSkillId ? { activeSkillId } : {}),
+        workspaceConfig: currentState.workspaceConfig,
         state: {
           ...(currentState.threadId !== undefined && { threadId: currentState.threadId }),
           messages: currentState.messages,
@@ -350,13 +663,19 @@ export const App: React.FC<AppProps> = ({
       };
 
       // Execute command
-      const result = await commandProcessor.executeCommand(input, commandContext);
+      const result = await executeCommandOrSkillShortcut(input, commandContext);
 
       // Handle command result
       if (result.success) {
         // Check for special actions
         if (result.data && typeof result.data === 'object') {
-          const commandData = result.data as { action?: string; tab?: unknown; sessionId?: unknown };
+          const commandData = result.data as {
+            action?: string;
+            tab?: unknown;
+            sessionId?: unknown;
+            datasourceId?: unknown;
+            skillId?: unknown;
+          };
           const action = commandData.action;
 
           if (action === 'clear_history') {
@@ -386,6 +705,17 @@ export const App: React.FC<AppProps> = ({
           } else if (action === 'open_picker' || action === 'list_sessions') {
             await openSessionPicker();
             return;
+          } else if (action === 'open_skill_picker') {
+            await openSkillPicker();
+            return;
+          } else if (action === 'select_datasource') {
+            if (typeof commandData.datasourceId === 'string') {
+              selectDatasourceForSession(commandData.datasourceId);
+            }
+          } else if (action === 'select_skill') {
+            if (typeof commandData.skillId === 'string') {
+              selectSkillForSession(commandData.skillId);
+            }
           }
         }
 
@@ -429,25 +759,44 @@ export const App: React.FC<AppProps> = ({
 
     const createRunInput = (): RunAgentInput => {
       const runId = `run-${Date.now()}-${Math.random().toString(36).substring(7)}`;
+      const runConfig = buildTuiRunConfig(currentState, activeDatasourceId, activeSkillId);
+      const context: NonNullable<RunAgentInput['context']> = [
+        ...(activeDatasourceId
+          ? [
+              {
+                description: 'datasource_id',
+                value: activeDatasourceId,
+              },
+            ]
+          : []),
+        {
+          description: 'run_config',
+          value: JSON.stringify(runConfig),
+        },
+      ];
 
       return {
         threadId,
         runId,
         messages,
         tools: [],
-        context: datasourceId ? [
-          {
-            description: 'datasource_id',
-            value: datasourceId,
-          }
-        ] : [],
+        context,
         state: {
-          ...(datasourceId ? { datasourceId, selectedDatasourceId: datasourceId } : {}),
+          ...(activeDatasourceId
+            ? {
+                datasourceId: activeDatasourceId,
+                selectedDatasourceId: activeDatasourceId,
+              }
+            : {}),
           runId,
           runStatus: 'running',
           sessionId: threadId,
+          run_config: runConfig,
         },
-        forwardedProps: datasourceId ? { datasourceId } : {},
+        forwardedProps: {
+          ...(activeDatasourceId ? { datasourceId: activeDatasourceId } : {}),
+          run_config: runConfig,
+        },
       };
     };
 
@@ -563,7 +912,7 @@ export const App: React.FC<AppProps> = ({
           threadId,
           runId,
           retryCount: attempt,
-          datasourceId,
+          activeDatasourceId,
         });
 
         // Update connection status
@@ -727,7 +1076,8 @@ export const App: React.FC<AppProps> = ({
         <Text bold color="cyan">Configuration</Text>
         <Text> </Text>
         <Text>Thread ID: {state.threadId || 'Not set'}</Text>
-        {datasourceId && <Text>Datasource ID: {datasourceId}</Text>}
+        {activeDatasourceId && <Text>Datasource ID: {activeDatasourceId}</Text>}
+        {activeSkillId && <Text>Skill ID: {activeSkillId}</Text>}
         <Text> </Text>
         <Text bold color="yellow">Settings</Text>
         <Text dimColor>No configurable settings yet</Text>
@@ -757,18 +1107,40 @@ export const App: React.FC<AppProps> = ({
 
   return (
     <>
-      {pickerOpen ? (
+      {sessionPickerOpen ? (
         <Box flexDirection="column">
           <SessionPicker
             sessions={pickerSessions}
             loading={pickerLoading}
             error={pickerError}
             onSelect={(sessionId) => {
-              setPickerOpen(false);
+              setSessionPickerOpen(false);
               void restoreHistoricalSession(sessionId);
             }}
             onCancel={() => {
-              setPickerOpen(false);
+              setSessionPickerOpen(false);
+            }}
+          />
+        </Box>
+      ) : skillPickerOpen ? (
+        <Box flexDirection="column">
+          <ResourcePicker
+            title="Select a skill"
+            items={skillPickerItems}
+            loading={skillPickerLoading}
+            error={skillPickerError}
+            warning={skillPickerWarning}
+            emptyMessage="No skills configured."
+            onSelect={(item) => {
+              setSkillPickerOpen(false);
+              selectSkillForSession(item.id);
+              setCommandNotice({
+                kind: 'info',
+                message: `Skill selected: ${item.name} (${item.id}).`,
+              });
+            }}
+            onCancel={() => {
+              setSkillPickerOpen(false);
             }}
           />
         </Box>
@@ -854,6 +1226,7 @@ export const App: React.FC<AppProps> = ({
                 onChange={handleInputChange}
                 onSubmit={handleSubmit}
                 disabled={state.connectionStatus !== 'connected' || state.runStatus === 'running'}
+                commands={inputCommands}
               />
 
               {activeTab !== 'chat' && (
