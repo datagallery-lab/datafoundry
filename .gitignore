@@ -10,6 +10,7 @@ storage/
 **/storage/
 .cache/
 **/.cache/
+.codegraph/
 .env
 .env.*
 !.env.example
