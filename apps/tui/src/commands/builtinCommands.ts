@@ -345,6 +345,16 @@ const formatChoiceList = (
   return lines.join('\n');
 };
 
+const formatDatasourceNameList = (choices: ResourceChoice[]): string => {
+  const lines: string[] = [];
+  if (choices.length === 0) {
+    lines.push('No data sources configured.');
+    return lines.join('\n');
+  }
+  choices.forEach((choice) => lines.push(choice.name));
+  return lines.join('\n');
+};
+
 const selectedMessage = (kind: string, choice: ResourceChoice): string => {
   return `${kind} selected: ${choice.name} (${choice.id})`;
 };
@@ -379,12 +389,7 @@ export const datasourceCommand: Command = {
     if (LIST_ACTIONS.has(action)) {
       return {
         success: true,
-        message: formatChoiceList(
-          'Available Data Sources:',
-          choices,
-          'Use /datasource select <id> or /datasource <id> to choose.',
-          result.warning,
-        ),
+        message: formatDatasourceNameList(choices),
         data: { datasources: choices },
       };
     }
@@ -393,9 +398,7 @@ export const datasourceCommand: Command = {
       const active = choices.find((choice) => choice.active);
       return {
         success: true,
-        message: active
-          ? `Active datasource: ${active.name} (${active.id})`
-          : 'No active datasource selected.',
+        message: active ? active.name : 'No active datasource selected.',
         data: active ? { datasourceId: active.id, datasource: active } : undefined,
       };
     }
@@ -418,7 +421,7 @@ export const datasourceCommand: Command = {
 
     return {
       success: true,
-      message: selectedMessage('Datasource', choice),
+      message: choice.name,
       data: {
         action: 'select_datasource',
         datasourceId: choice.id,

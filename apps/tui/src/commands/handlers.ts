@@ -256,16 +256,7 @@ export function datasourceCommand(context: HandlerContext): CommandResult {
         };
       }
 
-      const lines = ['Available Data Sources:', ''];
-      datasources.forEach((ds) => {
-        const status = ds.enabled ? '✓' : '✗';
-        const builtin = ds.builtin ? '(builtin)' : '';
-        const type = ds.settings?.type || 'unknown';
-        lines.push(`  ${status} ${ds.id} ${builtin}`);
-        lines.push(`    ${ds.description}`);
-        lines.push(`    Type: ${type}`);
-        lines.push('');
-      });
+      const lines = datasources.map((ds) => ds.name);
 
       return {
         success: true,
