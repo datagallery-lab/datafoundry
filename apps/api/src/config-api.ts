@@ -12,9 +12,7 @@ import {
   resolveWorkspaceDir,
   STATIC_AGENT_TOOL_NAMES
 } from "@open-data-agent/agent-runtime";
-import type { LocalDataGateway } from "@open-data-agent/data-gateway";
 import { fileAssetRefDto, type FileAssetService, mimeTypeForFilename, safeFilename } from "@open-data-agent/files";
-import type { LocalKnowledgeService } from "@open-data-agent/knowledge";
 import {
   buildSkillResourcePayload,
   parseSkillPackage,
@@ -47,7 +45,8 @@ import { basename, join, resolve, sep } from "node:path";
 import writeXlsxFile, { type SheetData } from "write-excel-file/node";
 
 import { resolveEffectiveRunConfig } from "./run-input.js";
-import type { RunCancelRegistry } from "./run-cancel-registry.js";
+import { handleCapabilitiesRequest } from "./routes/capabilities.js";
+import type { ConfigApiContext, ConfigApiResponse } from "./routes/types.js";
 import { sessionTitleDto } from "./session-title.js";
 import { readMultipartFiles, readMultipartUpload } from "./upload-parser.js";
 
@@ -72,21 +71,7 @@ const originToSource = (origin: string): string | undefined => {
   }
 };
 
-export type ConfigApiContext = {
-  dataGateway: LocalDataGateway;
-  fileAssetService: FileAssetService;
-  knowledgeService: LocalKnowledgeService;
-  metadataStore: MetadataStore;
-  runCancelRegistry: RunCancelRegistry;
-  userId: string;
-  workspaceId?: string;
-};
-
-export type ConfigApiResponse = {
-  body: ApiResult<unknown> | Buffer | Record<string, unknown>;
-  headers?: Record<string, string>;
-  status: number;
-};
+export type { ConfigApiContext, ConfigApiResponse } from "./routes/types.js";
 
 const RESOURCE_PATHS: Record<string, ConfigResourceKind> = {
   "knowledge-bases": "knowledge-base",
@@ -152,34 +137,8 @@ const routeConfigRequest = async (
   if (root === "run-defaults" && request.method === "GET") {
     return ok(buildRunDefaults(context));
   }
-  if (root === "capabilities" && request.method === "GET") {
-    return ok({
-      "artifact.export": true,
-      "artifact.list": true,
-      "artifact.promote": true,
-      "chat.fileUpload": true,
-      "chat.imageInput": true,
-      "conversation.memory": true,
-      "conversation.title": true,
-      "datasource.fieldMasking": true,
-      "datasource.extendedTypes": true,
-      "datasource.introspectionPolicy": true,
-      "datasource.queryPolicy": true,
-      "datasource.samplePolicy": true,
-      "datasource.server": true,
-      files: true,
-      "kb.chunking": true,
-      "kb.citationPolicy": true,
-      "kb.scope": true,
-      "llm.advancedSampling": true,
-      "llm.samplingParams": true,
-      knowledge: true,
-      mcp: true,
-      "mcp.stdio": true,
-      "mcp.toolPolicy": true,
-      "skill.resourceBinding": true,
-      skills: true
-    });
+  if (root === "capabilities") {
+    return handleCapabilitiesRequest(request.method);
   }
   if (root === "chat" && segments[1] === "uploads") {
     if (request.method !== "POST") {
