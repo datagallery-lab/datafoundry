@@ -307,17 +307,31 @@ function reduceActivitySnapshot(state: LiveRun, event: AgUiLikeEvent): LiveRun {
 
     let nextState = state;
 
-    if (toolCall && stepId) {
-      const toolUpdate: LiveToolCallRecord = { ...toolCall, stepId };
-      if (activityStatus === "failed" && toolCall.status === "running") {
-        const errorMessage = stringValue(content.error_message) ?? "Tool execution failed";
-        toolUpdate.status = "failed";
-        toolUpdate.finishedAtMs = Date.now();
-        if (!toolCall.result) {
-          toolUpdate.result = JSON.stringify({ error: errorMessage });
-        }
-      }
-      nextState = upsertToolCallRecord(nextState, toolUpdate);
+    if (toolName && activityStatus) {
+      const now = Date.now();
+      const nextToolStatus = toolCall
+        ? resolveTraceToolStatus(toolCall.status, activityStatus)
+        : activityStatus === "failed"
+          ? "failed"
+          : activityStatus === "completed"
+            ? "success"
+            : "running";
+      const activityResult = toolResultFromActivityContent(content, activityStatus);
+      nextState = upsertToolCallRecord(nextState, {
+        id: eventId,
+        name: toolName,
+        status: nextToolStatus,
+        ...(stepId ? { stepId } : toolCall?.stepId ? { stepId: toolCall.stepId } : {}),
+        startedAtMs: toolCall?.startedAtMs ?? now,
+        ...(nextToolStatus !== "running"
+          ? { finishedAtMs: toolCall?.finishedAtMs ?? now }
+          : {}),
+        ...(toolCall?.result
+          ? { result: toolCall.result }
+          : activityResult
+            ? { result: activityResult }
+            : {}),
+      });
     }
 
     if (toolCall && stepId && stepId !== toolCall.id) {
@@ -329,7 +343,7 @@ function reduceActivitySnapshot(state: LiveRun, event: AgUiLikeEvent): LiveRun {
 
     const existing = nextState.events.find((item) => item.id === eventId);
 
-    return upsertTimelineEvent(nextState, {
+    const withTimelineEvent = upsertTimelineEvent(nextState, {
       id: eventId,
       kind,
       toolName: toolName ?? undefined,
@@ -341,6 +355,9 @@ function reduceActivitySnapshot(state: LiveRun, event: AgUiLikeEvent): LiveRun {
       payload: mergeActivityPayload(kind, content, existing),
       ...(existing?.artifactIds ? { artifactIds: existing.artifactIds } : {}),
     });
+    return activityStatus === "completed"
+      ? reconcileUnlinkedArtifacts(withTimelineEvent)
+      : withTimelineEvent;
   }
 
   return state;
@@ -354,34 +371,82 @@ function reduceActivityDelta(state: LiveRun, event: AgUiLikeEvent): LiveRun {
 }
 
 function reduceToolEvent(state: LiveRun, event: AgUiLikeEvent): LiveRun {
-  const toolName =
+  const incomingToolName =
     stringValue(event.toolCallName) ??
     stringValue(event.toolName) ??
-    stringValue(event.name) ??
-    "tool";
-  const id = stringValue(event.toolCallId) ?? `${toolName}-${state.events.length + 1}`;
+    stringValue(event.name);
   const eventType = stringValue(event.type);
+  const explicitId = stringValue(event.toolCallId);
+  const directToolCall = explicitId
+    ? state.toolCalls.find((item) => item.id === explicitId)
+    : undefined;
+  const directEvent = explicitId
+    ? state.events.find((item) => item.id === explicitId)
+    : undefined;
+  const correlationToolName = isSpecificToolName(incomingToolName)
+    ? incomingToolName
+    : directToolCall?.name ?? directEvent?.toolName;
+  const startFallbackToolCall =
+    eventType === "TOOL_CALL_START" && !directToolCall && !explicitId
+      ? findRunningToolCall(state.toolCalls, correlationToolName)
+      : undefined;
+  const resultFallbackToolCall =
+    eventType !== "TOOL_CALL_START" && !directToolCall
+      ? explicitId
+        ? isSpecificToolName(correlationToolName)
+          ? findRunningToolCall(state.toolCalls, correlationToolName)
+          : findLatestRunningToolCall(state.toolCalls)
+        : isSpecificToolName(correlationToolName)
+          ? findCorrelatedToolCall(state.toolCalls, correlationToolName, undefined)
+          : findLatestRunningToolCall(state.toolCalls)
+      : undefined;
+  const correlatedToolCall = eventType === "TOOL_CALL_START"
+    ? directToolCall ?? startFallbackToolCall
+    : directToolCall ?? resultFallbackToolCall;
+  const correlatedEvent = correlatedToolCall
+    ? state.events.find((item) => item.id === correlatedToolCall.id)
+    : undefined;
+  const toolName = resolveIncomingToolName(
+    event,
+    directToolCall ?? correlatedToolCall,
+    directEvent ?? correlatedEvent,
+  );
+  const id = explicitId ?? correlatedToolCall?.id ?? `${toolName}-${state.events.length + 1}`;
 
   let nextState = state;
-  const resultPayload =
-    stringValue(event.result) ?? stringValue(event.content) ?? "";
+  if (
+    explicitId &&
+    correlatedToolCall &&
+    correlatedToolCall.id !== explicitId &&
+    !directToolCall
+  ) {
+    nextState = rekeyToolCall(nextState, correlatedToolCall.id, explicitId);
+  }
+
+  const resultPayload = resultPayloadString(event.result ?? event.content);
   if (eventType === "TOOL_CALL_START") {
+    const existing = nextState.toolCalls.find((item) => item.id === id);
     nextState = upsertToolCallRecord(nextState, {
       id,
       name: toolName,
       status: "running",
-      startedAtMs: Date.now(),
+      ...(existing?.stepId ? { stepId: existing.stepId } : {}),
+      startedAtMs: existing?.startedAtMs ?? Date.now(),
     });
   } else if (eventType === "TOOL_CALL_END") {
-    const existing = state.toolCalls.find((item) => item.id === id);
+    const existing = nextState.toolCalls.find((item) => item.id === id);
+    const status = existing && existing.status !== "running" ? existing.status : "running";
     nextState = upsertToolCallRecord(nextState, {
       id,
       name: toolName,
-      status: existing?.status === "failed" ? "failed" : "running",
+      status,
       startedAtMs: existing?.startedAtMs ?? Date.now(),
+      ...(existing?.stepId ? { stepId: existing.stepId } : {}),
+      ...(existing?.finishedAtMs ? { finishedAtMs: existing.finishedAtMs } : {}),
+      ...(existing?.result ? { result: existing.result } : {}),
     });
   } else if (eventType === "TOOL_CALL_RESULT") {
-    const existing = state.toolCalls.find((item) => item.id === id);
+    const existing = nextState.toolCalls.find((item) => item.id === id);
     const parsed = parseResultObject(resultPayload);
     const failed = toolResultPayloadLooksFailed(parsed);
     nextState = upsertToolCallRecord(nextState, {
@@ -410,7 +475,7 @@ function reduceToolEvent(state: LiveRun, event: AgUiLikeEvent): LiveRun {
     const parsed = parseResultObject(result);
     const rowCount = numberValue(parsed?.row_count) ?? latestAudit(state)?.rowCount ?? 0;
     const elapsedMs = numberValue(parsed?.elapsed_ms) ?? latestAudit(state)?.elapsedMs ?? 0;
-    return upsertTimelineEvent(nextState, {
+    return finalizeToolEventState(upsertTimelineEvent(nextState, {
       id,
       kind,
       toolName,
@@ -423,13 +488,13 @@ function reduceToolEvent(state: LiveRun, event: AgUiLikeEvent): LiveRun {
         scannedRows: rowCount,
         durationMs: elapsedMs,
       },
-    });
+    }), eventType);
   }
 
   if (kind === "inspect") {
     const parsedSchema = parseResultObject(result);
     const tables = parseSchemaTables(parsedSchema);
-    return upsertTimelineEvent(nextState, {
+    return finalizeToolEventState(upsertTimelineEvent(nextState, {
       id,
       kind,
       toolName,
@@ -437,10 +502,10 @@ function reduceToolEvent(state: LiveRun, event: AgUiLikeEvent): LiveRun {
       summary: summarizeSchemaResult(result, tables, event.type),
       thought: "Agent 先确认数据源结构，避免在不可靠字段上直接下结论。",
       payload: { tables },
-    });
+    }), eventType);
   }
 
-  return upsertTimelineEvent(nextState, {
+  return finalizeToolEventState(upsertTimelineEvent(nextState, {
     id,
     kind,
     toolName,
@@ -451,10 +516,21 @@ function reduceToolEvent(state: LiveRun, event: AgUiLikeEvent): LiveRun {
       description: result || "",
       rawResult: result && result.length > 0 ? result : undefined,
     },
-  });
+  }), eventType);
+}
+
+function finalizeToolEventState(
+  state: LiveRun,
+  eventType?: string,
+): LiveRun {
+  if (eventType === "TOOL_CALL_RESULT") {
+    return reconcileUnlinkedArtifacts(state);
+  }
+  return state;
 }
 
 function summarizeGenericResult(result: string, eventType?: string): string {
+  if (toolResultPayloadLooksFailed(parseResultObject(result))) return "执行失败。";
   if (result) return result.length > 160 ? `${result.slice(0, 160)}…` : result;
   if (eventType === "TOOL_CALL_RESULT" || eventType === "TOOL_CALL_END") {
     return "数据操作已完成。";
@@ -472,10 +548,48 @@ function parseResultObject(result: string): Record<string, unknown> | null {
   }
 }
 
+function resultPayloadString(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (value === undefined || value === null) return "";
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+}
+
+function toolResultFromActivityContent(
+  content: Record<string, unknown>,
+  status: TimelineEvent["activityStatus"],
+): string | undefined {
+  if (status === "failed") {
+    return JSON.stringify({
+      error: stringValue(content.error_message) ?? "Tool execution failed",
+    });
+  }
+
+  if (status !== "completed") return undefined;
+  const output = content.content ?? content.output;
+  const payload = resultPayloadString(output);
+  return payload || undefined;
+}
+
 function toolResultPayloadLooksFailed(parsed: Record<string, unknown> | null): boolean {
   if (!parsed) return false;
-  if (parsed.status === "error") return true;
-  return parsed.error !== undefined;
+  const status = stringValue(parsed.status);
+  if (status === "error" || status === "failed") return true;
+  if (parsed.isError === true) return true;
+  if (parsed.error !== undefined) return true;
+
+  const result = recordValue(parsed.result);
+  if (!result) return false;
+  const resultStatus = stringValue(result.status);
+  return (
+    resultStatus === "error" ||
+    resultStatus === "failed" ||
+    result.isError === true ||
+    result.error !== undefined
+  );
 }
 
 function summarizeSqlResult(
@@ -483,6 +597,7 @@ function summarizeSqlResult(
   parsed: Record<string, unknown> | null,
   eventType?: string,
 ): string {
+  if (toolResultPayloadLooksFailed(parsed)) return "执行失败。";
   const rowCount = numberValue(parsed?.row_count);
   if (rowCount !== undefined) return `已执行，返回 ${rowCount} 行。`;
   // Non-JSON results are usually human-readable text (or an error); keep them.
@@ -496,6 +611,7 @@ function summarizeSchemaResult(
   tables: SchemaTable[],
   eventType?: string,
 ): string {
+  if (toolResultPayloadLooksFailed(parseResultObject(result))) return "执行失败。";
   if (tables.length > 0) return `已检查 ${tables.length} 张表。`;
   if (result && !parseResultObject(result)) return result;
   if (eventType === "TOOL_CALL_RESULT") return "已检查数据源 schema。";
@@ -541,7 +657,6 @@ function reduceCustomEvent(state: LiveRun, event: AgUiLikeEvent): LiveRun {
     if (!value) return state;
 
     const artifact = parseArtifactFromCustom(value);
-    const sqlTool = findSqlToolForArtifact(state);
     let nextState: LiveRun = {
       ...state,
       artifacts: [
@@ -549,8 +664,9 @@ function reduceCustomEvent(state: LiveRun, event: AgUiLikeEvent): LiveRun {
         ...state.artifacts.filter((item) => item.id !== artifact.id),
       ],
     };
-    if (sqlTool) {
-      nextState = linkArtifactToToolCall(nextState, artifact.id, sqlTool.id);
+    const sourceTool = findArtifactSourceTool(nextState, artifact, value);
+    if (sourceTool) {
+      nextState = linkArtifactToToolCall(nextState, artifact.id, sourceTool.id);
     }
     return nextState;
   }
@@ -608,6 +724,62 @@ function parseTablePreview(
   return { columns, rows };
 }
 
+function parseChartPoints(value: unknown): Array<{ label: string; value: number }> {
+  return arrayValue(value)
+    .map((item) => {
+      const point = recordValue(item);
+      const label =
+        stringValue(point?.label) ??
+        stringValue(point?.x) ??
+        stringValue(point?.name);
+      const valueNumber =
+        numberValue(point?.value) ??
+        numberValue(point?.y) ??
+        numberValue(point?.count);
+      if (!label || valueNumber === undefined) return undefined;
+      return { label, value: valueNumber };
+    })
+    .filter((item): item is { label: string; value: number } => Boolean(item));
+}
+
+function chartTypeValue(
+  value: unknown,
+): Extract<DataArtifact["detail"], { type: "chart" }>["chartType"] {
+  if (value === "bar" || value === "line" || value === "pie") return value;
+  return undefined;
+}
+
+function parseChartPreview(
+  preview: unknown,
+): Extract<DataArtifact["detail"], { type: "chart" }> | null {
+  const record = recordValue(preview);
+  if (!record) return null;
+
+  const points = parseChartPoints(record.points);
+  const series = arrayValue(record.series)
+    .map((item) => {
+      const seriesRecord = recordValue(item);
+      const name = stringValue(seriesRecord?.name);
+      const seriesPoints = parseChartPoints(seriesRecord?.points);
+      if (!name || seriesPoints.length === 0) return undefined;
+      return { name, points: seriesPoints };
+    })
+    .filter((item): item is { name: string; points: Array<{ label: string; value: number }> } =>
+      Boolean(item),
+    );
+
+  if (points.length === 0 && series.length === 0) return null;
+
+  const chartType = chartTypeValue(record.chartType ?? record.chart_type ?? record.kind);
+  return {
+    type: "chart",
+    ...(chartType ? { chartType } : {}),
+    ...(stringValue(record.unit) ? { unit: stringValue(record.unit) } : {}),
+    points,
+    ...(series.length > 0 ? { series } : {}),
+  };
+}
+
 function parseArtifactFromCustom(value: Record<string, unknown>): DataArtifact {
   const id =
     stringValue(value.id) ??
@@ -616,6 +788,9 @@ function parseArtifactFromCustom(value: Record<string, unknown>): DataArtifact {
   const title =
     stringValue(value.title) ?? stringValue(value.name) ?? "Agent 产出物";
   const backendType = stringValue(value.type);
+  const fileId = stringValue(value.file_id) ?? stringValue(value.fileId);
+  const downloadUrl =
+    stringValue(value.download_url) ?? stringValue(value.downloadUrl);
   const preview = value.preview_json;
   const previewRecord = recordValue(preview);
   const rowCount = numberValue(previewRecord?.row_count);
@@ -644,11 +819,43 @@ function parseArtifactFromCustom(value: Record<string, unknown>): DataArtifact {
   } else if (backendType === "chart") {
     type = "chart";
     kind = "chart";
+    detail = parseChartPreview(preview) ?? undefined;
     summary = summary ?? "图表产出";
   } else if (backendType === "markdown" || backendType === "html") {
     type = "report";
     kind = "memo";
+    const textContent =
+      stringValue(previewRecord?.content) ??
+      stringValue(previewRecord?.body) ??
+      (typeof preview === "string" ? preview : undefined);
+    if (textContent) {
+      detail = {
+        type: "report",
+        sections: [{ heading: "预览", body: textContent }],
+      };
+    }
     summary = summary ?? `${backendType} 报告`;
+  } else if (backendType === "file") {
+    type = "file";
+    kind = "file";
+    const filePath = stringValue(previewRecord?.path) ?? title;
+    const fileSize = numberValue(previewRecord?.size);
+    const fileMtime = stringValue(previewRecord?.mtime);
+    const fileTool = stringValue(previewRecord?.tool);
+    const fileContent = stringValue(previewRecord?.content);
+    detail = {
+      type: "file",
+      path: filePath,
+      ...(fileSize !== undefined ? { size: fileSize } : {}),
+      ...(fileMtime ? { mtime: fileMtime } : {}),
+      ...(fileTool ? { tool: fileTool } : {}),
+      ...(fileContent ? { content: fileContent } : {}),
+    };
+    summary =
+      summary ??
+      (fileSize !== undefined
+        ? `文件 ${filePath}（${fileSize.toLocaleString()} bytes）`
+        : `文件 ${filePath}`);
   }
 
   return {
@@ -658,19 +865,249 @@ function parseArtifactFromCustom(value: Record<string, unknown>): DataArtifact {
     type: type ?? undefined,
     summary: summary ?? "后端通过 AG-UI artifact 事件返回的产出物。",
     version: stringValue(value.version) ?? "v1",
+    fileId: fileId ?? undefined,
+    downloadUrl: downloadUrl ?? undefined,
     detail: detail ?? undefined,
+    previewAvailable:
+      value.preview_available === true ||
+      (preview !== undefined && preview !== null),
     recordedAtMs: Date.now(),
   };
 }
 
-function findSqlToolForArtifact(state: LiveRun): LiveToolCallRecord | undefined {
-  for (let index = state.toolCalls.length - 1; index >= 0; index -= 1) {
-    const tool = state.toolCalls[index];
-    if (!tool || tool.name !== "run_sql_readonly") continue;
-    const event = state.events.find((item) => item.id === tool.id);
-    if (!event?.artifactIds?.length) return tool;
+function extractAuditIdFromArtifactValue(value: Record<string, unknown>): string | undefined {
+  const preview = recordValue(value.preview_json);
+  const fromPreview = stringValue(preview?.audit_log_id);
+  if (fromPreview) return fromPreview;
+  const name = stringValue(value.name) ?? stringValue(value.title);
+  const match = name?.match(/^SQL result\s+(.+)$/i);
+  return match?.[1];
+}
+
+function extractAuditIdFromToolResult(result?: string): string | undefined {
+  const parsed = parseResultObject(result ?? "");
+  return stringValue(parsed?.audit_log_id);
+}
+
+function isSqlToolCall(state: LiveRun, tool: LiveToolCallRecord): boolean {
+  return (
+    tool.name === "run_sql_readonly" ||
+    state.events.some((event) => event.id === tool.id && event.kind === "query")
+  );
+}
+
+function toolCallHasLinkedArtifacts(state: LiveRun, toolCallId: string): boolean {
+  const event = state.events.find((item) => item.id === toolCallId);
+  return (event?.artifactIds?.length ?? 0) > 0;
+}
+
+function unlinkedSuccessfulSqlTools(state: LiveRun): LiveToolCallRecord[] {
+  return state.toolCalls.filter((tool) => {
+    if (!isSqlToolCall(state, tool)) return false;
+    if (tool.status === "failed") return false;
+    return !toolCallHasLinkedArtifacts(state, tool.id);
+  });
+}
+
+function findSqlToolForArtifact(
+  state: LiveRun,
+  artifactValue?: Record<string, unknown>,
+): LiveToolCallRecord | undefined {
+  const auditId = artifactValue ? extractAuditIdFromArtifactValue(artifactValue) : undefined;
+  const preview = artifactValue ? recordValue(artifactValue.preview_json) : undefined;
+  const artifactRowCount = numberValue(preview?.row_count);
+
+  if (auditId) {
+    for (let index = state.toolCalls.length - 1; index >= 0; index -= 1) {
+      const tool = state.toolCalls[index];
+      if (!tool || !isSqlToolCall(state, tool)) continue;
+      if (extractAuditIdFromToolResult(tool.result) === auditId) return tool;
+    }
   }
-  return state.toolCalls.filter((call) => call.name === "run_sql_readonly").at(-1);
+
+  const unlinked = unlinkedSuccessfulSqlTools(state);
+
+  if (artifactRowCount !== undefined) {
+    const rowMatch = unlinked.find((tool) => {
+      if (!tool.result) return false;
+      const parsed = parseResultObject(tool.result);
+      return numberValue(parsed?.row_count) === artifactRowCount;
+    });
+    if (rowMatch) return rowMatch;
+  }
+
+  // Artifacts usually arrive after sequential tool calls; link to the oldest
+  // successful SQL call that still has no linked artifact.
+  return unlinked[0];
+}
+
+const FILE_ARTIFACT_TOOLS = new Set([
+  "write_file",
+  "edit_file",
+  "execute_command",
+  "publish_artifact",
+  "promote_workspace_file",
+]);
+
+type FileArtifactMeta = {
+  path?: string | undefined;
+  tool?: string | undefined;
+};
+
+function extractFileArtifactMeta(value: Record<string, unknown>): FileArtifactMeta {
+  const preview = recordValue(value.preview_json);
+  return {
+    path: stringValue(preview?.path) ?? stringValue(value.name) ?? stringValue(value.title),
+    tool: stringValue(preview?.tool),
+  };
+}
+
+function fileArtifactMetaFromDataArtifact(artifact: DataArtifact): FileArtifactMeta {
+  if (artifact.detail?.type === "file") {
+    return {
+      path: artifact.detail.path,
+      tool: artifact.detail.tool,
+    };
+  }
+  return { path: artifact.title };
+}
+
+function normalizeWorkspacePath(relativePath: string): string {
+  return relativePath.replace(/\\/gu, "/").replace(/^\.\/+/, "");
+}
+
+function extractObservationFromToolResult(result?: string): string | undefined {
+  if (!result) return undefined;
+  const parsed = parseResultObject(result);
+  const observation = stringValue(parsed?.observation);
+  if (observation) return observation;
+  const trimmed = result.trim();
+  if (trimmed.startsWith("{")) return undefined;
+  return trimmed;
+}
+
+function extractWorkspacePathFromToolResult(result?: string): string | undefined {
+  const observation = extractObservationFromToolResult(result);
+  if (!observation) return undefined;
+
+  const firstLine = observation.split("\n")[0]?.trim() ?? observation.trim();
+  const wroteMatch = /^Wrote \d+ bytes to (.+)$/u.exec(firstLine);
+  if (wroteMatch?.[1]) return wroteMatch[1].trim();
+
+  const replacedMatch = /^Replaced \d+ occurrence(?:s)? in (.+)$/u.exec(firstLine);
+  if (replacedMatch?.[1]) {
+    return replacedMatch[1].replace(/\s+\(lines [^)]+\)$/u, "").trim();
+  }
+
+  return undefined;
+}
+
+function workspaceToolMatchesFileArtifact(
+  tool: LiveToolCallRecord,
+  meta: FileArtifactMeta,
+): boolean {
+  if (meta.tool && tool.name !== meta.tool) return false;
+  if (!meta.path) return true;
+
+  const resultPath = extractWorkspacePathFromToolResult(tool.result);
+  if (!resultPath) return true;
+  return normalizeWorkspacePath(resultPath) === normalizeWorkspacePath(meta.path);
+}
+
+function findFileToolForArtifact(
+  state: LiveRun,
+  artifactValue?: Record<string, unknown>,
+): LiveToolCallRecord | undefined {
+  const meta = artifactValue ? extractFileArtifactMeta(artifactValue) : undefined;
+  return findFileToolForArtifactByMeta(state, meta ?? {});
+}
+
+function findFileToolForArtifactByMeta(
+  state: LiveRun,
+  meta: FileArtifactMeta,
+): LiveToolCallRecord | undefined {
+  const candidates = state.toolCalls.filter(
+    (tool) =>
+      FILE_ARTIFACT_TOOLS.has(tool.name) &&
+      tool.status === "success" &&
+      workspaceToolMatchesFileArtifact(tool, meta),
+  );
+
+  const unlinked = candidates.filter((tool) => !toolCallHasLinkedArtifacts(state, tool.id));
+  if (unlinked.length > 0) return unlinked[0];
+
+  if (meta.path && meta.tool && candidates.length === 1) return candidates[0];
+  return undefined;
+}
+
+function artifactValueFromDataArtifact(artifact: DataArtifact): Record<string, unknown> {
+  const value: Record<string, unknown> = {
+    id: artifact.id,
+    title: artifact.title,
+    name: artifact.title,
+    summary: artifact.summary,
+    type: artifact.type ?? artifact.kind,
+  };
+  if (artifact.fileId) value.file_id = artifact.fileId;
+  if (artifact.downloadUrl) value.download_url = artifact.downloadUrl;
+
+  if (artifact.detail?.type === "dataset") {
+    value.type = "table";
+    value.preview_json = {
+      columns: artifact.detail.columns,
+      rows: artifact.detail.rows,
+      row_count: artifact.detail.rows.length,
+    };
+  } else if (artifact.detail?.type === "file") {
+    value.type = "file";
+    value.preview_json = {
+      path: artifact.detail.path,
+      size: artifact.detail.size,
+      tool: artifact.detail.tool,
+    };
+  }
+
+  return value;
+}
+
+function reconcileUnlinkedArtifacts(state: LiveRun): LiveRun {
+  let nextState = state;
+  for (const artifact of state.artifacts) {
+    if (artifact.createdByEventId) continue;
+    const linkedTool = findArtifactSourceTool(nextState, artifact);
+    if (linkedTool) {
+      nextState = linkArtifactToToolCall(nextState, artifact.id, linkedTool.id);
+    }
+  }
+  return nextState;
+}
+
+function findArtifactSourceTool(
+  state: LiveRun,
+  artifact: DataArtifact,
+  artifactValue?: Record<string, unknown>,
+): LiveToolCallRecord | undefined {
+  const value = artifactValue ?? artifactValueFromDataArtifact(artifact);
+
+  if (artifact.type === "file" || artifact.kind === "file") {
+    return findFileToolForArtifact(state, value);
+  }
+  if (
+    artifact.type === "dataset" ||
+    artifact.detail?.type === "dataset" ||
+    stringValue(value.type) === "table"
+  ) {
+    return findSqlToolForArtifact(state, value);
+  }
+  if (stringValue(value.type) === "file") {
+    return findFileToolForArtifact(state, value);
+  }
+
+  // Title-only artifact payloads: link only when a single SQL tool is waiting.
+  const unlinkedSql = unlinkedSuccessfulSqlTools(state);
+  if (unlinkedSql.length === 1) return unlinkedSql[0];
+
+  return undefined;
 }
 
 function linkArtifactToToolCall(
@@ -694,6 +1131,50 @@ function linkArtifactToToolCall(
       : artifact,
   );
   return { ...state, events, artifacts };
+}
+
+function rekeyToolCall(
+  state: LiveRun,
+  fromId: string,
+  toId: string,
+): LiveRun {
+  if (fromId === toId) return state;
+
+  const fromIndex = state.toolCalls.findIndex((item) => item.id === fromId);
+  if (fromIndex === -1) return state;
+
+  const toIndex = state.toolCalls.findIndex((item) => item.id === toId);
+  const fromCall = state.toolCalls[fromIndex];
+  const toCall = toIndex >= 0 ? state.toolCalls[toIndex] : undefined;
+  if (!fromCall) return state;
+
+  const mergedCall: LiveToolCallRecord = {
+    ...fromCall,
+    ...toCall,
+    id: toId,
+    name: isSpecificToolName(toCall?.name) ? toCall.name : fromCall.name,
+    status: toCall?.status ?? fromCall.status,
+    startedAtMs: fromCall.startedAtMs ?? toCall?.startedAtMs,
+    finishedAtMs: toCall?.finishedAtMs ?? fromCall.finishedAtMs,
+    stepId: toCall?.stepId ?? fromCall.stepId,
+    result: toCall?.result ?? fromCall.result,
+  };
+
+  const toolCalls = state.toolCalls.filter(
+    (item) => item.id !== fromId && item.id !== toId,
+  );
+  toolCalls.splice(Math.min(fromIndex, toolCalls.length), 0, mergedCall);
+
+  const events = state.events.map((event) =>
+    event.id === fromId ? { ...event, id: toId } : event,
+  );
+  const artifacts = state.artifacts.map((artifact) =>
+    artifact.createdByEventId === fromId
+      ? { ...artifact, createdByEventId: toId }
+      : artifact,
+  );
+
+  return { ...state, toolCalls, events, artifacts };
 }
 
 function upsertTimelineEvent(
@@ -766,6 +1247,47 @@ function statusSummary(value: unknown): string {
   if (status === "completed") return "已完成。";
   if (status === "failed") return "执行失败。";
   return "等待执行。";
+}
+
+function isSpecificToolName(value: string | undefined): value is string {
+  return Boolean(value && value !== "tool" && value !== "unknown");
+}
+
+function resolveIncomingToolName(
+  event: AgUiLikeEvent,
+  existing?: LiveToolCallRecord,
+  existingEvent?: TimelineEvent,
+): string {
+  const fromEvent =
+    stringValue(event.toolCallName) ??
+    stringValue(event.toolName) ??
+    stringValue(event.name);
+  if (isSpecificToolName(fromEvent)) return fromEvent;
+  if (isSpecificToolName(existing?.name)) return existing.name;
+  if (isSpecificToolName(existingEvent?.toolName)) return existingEvent.toolName;
+  return fromEvent ?? existing?.name ?? existingEvent?.toolName ?? "tool";
+}
+
+function findRunningToolCall(
+  toolCalls: LiveToolCallRecord[],
+  toolName: string | undefined,
+): LiveToolCallRecord | undefined {
+  if (!isSpecificToolName(toolName)) return undefined;
+  for (let index = toolCalls.length - 1; index >= 0; index -= 1) {
+    const call = toolCalls[index];
+    if (call?.name === toolName && call.status === "running") return call;
+  }
+  return undefined;
+}
+
+function findLatestRunningToolCall(
+  toolCalls: LiveToolCallRecord[],
+): LiveToolCallRecord | undefined {
+  for (let index = toolCalls.length - 1; index >= 0; index -= 1) {
+    const call = toolCalls[index];
+    if (call?.status === "running") return call;
+  }
+  return undefined;
 }
 
 export function findCorrelatedToolCall(
@@ -951,8 +1473,11 @@ function finalizeRunningToolCalls(
   toolCalls: LiveToolCallRecord[],
   finalStatus: "success" | "failed",
 ): LiveToolCallRecord[] {
+  const finishedAtMs = Date.now();
   return toolCalls.map((call) =>
-    call.status === "running" ? { ...call, status: finalStatus } : call,
+    call.status === "running"
+      ? { ...call, status: finalStatus, finishedAtMs: call.finishedAtMs ?? finishedAtMs }
+      : call,
   );
 }
 

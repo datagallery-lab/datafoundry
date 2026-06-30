@@ -2,6 +2,7 @@ import { createInitialTuiState, type TuiSessionState } from "./tui-state.js";
 import {
   reduceLiveRunEvent,
   type LiveRun,
+  type LiveToolCallRecord,
   createInitialSessionUsage,
   deriveRunUsage,
   accumulateSessionUsage,
@@ -12,6 +13,7 @@ import {
   addUserMessage,
   addAssistantMessage,
   appendToLastAssistantMessage,
+  clearMessages,
   finalizeLastAssistantMessage,
   updateLastAssistantMessage,
   insertToolCallIntoLastMessage,
@@ -22,6 +24,7 @@ import {
   clearInputBuffer,
   setThreadId,
 } from "./tui-state.js";
+import type { DisplayMessage } from "./tui-state.js";
 import type { WorkspaceConfigStore } from "./data-task-state.js";
 
 /**
@@ -163,25 +166,16 @@ class StateStore {
       return;
     }
 
-    // Detect new tool call starts and insert into message elements
-    if (event.type === "TOOL_CALL_START") {
-      const toolCallId = typeof event.toolCallId === 'string'
-        ? event.toolCallId
-        : `tool-${Date.now()}`;
-
-      // Insert tool call element into the last assistant message
-      const stateWithToolCall = insertToolCallIntoLastMessage(this.state, toolCallId);
-
-      // Merge with LiveRun update
-      const newState: TuiAppState = {
-        ...stateWithToolCall,
-        ...newLiveRun,
-        sessionStats: this.state.sessionStats,
-        workspaceConfig: this.state.workspaceConfig,
-      };
-
-      this.setState(newState);
-      return;
+    const previousToolCallIds = new Set(this.state.toolCalls.map((toolCall) => toolCall.id));
+    const newToolCallIds = newLiveRun.toolCalls
+      .filter((toolCall) => !previousToolCallIds.has(toolCall.id))
+      .map((toolCall) => toolCall.id);
+    let stateWithNewToolCalls: TuiAppState = this.state;
+    for (const toolCallId of newToolCallIds) {
+      stateWithNewToolCalls = insertToolCallIntoLastMessage(
+        stateWithNewToolCalls,
+        toolCallId,
+      ) as TuiAppState;
     }
 
     // Detect run completion and accumulate stats
@@ -201,7 +195,7 @@ class StateStore {
 
     // Merge back with TUI-specific fields
     const newState: TuiAppState = {
-      ...this.state,
+      ...stateWithNewToolCalls,
       ...newLiveRun,
       sessionStats: newSessionStats,
     };
@@ -279,6 +273,54 @@ class StateStore {
   setThreadId(threadId: string | null): void {
     const newState = setThreadId(this.state, threadId);
     this.setState(newState as TuiAppState);
+  }
+
+  /**
+   * Clear chat messages while preserving the current session.
+   */
+  clearMessages(): void {
+    const newState = clearMessages(this.state);
+    this.setState(newState as TuiAppState, true);
+  }
+
+  /**
+   * Start a fresh session with a known thread id.
+   */
+  startNewSession(threadId: string): void {
+    this.setState({
+      ...createInitialTuiState(),
+      workspaceConfig: this.state.workspaceConfig,
+      sessionStats: createInitialSessionUsage(),
+      connectionStatus: this.state.connectionStatus,
+      threadId,
+    }, true);
+  }
+
+  /**
+   * Replace visible state with a server-authoritative session conversation.
+   */
+  restoreSession(input: {
+    threadId: string;
+    messages: DisplayMessage[];
+    toolCalls?: LiveToolCallRecord[] | undefined;
+  }): void {
+    const initial = createInitialTuiState();
+    this.setState({
+      ...this.state,
+      plan: initial.plan,
+      events: initial.events,
+      artifacts: initial.artifacts,
+      audits: initial.audits,
+      runStatus: initial.runStatus,
+      errorMessage: undefined,
+      toolCalls: input.toolCalls ?? [],
+      runStartedAt: undefined,
+      runFinishedAt: undefined,
+      tokenUsage: undefined,
+      messages: input.messages,
+      sessionStats: createInitialSessionUsage(),
+      threadId: input.threadId,
+    }, true);
   }
 
   /**

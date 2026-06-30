@@ -1,98 +1,84 @@
-import React, { useEffect, useRef } from 'react';
+import React from 'react';
 import { Box, Text } from 'ink';
-import type { DisplayMessage, DataArtifact, LiveToolCallRecord } from '../state/index.js';
-import { ArtifactCard } from './ArtifactCard.js';
-import { MessageBubble } from './MessageBubble.js';
-import { ToolCallsView } from './ToolCallsView.js';
+import type { DataArtifact, DisplayMessage, LiveToolCallRecord } from '../state/index.js';
+import {
+  buildChatLines,
+  chatContentWidth,
+  countChatLines,
+  type StartupInfo,
+} from './transcript-lines.js';
+
+export { chatContentWidth, countChatLines };
+export type { StartupInfo };
 
 interface ChatAreaProps {
   messages: DisplayMessage[];
   artifacts: DataArtifact[];
   toolCalls?: LiveToolCallRecord[];
-  autoScroll?: boolean;
   totalMessageCount?: number;
-  maxMessageContentLength?: number;
+  maxMessageContentLength?: number | undefined;
+  viewportRows?: number;
+  scrollbackRows?: number;
+  columns?: number;
+  startup?: StartupInfo | undefined;
 }
 
+/**
+ * Chat transcript viewport.
+ *
+ * The transcript is rendered into a flat list of single-row lines (see
+ * {@link buildChatLines}), then the visible window is an exact slice of that
+ * list. Because each line is pre-wrapped to the content width, Ink renders one
+ * terminal row per line and the row count is deterministic - so scrolling is a
+ * pure integer slice with no height estimation and no negative-margin cropping.
+ */
 export const ChatArea: React.FC<ChatAreaProps> = ({
   messages,
   artifacts,
   toolCalls = [],
-  autoScroll = true,
   totalMessageCount,
   maxMessageContentLength,
+  viewportRows,
+  scrollbackRows = 0,
+  columns = 100,
+  startup,
 }) => {
-  const messagesEndRef = useRef<boolean>(false);
+  const lines = buildChatLines({
+    messages,
+    artifacts,
+    toolCalls,
+    totalMessageCount,
+    maxMessageContentLength,
+    columns,
+    startup,
+  });
 
-  // Auto-scroll to bottom when new messages arrive
-  useEffect(() => {
-    if (autoScroll && messages.length > 0) {
-      messagesEndRef.current = true;
-    }
-  }, [messages.length, autoScroll]);
+  if (viewportRows === undefined) {
+    return (
+      <Box flexDirection="column">
+        {lines.map((line) => line.node)}
+      </Box>
+    );
+  }
 
-  // Get active tool calls (running status)
-  const activeToolCalls = toolCalls.filter(tc => tc.status === 'running');
-
-  // Get recent completed tool calls for the last message
-  const recentToolCalls = toolCalls
-    .filter(tc => tc.status !== 'running')
-    .slice(-5); // Show last 5 completed tool calls
-  const messageCount = totalMessageCount ?? messages.length;
+  const viewport = Math.max(1, viewportRows);
+  const total = lines.length;
+  const maxScroll = Math.max(0, total - viewport);
+  const safeScroll = Math.max(0, Math.min(scrollbackRows, maxScroll));
+  const top = Math.max(0, total - viewport - safeScroll);
+  const visible = lines.slice(top, top + viewport);
+  // Keep the newest content pinned to the bottom of the viewport when the
+  // transcript is shorter than the available rows.
+  const padCount = Math.max(0, viewport - visible.length);
 
   return (
-    <Box flexDirection="column" flexGrow={1}>
-      {/* Title */}
-      <Box marginBottom={1}>
-        <Text bold color="cyan">Chat History</Text>
-        {messageCount > 0 && (
-          <Text dimColor> ({messageCount} messages)</Text>
-        )}
+    <Box flexDirection="column" flexGrow={1} overflowY="hidden">
+      <Box height={viewport} flexDirection="column" overflowY="hidden">
+        {Array.from({ length: padCount }, (_, index) => (
+          <Text key={`pad:${index}`}> </Text>
+        ))}
+        {visible.map((line) => line.node)}
       </Box>
-
-      {/* Message list */}
-      <Box flexDirection="column" flexGrow={1}>
-        {messages.length === 0 && messageCount === 0 ? (
-          <Box flexDirection="column" paddingY={2}>
-            <Text dimColor>No messages yet. Start typing to begin...</Text>
-            <Text dimColor>Type your question and press Enter to send.</Text>
-          </Box>
-        ) : messages.length === 0 ? (
-          <Box />
-        ) : (
-          <>
-            {messages.map((message, index) => {
-              return (
-                <Box key={message.id} flexDirection="column" marginBottom={1}>
-                  <MessageBubble
-                    message={message}
-                    maxContentLength={maxMessageContentLength}
-                    allToolCalls={toolCalls}
-                  />
-                </Box>
-              );
-            })}
-          </>
-        )}
-      </Box>
-
-      {/* Artifacts section */}
-      {artifacts.length > 0 && (
-        <Box flexDirection="column" marginTop={1} paddingTop={1} borderStyle="single" borderTop>
-          <Box marginBottom={1}>
-            <Text bold color="magenta">Artifacts</Text>
-            <Text dimColor> ({artifacts.length})</Text>
-          </Box>
-          <Box flexDirection="column">
-            {artifacts.slice(-3).map((artifact) => (
-              <ArtifactCard key={artifact.id} artifact={artifact} />
-            ))}
-            {artifacts.length > 3 && (
-              <Text dimColor>... and {artifacts.length - 3} more</Text>
-            )}
-          </Box>
-        </Box>
-      )}
     </Box>
   );
 };

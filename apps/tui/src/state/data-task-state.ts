@@ -3,8 +3,14 @@ import {
   RIGHT_PANEL_DEFAULT_WIDTH,
 } from "./workspace-layout.js";
 
-export type ArtifactKind = "chart" | "csv" | "memo" | "dashboard";
-export type DataArtifactType = "dataset" | "chart" | "sql" | "report";
+export type ArtifactKind = "chart" | "csv" | "memo" | "dashboard" | "file";
+export type DataArtifactType = "dataset" | "chart" | "sql" | "report" | "file";
+export type ChartArtifactType = "bar" | "line" | "pie";
+export type ChartArtifactPoint = { label: string; value: number };
+export type ChartArtifactSeries = {
+  name: string;
+  points: ChartArtifactPoint[];
+};
 
 /**
  * Tool-agnostic data step kinds. The console is organized around the data-task
@@ -74,12 +80,22 @@ export type ArtifactDetail =
     }
   | {
       type: "chart";
-      unit: string;
-      points: Array<{ label: string; value: number }>;
+      chartType?: ChartArtifactType | undefined;
+      unit?: string | undefined;
+      points: ChartArtifactPoint[];
+      series?: ChartArtifactSeries[] | undefined;
     }
   | {
       type: "report";
       sections: Array<{ heading: string; body: string }>;
+    }
+  | {
+      type: "file";
+      path: string;
+      size?: number | undefined;
+      mtime?: string | undefined;
+      tool?: string | undefined;
+      content?: string | undefined;
     };
 
 export interface DataArtifact {
@@ -89,8 +105,14 @@ export interface DataArtifact {
   type?: DataArtifactType | undefined;
   summary: string;
   version?: string | undefined;
+  /** FileAssetRef id behind file-backed artifacts, when the backend provides one. */
+  fileId?: string | undefined;
+  /** Backend download URL for file-backed artifacts, when available. */
+  downloadUrl?: string | undefined;
   createdByEventId?: string | undefined;
   detail?: ArtifactDetail | undefined;
+  /** When true, full preview can be fetched via artifact REST API. */
+  previewAvailable?: boolean | undefined;
   /** Milliseconds since epoch when the artifact event was received. */
   recordedAtMs?: number | undefined;
 }

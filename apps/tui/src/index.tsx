@@ -2,10 +2,12 @@
 import { render } from "ink";
 import { randomUUID } from "node:crypto";
 import React from "react";
+import { ConfigClient } from "./config/index.js";
 import { CopilotKitClient } from "./protocol/copilotkit-client.js";
 import { DemoCopilotKitClient } from "./protocol/demo-client.js";
 import { seedDemoState } from "./state/demo-state.js";
 import { store } from "./state/store.js";
+import { withAlternateScreen } from "./terminal-screen.js";
 import { App } from "./ui/App.js";
 
 const args = process.argv.slice(2);
@@ -24,6 +26,7 @@ Options:
                           (default: api-duckdb-demo)
   --agent <name>          Agent name
                           (default: dataAgent)
+  --resume [sessionId]    Resume the latest server session, or a specific session
   --demo                  Show mock messages and use a local mock stream
   --help, -h              Show this help message
 
@@ -31,6 +34,8 @@ Examples:
   dataagent-tui
   dataagent-tui --runtime-url http://localhost:8787/api/copilotkit
   dataagent-tui --datasource-id my-database
+  dataagent-tui --resume
+  dataagent-tui --resume thread-001
   dataagent-tui --demo
 `);
   process.exit(0);
@@ -44,6 +49,34 @@ function getArg(name: string, defaultValue: string): string {
   return defaultValue;
 }
 
+function getOptionalArg(name: string): string | undefined {
+  const index = args.indexOf(name);
+  if (index === -1 || index + 1 >= args.length) {
+    return undefined;
+  }
+  const next = args[index + 1];
+  return next && !next.startsWith("-") ? next : undefined;
+}
+
+function resolveResumeRequest(): { enabled: boolean; sessionId?: string | undefined } | undefined {
+  if (args.includes("--resume")) {
+    return {
+      enabled: true,
+      ...(getOptionalArg("--resume") ? { sessionId: getOptionalArg("--resume") } : {}),
+    };
+  }
+  const explicit = getOptionalArg("--resume-session");
+  return explicit ? { enabled: true, sessionId: explicit } : undefined;
+}
+
+function configBaseUrlFromRuntime(runtimeUrl: string): string {
+  const apiIndex = runtimeUrl.indexOf("/api/");
+  if (apiIndex >= 0) {
+    return runtimeUrl.slice(0, apiIndex);
+  }
+  return runtimeUrl.replace(/\/$/, "");
+}
+
 const runtimeUrl = getArg(
   "--runtime-url",
   "http://127.0.0.1:8787/api/copilotkit"
@@ -51,6 +84,12 @@ const runtimeUrl = getArg(
 const datasourceId = getArg("--datasource-id", "api-duckdb-demo");
 const agent = getArg("--agent", "dataAgent");
 const demoMode = args.includes("--demo");
+const initialResume = resolveResumeRequest();
+const configClient = demoMode
+  ? undefined
+  : new ConfigClient({
+      baseUrl: configBaseUrlFromRuntime(runtimeUrl),
+    });
 
 const client = demoMode
   ? new DemoCopilotKitClient()
@@ -62,20 +101,33 @@ const client = demoMode
       },
     });
 
-try {
-  store.setConnectionStatus(demoMode ? "connected" : "disconnected");
-  store.setThreadId(randomUUID());
-  if (demoMode) {
-    seedDemoState(datasourceId);
-  }
-
-  render(
-    React.createElement(App, {
-      client,
-      datasourceId,
-    }),
-  );
-} catch (error) {
-  console.error("Failed to start TUI:", error);
-  process.exit(1);
+function createAppElement(): React.ReactElement {
+  return React.createElement(App, {
+    client,
+    datasourceId,
+    ...(configClient ? { configClient } : {}),
+    ...(initialResume ? { initialResume } : {}),
+  });
 }
+
+async function main(): Promise<void> {
+  try {
+    store.setConnectionStatus(demoMode ? "connected" : "disconnected");
+    if (!initialResume?.enabled) {
+      store.setThreadId(randomUUID());
+    }
+    if (demoMode) {
+      seedDemoState(datasourceId);
+    }
+
+    await withAlternateScreen(async () => {
+      const instance = render(createAppElement());
+      await instance.waitUntilExit();
+    });
+  } catch (error) {
+    console.error("Failed to start TUI:", error);
+    process.exitCode = 1;
+  }
+}
+
+await main();

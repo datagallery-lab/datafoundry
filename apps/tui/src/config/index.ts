@@ -19,4 +19,12 @@ export type {
   WorkspaceConfig,
   RunDefaults,
   Capabilities,
+  SessionListItem,
+  SessionListResponse,
+  ConversationMessage,
+  ConversationSummary,
+  ConversationRunEventRef,
+  ConversationToolCall,
+  SessionConversation,
+  SessionTitle,
 } from "./config-client.js";

@@ -56,6 +56,16 @@ export {
   getMessageTextContent,
 } from "./message-history.js";
 
+export {
+  restoreSessionConversation,
+  conversationToDisplayMessages,
+  conversationToToolCalls,
+} from "./session-restore.js";
+
+export type {
+  RestoredSessionConversation,
+} from "./session-restore.js";
+
 // Re-export data-task-state types
 export type {
   DataArtifact,

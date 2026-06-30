@@ -309,6 +309,85 @@ const CapabilitiesSchema = z.object({
     .optional(),
 });
 
+// ==================== Session Schemas ====================
+
+const SessionListItemSchema = z.object({
+  id: z.string(),
+  threadId: z.string(),
+  title: z.string().optional(),
+  titleSource: z.string().optional(),
+  createdAt: z.string().optional(),
+  updatedAt: z.string().optional(),
+  lastMessageAt: z.string().optional(),
+});
+
+const SessionListResponseSchema = z.object({
+  sessions: z.array(SessionListItemSchema),
+  nextCursor: z.string().optional(),
+});
+
+const ConversationMessageSchema = z.object({
+  id: z.string(),
+  runId: z.string(),
+  role: z.enum(["assistant", "user"]),
+  source: z.enum(["agent", "client"]),
+  messageId: z.string().optional(),
+  contentText: z.string(),
+  position: z.number(),
+  createdAt: z.string(),
+});
+
+const ConversationSummarySchema = z.object({
+  id: z.string(),
+  sourceRunId: z.string().optional(),
+  fromPosition: z.number(),
+  toPosition: z.number(),
+  summaryText: z.string(),
+  createdAt: z.string(),
+});
+
+const ConversationRunEventRefSchema = z.object({
+  runId: z.string(),
+  eventCount: z.number(),
+  firstSeq: z.number().optional(),
+  lastSeq: z.number().optional(),
+});
+
+const ConversationToolCallSchema = z.object({
+  runId: z.string(),
+  id: z.string().optional(),
+  toolCallId: z.string(),
+  status: z.enum(["completed", "failed", "pending"]),
+  name: z.string().optional(),
+  toolName: z.string().optional(),
+  args: z.unknown().optional(),
+  result: z.unknown().optional(),
+  callEventSeq: z.number().optional(),
+  endEventSeq: z.number().optional(),
+  resultEventSeq: z.number().optional(),
+  parentMessageId: z.string().optional(),
+  resultMessageId: z.string().optional(),
+  resultPreview: z.string().optional(),
+});
+
+const SessionConversationSchema = z.object({
+  sessionId: z.string(),
+  title: z.string().optional(),
+  titleSource: z.string().optional(),
+  updatedAt: z.string().optional(),
+  messages: z.array(ConversationMessageSchema),
+  summary: ConversationSummarySchema.optional(),
+  runEventRefs: z.array(ConversationRunEventRefSchema),
+  toolCalls: z.array(ConversationToolCallSchema),
+});
+
+const SessionTitleSchema = z.object({
+  sessionId: z.string(),
+  title: z.string(),
+  titleSource: z.string().optional(),
+  updatedAt: z.string().optional(),
+});
+
 // ==================== Type Exports ====================
 
 export type Datasource = z.infer<typeof DatasourceSchema>;
@@ -334,6 +413,14 @@ export type KnowledgeSearchResult = z.infer<typeof KnowledgeSearchResultSchema>;
 export type WorkspaceConfig = z.infer<typeof WorkspaceConfigSchema>;
 export type RunDefaults = z.infer<typeof RunDefaultsSchema>;
 export type Capabilities = z.infer<typeof CapabilitiesSchema>;
+export type SessionListItem = z.infer<typeof SessionListItemSchema>;
+export type SessionListResponse = z.infer<typeof SessionListResponseSchema>;
+export type ConversationMessage = z.infer<typeof ConversationMessageSchema>;
+export type ConversationSummary = z.infer<typeof ConversationSummarySchema>;
+export type ConversationRunEventRef = z.infer<typeof ConversationRunEventRefSchema>;
+export type ConversationToolCall = z.infer<typeof ConversationToolCallSchema>;
+export type SessionConversation = z.infer<typeof SessionConversationSchema>;
+export type SessionTitle = z.infer<typeof SessionTitleSchema>;
 
 // ==================== Client Configuration ====================
 
@@ -571,6 +658,40 @@ export class ConfigClient {
       `/api/v1/datasources/${id}/schema`,
       {
         schema: DatasourceSchemaResponseSchema,
+      }
+    );
+  }
+
+  // ==================== Session Methods ====================
+
+  async listSessions(options: { limit?: number; cursor?: string } = {}): Promise<SessionListResponse> {
+    return this.request<SessionListResponse>("GET", "/api/v1/sessions", {
+      params: {
+        ...(options.limit !== undefined ? { limit: options.limit } : {}),
+        ...(options.cursor ? { cursor: options.cursor } : {}),
+      },
+      schema: SessionListResponseSchema,
+    });
+  }
+
+  async getSessionConversation(sessionId: string, limit = 80): Promise<SessionConversation> {
+    return this.request<SessionConversation>(
+      "GET",
+      `/api/v1/sessions/${encodeURIComponent(sessionId)}/conversation`,
+      {
+        params: { limit },
+        schema: SessionConversationSchema,
+      }
+    );
+  }
+
+  async patchSessionTitle(sessionId: string, title: string): Promise<SessionTitle> {
+    return this.request<SessionTitle>(
+      "PATCH",
+      `/api/v1/sessions/${encodeURIComponent(sessionId)}`,
+      {
+        body: { title },
+        schema: SessionTitleSchema,
       }
     );
   }

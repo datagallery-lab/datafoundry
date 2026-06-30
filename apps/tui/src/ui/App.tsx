@@ -1,26 +1,52 @@
-import React, { useState, useEffect } from 'react';
-import { Box, Text, useApp, useInput } from 'ink';
-import { Header } from './Header.js';
-import { ChatArea } from './ChatArea.js';
+import React, { useState, useEffect, useRef } from 'react';
+import { Box, Text, useApp, useInput, useStdin, useStdout } from 'ink';
+import { randomUUID } from 'node:crypto';
+import { StatusFooter } from './Header.js';
+import { ChatArea, countChatLines } from './ChatArea.js';
+import { OutputsView } from './OutputsView.js';
 import { ActivityPanel } from './ActivityPanel.js';
 import { InputBox } from './InputBox.js';
+import { WorkspaceFrame, chatViewportRows } from './workspace-layout.js';
 import { KeybindingsHelp } from './KeybindingsHelp.js';
+import { SessionPicker } from './SessionPicker.js';
 import { getStatusBarShortcuts } from './keybindings.js';
 import { AssistantTextStreamBuffer, type AssistantTextFlush } from './assistant-stream-buffer.js';
-import { store, type TuiAppState } from '../state/index.js';
+import { wheelScrollDelta } from '../input/mouse-wheel.js';
+import {
+  restoreSessionConversation,
+  store,
+  type TuiAppState,
+} from '../state/index.js';
 import { getMessageTextContent } from '../state/message-history.js';
 import type { AgentClient, AgentMessage, RunAgentInput } from '../protocol/types.js';
 import { classifyError, formatErrorMessage, errorLogger } from '../protocol/error-handler.js';
 import { commandProcessor } from '../commands/index.js';
 import type { CommandContext } from '../commands/types.js';
+import { ConfigClientError, type ConfigClient, type SessionListItem } from '../config/index.js';
 
 interface AppProps {
   client: AgentClient;
+  configClient?: ConfigClient | undefined;
   datasourceId: string | undefined;
+  initialResume?: {
+    enabled: boolean;
+    sessionId?: string | undefined;
+  } | undefined;
 }
 
-type TabType = 'chat' | 'stats' | 'config';
-const MAX_VISIBLE_CHAT_MESSAGES = 40;
+type TabType = 'chat' | 'stats' | 'config' | 'outputs';
+type CommandNotice = {
+  message: string;
+  kind: 'info' | 'error';
+};
+
+const createThreadId = (): string => {
+  try {
+    return randomUUID();
+  } catch {
+    return `thread-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  }
+};
 
 const formatDirectory = (directory: string): string => {
   const homeDirectory = process.env.HOME;
@@ -44,12 +70,71 @@ const resolveModelName = (state: TuiAppState): string => {
   return modelName || model?.name || 'server default';
 };
 
-export const App: React.FC<AppProps> = ({ client, datasourceId }) => {
+const formatSessionApiError = (error: unknown): string => {
+  if (
+    error instanceof ConfigClientError &&
+    error.statusCode === 404 &&
+    error.message.includes('Unknown API resource: sessions')
+  ) {
+    return 'The connected API process does not support /api/v1/sessions. Rebuild/restart the API server, then retry /resume.';
+  }
+  return error instanceof Error ? error.message : String(error);
+};
+
+export const App: React.FC<AppProps> = ({
+  client,
+  configClient,
+  datasourceId,
+  initialResume,
+}) => {
   const { exit } = useApp();
+  const { stdin } = useStdin();
+  const { stdout } = useStdout();
   const [state, setState] = useState<TuiAppState>(store.getState());
   const [activeTab, setActiveTab] = useState<TabType>('chat');
   const [inputFocused, setInputFocused] = useState(false);
+  const [commandNotice, setCommandNotice] = useState<CommandNotice | null>(null);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [pickerSessions, setPickerSessions] = useState<SessionListItem[]>([]);
+  const [pickerLoading, setPickerLoading] = useState(false);
+  const [pickerError, setPickerError] = useState<string | undefined>(undefined);
   const [retryCount, setRetryCount] = useState(0);
+  const [chatScrollbackRows, setChatScrollbackRows] = useState(0);
+  const startupResumeAttempted = useRef(false);
+  const terminalRows = stdout.rows ?? 40;
+  const terminalColumns = stdout.columns ?? 100;
+  const modelName = resolveModelName(state);
+  const directory = formatDirectory(process.env.PWD || process.cwd());
+  const startup = {
+    threadId: state.threadId,
+    connectionStatus: state.connectionStatus,
+    runStatus: state.runStatus,
+    modelName,
+    directory,
+  };
+  const visibleMessages = state.messages;
+  const chatViewportRowCount = chatViewportRows(terminalRows, {
+    commandNotice: Boolean(commandNotice),
+    activeTab,
+  });
+  const chatContentRows = countChatLines({
+    messages: visibleMessages,
+    artifacts: state.artifacts,
+    toolCalls: state.toolCalls,
+    totalMessageCount: state.messages.length,
+    columns: terminalColumns,
+    startup,
+  });
+  const maxChatScrollbackRows = Math.max(0, chatContentRows - chatViewportRowCount);
+
+  const clampChatScrollback = (value: number): number => {
+    return Math.max(0, Math.min(maxChatScrollbackRows, value));
+  };
+
+  const scrollChatBy = (delta: number): void => {
+    if (activeTab !== 'chat' || delta === 0) return;
+    setChatScrollbackRows((current) => clampChatScrollback(current + delta));
+  };
 
   // Subscribe to state changes
   useEffect(() => {
@@ -58,6 +143,24 @@ export const App: React.FC<AppProps> = ({ client, datasourceId }) => {
     });
     return unsubscribe;
   }, []);
+
+  useEffect(() => {
+    setChatScrollbackRows((current) => Math.max(0, Math.min(maxChatScrollbackRows, current)));
+  }, [maxChatScrollbackRows]);
+
+  useEffect(() => {
+    const onData = (chunk: Buffer | string) => {
+      const delta = wheelScrollDelta(chunk.toString());
+      if (delta !== 0) {
+        scrollChatBy(delta);
+      }
+    };
+
+    stdin.prependListener('data', onData);
+    return () => {
+      stdin.off('data', onData);
+    };
+  }, [stdin, activeTab, maxChatScrollbackRows]);
 
   // Initialize connection monitoring if client supports it
   useEffect(() => {
@@ -72,54 +175,144 @@ export const App: React.FC<AppProps> = ({ client, datasourceId }) => {
     };
   }, [client]);
 
-  // Handle global keyboard shortcuts
-  useInput((input, key) => {
-    // Ignore input when typing in the input box
-    if (inputFocused) return;
+  useEffect(() => {
+    if (!initialResume?.enabled || startupResumeAttempted.current) return;
+    if (state.connectionStatus !== 'connected') return;
+    startupResumeAttempted.current = true;
+    void restoreHistoricalSession(initialResume.sessionId, true);
+  }, [initialResume?.enabled, initialResume?.sessionId, state.connectionStatus]);
 
-    // Ctrl+L - Clear screen (reset chat messages)
-    if (key.ctrl && input === 'l') {
-      // Clear messages but keep thread and session
-      const currentState = store.getState();
-      store.reset();
-      if (currentState.threadId) {
-        store.setThreadId(currentState.threadId);
-      }
+  async function restoreHistoricalSession(
+    requestedSessionId?: string | undefined,
+    startup = false,
+  ): Promise<void> {
+    if (store.getState().runStatus === 'running') {
+      setCommandNotice({
+        kind: 'error',
+        message: 'Cannot resume another session while a run is active.',
+      });
       return;
     }
 
-    // Ctrl+T - Toggle tab (cycle through tabs)
-    if (key.ctrl && input === 't') {
-      const tabs: TabType[] = ['chat', 'stats', 'config'];
-      const currentIndex = tabs.indexOf(activeTab);
-      const nextIndex = (currentIndex + 1) % tabs.length;
-      setActiveTab(tabs[nextIndex]);
+    if (!configClient) {
+      setCommandNotice({
+        kind: 'error',
+        message: 'Session resume requires a live backend; it is not available in demo mode.',
+      });
+      return;
+    }
+
+    setCommandNotice({
+      kind: 'info',
+      message: requestedSessionId
+        ? `Loading session ${requestedSessionId}...`
+        : 'Loading latest session...',
+    });
+
+    try {
+      let sessionId = requestedSessionId;
+      if (!sessionId) {
+        const response = await configClient.listSessions({ limit: 1 });
+        sessionId = response.sessions[0]?.threadId ?? response.sessions[0]?.id;
+        if (!sessionId) {
+          setCommandNotice({
+            kind: startup ? 'info' : 'error',
+            message: 'No server sessions found.',
+          });
+          return;
+        }
+      }
+
+      const conversation = await configClient.getSessionConversation(sessionId);
+      const restored = restoreSessionConversation(conversation);
+      store.restoreSession(restored);
+      setActiveTab('chat');
+      setChatScrollbackRows(0);
+      setCommandNotice({
+        kind: 'info',
+        message: `Resumed session ${restored.title ? `"${restored.title}" ` : ''}(${restored.threadId}).`,
+      });
+    } catch (error) {
+      setCommandNotice({
+        kind: 'error',
+        message: `Resume failed: ${formatSessionApiError(error)}`,
+      });
+    }
+  }
+
+  async function openSessionPicker(): Promise<void> {
+    if (store.getState().runStatus === 'running') {
+      setCommandNotice({
+        kind: 'error',
+        message: 'Cannot resume another session while a run is active.',
+      });
+      return;
+    }
+
+    if (!configClient) {
+      setCommandNotice({
+        kind: 'error',
+        message: 'Session resume requires a live backend; it is not available in demo mode.',
+      });
+      return;
+    }
+
+    setCommandNotice(null);
+    setPickerOpen(true);
+    setPickerLoading(true);
+    setPickerError(undefined);
+    setPickerSessions([]);
+
+    try {
+      const response = await configClient.listSessions({ limit: 50 });
+      setPickerSessions(response.sessions);
+    } catch (error) {
+      setPickerError(formatSessionApiError(error));
+    } finally {
+      setPickerLoading(false);
+    }
+  }
+
+  // Handle global keyboard shortcuts
+  useInput((input, key) => {
+    // Ignore input when typing in the input box
+    if (pickerOpen || inputFocused) return;
+
+    if (activeTab === 'chat' && key.pageUp) {
+      scrollChatBy(Math.max(3, Math.floor(chatViewportRowCount * 0.8)));
+      return;
+    }
+
+    if (activeTab === 'chat' && key.pageDown) {
+      scrollChatBy(-Math.max(3, Math.floor(chatViewportRowCount * 0.8)));
+      return;
+    }
+
+    if (activeTab === 'chat' && key.home) {
+      setChatScrollbackRows(maxChatScrollbackRows);
+      return;
+    }
+
+    if (activeTab === 'chat' && key.end) {
+      setChatScrollbackRows(0);
+      return;
+    }
+
+    // Ctrl+L - Clear screen (reset chat messages)
+    if (key.ctrl && input === 'l') {
+      store.clearMessages();
+      setChatScrollbackRows(0);
       return;
     }
 
     // Ctrl+N - New session (reset and create new thread)
     if (key.ctrl && input === 'n') {
-      store.reset();
-      const newThreadId = `thread-${Date.now()}`;
-      store.setThreadId(newThreadId);
+      store.startNewSession(createThreadId());
       setActiveTab('chat');
+      setChatScrollbackRows(0);
       return;
     }
 
-    // Tab navigation shortcuts
-    if (key.tab) {
-      // Cycle through tabs
-      const tabs: TabType[] = ['chat', 'stats', 'config'];
-      const currentIndex = tabs.indexOf(activeTab);
-      const nextIndex = (currentIndex + 1) % tabs.length;
-      setActiveTab(tabs[nextIndex]);
-    } else if (input === '1') {
-      setActiveTab('chat');
-    } else if (input === '2') {
-      setActiveTab('stats');
-    } else if (input === '3') {
-      setActiveTab('config');
-    }
   });
 
   // Handle user input submission
@@ -141,9 +334,8 @@ export const App: React.FC<AppProps> = ({ client, datasourceId }) => {
 
   // Handle command execution
   const handleCommandExecution = async (input: string) => {
-    // Add user message to chat history
-    store.addUserMessage(input);
     store.clearInputBuffer();
+    setCommandNotice(null);
 
     try {
       // Prepare command context
@@ -164,41 +356,59 @@ export const App: React.FC<AppProps> = ({ client, datasourceId }) => {
       if (result.success) {
         // Check for special actions
         if (result.data && typeof result.data === 'object') {
-          const action = (result.data as { action?: string }).action;
+          const commandData = result.data as { action?: string; tab?: unknown; sessionId?: unknown };
+          const action = commandData.action;
 
           if (action === 'clear_history') {
-            // Clear messages but keep thread
-            store.getState().messages = [];
-            setState(store.getState());
+            store.clearMessages();
+            setChatScrollbackRows(0);
           } else if (action === 'reset_session') {
-            // Reset entire session
-            store.setThreadId(null);
-            store.getState().messages = [];
-            setState(store.getState());
+            store.startNewSession(createThreadId());
+            setActiveTab('chat');
+            setChatScrollbackRows(0);
           } else if (action === 'exit_application') {
-            store.addAssistantMessage(result.message, false);
             if ('dispose' in client && typeof client.dispose === 'function') {
               client.dispose();
             }
             exit();
             return;
+          } else if (action === 'switch_tab') {
+            const tab = commandData.tab;
+            if (tab === 'chat' || tab === 'stats' || tab === 'config' || tab === 'outputs') {
+              setActiveTab(tab);
+            }
+          } else if (action === 'resume_session') {
+            const sessionId = typeof commandData.sessionId === 'string'
+              ? commandData.sessionId
+              : undefined;
+            await restoreHistoricalSession(sessionId);
+            return;
+          } else if (action === 'open_picker' || action === 'list_sessions') {
+            await openSessionPicker();
+            return;
           }
         }
 
-        // Add command result as system message
-        store.addAssistantMessage(result.message, false);
+        setCommandNotice({ message: result.message, kind: 'info' });
       } else {
-        // Add error message
-        store.addAssistantMessage(`Command error: ${result.message}`, false);
+        setCommandNotice({
+          message: `Command error: ${result.message}`,
+          kind: 'error',
+        });
       }
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
-      store.addAssistantMessage(`Command execution failed: ${errorMessage}`, false);
+      setCommandNotice({
+        message: `Command execution failed: ${errorMessage}`,
+        kind: 'error',
+      });
     }
   };
 
   // Handle agent query execution
   const handleAgentQuery = async (input: string) => {
+    setCommandNotice(null);
+    setChatScrollbackRows(0);
     // Add user message to chat history
     store.addUserMessage(input);
     store.clearInputBuffer();
@@ -206,7 +416,7 @@ export const App: React.FC<AppProps> = ({ client, datasourceId }) => {
     // Prepare stable run input material. Retry attempts should not append
     // duplicate chat messages or send retry UI text back as model history.
     const currentState = store.getState();
-    const threadId = currentState.threadId || `thread-${Date.now()}`;
+    const threadId = currentState.threadId || createThreadId();
     if (!currentState.threadId) {
       store.setThreadId(threadId);
     }
@@ -422,12 +632,7 @@ export const App: React.FC<AppProps> = ({ client, datasourceId }) => {
   };
 
   const { chatWidth, panelWidth } = getContentWidth();
-  const visibleMessages = state.messages.slice(-MAX_VISIBLE_CHAT_MESSAGES);
-  const visibleArtifacts = state.runStatus === 'running'
-    ? []
-    : state.artifacts.slice(-3);
-  const modelName = resolveModelName(state);
-  const directory = formatDirectory(process.env.PWD || process.cwd());
+  const visibleArtifacts = state.artifacts;
   const liveActivity = state.runStatus === 'running'
     ? {
         plan: state.plan,
@@ -443,14 +648,15 @@ export const App: React.FC<AppProps> = ({ client, datasourceId }) => {
 
   // Render tab navigation
   const renderTabs = () => {
-    const tabs: Array<{ key: TabType; label: string; shortcut: string }> = [
-      { key: 'chat', label: 'Chat', shortcut: '1' },
-      { key: 'stats', label: 'Stats', shortcut: '2' },
-      { key: 'config', label: 'Config', shortcut: '3' },
+    const tabs: Array<{ key: TabType; label: string }> = [
+      { key: 'chat', label: 'Chat' },
+      { key: 'stats', label: 'Stats' },
+      { key: 'config', label: 'Config' },
+      { key: 'outputs', label: 'Outputs' },
     ];
 
     return (
-      <Box marginBottom={1}>
+      <Box marginBottom={0}>
         {tabs.map((tab, index) => (
           <React.Fragment key={tab.key}>
             {index > 0 && <Text color="gray"> | </Text>}
@@ -459,7 +665,7 @@ export const App: React.FC<AppProps> = ({ client, datasourceId }) => {
               bold={activeTab === tab.key}
               dimColor={activeTab !== tab.key}
             >
-              [{tab.shortcut}] {tab.label}
+              {tab.label}
             </Text>
           </React.Fragment>
         ))}
@@ -550,77 +756,118 @@ export const App: React.FC<AppProps> = ({ client, datasourceId }) => {
   };
 
   return (
-    <Box flexDirection="column" height="100%">
-      {/* Header: Session info and status */}
-      <Header
-        threadId={state.threadId}
-        connectionStatus={state.connectionStatus}
-        runStatus={state.runStatus}
-        lastError={state.lastError}
-        modelName={modelName}
-        directory={directory}
-      />
+    <>
+      {pickerOpen ? (
+        <Box flexDirection="column">
+          <SessionPicker
+            sessions={pickerSessions}
+            loading={pickerLoading}
+            error={pickerError}
+            onSelect={(sessionId) => {
+              setPickerOpen(false);
+              void restoreHistoricalSession(sessionId);
+            }}
+            onCancel={() => {
+              setPickerOpen(false);
+            }}
+          />
+        </Box>
+      ) : (
+        <WorkspaceFrame
+          rows={terminalRows}
+          scrollable={
+            <Box flexDirection="row" flexGrow={1} overflowY="hidden">
+              {activeTab === 'chat' ? (
+                <>
+                  <Box
+                    flexDirection="column"
+                    width={showLiveActivity ? `${chatWidth}%` : '100%'}
+                    flexGrow={1}
+                    paddingX={1}
+                    overflowY="hidden"
+                  >
+                    <ChatArea
+                      messages={visibleMessages}
+                      artifacts={visibleArtifacts}
+                      totalMessageCount={state.messages.length}
+                      toolCalls={state.toolCalls}
+                      viewportRows={chatViewportRowCount}
+                      scrollbackRows={chatScrollbackRows}
+                      columns={terminalColumns}
+                      startup={startup}
+                    />
+                  </Box>
 
-      {/* Tab Navigation */}
-      <Box paddingX={1}>
-        {renderTabs()}
-      </Box>
-
-      {/* Main content area */}
-      <Box flexDirection="row" flexGrow={1}>
-        {activeTab === 'chat' ? (
-          <>
-            {/* Chat area: Message history (70% width) */}
-            <Box
-              flexDirection="column"
-              width={showLiveActivity ? `${chatWidth}%` : '100%'}
-              paddingX={1}
-            >
-              <ChatArea
-                messages={visibleMessages}
-                artifacts={visibleArtifacts}
-                totalMessageCount={state.messages.length}
-                toolCalls={state.toolCalls}
-              />
+                  {showLiveActivity && (
+                    <Box
+                      flexDirection="column"
+                      width={`${panelWidth}%`}
+                      borderStyle="single"
+                      borderColor="cyan"
+                      paddingX={1}
+                    >
+                      <ActivityPanel
+                        plan={liveActivity.plan}
+                        toolCalls={liveActivity.toolCalls}
+                        events={liveActivity.events}
+                      />
+                    </Box>
+                  )}
+                </>
+              ) : activeTab === 'stats' ? (
+                <Box flexDirection="column" flexGrow={1} overflowY="hidden">
+                  {renderStatsPanel()}
+                </Box>
+              ) : activeTab === 'config' ? (
+                <Box flexDirection="column" flexGrow={1} overflowY="hidden">
+                  {renderConfigPanel()}
+                </Box>
+              ) : (
+                <Box flexDirection="column" flexGrow={1} overflowY="hidden">
+                  <OutputsView
+                    artifacts={visibleArtifacts}
+                    events={state.events}
+                  />
+                </Box>
+              )}
             </Box>
+          }
+          bottom={
+            <>
+              {activeTab !== 'chat' && renderStatusBar()}
 
-            {/* Activity panel: Plan and tool call progress (30% width) */}
-            {showLiveActivity && (
-              <Box
-                flexDirection="column"
-                width={`${panelWidth}%`}
-                borderStyle="single"
-                borderColor="cyan"
-                paddingX={1}
-              >
-                <ActivityPanel
-                  plan={liveActivity.plan}
-                  toolCalls={liveActivity.toolCalls}
-                  events={liveActivity.events}
+              {commandNotice && (
+                <Box paddingX={1} flexShrink={0}>
+                  <Text color={commandNotice.kind === 'error' ? 'red' : 'cyan'}>
+                    {commandNotice.message}
+                  </Text>
+                </Box>
+              )}
+
+              {activeTab !== 'chat' && (
+                <Box paddingX={1}>
+                  {renderTabs()}
+                </Box>
+              )}
+
+              <InputBox
+                onChange={handleInputChange}
+                onSubmit={handleSubmit}
+                disabled={state.connectionStatus !== 'connected' || state.runStatus === 'running'}
+              />
+
+              {activeTab !== 'chat' && (
+                <StatusFooter
+                  connectionStatus={state.connectionStatus}
+                  runStatus={state.runStatus}
+                  modelName={modelName}
+                  directory={directory}
                 />
-              </Box>
-            )}
-          </>
-        ) : activeTab === 'stats' ? (
-          <Box flexDirection="column" flexGrow={1}>
-            {renderStatsPanel()}
-          </Box>
-        ) : (
-          <Box flexDirection="column" flexGrow={1}>
-            {renderConfigPanel()}
-          </Box>
-        )}
-      </Box>
-
-      {/* Status bar with keyboard shortcuts */}
-      {activeTab !== 'chat' && renderStatusBar()}
-
-      {/* Input box at the bottom */}
-      <InputBox
-        onChange={handleInputChange}
-        onSubmit={handleSubmit}
-        disabled={state.connectionStatus !== 'connected' || state.runStatus === 'running'}
-      />
-    </Box>
+              )}
+            </>
+          }
+        />
+      )}
+    </>
   );
 };
