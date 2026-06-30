@@ -13,6 +13,7 @@ import type {
   PerRunMentionKind,
   PerRunFileSelection,
   PerRunSelection,
+  SessionStartedHints,
   WorkspaceConfigItem,
 } from "../../data-task-state";
 import {
@@ -46,6 +47,7 @@ type DataTaskChatInputProps = CopilotChatInputProps & {
   onClearPerRunFileMentions: () => void;
   workspaceConfig: WorkspaceConfigStore;
   activeSession: ChatSession | null;
+  sessionStartedHints?: SessionStartedHints;
   onToggleSessionResource: (kind: PerRunMentionKind, id: string) => void;
   attachmentsApi: UseAttachmentsReturn;
 };
@@ -67,6 +69,7 @@ export function DataTaskChatInput({
   onClearPerRunFileMentions,
   workspaceConfig,
   activeSession,
+  sessionStartedHints,
   onToggleSessionResource,
   attachmentsApi,
   textArea,
@@ -118,6 +121,7 @@ export function DataTaskChatInput({
           onClearPerRunFileMentions={onClearPerRunFileMentions}
           workspaceConfig={workspaceConfig}
           activeSession={activeSession}
+          sessionStartedHints={sessionStartedHints}
           onToggleSessionResource={onToggleSessionResource}
           attachmentsApi={attachmentsApi}
         />
@@ -156,6 +160,7 @@ function DataTaskChatInputLayout({
   onClearPerRunFileMentions,
   workspaceConfig,
   activeSession,
+  sessionStartedHints,
   onToggleSessionResource,
   attachmentsApi,
 }: {
@@ -189,6 +194,7 @@ function DataTaskChatInputLayout({
   onClearPerRunFileMentions: () => void;
   workspaceConfig: WorkspaceConfigStore;
   activeSession: ChatSession | null;
+  sessionStartedHints?: SessionStartedHints;
   onToggleSessionResource: (kind: PerRunMentionKind, id: string) => void;
   attachmentsApi: UseAttachmentsReturn;
 }) {
@@ -265,7 +271,7 @@ function DataTaskChatInputLayout({
         >
           {attachmentsApi.dragOver && (
             <div className="pointer-events-none absolute inset-0 z-30 grid place-items-center rounded-2xl border-2 border-dashed border-primary bg-primary-light/10 text-sm font-medium text-primary">
-              拖拽文件到此处上传
+              Drop files here to upload
             </div>
           )}
           <div className="w-full px-3 py-1.5">
@@ -329,6 +335,7 @@ function DataTaskChatInputLayout({
             <SessionConfigBar
               workspaceConfig={workspaceConfig}
               session={activeSession}
+              sessionStartedHints={sessionStartedHints}
               onToggleSessionResource={onToggleSessionResource}
               leading={
                 <div className="flex items-center gap-1">
@@ -391,10 +398,10 @@ function ChatAddMenu({ actions }: { actions: ChatAddAction[] }) {
     <div ref={rootRef} className="relative">
       <button
         type="button"
-        aria-label="添加内容"
+        aria-label="Add content"
         aria-haspopup="menu"
         aria-expanded={open}
-        title="添加内容"
+        title="Add content"
         onClick={() => setOpen((value) => !value)}
         className="grid h-7 w-7 cursor-pointer place-items-center rounded-md text-muted transition-colors duration-200 hover:bg-surface-subtle hover:text-foreground"
       >
@@ -403,7 +410,7 @@ function ChatAddMenu({ actions }: { actions: ChatAddAction[] }) {
       {open && (
         <div
           role="menu"
-          aria-label="添加内容"
+          aria-label="Add content"
           className="absolute bottom-full left-0 z-50 mb-2 w-56 overflow-hidden rounded-xl border border-border bg-surface p-1 shadow-lg"
         >
           {actions.map((action) => (
@@ -451,7 +458,7 @@ function ChatModelPicker({
   const rootRef = useRef<HTMLDivElement>(null);
   const activeItem =
     llmOptions.find((item) => item.id === activeLlmId) ?? llmOptions[0] ?? null;
-  const label = activeItem ? getLlmDisplayLabel(activeItem) : "选择模型";
+  const label = activeItem ? getLlmDisplayLabel(activeItem) : "Select model";
 
   useEffect(() => {
     if (!open) return;
@@ -470,7 +477,7 @@ function ChatModelPicker({
         type="button"
         aria-haspopup="listbox"
         aria-expanded={open}
-        title="切换模型"
+        title="Switch model"
         onClick={() => setOpen((value) => !value)}
         className={[
           "chat-model-picker flex max-w-[168px] cursor-pointer items-center gap-0.5 px-1 py-1 text-xs font-medium transition-colors duration-200",
@@ -484,15 +491,15 @@ function ChatModelPicker({
       {open && (
         <div
           role="listbox"
-          aria-label="模型列表"
+          aria-label="Model list"
           className="absolute bottom-full right-0 z-50 mb-2 w-[min(280px,calc(100vw-2rem))] overflow-hidden rounded-xl border border-border bg-surface shadow-lg"
         >
           <div className="border-b border-border px-3 py-2 text-[11px] font-medium uppercase tracking-[0.06em] text-muted-light">
-            模型
+            Model
           </div>
           {llmOptions.length === 0 ? (
             <p className="px-3 py-4 text-sm text-muted-light">
-              请先在左侧配置中启用 LLM
+              Enable an LLM in the configuration panel first.
             </p>
           ) : (
             <ul className="max-h-64 overflow-y-auto py-1">
@@ -544,7 +551,7 @@ function ChatModelPicker({
                 }}
                 className="chat-model-picker-footer w-full cursor-pointer rounded-lg px-3 py-2 text-left text-xs font-medium text-foreground transition-colors duration-200 hover:bg-surface-subtle hover:text-primary"
               >
-                管理模型配置…
+                Manage model configuration...
               </button>
             </div>
           )}

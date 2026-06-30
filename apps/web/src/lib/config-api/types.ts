@@ -42,6 +42,7 @@ export type BackendCapabilitiesResponse = {
   "chat.imageInput"?: boolean;
   "conversation.memory"?: boolean;
   "conversation.title"?: boolean;
+  "interaction.resume"?: boolean;
   "datasource.fieldMasking"?: boolean;
   "datasource.extendedTypes"?: boolean;
   "datasource.introspectionPolicy"?: boolean;
@@ -272,6 +273,23 @@ export type ConversationToolCallDto = {
   resultPreview?: string;
 };
 
+export type RestorableCustomEventDto = {
+  runId: string;
+  seq: number;
+  name: string;
+  value: unknown;
+};
+
+export type PendingInteractionDto = {
+  interactionId: string;
+  runId: string;
+  toolCallId: string;
+  toolName: "ask_user" | "submit_plan";
+  interruptEvent?: unknown;
+  payload?: unknown;
+  resumeSchema?: unknown;
+};
+
 export type SessionConversationDto = {
   sessionId: string;
   title?: string;
@@ -281,6 +299,8 @@ export type SessionConversationDto = {
   summary?: ConversationSummaryDto;
   runEventRefs: ConversationRunEventRefDto[];
   toolCalls: ConversationToolCallDto[];
+  pendingInteractions?: PendingInteractionDto[];
+  restorableCustomEvents?: RestorableCustomEventDto[];
 };
 
 export type SessionListItemDto = {
@@ -356,6 +376,18 @@ export type DatasourceSchemaDto = {
   tables: DatasourceSchemaTableDto[];
   inspectedAt?: string;
   adapterSchemaVersion?: number;
+};
+
+export type DatasourceTablePreviewColumnDto = {
+  name: string;
+  type?: string;
+};
+
+export type DatasourceTablePreviewDto = {
+  columns: DatasourceTablePreviewColumnDto[];
+  rows: Array<Record<string, unknown>>;
+  total?: number;
+  hasMore?: boolean;
 };
 
 export type QueryHistoryItemDto = {

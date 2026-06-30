@@ -1,4 +1,105 @@
-export type SessionListIconSlot = "session" | "pin" | "none";
+import type { WorkspaceConfigStore } from "./data-task-state";
+import type { LiveRunStatus } from "./live-run-state";
+
+export type SessionListIconSlot = "session" | "running" | "pin" | "none";
+
+export function isSessionRunActive(status: LiveRunStatus): boolean {
+  return status === "running" || status === "suspended";
+}
+
+export type WorkspaceResourceNavAction =
+  | { type: "config"; panel: "db" | "kb" | "mcp" | "skill" | "llm" }
+  | { type: "assets" };
+
+export type WorkspaceResourceNavGroup = {
+  id: "data-sources" | "assets" | "knowledge" | "agent-tools" | "models";
+  title: string;
+  summary: string;
+  icon: "database" | "assets" | "book" | "tools" | "models";
+  action: WorkspaceResourceNavAction;
+  active: boolean;
+  statusLabel?: string;
+};
+
+export function getWorkspaceResourceNavGroups({
+  workspaceConfig,
+  workspaceFileCount,
+  activeConfigPanel,
+  activeFilesPanel,
+  capabilitiesReady,
+  supportsFiles,
+  supportsKnowledge,
+  supportsMcp,
+  supportsSkills,
+}: {
+  workspaceConfig: WorkspaceConfigStore;
+  workspaceFileCount: number;
+  activeConfigPanel: "db" | "kb" | "mcp" | "skill" | "llm" | null;
+  activeFilesPanel: boolean;
+  capabilitiesReady: boolean;
+  supportsFiles: boolean;
+  supportsKnowledge: boolean;
+  supportsMcp: boolean;
+  supportsSkills: boolean;
+}): WorkspaceResourceNavGroup[] {
+  const assetsUnsupported = capabilitiesReady && !supportsFiles;
+  const knowledgeUnsupported = capabilitiesReady && !supportsKnowledge;
+  const mcpUnsupported = capabilitiesReady && !supportsMcp;
+  const skillsUnsupported = capabilitiesReady && !supportsSkills;
+  const agentToolsStatus = mcpUnsupported
+    ? skillsUnsupported
+      ? "Backend unsupported"
+      : "MCP unsupported"
+    : skillsUnsupported
+      ? "Skills unsupported"
+      : undefined;
+
+  return [
+    {
+      id: "data-sources",
+      title: "Data Sources",
+      summary: String(workspaceConfig.db.length),
+      icon: "database",
+      action: { type: "config", panel: "db" },
+      active: activeConfigPanel === "db",
+    },
+    {
+      id: "knowledge",
+      title: "Knowledge",
+      summary: String(workspaceConfig.kb.length),
+      icon: "book",
+      action: { type: "config", panel: "kb" },
+      active: activeConfigPanel === "kb",
+      statusLabel: knowledgeUnsupported ? "Backend unsupported" : undefined,
+    },
+    {
+      id: "agent-tools",
+      title: "Agent Tools",
+      summary: `${workspaceConfig.mcp.length} · ${workspaceConfig.skill.length}`,
+      icon: "tools",
+      action: { type: "config", panel: "mcp" },
+      active: activeConfigPanel === "mcp" || activeConfigPanel === "skill",
+      statusLabel: agentToolsStatus,
+    },
+    {
+      id: "models",
+      title: "Models",
+      summary: String(workspaceConfig.llm.length),
+      icon: "models",
+      action: { type: "config", panel: "llm" },
+      active: activeConfigPanel === "llm",
+    },
+    {
+      id: "assets",
+      title: "Assets",
+      summary: String(workspaceFileCount),
+      icon: "assets",
+      action: { type: "assets" },
+      active: activeFilesPanel,
+      statusLabel: assetsUnsupported ? "Backend unsupported" : undefined,
+    },
+  ];
+}
 
 export function getCollapsedWorkspaceRailCopy() {
   return {
@@ -20,14 +121,16 @@ export function getCollapsedWorkspacePreviewClassNames() {
 
 export function getSessionListItemIconSlots({
   pinned,
+  running = false,
 }: {
   pinned: boolean;
+  running?: boolean;
 }): {
   leading: SessionListIconSlot;
   trailing: SessionListIconSlot;
 } {
   return {
-    leading: "session",
+    leading: running ? "running" : "session",
     trailing: pinned ? "pin" : "none",
   };
 }

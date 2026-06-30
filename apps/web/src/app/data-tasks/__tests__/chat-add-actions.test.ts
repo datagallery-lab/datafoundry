@@ -9,8 +9,8 @@ describe("chat add actions", () => {
     expect(actions).toHaveLength(1);
     expect(actions[0]).toMatchObject({
       id: "upload-file",
-      label: "上传文件",
-      description: "添加图片、表格或文档到本次对话",
+      label: "Upload file",
+      description: "Add an image, table, or document to this chat",
     });
 
     actions[0].run();

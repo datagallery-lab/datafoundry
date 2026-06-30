@@ -5,7 +5,9 @@ import {
   CopilotChatAssistantMessage,
   CopilotChatConfigurationProvider,
   CopilotChatInput,
+  CopilotChatReasoningMessage,
   CopilotChatToolCallsView,
+  CopilotChatUserMessage,
   CopilotKit,
   useAgent,
   useAgentContext,
@@ -15,7 +17,7 @@ import {
   useFrontendTool,
   useRenderTool,
 } from "@copilotkit/react-core/v2";
-import { useCallback, createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { Children, cloneElement, isValidElement, useCallback, createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
 import type { ComponentProps, ComponentType, MouseEvent, ReactNode } from "react";
 import { z } from "zod";
 import {
@@ -57,12 +59,10 @@ import {
   skillSettingsFromPackage,
   SKILL_PACKAGE_LOCAL_ONLY_KEYS,
   workspaceConfigItemDraftEquals,
-  summarizeConfigItems,
-  summarizeLlmItems,
-  summarizeMcpItems,
   togglePerRunFileMention,
   togglePerRunMention,
   toggleSessionResource,
+  isSessionResourceKindLocked,
   renderableConfigFields,
   resolveConfigFieldOptions,
   isFieldPending,
@@ -71,16 +71,19 @@ import {
   normalizeKbSettings,
   normalizeLlmSettingsExtended,
   visibleConfigFields,
-  WORKSPACE_CONFIG_BADGE_CLASS,
-  WORKSPACE_CONFIG_SHORT_LABEL,
 } from "./data-task-state";
 import { configApi } from "../../lib/config-api/client";
 import {
+  hasMeaningfulText,
+  isOrphanPreambleMergedIntoFollowingToolStep,
+  mergeMessagesForStepContext,
   messageTextContent,
-  resolveAssistantThoughtContent,
+  reasoningMessageAbsorbedByFollowingToolStep,
+  resolveToolStepThoughtContent,
 } from "./assistant-thought-content";
 import {
   isDisplayableToolName,
+  resolveCollaborationCompletedStepLabel,
   resolveCollaborationStepLabel,
   resolveStepBadgePresentation,
   resolveStepSummaryText,
@@ -93,7 +96,7 @@ import {
   type ConfigTestPresentation,
 } from "./config-test-result";
 import { useWorkspaceConfigApi } from "./hooks/use-workspace-config-api";
-import type { FileAssetRefDto, JobDto } from "../../lib/config-api";
+import type { DatasourceTypeDto, FileAssetRefDto, JobDto } from "../../lib/config-api";
 import type {
   CopilotChatAssistantMessageProps,
   JsonSerializable,
@@ -106,6 +109,7 @@ import type {
   ParsedSkillPackage,
   PerRunMentionKind,
   PerRunSelection,
+  SessionStartedHints,
   WorkspaceConfigItem,
   WorkspaceConfigKind,
   WorkspaceConfigStore,
@@ -114,7 +118,10 @@ import { TaskConsole } from "./components/task-console/TaskConsole";
 import { TaskConsoleDrawer } from "./components/task-console/TaskConsoleDrawer";
 import { TraceOverlay } from "./components/task-console/TraceOverlay";
 import { WorkspaceFileAssetsPanel } from "./components/task-console/WorkspaceFileAssetsPanel";
-import { SchemaBrowserPanel } from "./components/SchemaBrowserPanel";
+import { DatasourceSchemaPreviewPopover } from "./components/SchemaBrowserPanel";
+import { DatasourceExplorerPanel } from "./components/DatasourceExplorerPanel";
+import { DatasourceTypeGallery } from "./components/DatasourceTypeGallery";
+import { DatasourceTypeIcon } from "./components/DatasourceTypeIcon";
 import { DataTaskChatInput } from "./components/chat/DataTaskChatInput";
 import { createChatStopHandler } from "./components/chat/chat-stop-handler";
 import {
@@ -151,6 +158,19 @@ import {
   useLiveRun,
 } from "./use-data-agent-run";
 import type { LiveRun } from "./live-run-state";
+import {
+  buildProcessToolGroups,
+  processToolGroupsEqual,
+  type ProcessToolGroup,
+} from "./process-tool-groups";
+import {
+  buildCollapsedStepSummary,
+  buildToolChipSummaries,
+  stepElapsedLabel,
+  type StepToolStatus,
+  type StepToolSummaryInput,
+  type ToolChipSummary,
+} from "./step-tool-summary";
 import { ToolFormattedParams, ToolFormattedResult } from "./tool-result-format";
 import { normalizeSqlTable } from "./table-rows";
 import {
@@ -166,19 +186,30 @@ import { PanelResizeHandle } from "./components/layout/PanelResizeHandle";
 import {
   ChatInitializingState,
   DataTaskWelcomeScreen,
-  DatasourceChip,
 } from "./components/chat/DataTaskWelcome";
+import { SessionHeaderResourceChips } from "./components/chat/SessionResourceSummary";
 import { SessionConversationRestore } from "./components/chat/SessionConversationRestore";
 import { SessionArtifactsRestore } from "./components/chat/SessionArtifactsRestore";
 import { CollaborationInterruptHandler } from "./components/chat/CollaborationInterruptHandler";
+import { RestoredInterruptHandler } from "./components/chat/RestoredInterruptHandler";
+import { CollaborationPendingInterruptSlot } from "./components/chat/CollaborationPendingInterruptSlot";
+import { usePendingCollaborationInterrupt } from "./components/chat/pending-collaboration-interrupt";
 import {
+  CollaborationChoiceBubble,
   CollaborationResponseBridge,
   CollaborationResponsesProvider,
   useThreadCollaborationResponsesForChat,
 } from "./components/chat/collaboration-responses";
 import {
+  findPendingCollaborationToolCall,
+  messageHostsPendingCollaborationSlot,
+  shouldShowCollaborationRecapOnMessage,
+  shouldShowPendingInterruptOnMessage,
+} from "./collaboration-recap";
+import {
   AgentMessageRenderSync,
   useAgentMessageRenderGeneration,
+  useAgentMessageRenderSnapshot,
 } from "./agent-message-render-sync";
 import {
   resolveAssistantToolStepNumber,
@@ -186,9 +217,16 @@ import {
 } from "./step-assistant-state";
 import { btnSecondaryClass, panelTitleClass, sectionLabelClass } from "./ui-tokens";
 import {
+  buildDatasourceSettingsForType,
+  summarizeDatasourceConnection,
+} from "./datasource-metadata";
+import {
   getCollapsedWorkspaceRailCopy,
   getCollapsedWorkspacePreviewClassNames,
   getSessionListItemIconSlots,
+  getWorkspaceResourceNavGroups,
+  type WorkspaceResourceNavAction,
+  type WorkspaceResourceNavGroup,
 } from "./session-pane-ui";
 import { getBackendCapabilities, isResourcePanelSupported } from "../../lib/config-api";
 
@@ -202,12 +240,21 @@ const runtimeUrl =
 
 export type TaskSelection =
   | { type: "artifact"; id: string }
+  | { type: "toolGroup"; id: string }
   | { type: "action"; id: string }
   | null;
 
 export type WorkspaceConfigPanelKey = "db" | "kb" | "mcp" | "skill" | "llm";
 
 const NEW_CONFIG_ITEM_ID = "__new__";
+
+const CONFIG_ITEM_CARD_GRID_CLASS =
+  "grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(min(100%,280px),280px))]";
+
+const DATASOURCE_CARD_GRID_CLASS =
+  "grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(min(100%,360px),360px))]";
+
+const CONFIG_DETAIL_MAX_WIDTH_CLASS = "max-w-3xl";
 
 async function uploadChatDataFile(
   file: File,
@@ -294,26 +341,6 @@ function StableDataTaskChatInput({
       showDisclaimer={false}
     />
   );
-}
-
-function configSummary(
-  kind: WorkspaceConfigKind,
-  workspaceConfig: WorkspaceConfigStore,
-): string {
-  if (kind === "llm") {
-    return summarizeLlmItems(workspaceConfig.llm, "未配置");
-  }
-  const emptyLabels: Record<WorkspaceConfigKind, string> = {
-    db: "未配置",
-    kb: "未配置",
-    mcp: "未配置",
-    llm: "未配置",
-    skill: "未配置",
-  };
-  if (kind === "mcp") {
-    return summarizeMcpItems(workspaceConfig.mcp, emptyLabels.mcp);
-  }
-  return summarizeConfigItems(workspaceConfig[kind], emptyLabels[kind]);
 }
 
 // Credentials must never leave the browser through the AG-UI protocol.
@@ -433,6 +460,7 @@ function DataTaskWorkspace() {
   const {
     workspaceConfig,
     runDefaults,
+    datasourceTypes,
     loading: workspaceLoading,
     capabilitiesReady,
     error: workspaceError,
@@ -452,6 +480,7 @@ function DataTaskWorkspace() {
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [selection, setSelection] = useState<TaskSelection>(null);
+  const [toolGroups, setToolGroups] = useState<ProcessToolGroup[]>([]);
   const [artifactFocusId, setArtifactFocusId] = useState<string | null>(null);
   const [isTraceOpen, setIsTraceOpen] = useState(false);
   const [isConsoleDrawerOpen, setIsConsoleDrawerOpen] = useState(false);
@@ -587,6 +616,12 @@ function DataTaskWorkspace() {
     setIsConsoleDrawerOpen(false);
   }, [canDockRightPanel]);
 
+  const handleToolGroupsChange = useCallback((nextGroups: ProcessToolGroup[]) => {
+    setToolGroups((current) =>
+      processToolGroupsEqual(current, nextGroups) ? current : nextGroups,
+    );
+  }, []);
+
   const openConfigPanel = useCallback((panel: WorkspaceConfigPanelKey) => {
     setWorkspaceFilesPanelOpen(false);
     setConfigPanel((current) => (current === panel ? null : panel));
@@ -640,7 +675,7 @@ function DataTaskWorkspace() {
       })
       .catch((error) => {
         if (!cancelled) {
-          setSessionSyncError(error instanceof Error ? error.message : "加载服务端会话失败");
+          setSessionSyncError(error instanceof Error ? error.message : "Failed to load server sessions");
         }
       });
     return () => {
@@ -675,7 +710,7 @@ function DataTaskWorkspace() {
         return await updateItem(kind, item);
       } catch (error) {
         setConfigActionError(
-          error instanceof Error ? error.message : "保存配置失败",
+          error instanceof Error ? error.message : "Failed to save configuration",
         );
         throw error;
       }
@@ -712,7 +747,7 @@ function DataTaskWorkspace() {
         return createdId;
       } catch (error) {
         setConfigActionError(
-          error instanceof Error ? error.message : "创建配置失败",
+          error instanceof Error ? error.message : "Failed to create configuration",
         );
         throw error;
       }
@@ -746,9 +781,28 @@ function DataTaskWorkspace() {
     [workspaceFileAssets],
   );
 
+  const { liveRun, sessionUsage, latestQuestion, runningThreadIds } = useLiveRun();
+  const agentRenderSnapshot = useAgentMessageRenderSnapshot();
+  const sessionStartedHints = useMemo<SessionStartedHints>(
+    () => ({
+      runCount: sessionUsage.runCount,
+      messageCount: agentRenderSnapshot.messageCount,
+      hasRunHistory: (liveRun.runHistory?.length ?? 0) > 0,
+    }),
+    [
+      agentRenderSnapshot.messageCount,
+      liveRun.runHistory?.length,
+      sessionUsage.runCount,
+    ],
+  );
+
   const toggleSessionResourceItem = useCallback(
     (kind: PerRunMentionKind, id: string) => {
       if (!activeSessionId) return;
+      const session = sessions.find((item) => item.id === activeSessionId) ?? null;
+      if (isSessionResourceKindLocked(session, kind, sessionStartedHints)) {
+        return;
+      }
       setSessions((current) =>
         current.map((session) =>
           session.id === activeSessionId
@@ -757,7 +811,7 @@ function DataTaskWorkspace() {
         ),
       );
     },
-    [activeSessionId],
+    [activeSessionId, sessionStartedHints, sessions],
   );
 
   // Drop @ picks for resources removed from workspace or disabled in session.
@@ -766,7 +820,6 @@ function DataTaskWorkspace() {
       prunePerRunSelection(workspaceConfig, activeSession, current),
     );
   }, [workspaceConfig, activeSession]);
-  const { liveRun, sessionUsage, latestQuestion } = useLiveRun();
   useEffect(() => {
     if (!capabilitiesReady || !hasCapability("conversation.title")) return;
     const sessionTitle = liveRun.sessionTitle;
@@ -835,7 +888,7 @@ function DataTaskWorkspace() {
     try {
       await configApi.cancelRun(liveRun.runId, "user-requested");
     } catch (error) {
-      setConfigActionError(error instanceof Error ? error.message : "取消运行失败");
+      setConfigActionError(error instanceof Error ? error.message : "Failed to cancel run");
     } finally {
       setRunCancelBusy(false);
     }
@@ -885,7 +938,7 @@ function DataTaskWorkspace() {
         setSessionSyncError(null);
       })
       .catch((error) => {
-        setSessionSyncError(error instanceof Error ? error.message : "会话重命名同步失败");
+        setSessionSyncError(error instanceof Error ? error.message : "Failed to sync session rename");
       });
   }, []);
 
@@ -925,16 +978,26 @@ function DataTaskWorkspace() {
 
   const applyFirstUserMessageTitle = useCallback((text: string) => {
     if (!activeSessionId) return;
-    setSessions((current) => {
-      const session = current.find((item) => item.id === activeSessionId);
-      if (!session || session.titleSource !== "default") return current;
-      return applyAutoTitle(
-        current,
-        activeSessionId,
-        deriveSnippetTitle(text),
-        "auto-snippet",
-      );
-    });
+    const now = Date.now();
+    setSessions((current) =>
+      current.map((session) => {
+        if (session.id !== activeSessionId) return session;
+        const titled =
+          session.titleSource === "default"
+            ? applyAutoTitle(
+                [session],
+                activeSessionId,
+                deriveSnippetTitle(text),
+                "auto-snippet",
+              )[0]!
+            : session;
+        return {
+          ...titled,
+          lastMessageAt: titled.lastMessageAt ?? now,
+          updatedAt: now,
+        };
+      }),
+    );
   }, [activeSessionId]);
 
   const agentContext = useMemo<JsonSerializable>(
@@ -989,7 +1052,7 @@ function DataTaskWorkspace() {
   });
   // General workspace state for debugging / richer context (secrets stripped).
   useAgentContext({
-    description: "当前数据任务工作区状态",
+    description: "Current data task workspace state",
     value: agentContext,
   });
 
@@ -1011,6 +1074,7 @@ function DataTaskWorkspace() {
       onClearPerRunFileMentions: clearPerRunFileMentions,
       workspaceConfig,
       activeSession,
+      sessionStartedHints,
       onToggleSessionResource: toggleSessionResourceItem,
       chatColumnWidth,
       agentId,
@@ -1043,6 +1107,7 @@ function DataTaskWorkspace() {
       removePerRunFileMentionItem,
       clearPerRunFileMentions,
       toggleSessionResourceItem,
+      sessionStartedHints,
       workspaceConfig,
       liveRun.runId,
       liveRun.runStatus,
@@ -1063,17 +1128,17 @@ function DataTaskWorkspace() {
   useFrontendTool(
     {
       name: "selectDataSession",
-      description: "切换 UI 中可见的数据任务会话。",
+      description: "Switch the visible data task session in the UI.",
       agentId,
       parameters: z.object({
-        sessionId: z.string().describe("要激活的会话 ID"),
+        sessionId: z.string().describe("Session ID to activate"),
       }),
       handler: async ({ sessionId }) => {
         const target = sessions.find((session) => session.id === sessionId);
-        if (!target) return `未找到会话：${sessionId}`;
+        if (!target) return `Session not found: ${sessionId}`;
         setActiveSessionId(target.id);
         setSelection(null);
-        return `已选择：${target.title}`;
+        return `Selected: ${target.title}`;
       },
       followUp: false,
     },
@@ -1083,6 +1148,14 @@ function DataTaskWorkspace() {
   const handleSelectToolAction = useCallback(
     (toolCallId: string) => {
       setSelection({ type: "action", id: toolCallId });
+      openTaskConsole();
+    },
+    [openTaskConsole],
+  );
+
+  const handleSelectToolGroup = useCallback(
+    (groupId: string) => {
+      setSelection({ type: "toolGroup", id: groupId });
       openTaskConsole();
     },
     [openTaskConsole],
@@ -1136,6 +1209,7 @@ function DataTaskWorkspace() {
         filteredSessions={filteredSessions}
         query={query}
         sessionCount={sessions.length}
+        runningThreadIds={runningThreadIds}
         workspaceFileCount={workspaceFileAssets.length}
         capabilitiesReady={capabilitiesReady}
         onCreateSession={createSession}
@@ -1180,9 +1254,11 @@ function DataTaskWorkspace() {
             panel={configPanel}
             items={workspaceConfig[configPanel]}
             workspaceConfig={workspaceConfig}
+            datasourceTypes={datasourceTypes}
             loading={workspaceLoading || !capabilitiesReady}
             onAdd={(payload, skillFile) => addConfigItem(configPanel, payload, skillFile)}
             onBack={() => setConfigPanel(null)}
+            onSwitchPanel={(panel) => setConfigPanel(panel)}
             onSaveItem={(item) => saveConfigItem(configPanel, item)}
             onDeleteItem={(itemId) => deleteItem(configPanel, itemId)}
             onTestItem={(itemId) => testItem(configPanel, itemId)}
@@ -1227,20 +1303,24 @@ function DataTaskWorkspace() {
         <>
       <DataTaskChatInputBindingsProvider value={chatInputBindings}>
       <ToolActionSelectionContext.Provider value={handleSelectToolAction}>
+      <ToolGroupSelectionContext.Provider value={handleSelectToolGroup}>
       <div className="relative z-10 min-h-0 min-w-0 overflow-hidden">
       <ChatPane
         activeThreadId={activeThreadId}
-        title={activeSession?.title ?? "数据任务"}
-        datasourceId={activeDatasourceId}
+        title={activeSession?.title ?? "Data Tasks"}
+        workspaceConfig={workspaceConfig}
+        activeSession={activeSession}
         liveRunStatus={liveRun.runStatus}
         liveRun={liveRun}
         chatInput={chatInput}
         rightPanelOpen={isRightConsoleVisible}
         onOpenRightPanel={openTaskConsole}
         onChatColumnWidthChange={setChatColumnWidth}
+        onToolGroupsChange={handleToolGroupsChange}
         capabilitiesReady={capabilitiesReady}
       />
       </div>
+      </ToolGroupSelectionContext.Provider>
       </ToolActionSelectionContext.Provider>
       </DataTaskChatInputBindingsProvider>
 
@@ -1260,9 +1340,10 @@ function DataTaskWorkspace() {
             onReset={resetRightPanelWidth}
           />
           <TaskConsole
-            key={activeThreadId ?? activeSession?.id ?? "no-session"}
+            key={`task-console-dock-${activeThreadId ?? activeSession?.id ?? "no-session"}`}
             artifacts={visibleArtifacts}
             liveRun={liveRun}
+            toolGroups={toolGroups}
             sessionUsage={sessionUsage}
             selection={selection}
             visibleEvents={visibleTimelineEvents}
@@ -1278,6 +1359,9 @@ function DataTaskWorkspace() {
             onSelectEvent={(eventId) =>
               setSelection({ type: "action", id: eventId })
             }
+            onSelectToolGroup={(groupId) =>
+              setSelection({ type: "toolGroup", id: groupId })
+            }
             promotedArtifactIds={promotedArtifactIds}
           />
         </div>
@@ -1286,9 +1370,10 @@ function DataTaskWorkspace() {
       )}
 
       <TaskConsoleDrawer
-        key={activeThreadId ?? activeSession?.id ?? "no-session"}
+        key={`task-console-drawer-${activeThreadId ?? activeSession?.id ?? "no-session"}`}
         artifacts={visibleArtifacts}
         liveRun={liveRun}
+        toolGroups={toolGroups}
         sessionUsage={sessionUsage}
         selection={selection}
         visibleEvents={visibleTimelineEvents}
@@ -1304,6 +1389,9 @@ function DataTaskWorkspace() {
         onArtifactExportJob={setActiveJob}
         onSelectEvent={(eventId) =>
           setSelection({ type: "action", id: eventId })
+        }
+        onSelectToolGroup={(groupId) =>
+          setSelection({ type: "toolGroup", id: groupId })
         }
         promotedArtifactIds={promotedArtifactIds}
       />
@@ -1440,13 +1528,23 @@ function ToolCallSplitLayout({
     const target = event.target as HTMLElement;
     if (
       target.closest(
-        "button, a, input, select, textarea, label, summary, details, [data-no-tool-select]",
+        "button, a, input, select, textarea, label, [data-no-tool-select]",
       )
     ) {
       return;
     }
     handleActivate();
   };
+
+  const enhancedChildren = Children.map(children, (child) => {
+    if (!isValidElement(child)) return child;
+    if (child.type !== ToolInvocationCard && child.type !== ToolResultCard) {
+      return child;
+    }
+    return cloneElement(child as React.ReactElement<{ onActivate?: () => void }>, {
+      onActivate: selectable ? handleActivate : undefined,
+    });
+  });
 
   return (
     <div
@@ -1468,9 +1566,9 @@ function ToolCallSplitLayout({
             }
           : undefined
       }
-      title={selectable ? "在任务控制台中查看详情" : undefined}
+      title={selectable ? "View tool details in the task console" : undefined}
     >
-      {children}
+      {enhancedChildren}
     </div>
   );
 }
@@ -1478,20 +1576,38 @@ function ToolCallSplitLayout({
 function ToolInvocationCard({
   name,
   displayStatus,
+  onActivate,
   children,
 }: {
   name: string;
   displayStatus: ToolDisplayStatus;
+  onActivate?: () => void;
   children: ReactNode;
 }) {
   const statusTone = toolStatusToneClass(displayStatus);
 
   return (
     <div className="rounded-xl border border-border bg-surface p-3 text-sm text-muted shadow-[var(--shadow-card)]">
-      <div className="flex items-center justify-between gap-3">
+      <div
+        className={[
+          "flex items-center justify-between gap-3",
+          onActivate
+            ? "cursor-pointer rounded-lg transition-colors duration-150 hover:bg-surface-subtle"
+            : "",
+        ].join(" ")}
+        onClick={
+          onActivate
+            ? (event) => {
+                event.stopPropagation();
+                onActivate();
+              }
+            : undefined
+        }
+        title={onActivate ? "View tool details in the task console" : undefined}
+      >
         <div className="flex min-w-0 items-center gap-2">
           <span className="rounded-full border border-border bg-surface-subtle px-2 py-0.5 text-[11px] font-semibold text-muted">
-            工具调用
+            Tool calls
           </span>
           <strong className="truncate font-mono text-foreground">{name}</strong>
         </div>
@@ -1512,28 +1628,46 @@ function ToolInvocationCard({
 
 function ToolResultCard({
   name,
+  onActivate,
   children,
 }: {
   name: string;
+  onActivate?: () => void;
   children: ReactNode;
 }) {
   return (
     <div
       className="rounded-xl border border-border bg-surface p-3 text-sm text-muted shadow-[var(--shadow-card)]"
     >
-      <div className="mb-2 flex items-center justify-between gap-3">
+      <div
+        className={[
+          "mb-2 flex items-center justify-between gap-3",
+          onActivate
+            ? "cursor-pointer rounded-lg transition-colors duration-150 hover:bg-surface-subtle"
+            : "",
+        ].join(" ")}
+        onClick={
+          onActivate
+            ? (event) => {
+                event.stopPropagation();
+                onActivate();
+              }
+            : undefined
+        }
+        title={onActivate ? "View tool details in the task console" : undefined}
+      >
         <div className="flex min-w-0 items-center gap-2">
           <span
             className="rounded-full border border-border bg-surface-subtle px-2 py-0.5 text-[11px] font-semibold text-muted"
           >
-            执行结果
+            Execution result
           </span>
           <span className="truncate font-mono text-xs text-muted-light">{name}</span>
         </div>
         <span
           className="rounded-full border border-step-success/25 bg-step-success/8 px-2 py-0.5 text-xs text-step-success"
         >
-          已返回
+          Returned
         </span>
       </div>
       {children}
@@ -1542,8 +1676,8 @@ function ToolResultCard({
 }
 
 function invocationStatusLabel(status: ToolDisplayStatus): string {
-  if (status === "failed") return "执行失败";
-  if (status === "complete") return "已提交";
+  if (status === "failed") return "Failed";
+  if (status === "complete") return "Submitted";
   return toolDisplayStatusLabel(status);
 }
 
@@ -1579,13 +1713,13 @@ function ToolPendingHint({ displayStatus }: { displayStatus: ToolDisplayStatus }
 function ToolResultMissingCard({ name }: { name: string }) {
   return (
     <div className="rounded-xl border border-dashed border-border bg-surface-subtle p-3 text-xs leading-5 text-muted">
-      <div className="font-semibold text-foreground">执行结果未同步</div>
+      <div className="font-semibold text-foreground">Execution result not synced</div>
       <p className="mt-1">
         <span className="font-mono">{name}</span>{" "}
-        的工具 observation 仍未送达前端线程。若右侧追溯里已有 SQL 审计或 step
-        状态，通常是 AG-UI{" "}
+         tool observation has not reached the frontend thread. If the right-side Trace already has SQL audit or step
+         status, this usually means the AG-UI{" "}
         <code className="text-[11px]">TOOL_CALL_RESULT</code>{" "}
-        缺失；请刷新后重试，或检查 dataAgent runtime 桥接逻辑。
+         terminal event is missing. Refresh and retry, or inspect the dataAgent runtime bridge.
       </p>
     </div>
   );
@@ -1691,7 +1825,7 @@ function DataTable({
       </table>
       {normalizedRows.length > previewRows.length && (
         <div className="border-t border-border bg-surface-subtle px-2 py-1 text-[10px] text-muted-light">
-          仅预览前 {previewRows.length} 行，共 {normalizedRows.length} 行。
+          Previewing the first {previewRows.length} rows out of {normalizedRows.length} rows.
         </div>
       )}
     </div>
@@ -1748,17 +1882,17 @@ function SqlToolCard({
               <ResultMetaChips
                 items={[
                   {
-                    label: "行数",
+                    label: "Rows",
                     value: String(parsed.row_count ?? parsed.rows.length),
                   },
                   ...(parsed.elapsed_ms !== undefined
-                    ? [{ label: "耗时", value: `${parsed.elapsed_ms}ms` }]
+                    ? [{ label: "Duration", value: `${parsed.elapsed_ms}ms` }]
                     : []),
                   ...(parsed.audit_log_id
-                    ? [{ label: "审计", value: parsed.audit_log_id }]
+                    ? [{ label: "Audit", value: parsed.audit_log_id }]
                     : []),
                   ...(parsed.artifact_id
-                    ? [{ label: "产出", value: parsed.artifact_id }]
+                    ? [{ label: "Output", value: parsed.artifact_id }]
                     : []),
                 ]}
               />
@@ -1767,7 +1901,7 @@ function SqlToolCard({
               </div>
             </>
           ) : (
-            <ToolPayloadBlock title="原始返回" value={effectiveResult} tone="light" />
+            <ToolPayloadBlock title="Raw result" value={effectiveResult} tone="light" />
           )}
         </ToolResultCard>
       ) : displayStatus === "failed" || resultIsError ? (
@@ -1846,7 +1980,7 @@ function SchemaToolCard({
               ))}
             </div>
           ) : (
-            <ToolPayloadBlock title="原始返回" value={effectiveResult} tone="light" />
+            <ToolPayloadBlock title="Raw result" value={effectiveResult} tone="light" />
           )}
         </ToolResultCard>
       ) : displayStatus === "failed" || resultIsError ? (
@@ -1941,6 +2075,9 @@ const ChatLiveRunContext = createContext<LiveRun | null>(null);
 const ToolActionSelectionContext = createContext<
   ((toolCallId: string) => void) | null
 >(null);
+const ToolGroupSelectionContext = createContext<
+  ((groupId: string) => void) | null
+>(null);
 const ProcessTimelineCollapseContext = createContext<{
   collapsed: boolean;
   toggle: () => void;
@@ -1949,8 +2086,89 @@ const ProcessTimelineCollapseContext = createContext<{
   toggle: () => {},
 });
 
+type AssistantToolCallLike = {
+  id?: string;
+  function?: { name?: string };
+};
+
+function toolSummaryStatus(callStatus?: LiveRun["toolCalls"][number]["status"]): StepToolStatus {
+  if (callStatus === "failed") return "failed";
+  if (callStatus === "running") return "running";
+  return "success";
+}
+
+function buildStepToolSummaries(input: {
+  toolCalls: AssistantToolCallLike[];
+  liveRun: LiveRun | null;
+  isActive: boolean;
+}): StepToolSummaryInput[] {
+  const liveById = new Map(input.liveRun?.toolCalls.map((call) => [call.id, call]) ?? []);
+  return input.toolCalls
+    .map((call, index) => {
+      const id = typeof call.id === "string" && call.id ? call.id : `tool-${index}`;
+      const liveCall = liveById.get(id);
+      const status = liveCall ? toolSummaryStatus(liveCall.status) : input.isActive ? "running" : "success";
+      return {
+        id,
+        label: toolDisplayTitle(call.function?.name ?? liveCall?.name),
+        status,
+        durationLabel: liveCall
+          ? stepElapsedLabel(liveCall)
+          : status === "running"
+            ? "Running"
+            : "—",
+      };
+    })
+    .filter((tool) => tool.label.trim().length > 0);
+}
+
+function buildStepElapsedInput(input: {
+  toolCalls: AssistantToolCallLike[];
+  liveRun: LiveRun | null;
+  isActive: boolean;
+}): { status: StepToolStatus; startedAtMs?: number; finishedAtMs?: number } {
+  const liveById = new Map(input.liveRun?.toolCalls.map((call) => [call.id, call]) ?? []);
+  const liveCalls = input.toolCalls
+    .map((call) => (call.id ? liveById.get(call.id) : undefined))
+    .filter((call): call is LiveRun["toolCalls"][number] => Boolean(call));
+  if (liveCalls.length === 0) {
+    return { status: input.isActive ? "running" : "success" };
+  }
+  const status: StepToolStatus = liveCalls.some((call) => call.status === "failed")
+    ? "failed"
+    : liveCalls.some((call) => call.status === "running")
+      ? "running"
+      : "success";
+  const starts = liveCalls
+    .map((call) => call.startedAtMs)
+    .filter((value): value is number => value !== undefined);
+  const finishes = liveCalls
+    .map((call) => call.finishedAtMs)
+    .filter((value): value is number => value !== undefined);
+  return {
+    status,
+    ...(starts.length > 0 ? { startedAtMs: Math.min(...starts) } : {}),
+    ...(status !== "running" && finishes.length > 0
+      ? { finishedAtMs: Math.max(...finishes) }
+      : {}),
+  };
+}
+
+function buildGroupIdForAssistantMessage(
+  messageId: string | undefined,
+  toolCalls: AssistantToolCallLike[],
+): string | undefined {
+  if (messageId) return `group-${messageId}`;
+  const fallbackId = toolCalls
+    .map((call) => call.id)
+    .filter((id): id is string => typeof id === "string" && id.length > 0)
+    .join("-");
+  return fallbackId ? `group-${fallbackId}` : undefined;
+}
+
 function CopyContentButton({ content }: { content: string }) {
   const [copied, setCopied] = useState(false);
+  const label = copied ? "Copied" : "Copy this message";
   return (
     <button
       type="button"
@@ -1963,21 +2181,69 @@ function CopyContentButton({ content }: { content: string }) {
           /* clipboard unavailable */
         }
       }}
-      className="rounded-md px-1.5 py-0.5 text-[11px] font-medium text-slate-400 transition hover:bg-slate-100 hover:text-slate-600"
-      title="复制此消息"
+      className="cursor-pointer rounded-md p-0.5 text-muted-light transition-colors duration-150 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/20"
+      title={label}
+      aria-label={label}
     >
-      {copied ? "已复制" : "复制"}
+      {copied ? (
+        <svg viewBox="0 0 20 20" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden>
+          <path d="M5 10.5 8.5 14 15 7" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      ) : (
+        <svg viewBox="0 0 20 20" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden>
+          <path d="M4 4h8v8H4V4Z" />
+          <path d="M8 8h8v8H8V8Z" />
+        </svg>
+      )}
     </button>
   );
 }
 
+type CopilotChatUserMessageProps = ComponentProps<typeof CopilotChatUserMessage>;
+
+/** Hide reasoning bubbles that belong inside the next tool step card. */
+function StepReasoningMessage({
+  message,
+  messages,
+  ...props
+}: ComponentProps<typeof CopilotChatReasoningMessage>) {
+  useAgentMessageRenderGeneration();
+  const chatConfig = useCopilotChatConfiguration();
+  const { agent } = useAgent({ agentId: chatConfig?.agentId ?? agentId });
+  const allMessages = mergeMessagesForStepContext(
+    agent.messages ?? [],
+    messages ?? [],
+  );
+  if (reasoningMessageAbsorbedByFollowingToolStep(message, allMessages)) {
+    return null;
+  }
+  return (
+    <CopilotChatReasoningMessage
+      message={message}
+      messages={messages}
+      header={{ className: "chat-reasoning-header" }}
+      {...props}
+    />
+  );
+}
+
+/** Host pending HITL cards below the user turn when suspend lands before assistant bubble. */
+function StepUserMessage(props: CopilotChatUserMessageProps) {
+  return (
+    <>
+      <CopilotChatUserMessage {...props} />
+      <CollaborationPendingInterruptSlot message={props.message} />
+    </>
+  );
+}
+
 /**
- * 把单个助手回合渲染成一个「步骤」条目，按 ReAct 循环阅读：
- * - 带工具调用的回合 = ReAct 步骤；卡片内分「思考」「工具调用」两个子面板；
- * - 末尾纯文本回合 = 流式时为「回答中」（天蓝），完成后为「最终回答」（绿色）；
- * - 中间纯文本回合 = 思考/观察（琥珀色）。
- * 已完成步骤默认折叠；点击标题栏展开/折叠；流式步骤带边框光晕与光标。
- * 当前进行中的 block 自动展开；流式结束且下一步开始时，上一 block 自动折叠。
+ * Renders one assistant turn as a process step in the ReAct loop:
+ * - turns with tool calls become ReAct steps with Thinking and Tool calls panels;
+ * - trailing plain-text turns stream as Answering, then settle as Answer;
+ * - intermediate plain-text turns are shown as thinking/observation steps.
+ * Completed steps collapse by default. The active block expands automatically,
+ * then returns to default collapse when the next step takes over.
  */
 function StepAssistantMessage({
   message,
@@ -1991,16 +2257,25 @@ function StepAssistantMessage({
   const liveRun = useContext(ChatLiveRunContext);
   const processTimelineCollapse = useContext(ProcessTimelineCollapseContext);
   const selectToolAction = useContext(ToolActionSelectionContext);
+  const selectToolGroup = useContext(ToolGroupSelectionContext);
   const collaborationResponses = useThreadCollaborationResponsesForChat(chatConfig?.threadId);
-  const allMessages =
-    agent.messages && agent.messages.length > 0 ? agent.messages : (messages ?? []);
+  const pendingCollaborationInterrupt = usePendingCollaborationInterrupt(chatConfig?.threadId);
+  const allMessages = mergeMessagesForStepContext(
+    agent.messages ?? [],
+    messages ?? [],
+  );
   const isRunning = agent.isRunning ?? propIsRunning;
-  const content = resolveAssistantThoughtContent(message, allMessages);
+  const isOrphanPreamble = isOrphanPreambleMergedIntoFollowingToolStep(message, allMessages);
+
+  const content = resolveToolStepThoughtContent(message, allMessages);
   const {
     hasToolCalls,
     isWaitingForUser,
     isCollaborationStep,
     isCollaborationComplete,
+    isCollaborationFollowUpAnswer,
+    isFollowUpAnswerActive,
+    isLastAssistantInRun,
     isActive,
     isFinalAnswer,
     isFinalAnswerComplete,
@@ -2015,26 +2290,60 @@ function StepAssistantMessage({
     liveRun,
     collaborationResponses,
   });
+  const hostsPendingSlot = messageHostsPendingCollaborationSlot(
+    message,
+    pendingCollaborationInterrupt?.toolCallId,
+    allMessages,
+    liveRun,
+    liveRunStatus,
+  );
   const toolCalls = Array.isArray(message.toolCalls) ? message.toolCalls : [];
   const linkedLiveToolCall =
     linkedCollaboration && liveRun
       ? liveRun.toolCalls.find((call) => call.id === linkedCollaboration.toolCallId)
       : undefined;
-  const effectiveToolCalls =
-    toolCalls.length > 0
-      ? toolCalls
-      : linkedLiveToolCall
-        ? [
-            {
-              id: linkedLiveToolCall.id,
-              type: "function" as const,
-              function: {
-                name: linkedLiveToolCall.name,
-                arguments: "{}",
-              },
+  const authoritativeCollaborationToolName = linkedCollaboration?.toolName;
+  const linkedToolCallId = linkedLiveToolCall?.id ?? linkedCollaboration?.toolCallId;
+  const linkedToolCallName =
+    authoritativeCollaborationToolName ?? linkedLiveToolCall?.name;
+  const linkedToolCallEntry =
+    linkedToolCallId && linkedToolCallName
+      ? [
+          {
+            id: linkedToolCallId,
+            type: "function" as const,
+            function: {
+              name: linkedToolCallName,
+              arguments: "{}",
             },
-          ]
-        : [];
+          },
+        ]
+      : [];
+  const correctedToolCalls =
+    authoritativeCollaborationToolName && toolCalls.length > 0
+      ? toolCalls.map((call) => {
+          if (
+            call.id !== linkedCollaboration?.toolCallId ||
+            call.function?.name === authoritativeCollaborationToolName
+          ) {
+            return call;
+          }
+          return {
+            ...call,
+            function: {
+              ...call.function,
+              name: authoritativeCollaborationToolName,
+              arguments: call.function?.arguments ?? "{}",
+            },
+          };
+        })
+      : toolCalls;
+  const effectiveToolCalls =
+    isCollaborationComplete && linkedToolCallEntry.length > 0
+      ? linkedToolCallEntry
+      : correctedToolCalls.length > 0
+        ? correctedToolCalls
+        : linkedToolCallEntry;
   const displayHasToolCalls = effectiveToolCalls.length > 0;
   const displayMessage =
     effectiveToolCalls === toolCalls
@@ -2059,17 +2368,50 @@ function StepAssistantMessage({
     currentMessageIndex >= 0
       ? allMessages.slice(lastUserIndex + 1, nextUserIndex > -1 ? nextUserIndex : undefined)
       : allMessages;
-  const processMessagesInRun = currentRunMessages.filter(
-    (item) =>
-      item.role === "assistant" &&
-      (((item as { toolCalls?: unknown[] }).toolCalls?.length ?? 0) > 0 ||
-        messageTextContent((item as { content?: unknown }).content).length > 0),
+  const pendingCollaborationToolCall = findPendingCollaborationToolCall(
+    liveRun,
+    collaborationResponses,
+    liveRunStatus,
   );
+  const lastAssistantInRunId = [...currentRunMessages]
+    .reverse()
+    .find((item) => item.role === "assistant")?.id;
+  const processMessagesInRun = currentRunMessages.filter((item) => {
+    if (item.role !== "assistant") return false;
+    if (isOrphanPreambleMergedIntoFollowingToolStep(item, allMessages)) {
+      return false;
+    }
+    const hasTools = ((item as { toolCalls?: unknown[] }).toolCalls?.length ?? 0) > 0;
+    const hasContent = hasMeaningfulText(
+      messageTextContent((item as { content?: unknown }).content),
+    );
+    if (hasTools) return true;
+    // The run's trailing content-only assistant message is the final answer; it
+    // renders as a separate Answer (isProcessStep excludes isFinalAnswer), so it
+    // must not inflate the "Work process N steps" count.
+    if (hasContent && item.id === lastAssistantInRunId) return false;
+    if (hasContent) return true;
+    if (
+      pendingCollaborationToolCall &&
+      shouldShowPendingInterruptOnMessage(
+        item,
+        pendingCollaborationToolCall.id,
+        allMessages,
+        liveRun,
+        liveRunStatus,
+      )
+    ) {
+      return true;
+    }
+    return false;
+  });
   const isProcessStep =
-    (displayHasToolCalls || (isThought && !isCollaborationComplete)) &&
+    (displayHasToolCalls ||
+      isWaitingForUser ||
+      hostsPendingSlot ||
+      (isThought && !isCollaborationComplete)) &&
     !isFinalAnswer &&
-    !isCollaborationStep &&
-    !isWaitingForUser;
+    (!isCollaborationStep || isWaitingForUser || isCollaborationComplete);
   const isFirstProcessStep =
     isProcessStep && processMessagesInRun[0]?.id === message.id;
   const processStepCount = processMessagesInRun.length;
@@ -2093,52 +2435,17 @@ function StepAssistantMessage({
     if (isActive) {
       setManualCollapsed(null);
     } else if (wasActiveRef.current) {
-      // 本 block 刚结束流式/执行，下一步已接管 — 回到默认折叠（最终回答除外）
+      // This block just finished streaming/executing; reset to default collapse.
       setManualCollapsed(null);
     }
     wasActiveRef.current = isActive;
   }, [isActive]);
 
-  if (isWaitingForUser) {
-    const theme = getStepCardTheme({
-      hasToolCalls: false,
-      isActive: false,
-      isFinalAnswer: false,
-      isFinalAnswerComplete: false,
-      isThought: false,
-      isCollaborationStep: true,
-      isWaitingForUser: true,
-    });
-    return (
-      <div
-        data-copilotkit
-        className={[
-          "copilotKitMessage copilotKitAssistantMessage step-enter mb-4 rounded-2xl border p-3 shadow-sm",
-          theme.card,
-        ].join(" ")}
-      >
-        <div className="flex items-center gap-2">
-          <StepBadge
-            stepNumber={stepNumber}
-            isFinalAnswer={false}
-            isStreamingAnswer={false}
-            isActive={false}
-            isThought={false}
-            isCollaboration={true}
-            isWaitingForUser={true}
-          />
-          <span className={`text-xs font-semibold ${theme.label}`}>
-            等待你的回答
-          </span>
-        </div>
-        <p className="mt-2 text-sm leading-6 text-muted">
-          Agent 已暂停，请在下方卡片中选择或填写你的回答。
-        </p>
-      </div>
-    );
+  if (isOrphanPreamble) {
+    return null;
   }
 
-  if (!content && !hasToolCalls) {
+  if (!content && !hasToolCalls && !isWaitingForUser && !hostsPendingSlot) {
     if (isActive) {
       return <ChatAssistantLoadingRow />;
     }
@@ -2148,31 +2455,73 @@ function StepAssistantMessage({
   const rawToolNames = effectiveToolCalls
     .map((call) => call?.function?.name ?? "")
     .filter((name) => isDisplayableToolName(name));
+  const processContent = isCollaborationFollowUpAnswer ? "" : content;
+  const showSplitAnswerBlock = isCollaborationFollowUpAnswer && content.length > 0;
+  const matchingRecaps = collaborationResponses.filter((response) =>
+    shouldShowCollaborationRecapOnMessage(message, response, allMessages),
+  );
   const toolNames = rawToolNames
     .map((call) => toolDisplayTitle(call))
     .filter(Boolean)
     .join("、");
-  const toolActionLabel = resolveToolStepActionLabel(rawToolNames);
+  const toolSummaries = buildStepToolSummaries({
+    toolCalls: effectiveToolCalls,
+    liveRun,
+    isActive,
+  });
+  const stepElapsed = stepElapsedLabel(
+    buildStepElapsedInput({
+      toolCalls: effectiveToolCalls,
+      liveRun,
+      isActive,
+    }),
+  );
+  const collapsedStepSummary = buildCollapsedStepSummary({
+    thinking: processContent,
+    tools: toolSummaries,
+  });
+  const collapsedToolChips = buildToolChipSummaries(toolSummaries, 3);
+  const processGroupId = buildGroupIdForAssistantMessage(message.id, effectiveToolCalls);
+  const toolActionLabel = isCollaborationComplete
+    ? resolveCollaborationCompletedStepLabel(rawToolNames, linkedCollaboration?.toolName)
+    : resolveToolStepActionLabel(rawToolNames);
   const collaborationStepLabel = resolveCollaborationStepLabel(
     rawToolNames,
     isActive,
     linkedCollaboration?.toolName,
   );
 
-  const kindLabel = isWaitingForUser
-    ? "等待你的回答"
-    : isCollaborationStep
-      ? collaborationStepLabel
-      : isFinalAnswer
-        ? isActive
-          ? "正在回答"
-          : "回答"
-        : displayHasToolCalls
-          ? toolActionLabel
-          : "思考";
+  const pendingToolName = pendingCollaborationToolCall?.name;
+  const waitingToolNames =
+    rawToolNames.length > 0
+      ? rawToolNames
+      : hostsPendingSlot && pendingToolName
+        ? [pendingToolName]
+        : rawToolNames;
+
+  const kindLabel = isCollaborationComplete && displayHasToolCalls
+    ? toolActionLabel
+    : isWaitingForUser || hostsPendingSlot
+      ? resolveToolStepActionLabel(waitingToolNames)
+      : isCollaborationStep
+        ? collaborationStepLabel
+        : isFinalAnswer
+          ? isActive
+            ? "Answering"
+            : "Answer"
+          : displayHasToolCalls
+            ? toolActionLabel
+            : "Thinking";
+  const stepHeaderLabel = isProcessStep
+    ? isWaitingForUser || hostsPendingSlot || isCollaborationStep
+      ? kindLabel
+      : displayHasToolCalls
+        ? null
+        : kindLabel
+    : kindLabel;
 
   const summary = resolveStepSummaryText({
-    content,
+    content: processContent,
     hasToolCalls: displayHasToolCalls,
     displayToolNames: toolNames,
     toolActionLabel,
@@ -2191,14 +2540,23 @@ function StepAssistantMessage({
   const toggleCollapsed = () => {
     const next = !collapsed;
     setManualCollapsed(next);
-    if (!next && displayHasToolCalls && selectToolAction) {
-      const toolCallId = effectiveToolCalls
-        .map((call) => call?.id)
-        .find((id): id is string => typeof id === "string" && id.length > 0);
-      if (toolCallId) {
-        selectToolAction(toolCallId);
-      }
+  };
+
+  const openStepDetails = () => {
+    if (collapsed) {
+      setManualCollapsed(false);
     }
+    if (displayHasToolCalls && processGroupId && selectToolGroup) {
+      selectToolGroup(processGroupId);
+    }
+  };
+
+  const handleStepHeaderClick = () => {
+    if (displayHasToolCalls && processGroupId && selectToolGroup) {
+      openStepDetails();
+      return;
+    }
+    toggleCollapsed();
   };
 
   if (isFinalAnswer) {
@@ -2209,11 +2567,11 @@ function StepAssistantMessage({
       >
         <div className="mb-2 flex items-center gap-2 text-xs font-medium text-muted-light">
           <span className="h-1.5 w-1.5 rounded-full bg-muted-light" />
-          <span>{isActive ? "正在回答" : "回答"}</span>
+          <span>{isActive ? "Answering" : "Answer"}</span>
           {isActive ? (
             <span className="inline-flex items-center gap-1 rounded-full border border-border bg-surface-subtle px-2 py-0.5 text-[10px] text-muted">
               <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-muted" />
-              生成中
+              Generating
             </span>
           ) : null}
           {content ? (
@@ -2246,8 +2604,10 @@ function StepAssistantMessage({
           className="inline-flex cursor-pointer items-center gap-1.5 rounded-md px-1.5 py-1 font-medium transition-colors duration-150 hover:bg-surface-subtle hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/20"
           aria-expanded={!processTimelineCollapse.collapsed}
         >
-          <span>工作过程</span>
-          <span className="tabular">{processStepCount} 步</span>
+          <span>Work process</span>
+          <span className="tabular">
+            {processStepCount} step{processStepCount === 1 ? "" : "s"}
+          </span>
           <StepChevron expanded={!processTimelineCollapse.collapsed} />
         </button>
       </div>
@@ -2264,27 +2624,52 @@ function StepAssistantMessage({
         <>
           <span className="absolute left-[9px] top-0 bottom-0 w-px bg-border" aria-hidden />
           <span className="absolute left-0 top-2.5">
-            <StepBadge
-              stepNumber={stepNumber}
-              isFinalAnswer={false}
-              isStreamingAnswer={false}
-              isActive={isActive}
-              isThought={isThought}
-            />
+            <button
+              type="button"
+              onClick={(event) => {
+                event.stopPropagation();
+                openStepDetails();
+              }}
+              className="cursor-pointer rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/20"
+              title={
+                displayHasToolCalls
+                  ? "View step details in the task console"
+                  : collapsed
+                    ? "Expand step"
+                    : "Collapse step"
+              }
+              aria-label={
+                displayHasToolCalls
+                  ? "View step details in the task console"
+                  : collapsed
+                    ? "Expand step"
+                    : "Collapse step"
+              }
+            >
+              <StepBadge
+                stepNumber={stepNumber}
+                isFinalAnswer={false}
+                isStreamingAnswer={false}
+                isActive={isActive}
+                isThought={isThought}
+                isCollaboration={isCollaborationStep || isWaitingForUser}
+                isWaitingForUser={isWaitingForUser}
+              />
+            </button>
           </span>
         </>
       ) : null}
       <div
         role="button"
         tabIndex={0}
-        onClick={toggleCollapsed}
+        aria-expanded={!collapsed}
+        onClick={handleStepHeaderClick}
         onKeyDown={(event) => {
           if (event.key === "Enter" || event.key === " ") {
             event.preventDefault();
-            toggleCollapsed();
+            handleStepHeaderClick();
           }
         }}
-        aria-expanded={!collapsed}
         className={[
           "flex w-full cursor-pointer items-center gap-2 rounded-lg text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/20",
           isProcessStep ? "px-2 py-1 hover:bg-surface-subtle" : "",
@@ -2301,69 +2686,122 @@ function StepAssistantMessage({
             isWaitingForUser={isWaitingForUser}
           />
         ) : null}
-        <span className={`text-xs font-semibold ${theme.label}`}>
-          {kindLabel}
-        </span>
+        <div className="flex min-w-0 flex-1 items-center gap-2">
+          {stepHeaderLabel ? (
+            <span className={`shrink-0 text-xs font-semibold ${theme.label}`}>
+              {stepHeaderLabel}
+            </span>
+          ) : null}
+          {displayHasToolCalls ? (
+            <span
+              className={[
+                "min-w-0 truncate text-[10px]",
+                stepHeaderLabel ? "text-muted-light" : `font-semibold ${theme.label}`,
+              ].join(" ")}
+            >
+              {effectiveToolCalls.length} tool{effectiveToolCalls.length === 1 ? "" : "s"} · {stepElapsed}
+            </span>
+          ) : null}
+        </div>
         {isActive && (
           <span
             className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium ${theme.statusPill}`}
           >
             <span className={`h-1.5 w-1.5 rounded-full animate-pulse ${theme.statusDot}`} />
-            {isFinalAnswer ? "生成中" : isWaitingForUser ? "等待输入" : isCollaborationStep ? "协作中" : "执行中"}
+            {isFinalAnswer ? "Generating" : isWaitingForUser ? "Waiting for input" : isCollaborationStep ? "Collaborating" : "Running"}
           </span>
         )}
         <div className="ml-auto flex items-center gap-0.5">
-          {content && (
+          {hasMeaningfulText(processContent) ? (
             <span onClick={(event) => event.stopPropagation()}>
-              <CopyContentButton content={content} />
+              <CopyContentButton content={processContent} />
             </span>
-          )}
-          <StepChevron expanded={!collapsed} />
+          ) : null}
+          <button
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation();
+              toggleCollapsed();
+            }}
+            className="cursor-pointer rounded-md p-0.5 text-muted-light transition-colors duration-150 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/20"
+            title={collapsed ? "Expand step" : "Collapse step"}
+            aria-label={collapsed ? "Expand step" : "Collapse step"}
+          >
+            <StepChevron expanded={!collapsed} />
+          </button>
         </div>
       </div>
 
       {collapsed ? (
-        <button
-          type="button"
-          onClick={toggleCollapsed}
+        <div
           className={[
-            "block w-full truncate rounded-lg text-left text-xs transition-colors duration-150 hover:text-foreground",
+            "grid gap-1.5 rounded-lg text-left text-xs",
             isProcessStep ? "px-2 pb-1 text-muted" : "mt-1.5 text-muted-light",
           ].join(" ")}
-          title={summary}
         >
-          {summary}
-        </button>
+          {collapsedStepSummary.thinkingPreview ? (
+            <button
+              type="button"
+              onClick={openStepDetails}
+              className="line-clamp-2 cursor-pointer text-left leading-5 transition-colors duration-150 hover:text-foreground"
+              title={collapsedStepSummary.thinkingPreview}
+            >
+              {collapsedStepSummary.thinkingPreview}
+            </button>
+          ) : null}
+          {displayHasToolCalls ? (
+            <div className="flex min-w-0 flex-wrap gap-1.5">
+              {collapsedToolChips.map((chip) => (
+                <ToolSummaryChip
+                  key={chip.id}
+                  chip={chip}
+                  onSelectToolAction={selectToolAction}
+                />
+              ))}
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={openStepDetails}
+              className="block w-full truncate rounded-lg text-left transition-colors duration-150 hover:text-foreground"
+              title={summary}
+            >
+              {summary}
+            </button>
+          )}
+        </div>
       ) : (
         <>
-          {content && displayHasToolCalls ? (
+          {processContent && displayHasToolCalls ? (
             <>
               <StepSubPanel
-                title="思考"
+                title="Thinking"
                 tone="thought"
                 streaming={isActive}
+                onHeaderClick={displayHasToolCalls ? openStepDetails : undefined}
               >
                 <div className="text-sm leading-6 text-muted [&_code]:rounded [&_code]:bg-surface-subtle [&_code]:px-1 [&_ol]:my-1 [&_ol]:list-decimal [&_ol]:pl-5 [&_p]:my-1 [&_ul]:my-1 [&_ul]:list-disc [&_ul]:pl-5">
-                  <CopilotChatAssistantMessage.MarkdownRenderer content={content} />
+                  <CopilotChatAssistantMessage.MarkdownRenderer content={processContent} />
                   {isActive && (
                     <span className="caret-blink ml-0.5 inline-block h-4 w-[2px] -translate-y-[1px] bg-muted align-middle" />
                   )}
                 </div>
               </StepSubPanel>
               <StepSubPanel
-                title="工具调用"
+                title="Tool calls"
                 tone="tool"
                 badge={effectiveToolCalls.length}
                 busy={isActive}
+                onHeaderClick={openStepDetails}
               >
                 <div className="grid gap-1">
                   <CopilotChatToolCallsView message={displayMessage} messages={messages} />
                 </div>
               </StepSubPanel>
             </>
-          ) : content ? (
+          ) : processContent ? (
             <div className="mt-2 text-sm leading-6 text-muted [&_code]:rounded [&_code]:bg-surface-subtle [&_code]:px-1 [&_ol]:my-1 [&_ol]:list-decimal [&_ol]:pl-5 [&_p]:my-1 [&_ul]:my-1 [&_ul]:list-disc [&_ul]:pl-5">
-              <CopilotChatAssistantMessage.MarkdownRenderer content={content} />
+              <CopilotChatAssistantMessage.MarkdownRenderer content={processContent} />
               {isActive && (
                 <span
                   className={`caret-blink ml-0.5 inline-block h-4 w-[2px] -translate-y-[1px] align-middle ${theme.caret}`}
@@ -2372,10 +2810,11 @@ function StepAssistantMessage({
             </div>
           ) : displayHasToolCalls ? (
             <StepSubPanel
-              title="工具调用"
+              title="Tool calls"
               tone="tool"
               badge={effectiveToolCalls.length}
               busy={isActive}
+              onHeaderClick={openStepDetails}
             >
               <div className="grid gap-1">
                 <CopilotChatToolCallsView message={displayMessage} messages={messages} />
@@ -2385,6 +2824,41 @@ function StepAssistantMessage({
         </>
       )}
     </div>
+    {(hostsPendingSlot || isCollaborationStep || (isWaitingForUser && !isCollaborationComplete)) ? (
+      <CollaborationPendingInterruptSlot message={message} />
+    ) : null}
+    {matchingRecaps.map((response) => (
+      <CollaborationChoiceBubble key={response.id} response={response} />
+    ))}
+    {showSplitAnswerBlock ? (
+      <div
+        data-copilotkit
+        className={[
+          "copilotKitMessage copilotKitAssistantMessage step-enter px-1",
+          isLastAssistantInRun ? "mb-6" : "mb-4",
+        ].join(" ")}
+      >
+        <div className="mb-2 flex items-center gap-2 text-xs font-medium text-muted-light">
+          <span className="h-1.5 w-1.5 rounded-full bg-muted-light" />
+          <span>{isFollowUpAnswerActive ? "Answering" : "Answer"}</span>
+          {isFollowUpAnswerActive ? (
+            <span className="inline-flex items-center gap-1 rounded-full border border-border bg-surface-subtle px-2 py-0.5 text-[10px] text-muted">
+              <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-muted" />
+              Generating
+            </span>
+          ) : null}
+          <span className="ml-auto">
+            <CopyContentButton content={content} />
+          </span>
+        </div>
+        <div className="max-w-none text-sm leading-7 text-foreground [&_code]:rounded [&_code]:bg-surface-subtle [&_code]:px-1 [&_ol]:my-2 [&_ol]:list-decimal [&_ol]:pl-5 [&_p]:my-2 [&_ul]:my-2 [&_ul]:list-disc [&_ul]:pl-5">
+          <CopilotChatAssistantMessage.MarkdownRenderer content={content} />
+          {isFollowUpAnswerActive ? (
+            <span className="caret-blink ml-0.5 inline-block h-4 w-[2px] -translate-y-[1px] align-middle bg-primary" />
+          ) : null}
+        </div>
+      </div>
+    ) : null}
     </>
   );
 }
@@ -2395,6 +2869,7 @@ function StepSubPanel({
   badge,
   streaming,
   busy,
+  onHeaderClick,
   children,
 }: {
   title: string;
@@ -2402,6 +2877,7 @@ function StepSubPanel({
   badge?: number;
   streaming?: boolean;
   busy?: boolean;
+  onHeaderClick?: () => void;
   children: ReactNode;
 }) {
   const styles =
@@ -2421,8 +2897,17 @@ function StepSubPanel({
 
   return (
     <section className={`mt-2 overflow-hidden rounded-xl border ${styles.shell}`}>
-      <div
-        className={`flex items-center gap-2 border-b px-3 py-2 ${styles.header}`}
+      <button
+        type="button"
+        onClick={onHeaderClick}
+        disabled={!onHeaderClick}
+        className={[
+          `flex w-full items-center gap-2 border-b px-3 py-2 ${styles.header}`,
+          onHeaderClick
+            ? "cursor-pointer transition-colors duration-150 hover:bg-surface focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/20"
+            : "cursor-default",
+        ].join(" ")}
+        title={onHeaderClick ? "View step details in the task console" : undefined}
       >
         <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${styles.dot}`} />
         <span
@@ -2440,12 +2925,82 @@ function StepSubPanel({
             className={`ml-auto inline-flex items-center gap-1 text-[10px] font-medium ${styles.label}`}
           >
             <span className={`h-1.5 w-1.5 rounded-full animate-pulse ${styles.dot}`} />
-            {streaming ? "生成中" : "执行中"}
+            {streaming ? "Generating" : "Running"}
           </span>
         )}
-      </div>
+      </button>
       <div className="px-3 py-2.5">{children}</div>
     </section>
+  );
+}
+
+function ToolSummaryChip({
+  chip,
+  onSelectToolAction,
+}: {
+  chip: ToolChipSummary;
+  onSelectToolAction: ((toolCallId: string) => void) | null;
+}) {
+  const tone =
+    chip.status === "failed"
+      ? "border-step-error/25 bg-step-error/8 text-step-error"
+      : chip.status === "running"
+        ? "border-border bg-surface text-foreground"
+        : "border-border bg-surface text-muted";
+  const dot =
+    chip.status === "failed"
+      ? "bg-step-error"
+      : chip.status === "running"
+        ? "bg-primary-light"
+        : "bg-step-success";
+  const content = (
+    <>
+      {!chip.overflow ? (
+        <span
+          className={[
+            "h-1.5 w-1.5 shrink-0 rounded-full",
+            dot,
+            chip.status === "running" ? "animate-pulse" : "",
+          ].join(" ")}
+        />
+      ) : null}
+      <span className="truncate">{chip.label}</span>
+      {!chip.overflow && chip.durationLabel ? (
+        <span className="shrink-0 font-mono text-[10px] text-muted-light">
+          {chip.durationLabel}
+        </span>
+      ) : null}
+    </>
+  );
+
+  if (chip.overflow || !onSelectToolAction) {
+    return (
+      <span
+        className={[
+          "inline-flex max-w-full items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-medium",
+          tone,
+        ].join(" ")}
+      >
+        {content}
+      </span>
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={(event) => {
+        event.stopPropagation();
+        onSelectToolAction(chip.id);
+      }}
+      className={[
+        "inline-flex max-w-full cursor-pointer items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-medium transition-colors duration-150 hover:bg-surface-subtle focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/20",
+        tone,
+      ].join(" ")}
+      title="View tool details in the task console"
+    >
+      {content}
+    </button>
   );
 }
 
@@ -2581,7 +3136,7 @@ function ChatAssistantLoadingRow() {
       className="copilotKitMessage copilotKitAssistantMessage mb-4 flex items-center gap-2.5"
       role="status"
       aria-live="polite"
-      aria-label="Agent 思考中"
+      aria-label="Agent thinking"
     >
       <StepBadge
         stepNumber={0}
@@ -2779,6 +3334,48 @@ function SessionBubbleIcon() {
   );
 }
 
+function SessionRunningIcon() {
+  return (
+    <span
+      className="relative inline-flex h-4 w-4 shrink-0 items-center justify-center"
+      aria-label="Running"
+      title="Running"
+    >
+      <svg
+        viewBox="0 0 20 20"
+        className="session-sidebar-running-icon h-4 w-4"
+        fill="none"
+        aria-hidden
+      >
+        <g className="session-sidebar-running-orbit">
+          <circle
+            cx="10"
+            cy="10"
+            r="7.25"
+            stroke="currentColor"
+            strokeWidth="1.15"
+            strokeLinecap="round"
+            strokeDasharray="10 36"
+            opacity="0.45"
+          />
+        </g>
+        <g className="session-sidebar-running-orbit-inner">
+          <circle
+            cx="10"
+            cy="10"
+            r="5.75"
+            stroke="currentColor"
+            strokeWidth="1"
+            strokeLinecap="round"
+            strokeDasharray="5 28"
+            opacity="0.3"
+          />
+        </g>
+      </svg>
+    </span>
+  );
+}
+
 function MoreHorizontalIcon() {
   return (
     <svg viewBox="0 0 20 20" className="h-4 w-4" fill="currentColor" aria-hidden>
@@ -2871,12 +3468,12 @@ function SessionActionMenu({
 
   useEffect(() => {
     if (!open) return;
-    const onPointerDown = (event: MouseEvent) => {
+    const onPointerDown = (event: globalThis.MouseEvent) => {
       if (!rootRef.current?.contains(event.target as Node)) {
         setOpen(false);
       }
     };
-    const onKeyDown = (event: KeyboardEvent) => {
+    const onKeyDown = (event: globalThis.KeyboardEvent) => {
       if (event.key === "Escape") setOpen(false);
     };
     document.addEventListener("mousedown", onPointerDown);
@@ -2899,7 +3496,7 @@ function SessionActionMenu({
     <div ref={rootRef} className="relative shrink-0">
       <button
         type="button"
-        aria-label={`会话操作：${session.title}`}
+        aria-label={`Session actions: ${session.title}`}
         aria-expanded={open}
         aria-haspopup="menu"
         onClick={(event) => {
@@ -2934,17 +3531,17 @@ function SessionActionMenu({
             }}
           >
             <PinMenuIcon />
-            {session.pinned ? "取消置顶" : "置顶"}
+            {session.pinned ? "Unpin" : "Pin"}
           </button>
           <button
             type="button"
             role="menuitem"
             disabled
             className="flex w-full cursor-not-allowed items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-sm text-muted-light opacity-50"
-            title="分享功能待后端支持"
+            title="Sharing awaits backend support"
           >
             <ShareMenuIcon />
-            分享
+            Share
           </button>
           <button
             type="button"
@@ -2960,7 +3557,7 @@ function SessionActionMenu({
             }}
           >
             <PencilMenuIcon />
-            重命名
+            Rename
           </button>
           <button
             type="button"
@@ -2976,7 +3573,7 @@ function SessionActionMenu({
             }}
           >
             <TrashMenuIcon />
-            删除
+            Delete
           </button>
         </div>
       ) : null}
@@ -2987,6 +3584,7 @@ function SessionActionMenu({
 function SessionListItem({
   session,
   active,
+  running,
   onSelect,
   onRename,
   onDelete,
@@ -2994,6 +3592,7 @@ function SessionListItem({
 }: {
   session: ChatSession;
   active: boolean;
+  running: boolean;
   onSelect: () => void;
   onRename: (title: string) => void;
   onDelete: () => void;
@@ -3010,7 +3609,10 @@ function SessionListItem({
     onRename(draftTitle);
     setEditing(false);
   };
-  const iconSlots = getSessionListItemIconSlots({ pinned: Boolean(session.pinned) });
+  const iconSlots = getSessionListItemIconSlots({
+    pinned: Boolean(session.pinned),
+    running,
+  });
 
   if (editing) {
     return (
@@ -3045,7 +3647,9 @@ function SessionListItem({
         active ? "bg-surface shadow-[var(--shadow-card)]" : "hover:bg-surface",
       ].join(" ")}
     >
-      {iconSlots.leading === "session" ? (
+      {iconSlots.leading === "running" ? (
+        <SessionRunningIcon />
+      ) : iconSlots.leading === "session" ? (
         <SessionBubbleIcon />
       ) : null}
       <button
@@ -3062,8 +3666,8 @@ function SessionListItem({
       {iconSlots.trailing === "pin" && (
         <span
           className="shrink-0 text-muted"
-          title="已置顶"
-          aria-label="已置顶"
+          title="Pinned"
+          aria-label="Pinned"
         >
           <PinMenuIcon />
         </span>
@@ -3087,6 +3691,7 @@ type SessionPaneProps = {
   filteredSessions: ChatSession[];
   query: string;
   sessionCount: number;
+  runningThreadIds: ReadonlySet<string>;
   workspaceFileCount: number;
   workspaceConfig: WorkspaceConfigStore;
   capabilitiesReady: boolean;
@@ -3109,6 +3714,7 @@ function SessionPane({
   filteredSessions,
   query,
   sessionCount,
+  runningThreadIds,
   workspaceFileCount,
   workspaceConfig,
   capabilitiesReady,
@@ -3141,7 +3747,7 @@ function SessionPane({
           >
             <SidebarToggleIcon />
           </button>
-          <div className={previewClassNames.panel} aria-label="工作区侧栏预览">
+          <div className={previewClassNames.panel} aria-label="Workspace sidebar preview">
             <SessionPaneContent
               activeSessionId={activeSessionId}
               activeConfigPanel={activeConfigPanel}
@@ -3149,6 +3755,7 @@ function SessionPane({
               filteredSessions={filteredSessions}
               query={query}
               sessionCount={sessionCount}
+              runningThreadIds={runningThreadIds}
               workspaceFileCount={workspaceFileCount}
               workspaceConfig={workspaceConfig}
               capabilitiesReady={capabilitiesReady}
@@ -3178,6 +3785,7 @@ function SessionPane({
         filteredSessions={filteredSessions}
         query={query}
         sessionCount={sessionCount}
+        runningThreadIds={runningThreadIds}
         workspaceFileCount={workspaceFileCount}
         workspaceConfig={workspaceConfig}
         capabilitiesReady={capabilitiesReady}
@@ -3202,6 +3810,7 @@ function SessionPaneContent({
   filteredSessions,
   query,
   sessionCount,
+  runningThreadIds,
   workspaceFileCount,
   workspaceConfig,
   capabilitiesReady,
@@ -3217,6 +3826,25 @@ function SessionPaneContent({
   preview = false,
 }: Omit<SessionPaneProps, "collapsed"> & { preview?: boolean }) {
   const previewClassNames = getCollapsedWorkspacePreviewClassNames();
+  const resourceNavGroups = getWorkspaceResourceNavGroups({
+    workspaceConfig,
+    workspaceFileCount,
+    activeConfigPanel,
+    activeFilesPanel,
+    capabilitiesReady,
+    supportsFiles: hasCapability("files"),
+    supportsKnowledge: isResourcePanelSupported("kb"),
+    supportsMcp: isResourcePanelSupported("mcp"),
+    supportsSkills: isResourcePanelSupported("skill"),
+  });
+
+  const handleResourceAction = (action: WorkspaceResourceNavAction) => {
+    if (action.type === "assets") {
+      onOpenFilesPanel();
+      return;
+    }
+    onOpenConfigPanel(action.panel);
+  };
 
   return (
     <div
@@ -3231,85 +3859,50 @@ function SessionPaneContent({
           D
         </div>
         <div className="min-w-0 flex-1">
-          <h1 className="truncate text-sm font-semibold text-foreground">数据任务</h1>
-          <p className="text-xs text-muted-light">{sessionCount} 个会话</p>
+          <h1 className="truncate text-sm font-semibold text-foreground">Data Tasks</h1>
+          <p className="text-xs text-muted-light">{sessionCount} sessions</p>
         </div>
         <button
           type="button"
           onClick={onToggleCollapse}
-          title={preview ? "展开为常驻侧栏" : "收起为工作区快捷栏"}
-          aria-label={preview ? "展开为常驻侧栏" : "收起为工作区快捷栏"}
+          title={preview ? "Expand to persistent sidebar" : "Collapse to workspace rail"}
+          aria-label={preview ? "Expand to persistent sidebar" : "Collapse to workspace rail"}
           className="flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-lg text-muted-light transition-colors duration-200 hover:bg-surface-subtle hover:text-foreground"
         >
           <SidebarToggleIcon />
         </button>
       </div>
 
-      <div className="border-b border-border px-3 py-3">
-        <div className="mb-1 flex items-center justify-between gap-2">
-          <span className={sectionLabelClass}>工作区默认配置</span>
+      <div className="border-b border-border px-2.5 pt-1.5 pb-1">
+        <div className="mb-0.5 px-0.5">
+          <span className={sectionLabelClass}>Workspace Resources</span>
         </div>
-        <p className="mb-1.5 text-[11px] leading-4 text-muted-light">
-          默认全部可用；本次任务的启用/关闭将在对话框中控制
-        </p>
-        <div className="flex flex-col gap-0.5">
-          <ConfigRow
-            kind="db"
-            value={configSummary("db", workspaceConfig)}
-            active={activeConfigPanel === "db"}
-            onClick={() => onOpenConfigPanel("db")}
-          />
-          <ConfigRow
-            kind="kb"
-            value={configSummary("kb", workspaceConfig)}
-            active={activeConfigPanel === "kb"}
-            unsupported={capabilitiesReady && !isResourcePanelSupported("kb")}
-            onClick={() => onOpenConfigPanel("kb")}
-          />
-          <ConfigRow
-            kind="mcp"
-            value={configSummary("mcp", workspaceConfig)}
-            active={activeConfigPanel === "mcp"}
-            unsupported={capabilitiesReady && !isResourcePanelSupported("mcp")}
-            onClick={() => onOpenConfigPanel("mcp")}
-          />
-          <ConfigRow
-            kind="skill"
-            value={configSummary("skill", workspaceConfig)}
-            active={activeConfigPanel === "skill"}
-            unsupported={capabilitiesReady && !isResourcePanelSupported("skill")}
-            onClick={() => onOpenConfigPanel("skill")}
-          />
-          <ConfigRow
-            kind="llm"
-            value={configSummary("llm", workspaceConfig)}
-            active={activeConfigPanel === "llm"}
-            onClick={() => onOpenConfigPanel("llm")}
-          />
-          <WorkspaceFilesRow
-            count={workspaceFileCount}
-            active={activeFilesPanel}
-            unsupported={capabilitiesReady && !hasCapability("files")}
-            onClick={onOpenFilesPanel}
-          />
+        <div className="flex flex-col gap-px">
+          {resourceNavGroups.map((group) => (
+            <ResourceNavCard
+              key={group.id}
+              group={group}
+              onAction={handleResourceAction}
+            />
+          ))}
         </div>
       </div>
 
-      <div className="border-b border-border p-3">
+      <div className="border-b border-border px-2.5 py-2">
         <button
           type="button"
           onClick={onCreateSession}
           className="h-9 w-full cursor-pointer rounded-lg bg-primary text-sm font-semibold text-white transition-colors duration-200 hover:bg-primary-light focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/25"
         >
-          新建数据任务
+          New data task
         </button>
-        <label className="mt-3 block">
-          <span className="sr-only">搜索会话</span>
+        <label className="mt-2 block">
+          <span className="sr-only">Search conversations</span>
           <input
             value={query}
             onChange={(event) => onQueryChange(event.target.value)}
             className="h-9 w-full rounded-lg border border-border bg-surface px-3 text-sm text-foreground outline-none transition-colors duration-200 placeholder:text-muted-light focus:border-muted-light focus:bg-surface"
-            placeholder="搜索会话"
+            placeholder="Search conversations"
           />
         </label>
       </div>
@@ -3322,17 +3915,18 @@ function SessionPaneContent({
         }
       >
         <div className="px-2 pb-2 text-xs font-semibold text-muted-light">
-          {preview ? "历史对话" : "会话"}
+          {preview ? "History" : "Sessions"}
         </div>
         <div className="flex flex-col gap-0.5">
           {filteredSessions.length === 0 ? (
-            <p className="px-2 py-3 text-xs text-muted-light">没有匹配的会话。</p>
+            <p className="px-2 py-3 text-xs text-muted-light">No matching sessions.</p>
           ) : (
             filteredSessions.map((session) => (
               <SessionListItem
-                key={session.threadId || session.id}
+                key={session.id}
                 session={session}
                 active={session.id === activeSessionId}
+                running={runningThreadIds.has(session.threadId)}
                 onSelect={() => onSelectSession(session.id)}
                 onRename={(title) => onRenameSession(session.id, title)}
                 onDelete={() => onDeleteSession(session.id)}
@@ -3360,15 +3954,15 @@ function WorkspaceFilesLibraryPanel({
           type="button"
           onClick={onBack}
           className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-muted-light transition hover:bg-surface-subtle hover:text-foreground"
-          aria-label="返回对话"
-          title="返回对话"
+          aria-label="Back to workspace"
+          title="Back to workspace"
         >
           <ChevronIcon direction="left" />
         </button>
         <div className="min-w-0">
-          <h2 className={panelTitleClass}>工作区文件</h2>
+          <h2 className={panelTitleClass}>Assets</h2>
           <p className="text-xs text-muted-light">
-            跨会话可复用的文件资产，可在 @ 文件中注入到后续任务。
+            Reusable workspace assets for future data tasks and @ mentions.
           </p>
         </div>
       </div>
@@ -3383,9 +3977,11 @@ function WorkspaceConfigPanel({
   panel,
   items,
   workspaceConfig,
+  datasourceTypes,
   loading,
   onAdd,
   onBack,
+  onSwitchPanel,
   onSaveItem,
   onDeleteItem,
   onTestItem,
@@ -3398,6 +3994,7 @@ function WorkspaceConfigPanel({
   panel: WorkspaceConfigPanelKey;
   items: WorkspaceConfigItem[];
   workspaceConfig: WorkspaceConfigStore;
+  datasourceTypes: DatasourceTypeDto[];
   loading?: boolean;
   onAdd: (
     payload: {
@@ -3409,6 +4006,7 @@ function WorkspaceConfigPanel({
     skillFile?: File,
   ) => Promise<string>;
   onBack: () => void;
+  onSwitchPanel?: (panel: WorkspaceConfigPanelKey) => void;
   onSaveItem: (item: WorkspaceConfigItem) => Promise<WorkspaceConfigItem>;
   onDeleteItem: (itemId: string) => Promise<void>;
   onTestItem: (itemId: string) => Promise<Record<string, unknown>>;
@@ -3425,6 +4023,8 @@ function WorkspaceConfigPanel({
   const [panelError, setPanelError] = useState<string | null>(null);
   const [actionBusy, setActionBusy] = useState(false);
   const [testResult, setTestResult] = useState<ConfigTestPresentation | null>(null);
+  const [dbGalleryOpen, setDbGalleryOpen] = useState(false);
+  const [explorerItemId, setExplorerItemId] = useState<string | null>(null);
 
   useEffect(() => {
     setDetailItemId(null);
@@ -3433,6 +4033,8 @@ function WorkspaceConfigPanel({
     setPendingSkillFile(null);
     setPanelError(null);
     setTestResult(null);
+    setDbGalleryOpen(false);
+    setExplorerItemId(null);
   }, [panel]);
 
   useEffect(() => {
@@ -3459,40 +4061,49 @@ function WorkspaceConfigPanel({
       ? items.find((item) => item.id === detailItemId) ?? null
       : null;
   const detailItem = isCreating ? draftItem : editDraftItem ?? savedItem;
+  const explorerItem =
+    panel === "db" && explorerItemId
+      ? items.find((entry) => entry.id === explorerItemId) ?? null
+      : null;
 
   const titles: Record<typeof panel, string> = {
-    db: "数据源",
-    kb: "知识库",
-    mcp: "MCP",
-    skill: "Skill",
-    llm: "模型",
+    db: "Data Sources",
+    kb: "Knowledge",
+    mcp: "Agent Tools",
+    skill: "Agent Tools",
+    llm: "Models",
   };
 
   const detailTitles: Record<typeof panel, string> = {
-    db: "数据源详情",
-    kb: "知识库详情",
-    mcp: "MCP 详情",
-    skill: "Skill 详情",
-    llm: "模型详情",
+    db: "Data source details",
+    kb: "Knowledge base details",
+    mcp: "MCP server details",
+    skill: "Skill package details",
+    llm: "Model profile details",
   };
 
   const descriptions: Record<typeof panel, string> = {
-    db: "管理数据源；支持 DuckDB demo / SQLite / CSV / Excel / PostgreSQL / MySQL。配置经 REST API 持久化。",
-    kb: "管理知识库；上传文档、重建索引与调试检索均经 REST API。",
-    mcp: "管理 MCP 服务器连接；测试连接后会缓存 tools manifest。",
-    skill: "上传 SKILL.md 或 .zip 技能包；包正文存储在服务端，run 时仅传 skill id。",
-    llm: "管理 LLM model profile；run 时通过 run_config.activeLlmProfileId 切换模型。",
+    db: "Manage databases and connection profiles.",
+    kb: "Manage documents, indexes and retrieval settings for workspace knowledge.",
+    mcp: "Manage MCP server connections. Tests refresh the cached tools manifest.",
+    skill: "Import SKILL.md or .zip packages. Runtime payloads reference skill ids only.",
+    llm: "Manage LLM model profiles. Runs reference activeLlmProfileId through run_config.",
   };
 
   const addLabels: Record<typeof panel, string> = {
-    db: "新增数据源",
-    kb: "新增知识库",
-    mcp: "新增 MCP",
-    skill: "导入 Skill",
-    llm: "新增模型",
+    db: "Add data source",
+    kb: "Add knowledge base",
+    mcp: "Add MCP",
+    skill: "Import Skill",
+    llm: "Add model",
   };
 
   const openCreate = () => {
+    if (panel === "db") {
+      setDbGalleryOpen(true);
+      setExplorerItemId(null);
+      return;
+    }
     setDraftItem({
       id: NEW_CONFIG_ITEM_ID,
       name: "",
@@ -3503,12 +4114,37 @@ function WorkspaceConfigPanel({
     setDetailItemId(NEW_CONFIG_ITEM_ID);
   };
 
+  const openDbCreateFromType = (type: DatasourceTypeDto) => {
+    setDraftItem({
+      id: NEW_CONFIG_ITEM_ID,
+      name: `${type.label} datasource`,
+      description: type.description ?? "Custom data source",
+      enabled: true,
+      settings: buildDatasourceSettingsForType(type),
+    });
+    setDbGalleryOpen(false);
+    setExplorerItemId(null);
+    setDetailItemId(NEW_CONFIG_ITEM_ID);
+  };
+
   const handleHeaderBack = () => {
     if (detailItem) {
+      if (panel === "db") {
+        onBack();
+        return;
+      }
       setDetailItemId(null);
       setDraftItem(null);
       setEditDraftItem(null);
       setTestResult(null);
+      return;
+    }
+    if (dbGalleryOpen) {
+      setDbGalleryOpen(false);
+      return;
+    }
+    if (explorerItem) {
+      setExplorerItemId(null);
       return;
     }
     onBack();
@@ -3522,7 +4158,7 @@ function WorkspaceConfigPanel({
       const saved = await onSaveItem(editDraftItem);
       setEditDraftItem(saved);
     } catch (error) {
-      setPanelError(error instanceof Error ? error.message : "保存失败");
+      setPanelError(error instanceof Error ? error.message : "Save failed");
     } finally {
       setActionBusy(false);
     }
@@ -3545,7 +4181,7 @@ function WorkspaceConfigPanel({
       const createdId = await onAdd(
         {
           name,
-          description: draftItem.description.trim() || "自定义配置项",
+          description: draftItem.description.trim() || "Custom configuration item",
           enabled: draftItem.enabled,
           settings: draftItem.settings,
         },
@@ -3555,7 +4191,7 @@ function WorkspaceConfigPanel({
       setDraftItem(null);
       setPendingSkillFile(null);
     } catch (error) {
-      setPanelError(error instanceof Error ? error.message : "创建失败");
+      setPanelError(error instanceof Error ? error.message : "Create failed");
     } finally {
       setActionBusy(false);
     }
@@ -3567,36 +4203,110 @@ function WorkspaceConfigPanel({
         <button
           type="button"
           onClick={handleHeaderBack}
-          aria-label={detailItem ? `返回${titles[panel]}列表` : "返回工作区"}
+          aria-label={detailItem || dbGalleryOpen || explorerItem ? `Back to ${titles[panel]} list` : "Back to workspace"}
           className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-slate-500 transition hover:bg-slate-100 hover:text-slate-700"
         >
           <ChevronIcon direction="left" />
         </button>
+        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-border bg-surface-subtle text-muted-light">
+          <WorkspaceResourceIcon
+            icon={
+              panel === "kb"
+                ? "book"
+                : panel === "llm"
+                  ? "models"
+                  : panel === "db"
+                    ? "database"
+                    : "tools"
+            }
+          />
+        </span>
         <div className="min-w-0 flex-1">
           <h2 className="truncate text-base font-semibold text-slate-950">
             {detailItem
               ? isCreating
                 ? addLabels[panel]
                 : detailItem.name || titles[panel]
+              : dbGalleryOpen
+                ? "Choose data source"
+                : explorerItem
+                  ? explorerItem.name || "Data source browser"
               : titles[panel]}
           </h2>
           <p className="text-xs text-slate-500">
-            {detailItem ? detailTitles[panel] : "工作区配置"}
+            {detailItem
+              ? detailTitles[panel]
+              : dbGalleryOpen
+                ? "Pick one backend-enabled adapter"
+                : explorerItem
+                  ? "Browse schema and data preview"
+                  : "Workspace configuration"}
           </p>
         </div>
       </header>
 
       <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
-        <div className="mx-auto max-w-2xl space-y-4">
+        <div className="w-full space-y-4">
           {panelError ? (
             <div className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-800">
               {panelError}
             </div>
           ) : null}
           {loading ? (
-            <p className="text-sm text-slate-500">正在从 REST API 加载配置…</p>
+            <p className="text-sm text-slate-500">Loading configuration from REST API...</p>
           ) : null}
-          {detailItem ? (
+          {(panel === "mcp" || panel === "skill") && !detailItem ? (
+            <AgentToolsTabs
+              activePanel={panel}
+              mcpCount={workspaceConfig.mcp.length}
+              skillCount={workspaceConfig.skill.length}
+              onSelect={(nextPanel) => {
+                if (nextPanel !== panel) onSwitchPanel?.(nextPanel);
+              }}
+            />
+          ) : null}
+
+          {dbGalleryOpen ? (
+            <DatasourceTypeGallery
+              types={datasourceTypes}
+              onSelect={openDbCreateFromType}
+            />
+          ) : explorerItem ? (
+            <DatasourceExplorerPanel
+              item={explorerItem}
+              onBack={() => setExplorerItemId(null)}
+              onEdit={() => {
+                setExplorerItemId(null);
+                setDetailItemId(explorerItem.id);
+              }}
+              onTest={async () => {
+                setActionBusy(true);
+                setPanelError(null);
+                try {
+                  await onTestItem(explorerItem.id);
+                } catch (error) {
+                  setPanelError(error instanceof Error ? error.message : "Test failed");
+                } finally {
+                  setActionBusy(false);
+                }
+              }}
+              onIntrospect={
+                onIntrospect
+                  ? async () => {
+                      setActionBusy(true);
+                      setPanelError(null);
+                      try {
+                        await onIntrospect(explorerItem.id);
+                      } catch (error) {
+                        setPanelError(error instanceof Error ? error.message : "Schema sync failed");
+                      } finally {
+                        setActionBusy(false);
+                      }
+                    }
+                  : undefined
+              }
+            />
+          ) : detailItem ? (
             <ConfigItemDetailView
               item={detailItem}
               savedItem={savedItem}
@@ -3654,7 +4364,7 @@ function WorkspaceConfigPanel({
                         setDetailItemId(null);
                       } catch (error) {
                         setPanelError(
-                          error instanceof Error ? error.message : "删除失败",
+                          error instanceof Error ? error.message : "Delete failed",
                         );
                       } finally {
                         setActionBusy(false);
@@ -3689,7 +4399,7 @@ function WorkspaceConfigPanel({
                         await onIntrospect(detailItem.id);
                       } catch (error) {
                         setPanelError(
-                          error instanceof Error ? error.message : "Schema 抓取失败",
+                          error instanceof Error ? error.message : "Schema sync failed",
                         );
                       } finally {
                         setActionBusy(false);
@@ -3705,7 +4415,7 @@ function WorkspaceConfigPanel({
                         await onReindex(detailItem.id);
                       } catch (error) {
                         setPanelError(
-                          error instanceof Error ? error.message : "重建索引失败",
+                          error instanceof Error ? error.message : "Reindex failed",
                         );
                       } finally {
                         setActionBusy(false);
@@ -3721,7 +4431,7 @@ function WorkspaceConfigPanel({
                         await onUploadKnowledgeFile(detailItem.id, file);
                       } catch (error) {
                         setPanelError(
-                          error instanceof Error ? error.message : "上传失败",
+                          error instanceof Error ? error.message : "Upload failed",
                         );
                       } finally {
                         setActionBusy(false);
@@ -3737,7 +4447,7 @@ function WorkspaceConfigPanel({
                         await onReplaceSkill(detailItem.id, file);
                       } catch (error) {
                         setPanelError(
-                          error instanceof Error ? error.message : "替换 Skill 失败",
+                          error instanceof Error ? error.message : "Failed to replace Skill",
                         );
                       } finally {
                         setActionBusy(false);
@@ -3753,7 +4463,7 @@ function WorkspaceConfigPanel({
                         await onValidateSkill(detailItem.id);
                       } catch (error) {
                         setPanelError(
-                          error instanceof Error ? error.message : "校验失败",
+                          error instanceof Error ? error.message : "Validation failed",
                         );
                       } finally {
                         setActionBusy(false);
@@ -3770,26 +4480,187 @@ function WorkspaceConfigPanel({
           ) : (
             <>
               <p className="text-sm leading-6 text-slate-500">{descriptions[panel]}</p>
-              <div className="grid gap-2 sm:grid-cols-2">
-                {items.map((item) => (
-                  <ConfigItemCard
-                    key={item.id}
-                    item={item}
-                    onSelect={() => setDetailItemId(item.id)}
-                  />
-                ))}
-                <AddConfigCard
-                  label={addLabels[panel]}
-                  onClick={openCreate}
-                />
-              </div>
               {panel === "db" ? (
-                <SchemaBrowserPanel datasources={items} />
-              ) : null}
+                <DatasourceConfigList
+                  items={items}
+                  datasourceTypes={datasourceTypes}
+                  onAdd={openCreate}
+                  onBrowse={(itemId) => setExplorerItemId(itemId)}
+                  onEdit={(itemId) => setDetailItemId(itemId)}
+                  onTest={(itemId) =>
+                    onTestItem(itemId).catch((error) => {
+                      setPanelError(error instanceof Error ? error.message : "Test failed");
+                    })
+                  }
+                />
+              ) : (
+                <div className={CONFIG_ITEM_CARD_GRID_CLASS}>
+                  {items.map((item) => (
+                    <ConfigItemCard
+                      key={item.id}
+                      item={item}
+                      onSelect={() => setDetailItemId(item.id)}
+                    />
+                  ))}
+                  <AddConfigCard
+                    label={addLabels[panel]}
+                    onClick={openCreate}
+                  />
+                </div>
+              )}
             </>
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+function AgentToolsTabs({
+  activePanel,
+  mcpCount,
+  skillCount,
+  onSelect,
+}: {
+  activePanel: "mcp" | "skill";
+  mcpCount: number;
+  skillCount: number;
+  onSelect: (panel: "mcp" | "skill") => void;
+}) {
+  return (
+    <div className="inline-flex rounded-xl border border-border bg-slate-50 p-1">
+      {([
+        ["mcp", "MCP", mcpCount],
+        ["skill", "Skills", skillCount],
+      ] as const).map(([panel, label, count]) => (
+        <button
+          key={panel}
+          type="button"
+          onClick={() => onSelect(panel)}
+          className={[
+            "cursor-pointer rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors duration-200",
+            activePanel === panel
+              ? "bg-white text-slate-950 shadow-sm"
+              : "text-slate-500 hover:text-slate-800",
+          ].join(" ")}
+        >
+          {label}
+          <span className="ml-1.5 rounded-full border border-border bg-slate-50 px-1.5 py-px text-[10px] text-slate-500">
+            {count}
+          </span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function DatasourceConfigList({
+  items,
+  datasourceTypes,
+  onAdd,
+  onBrowse,
+  onEdit,
+  onTest,
+}: {
+  items: WorkspaceConfigItem[];
+  datasourceTypes: DatasourceTypeDto[];
+  onAdd: () => void;
+  onBrowse: (itemId: string) => void;
+  onEdit: (itemId: string) => void;
+  onTest: (itemId: string) => void;
+}) {
+  const typeLabelByName = new Map(datasourceTypes.map((type) => [type.name, type.label]));
+
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-border bg-surface-subtle px-4 py-3">
+        <div>
+          <h3 className="text-sm font-semibold text-slate-950">Configured data sources</h3>
+          <p className="mt-1 text-xs text-slate-600">
+            Browse configured sources, sync schema, and open table-level previews.
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={onAdd}
+          className="h-9 cursor-pointer rounded-lg bg-slate-950 px-4 text-sm font-semibold text-white transition-colors duration-200 hover:bg-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-300"
+        >
+          Add data source
+        </button>
+      </div>
+
+      {items.length === 0 ? (
+        <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50 p-6 text-center">
+          <p className="text-sm font-medium text-slate-700">No data sources configured.</p>
+          <p className="mt-1 text-xs text-slate-500">Start from the adapter gallery to create one.</p>
+        </div>
+      ) : (
+        <div className={DATASOURCE_CARD_GRID_CLASS}>
+          {items.map((item) => {
+            const type = item.settings?.type ?? "unknown";
+            const typeLabel = typeLabelByName.get(type) ?? type;
+            const status = configItemStatusBadge(item);
+            const connection = summarizeDatasourceConnection(item);
+            return (
+              <article
+                key={item.id}
+                className="group rounded-2xl border border-border bg-white p-4 transition-colors duration-200 hover:border-primary-light/30 hover:bg-primary-light/5"
+              >
+                <div className="flex items-start gap-3">
+                  <DatasourceTypeIcon
+                    typeName={type}
+                    className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border"
+                    iconClassName="h-8 w-8 object-contain"
+                  />
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <h4 className="truncate text-sm font-semibold text-slate-950">{item.name}</h4>
+                      {status ? (
+                        <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium ${status.className}`}>
+                          {status.label}
+                        </span>
+                      ) : null}
+                    </div>
+                    <p className="mt-0.5 truncate font-mono text-[10px] text-slate-400">{item.id}</p>
+                    <p className="mt-2 truncate text-xs text-slate-600">
+                      <span className="font-medium text-slate-800">{typeLabel}</span>
+                      {connection ? ` · ${connection}` : ""}
+                    </p>
+                    <div className="mt-3 flex flex-wrap gap-1.5 text-[10px] text-slate-500">
+                      <span className="rounded-full border border-border bg-slate-50 px-2 py-0.5">
+                        {item.enabled ? "Workspace default" : "Disabled by default"}
+                      </span>
+                      {item.hasSecret ? (
+                        <span className="rounded-full border border-emerald-100 bg-emerald-50 px-2 py-0.5 text-emerald-700">
+                          Secret saved
+                        </span>
+                      ) : null}
+                      <span className="rounded-full border border-border bg-slate-50 px-2 py-0.5">
+                        Browse schema and data
+                      </span>
+                    </div>
+                  </div>
+                </div>
+                <div className="mt-4 flex flex-wrap justify-end gap-2">
+                  <button type="button" onClick={() => onTest(item.id)} className={btnSecondaryClass}>
+                    Test
+                  </button>
+                  <button type="button" onClick={() => onEdit(item.id)} className={btnSecondaryClass}>
+                    Edit
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onBrowse(item.id)}
+                    className="cursor-pointer rounded-lg bg-slate-950 px-3 py-1.5 text-xs font-semibold text-white transition-colors duration-200 hover:bg-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-300"
+                  >
+                    Browse
+                  </button>
+                </div>
+              </article>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
@@ -3864,7 +4735,7 @@ function ConfigItemDetailView({
       .catch((error: unknown) => {
         if (!cancelled) {
           setMcpTools(null);
-          setMcpToolsError(error instanceof Error ? error.message : "无法加载 tools manifest");
+          setMcpToolsError(error instanceof Error ? error.message : "Unable to load tools manifest");
         }
       });
     return () => {
@@ -3899,33 +4770,33 @@ function ConfigItemDetailView({
 
   const configKindLabel =
     panel === "db"
-      ? "数据源"
+      ? "Data source"
       : panel === "kb"
-        ? "知识库"
+        ? "Knowledge base"
         : panel === "mcp"
           ? "MCP"
           : panel === "llm"
-            ? "模型"
+            ? "Model"
             : "Skill";
 
   const notes: Record<WorkspaceConfigPanelKey, string> = {
     db:
-      "数据源经 REST API 注册；凭据写入 secretRef，读接口不回传明文。" +
-      "测试连接与 schema 抓取结果会更新 connectionStatus。",
-    kb: "知识库文档与索引经 REST API 管理；run 时按 run_config.enabledKnowledgeIds 检索。",
+      "Data sources are registered through the REST API. Credentials are stored in secretRef and never returned in reads." +
+      "Connection tests and schema sync update connectionStatus.",
+    kb: "Knowledge documents and indexes are managed through the REST API. Runs retrieve by run_config.enabledKnowledgeIds.",
     mcp:
-      "MCP server 经 REST API 注册；测试连接会刷新 toolManifest 与 healthStatus。",
+      "MCP servers are registered through the REST API. Connection tests refresh toolManifest and healthStatus.",
     llm:
-      "Model profile 经 REST API 管理；run 时通过 run_config.activeLlmProfileId 切换。",
+      "Model profiles are managed through the REST API. Runs switch with run_config.activeLlmProfileId.",
     skill: isBuiltinSkill
-      ? "内置 Skill 由服务端预置，run 时仅传 skill id。"
-      : "自定义 Skill 经 multipart REST 上传；包正文存储在服务端。",
+      ? "Built-in Skills are provided by the server. Runs send only the skill id."
+      : "Custom Skills are uploaded through multipart REST. Package content is stored server-side.",
   };
 
   const createDisabledFinal =
     Boolean(createDisabled) ||
     !isWorkspaceConfigItemValid(panel, item, settings);
-  const createLabel = panel === "skill" ? "导入 Skill" : "创建配置项";
+  const createLabel = panel === "skill" ? "Import Skill" : "Create configuration item";
   const isDirty =
     mode === "edit" &&
     savedItem != null &&
@@ -3936,7 +4807,7 @@ function ConfigItemDetailView({
     !isWorkspaceConfigItemValid(panel, item, settings);
 
   return (
-    <div className="space-y-4">
+    <div className={`space-y-4 ${CONFIG_DETAIL_MAX_WIDTH_CLASS}`}>
       {panel === "skill" && <SkillConfigProtocolHint builtin={isBuiltinSkill} />}
 
       {!isBuiltinSkill && panel === "skill" && (
@@ -3961,22 +4832,22 @@ function ConfigItemDetailView({
         <section className="flex flex-wrap gap-2 rounded-xl border border-border bg-white px-5 py-4">
           {onTest ? (
             <ActionButton
-              label={testBusy ? "测试中…" : "测试连接"}
+              label={testBusy ? "Testing..." : "Test connection"}
               disabled={testBusy}
               onClick={() => void onTest()}
             />
           ) : null}
           {onIntrospect ? (
-            <ActionButton label="抓取 Schema" onClick={() => void onIntrospect()} />
+            <ActionButton label="Sync schema" onClick={() => void onIntrospect()} />
           ) : null}
           {onReindex ? (
-            <ActionButton label="重建索引" onClick={() => void onReindex()} />
+            <ActionButton label="Reindex" onClick={() => void onReindex()} />
           ) : null}
           {onValidateSkill ? (
-            <ActionButton label="语义校验" onClick={() => void onValidateSkill()} />
+            <ActionButton label="Validate semantics" onClick={() => void onValidateSkill()} />
           ) : null}
           {onDelete ? (
-            <ActionButton label="删除" tone="danger" onClick={() => void onDelete()} />
+            <ActionButton label="Delete" tone="danger" onClick={() => void onDelete()} />
           ) : null}
         </section>
       ) : null}
@@ -3986,30 +4857,30 @@ function ConfigItemDetailView({
       <div className="rounded-xl border border-border bg-white px-5 py-4">
         <div className="space-y-3">
           <EditableField
-            label="名称"
+            label="Name"
             value={item.name}
             readOnly={nameReadOnly}
-            placeholder={`输入${configKindLabel}名称`}
+            placeholder={`Enter ${configKindLabel}Name`}
             onChange={(name) => onUpdate({ name })}
           />
           <EditableField
-            label="描述"
+            label="Description"
             value={item.description}
             multiline
-            placeholder="简短说明"
+            placeholder="Short description"
             onChange={(description) => onUpdate({ description })}
           />
         </div>
       </div>
 
       {mode === "edit" && (
-        <DetailField label="配置 ID" value={item.id} />
+        <DetailField label="Configuration ID" value={item.id} />
       )}
 
       {(panel !== "skill" || hasUploadedSkillPackage) && (
         <section className="space-y-3 rounded-xl border border-border bg-slate-50 px-5 py-4">
           <h4 className="text-xs font-semibold uppercase tracking-[0.06em] text-slate-400">
-            {panel === "skill" ? "包信息" : "具体配置"}
+            {panel === "skill" ? "Package information" : "Configuration details"}
           </h4>
           {panel === "llm" && (
             <LlmConfigProtocolHint builtin={!!item.builtin && mode === "edit"} />
@@ -4029,7 +4900,7 @@ function ConfigItemDetailView({
                 item.hasSecret &&
                 isSecretField &&
                 !(settings[field.key] ?? "").trim()
-                  ? "已保存（留空则不修改）"
+                  ? "Saved (leave blank to keep unchanged)"
                   : field.placeholder;
               const lockField = panel === "skill";
               const pending = lockField && isFieldPending(field, settings);
@@ -4064,13 +4935,13 @@ function ConfigItemDetailView({
 
       <section className="rounded-xl border border-border bg-white px-5 py-4">
         <h4 className="text-xs font-semibold uppercase tracking-[0.06em] text-slate-400">
-          说明
+          Notes
         </h4>
         <p className="mt-2 text-sm leading-6 text-slate-600">{notes[panel]}</p>
         {mode === "edit" && (
           <p className="mt-2 text-xs text-slate-400">
-            {item.builtin ? "内置配置项" : "自定义配置项"}
-            {" · 工作区默认可用"}
+            {item.builtin ? "Built-in configuration item" : "Custom configuration item"}
+            {" · Available by default in the workspace"}
           </p>
         )}
       </section>
@@ -4091,10 +4962,10 @@ function ConfigItemDetailView({
       {mode === "edit" && onSave && onCancel ? (
         <div className="flex flex-wrap items-center justify-end gap-2 border-t border-border pt-4">
           {isDirty ? (
-            <span className="mr-auto text-xs text-amber-700">有未保存的修改</span>
+            <span className="mr-auto text-xs text-amber-700">Unsaved changes</span>
           ) : null}
           <ActionButton
-            label="取消"
+            label="Cancel"
             disabled={!isDirty || saveBusy}
             onClick={onCancel}
           />
@@ -4104,7 +4975,7 @@ function ConfigItemDetailView({
             onClick={onSave}
             className="h-9 rounded-lg bg-code-bg px-4 text-sm font-medium text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-40"
           >
-            {saveBusy ? "保存中…" : "保存"}
+            {saveBusy ? "Saving..." : "Save"}
           </button>
         </div>
       ) : null}
@@ -4172,9 +5043,9 @@ function KnowledgeFileUpload({
     <section className="rounded-xl border border-dashed border-slate-300 bg-white px-5 py-4">
       <div className="flex items-center justify-between gap-3">
         <div>
-          <h4 className="text-sm font-medium text-slate-900">上传文档</h4>
+          <h4 className="text-sm font-medium text-slate-900">Upload document</h4>
           <p className="mt-1 text-xs text-slate-500">
-            上传到知识库并参与后续 reindex / 检索。
+            Upload into the knowledge base for later reindexing and retrieval.
           </p>
         </div>
         <button
@@ -4182,7 +5053,7 @@ function KnowledgeFileUpload({
           onClick={() => inputRef.current?.click()}
           className="h-9 rounded-lg border border-border bg-white px-4 text-sm font-medium text-slate-700 transition hover:bg-slate-50"
         >
-          选择文件
+          Choose file
         </button>
       </div>
       <input
@@ -4230,9 +5101,9 @@ function SkillPackageUpload({
     <section className="space-y-3 rounded-xl border border-dashed border-slate-300 bg-white px-5 py-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h4 className="text-sm font-medium text-slate-900">上传 Skill 包</h4>
+          <h4 className="text-sm font-medium text-slate-900">Upload Skill package</h4>
           <p className="mt-1 text-xs leading-5 text-slate-500">
-            支持 SKILL.md（须含 YAML frontmatter）或 .zip 目录包；创建/替换经 REST API 上传。
+            Supports SKILL.md (with YAML frontmatter) or a .zip package. Create/replace uploads through REST API.
           </p>
         </div>
         <button
@@ -4241,12 +5112,12 @@ function SkillPackageUpload({
           onClick={() => inputRef.current?.click()}
           className="h-9 rounded-lg border border-border bg-white px-4 text-sm font-medium text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
         >
-          {loading ? "解析中…" : fileName ? "重新选择文件" : "选择文件"}
+          {loading ? "Parsing..." : fileName ? "Choose another file" : "Choose file"}
         </button>
       </div>
       {fileName && (
         <p className="text-xs text-slate-600">
-          已选：<span className="font-medium text-slate-900">{fileName}</span>
+          Selected: <span className="font-medium text-slate-900">{fileName}</span>
         </p>
       )}
       {error && (
@@ -4271,21 +5142,21 @@ function SkillPackageUpload({
 function SkillConfigProtocolHint({ builtin }: { builtin: boolean }) {
   return (
     <div className="rounded-lg border border-violet-200 bg-violet-50 px-3 py-2.5 text-xs leading-5 text-violet-900">
-      <p className="font-medium">Skill 包说明</p>
+      <p className="font-medium">Skill package notes</p>
       <ul className="mt-1 list-inside list-disc space-y-0.5 text-violet-800/90">
         <li>
-          标准结构：目录内含{" "}
-          <code className="text-[11px]">SKILL.md</code>（YAML frontmatter + 指令正文）
+          Standard structure: directory contains{" "}
+          <code className="text-[11px]">SKILL.md</code>(YAML frontmatter + instructions)
         </li>
         <li>
-          后端契约：<code className="text-[11px]">POST /api/v1/skills</code>{" "}
-          multipart 上传；run 仅传{" "}
-          <code className="text-[11px]">activeSkillId</code>，不传包正文
+          Backend contract: <code className="text-[11px]">POST /api/v1/skills</code>{" "}
+          multipart upload; runs send only{" "}
+          <code className="text-[11px]">activeSkillId</code>, not package content
         </li>
         {builtin ? (
-          <li>内置 Skill 由服务端预置，当前前端仅展示元数据</li>
+          <li>Built-in Skills are provided by the server; the frontend only shows metadata</li>
         ) : (
-          <li>自定义 Skill 经 REST multipart 上传；AG-UI context 只带 skill id</li>
+          <li>Custom Skills are uploaded through REST multipart; AG-UI context carries only the skill id</li>
         )}
       </ul>
     </div>
@@ -4295,19 +5166,19 @@ function SkillConfigProtocolHint({ builtin }: { builtin: boolean }) {
 function McpConfigProtocolHint() {
   return (
     <div className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2.5 text-xs leading-5 text-rose-900">
-      <p className="font-medium">MCP 连接说明</p>
+      <p className="font-medium">MCP connection notes</p>
       <ul className="mt-1 list-inside list-disc space-y-0.5 text-rose-800/90">
         <li>
-          远程服务常用 SSE / Streamable HTTP URL，例如{" "}
+          Remote services commonly use SSE / Streamable HTTP URLs, for example{" "}
           <code className="text-[11px]">https://host/mcp</code>
         </li>
         <li>
-          配置经 <code className="text-[11px]">POST /api/v1/mcp-servers</code>{" "}
-          持久化；token 写入 secretRef
+          Configuration is persisted through <code className="text-[11px]">POST /api/v1/mcp-servers</code>{" "}
+          ; tokens are stored in secretRef
         </li>
         <li>
-          run 时按 <code className="text-[11px]">run_config.enabledMcpServerIds</code>{" "}
-          挂载 MCP tools
+          Runs use <code className="text-[11px]">run_config.enabledMcpServerIds</code>{" "}
+          mount MCP tools
         </li>
       </ul>
     </div>
@@ -4317,26 +5188,26 @@ function McpConfigProtocolHint() {
 function LlmConfigProtocolHint({ builtin }: { builtin: boolean }) {
   return (
     <div className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2.5 text-xs leading-5 text-blue-900">
-      <p className="font-medium">AG-UI / dataAgent 对齐说明</p>
+      <p className="font-medium">AG-UI / dataAgent alignment notes</p>
       <ul className="mt-1 list-inside list-disc space-y-0.5 text-blue-800/90">
         <li>
-          服务端 env：<code className="text-[11px]">LLM_PROVIDER</code>、
+          Server env: <code className="text-[11px]">LLM_PROVIDER</code>、
           <code className="text-[11px]">LLM_BASE_URL</code>、
           <code className="text-[11px]">LLM_API_KEY</code>、
           <code className="text-[11px]">LLM_MODEL</code>
         </li>
         <li>
-          Model profile 经{" "}
+          Model profiles are managed through{" "}
           <code className="text-[11px]">POST /api/v1/model-profiles</code>{" "}
-          注册；API Key 写入 secretRef
+          ; API keys are stored in secretRef
         </li>
         <li>
-          run 时通过{" "}
+          Runs switch through{" "}
           <code className="text-[11px]">run_config.activeLlmProfileId</code>{" "}
-          切换模型
+          switch models
         </li>
         {builtin && (
-          <li>「服务端默认」项只读，对应服务端 env 中的 LLM 配置</li>
+          <li>The Server default item is read-only and maps to LLM configuration from server env</li>
         )}
       </ul>
     </div>
@@ -4356,9 +5227,9 @@ function McpToolsManifest({
       {error ? (
         <p className="mt-1 text-xs text-rose-600">{error}</p>
       ) : tools === null ? (
-        <p className="mt-1 text-xs text-slate-400">正在加载…</p>
+        <p className="mt-1 text-xs text-slate-400">Loading...</p>
       ) : tools.length === 0 ? (
-        <p className="mt-1 text-xs text-slate-500">暂无工具；请先测试连接以刷新 manifest。</p>
+        <p className="mt-1 text-xs text-slate-500">No tools yet. Test the connection first to refresh the manifest.</p>
       ) : (
         <ul className="mt-2 max-h-40 space-y-1 overflow-y-auto text-xs text-slate-600">
           {tools.map((tool, index) => {
@@ -4425,7 +5296,7 @@ function EditableField({
         </span>
         {pending ? (
           <span className="rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-semibold text-amber-700">
-            待后端
+            Pending backend
           </span>
         ) : null}
       </span>
@@ -4436,8 +5307,8 @@ function EditableField({
           onChange={(event) => onChange(event.target.value)}
           className={`${className} h-9`}
         >
-          <option value="false">否</option>
-          <option value="true">是</option>
+          <option value="false">No</option>
+          <option value="true">Yes</option>
         </select>
       ) : inputType === "select" && options ? (
         <select
@@ -4446,7 +5317,7 @@ function EditableField({
           onChange={(event) => onChange(event.target.value)}
           className={`${className} h-9`}
         >
-          <option value="">请选择…</option>
+          <option value="">Select...</option>
           {options.map((option) => {
             const optionPending = isOptionPending?.(option.value) ?? false;
             return (
@@ -4456,7 +5327,7 @@ function EditableField({
                 disabled={optionPending}
               >
                 {option.label}
-                {optionPending ? "（待后端）" : ""}
+                {optionPending ? "（Pending backend）" : ""}
               </option>
             );
           })}
@@ -4503,7 +5374,7 @@ function AddConfigCard({ label, onClick }: { label: string; onClick: () => void 
     <button
       type="button"
       onClick={onClick}
-      className="flex min-h-[88px] flex-col items-center justify-center rounded-xl border border-dashed border-slate-300 bg-slate-50 text-slate-500 transition hover:border-slate-400 hover:bg-slate-100 hover:text-slate-700"
+      className="flex h-full min-h-[88px] w-full flex-col items-center justify-center rounded-xl border border-dashed border-slate-300 bg-slate-50 text-slate-500 transition hover:border-slate-400 hover:bg-slate-100 hover:text-slate-700"
     >
       <span className="text-2xl leading-none">+</span>
       <span className="mt-1 text-xs font-medium">{label}</span>
@@ -4527,11 +5398,11 @@ function configItemStatusBadge(
   item: WorkspaceConfigItem,
 ): { label: string; className: string } | null {
   if (item.status === "connected")
-    return { label: "已连接", className: "bg-emerald-50 text-emerald-700" };
+    return { label: "Connected", className: "bg-emerald-50 text-emerald-700" };
   if (item.status === "failed")
-    return { label: "失败", className: "bg-rose-50 text-rose-700" };
+    return { label: "Failed", className: "bg-rose-50 text-rose-700" };
   if (item.builtin) return null;
-  return { label: "未测试", className: "bg-slate-100 text-slate-400" };
+  return { label: "Not tested", className: "bg-slate-100 text-slate-400" };
 }
 
 function ConfigItemCard({
@@ -4542,7 +5413,7 @@ function ConfigItemCard({
   onSelect?: () => void;
 }) {
   const className = [
-    "rounded-xl border px-4 py-3 transition",
+    "w-full rounded-xl border px-4 py-3 transition",
     "border-border bg-white hover:border-slate-300",
     onSelect ? "cursor-pointer hover:bg-slate-50" : "",
   ].join(" ");
@@ -4579,136 +5450,163 @@ function ConfigItemCard({
   return <div className={className}>{content}</div>;
 }
 
-function ConfigRow({
-  kind,
-  value,
-  unsupported,
-  active,
-  onClick,
+function ResourceNavCard({
+  group,
+  onAction,
 }: {
-  kind: WorkspaceConfigKind;
-  value: string;
-  unsupported?: boolean;
-  active?: boolean;
-  onClick?: () => void;
-}) {
-  const label = WORKSPACE_CONFIG_SHORT_LABEL[kind];
-  const badgeClass = WORKSPACE_CONFIG_BADGE_CLASS[kind];
-
-  const className = [
-    "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-xs transition-colors duration-150",
-    onClick ? "cursor-pointer hover:bg-surface" : "",
-    active ? "bg-surface font-medium shadow-[var(--shadow-card)]" : "",
-  ].join(" ");
-
-  const content = (
-    <>
-      <span
-        className={[
-          "inline-flex w-9 shrink-0 items-center justify-center rounded-md px-1 py-px text-[10px] font-semibold uppercase tracking-wide",
-          badgeClass,
-        ].join(" ")}
-      >
-        {label}
-      </span>
-      <span className="min-w-0 flex-1 truncate text-left text-muted">{value}</span>
-      {unsupported && (
-        <span className="shrink-0 rounded bg-surface px-1 py-0.5 text-[10px] text-muted-light">
-          未支持
-        </span>
-      )}
-      {onClick && (
-        <span className="shrink-0 text-muted-light">
-          <ChevronIcon direction="right" />
-        </span>
-      )}
-    </>
-  );
-
-  if (onClick) {
-    return (
-      <button
-        type="button"
-        onClick={onClick}
-        className={className}
-        title={`配置 ${label}`}
-      >
-        {content}
-      </button>
-    );
-  }
-
-  return (
-    <div className={className} title={`${label}: ${value}`}>
-      {content}
-    </div>
-  );
-}
-
-function WorkspaceFilesRow({
-  count,
-  unsupported,
-  active,
-  onClick,
-}: {
-  count: number;
-  unsupported?: boolean;
-  active?: boolean;
-  onClick: () => void;
+  group: WorkspaceResourceNavGroup;
+  onAction: (action: WorkspaceResourceNavAction) => void;
 }) {
   return (
     <button
       type="button"
-      onClick={onClick}
+      onClick={() => onAction(group.action)}
       className={[
-        "flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-xs transition-colors duration-150 hover:bg-surface",
-        active ? "bg-surface font-medium shadow-[var(--shadow-card)]" : "",
+        "group flex min-h-8 w-full cursor-pointer items-center gap-1.5 rounded-md px-1.5 py-1 text-left transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/20",
+        group.active ? "bg-surface shadow-[var(--shadow-card)]" : "hover:bg-surface/80",
       ].join(" ")}
-      title="工作区文件"
+      aria-current={group.active ? "page" : undefined}
     >
-      <span className="inline-flex w-9 shrink-0 items-center justify-center rounded-md bg-surface-subtle px-1 py-px text-[10px] font-semibold uppercase tracking-wide text-muted ring-1 ring-inset ring-border">
-        File
+      <span
+        className={[
+          "flex h-6 w-6 shrink-0 items-center justify-center rounded-md border transition-colors duration-200",
+          group.active
+            ? "border-primary-light/30 bg-primary-light/10 text-primary"
+            : "border-border bg-surface-subtle text-muted-light group-hover:text-foreground",
+        ].join(" ")}
+        aria-hidden
+      >
+        <WorkspaceResourceIcon icon={group.icon} />
       </span>
-      <span className="min-w-0 flex-1 truncate text-left text-muted">
-        {count > 0 ? `${count} 个跨会话文件` : "跨会话文件资产"}
+      <span className="min-w-0 flex-1 truncate text-[13px] font-semibold leading-snug text-foreground">
+        {group.title}
       </span>
-      {unsupported ? (
-        <span className="shrink-0 rounded bg-surface px-1 py-0.5 text-[10px] text-muted-light">
-          未支持
+      {group.statusLabel ? (
+        <span className="shrink-0 rounded-full border border-border bg-surface-subtle px-1 py-px text-[9px] font-medium leading-snug text-muted-light">
+          {group.statusLabel}
         </span>
       ) : null}
-      <span className="shrink-0 text-muted-light">
+      <span className="min-w-12 shrink-0 text-right tabular text-[10px] leading-snug text-muted-light">
+        {group.summary}
+      </span>
+      <span className="shrink-0 text-muted-light transition-colors duration-200 group-hover:text-foreground">
         <ChevronIcon direction="right" />
       </span>
     </button>
   );
 }
 
+function WorkspaceResourceIcon({
+  icon,
+}: {
+  icon: WorkspaceResourceNavGroup["icon"] | "models";
+}) {
+  if (icon === "database") {
+    return (
+      <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
+        <ellipse cx="12" cy="5" rx="7" ry="3" />
+        <path d="M5 5v6c0 1.7 3.1 3 7 3s7-1.3 7-3V5" />
+        <path d="M5 11v6c0 1.7 3.1 3 7 3s7-1.3 7-3v-6" />
+      </svg>
+    );
+  }
+  if (icon === "assets") {
+    return (
+      <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
+        <path d="M4 7.5A2.5 2.5 0 0 1 6.5 5h11A2.5 2.5 0 0 1 20 7.5v9A2.5 2.5 0 0 1 17.5 19h-11A2.5 2.5 0 0 1 4 16.5v-9Z" />
+        <path d="M8 10h8M8 14h5" />
+      </svg>
+    );
+  }
+  if (icon === "book") {
+    return (
+      <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
+        <path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v16H7a3 3 0 0 0-3 3V5.5Z" />
+        <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" />
+      </svg>
+    );
+  }
+  if (icon === "tools") {
+    return (
+      <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
+        <path d="M14.5 6.5 17 4l3 3-2.5 2.5" />
+        <path d="m3 21 8.5-8.5" />
+        <path d="M12 7a5 5 0 0 0 5 5" />
+        <path d="M4 4h5v5H4z" />
+        <path d="M16 16h4v4h-4z" />
+      </svg>
+    );
+  }
+  return (
+    <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
+      <path d="M5 7.5A3.5 3.5 0 0 1 8.5 4h7A3.5 3.5 0 0 1 19 7.5v9a3.5 3.5 0 0 1-3.5 3.5h-7A3.5 3.5 0 0 1 5 16.5v-9Z" />
+      <path d="M9 8h6" />
+      <path d="M9 12h6" />
+      <path d="M9 16h3" />
+    </svg>
+  );
+}
+
+function ProcessToolGroupSync({
+  liveRun,
+  onToolGroupsChange,
+}: {
+  liveRun: LiveRun;
+  onToolGroupsChange: (groups: ProcessToolGroup[]) => void;
+}) {
+  const chatConfig = useCopilotChatConfiguration();
+  const { agent } = useAgent({ agentId: chatConfig?.agentId ?? agentId });
+  const messages = agent.messages ?? [];
+  const groups = useMemo(
+    () => buildProcessToolGroups(messages, liveRun),
+    [liveRun, messages],
+  );
+
+  useEffect(() => {
+    onToolGroupsChange(groups);
+  }, [groups, onToolGroupsChange]);
+
+  return null;
+}
+
 function ChatPane({
   activeThreadId,
   title,
-  datasourceId,
+  workspaceConfig,
+  activeSession,
   liveRunStatus,
   liveRun,
   chatInput: ChatInput,
   rightPanelOpen,
   onOpenRightPanel,
   onChatColumnWidthChange,
+  onToolGroupsChange,
   capabilitiesReady,
 }: {
   activeThreadId?: string;
   title: string;
-  datasourceId: string;
+  workspaceConfig: WorkspaceConfigStore;
+  activeSession: ChatSession | null;
   liveRunStatus: LiveRun["runStatus"];
   liveRun: LiveRun;
   chatInput: ComponentType<ComponentProps<typeof DataTaskChatInput>>;
   rightPanelOpen: boolean;
   onOpenRightPanel: () => void;
   onChatColumnWidthChange: (width: number) => void;
+  onToolGroupsChange: (groups: ProcessToolGroup[]) => void;
   capabilitiesReady: boolean;
 }) {
   const { containerRef, chatColumnWidth } = useChatColumnWidth();
   const [processTimelineCollapsed, setProcessTimelineCollapsed] = useState(false);
+  const [schemaPreviewDatasourceId, setSchemaPreviewDatasourceId] = useState<string | null>(null);
+  const schemaPreviewRootRef = useRef<HTMLDivElement>(null);
+  const schemaPreviewDatasource = useMemo(
+    () =>
+      schemaPreviewDatasourceId
+        ? workspaceConfig.db.find((item) => item.id === schemaPreviewDatasourceId) ?? null
+        : null,
+    [schemaPreviewDatasourceId, workspaceConfig.db],
+  );
   const processTimelineCollapse = useMemo(
     () => ({
       collapsed: processTimelineCollapsed,
@@ -4723,19 +5621,43 @@ function ChatPane({
     }
   }, [chatColumnWidth, onChatColumnWidthChange]);
 
+  useEffect(() => {
+    if (!schemaPreviewDatasourceId) return;
+    const handlePointerDown = (event: globalThis.MouseEvent) => {
+      if (!schemaPreviewRootRef.current?.contains(event.target as Node)) {
+        setSchemaPreviewDatasourceId(null);
+      }
+    };
+    document.addEventListener("mousedown", handlePointerDown);
+    return () => document.removeEventListener("mousedown", handlePointerDown);
+  }, [schemaPreviewDatasourceId]);
+
   return (
     <main className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-surface">
       <ChatRunStatusContext.Provider value={liveRunStatus}>
       <ChatLiveRunContext.Provider value={liveRun}>
       <ProcessTimelineCollapseContext.Provider value={processTimelineCollapse}>
       <header className="flex h-16 items-center justify-between gap-3 border-b border-border bg-surface px-5">
-        <div className="min-w-0">
+        <div ref={schemaPreviewRootRef} className="relative min-w-0">
           <h2 className="truncate text-base font-semibold text-foreground">
             {title}
           </h2>
-          <div className="mt-0.5 flex items-center gap-2">
-            <DatasourceChip datasourceId={datasourceId} />
+          <div className="mt-0.5">
+            <SessionHeaderResourceChips
+              workspaceConfig={workspaceConfig}
+              session={activeSession}
+              onPreviewDatasource={(itemId) =>
+                setSchemaPreviewDatasourceId((current) => (current === itemId ? null : itemId))
+              }
+            />
           </div>
+          {schemaPreviewDatasource ? (
+            <DatasourceSchemaPreviewPopover
+              datasourceId={schemaPreviewDatasource.id}
+              datasourceName={schemaPreviewDatasource.name || schemaPreviewDatasource.id}
+              onClose={() => setSchemaPreviewDatasourceId(null)}
+            />
+          ) : null}
         </div>
         <div className="flex shrink-0 items-center gap-2">
           <RunStatusPill status={liveRunStatus} />
@@ -4745,7 +5667,7 @@ function ChatPane({
               onClick={onOpenRightPanel}
               className={`h-8 ${btnSecondaryClass}`}
             >
-              打开控制台
+              Open console
             </button>
           ) : null}
         </div>
@@ -4770,25 +5692,35 @@ function ChatPane({
               threadId={activeThreadId}
             />
             <AgentMessageRenderSync agentId={agentId} runStatus={liveRunStatus} />
+            <ProcessToolGroupSync
+              liveRun={liveRun}
+              onToolGroupsChange={onToolGroupsChange}
+            />
             <CollaborationResponseBridge />
             <CollaborationInterruptHandler
-              key={activeThreadId}
+              key={`collaboration-interrupt-${activeThreadId}`}
               agentId={agentId}
               threadId={activeThreadId}
+            />
+            <RestoredInterruptHandler
+              key={`restored-${activeThreadId}`}
+              agentId={agentId}
+              threadId={activeThreadId}
+              capabilitiesReady={capabilitiesReady}
             />
             <CopilotChat
               agentId={agentId}
               threadId={activeThreadId}
-              key={activeThreadId}
+              key={`copilot-chat-${activeThreadId}`}
               welcomeScreen={DataTaskWelcomeScreen}
-              autoScroll="pin-to-send"
+              autoScroll="pin-to-bottom"
               intelligenceIndicator={{ className: "chat-intelligence-indicator" }}
               messageView={{
+                userMessage: StepUserMessage as typeof CopilotChatUserMessage,
                 assistantMessage:
                   StepAssistantMessage as unknown as typeof CopilotChatAssistantMessage,
-                reasoningMessage: {
-                  header: { className: "chat-reasoning-header" },
-                },
+                reasoningMessage:
+                  StepReasoningMessage as unknown as typeof CopilotChatReasoningMessage,
                 cursor: { className: "chat-stream-cursor" },
               }}
               input={ChatInput as typeof CopilotChatInput}
@@ -4845,16 +5777,16 @@ function RunStatusPill({
 }) {
   const label =
     status === "completed"
-      ? "已完成"
+      ? "Completed"
       : status === "running"
-        ? "运行中"
+        ? "Running"
         : status === "suspended"
-          ? "等待回复"
+          ? "Waiting"
           : status === "failed"
-            ? "失败"
+            ? "Failed"
             : status === "canceled"
-              ? "已取消"
-              : "就绪";
+              ? "Canceled"
+              : "Ready";
   const className =
     status === "completed"
       ? "border border-step-success/20 bg-step-success/8 text-step-success"

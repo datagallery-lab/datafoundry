@@ -15,8 +15,8 @@ describe("config test result presentation", () => {
       }),
     ).toEqual({
       tone: "success",
-      title: "测试成功",
-      details: ["模型：qwen-plus", "耗时：1200 ms", "响应：OK"],
+      title: "Test succeeded",
+      details: ["Model: qwen-plus", "Duration: 1200 ms", "Response: OK"],
     });
   });
 
@@ -25,7 +25,7 @@ describe("config test result presentation", () => {
       formatConfigTestError(new Error("PROVIDER_TEST_FAILED: timeout")),
     ).toEqual({
       tone: "error",
-      title: "测试失败",
+      title: "Test failed",
       details: ["PROVIDER_TEST_FAILED: timeout"],
     });
   });

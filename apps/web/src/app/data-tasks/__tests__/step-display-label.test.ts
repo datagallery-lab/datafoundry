@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  resolveCollaborationCompletedStepLabel,
   resolveStepBadgePresentation,
   resolveCollaborationStepLabel,
   resolveStepSummaryText,
@@ -8,28 +9,38 @@ import {
 
 describe("resolveToolStepActionLabel", () => {
   it("uses specific action labels for common data tools", () => {
-    expect(resolveToolStepActionLabel(["list_data_sources"])).toBe("查看数据源");
-    expect(resolveToolStepActionLabel(["inspect_schema"])).toBe("检查表结构");
-    expect(resolveToolStepActionLabel(["preview_table"])).toBe("预览数据");
-    expect(resolveToolStepActionLabel(["run_sql_readonly"])).toBe("执行查询");
+    expect(resolveToolStepActionLabel(["list_data_sources"])).toBe("List data sources");
+    expect(resolveToolStepActionLabel(["inspect_schema"])).toBe("Inspect schema");
+    expect(resolveToolStepActionLabel(["preview_table"])).toBe("Preview data");
+    expect(resolveToolStepActionLabel(["run_sql_readonly"])).toBe("Run query");
   });
 
   it("uses specific action labels for file and knowledge tools", () => {
-    expect(resolveToolStepActionLabel(["retrieve_knowledge"])).toBe("检索知识");
-    expect(resolveToolStepActionLabel(["edit_file"])).toBe("编辑文件");
-    expect(resolveToolStepActionLabel(["read_file"])).toBe("读取文件");
+    expect(resolveToolStepActionLabel(["retrieve_knowledge"])).toBe("Retrieve knowledge");
+    expect(resolveToolStepActionLabel(["edit_file"])).toBe("Edit file");
+    expect(resolveToolStepActionLabel(["read_file"])).toBe("Read file");
   });
 
   it("summarizes mixed or unknown tool sets without templated wording", () => {
-    expect(resolveToolStepActionLabel(["read_file", "edit_file"])).toBe("处理文件");
-    expect(resolveToolStepActionLabel(["list_files", "grep"])).toBe("操作工作区");
-    expect(resolveToolStepActionLabel(["unknown_tool", "another_tool"])).toBe("调用 2 个工具");
+    expect(resolveToolStepActionLabel(["read_file", "edit_file"])).toBe("Handle files");
+    expect(resolveToolStepActionLabel(["list_files", "grep"])).toBe("Operate workspace");
+    expect(resolveToolStepActionLabel(["unknown_tool", "another_tool"])).toBe("Call 2 tools");
   });
 
   it("falls back to readable labels for unmapped and namespaced tools", () => {
     expect(resolveToolStepActionLabel(["custom_analytics_tool"])).toBe("Custom Analytics Tool");
-    expect(resolveToolStepActionLabel(["mcp__demo__inspect_schema"])).toBe("检查表结构");
-    expect(resolveToolStepActionLabel(["查看数据源"])).toBe("查看数据源");
+    expect(resolveToolStepActionLabel(["mcp__demo__inspect_schema"])).toBe("Inspect schema");
+    expect(resolveToolStepActionLabel(["List data sources"])).toBe("List data sources");
+  });
+
+  it("labels repeated parallel calls to the same tool as one concurrent batch", () => {
+    expect(
+      resolveToolStepActionLabel([
+        "list_data_sources",
+        "list_data_sources",
+        "list_data_sources",
+      ]),
+    ).toBe("Run 3 tools in parallel");
   });
 });
 
@@ -39,11 +50,11 @@ describe("resolveStepSummaryText", () => {
       resolveStepSummaryText({
         content: "I'll inspect the schema for you.",
         hasToolCalls: true,
-        displayToolNames: "检查数据源 Schema",
-        toolActionLabel: "检查表结构",
+        displayToolNames: "Inspect data source schema",
+        toolActionLabel: "Inspect schema",
         isThought: false,
       }),
-    ).toBe("I'll inspect the schema for you. · 调用 检查数据源 Schema");
+    ).toBe("I'll inspect the schema for you. · Call Inspect data source schema");
   });
 
   it("shows thought preview before tool invocation when both are available", () => {
@@ -51,11 +62,11 @@ describe("resolveStepSummaryText", () => {
       resolveStepSummaryText({
         content: "我先查看一下可用的数据源。",
         hasToolCalls: true,
-        displayToolNames: "查看数据源",
-        toolActionLabel: "查看数据源",
+        displayToolNames: "List data sources",
+        toolActionLabel: "List data sources",
         isThought: false,
       }),
-    ).toBe("我先查看一下可用的数据源。 · 调用 查看数据源");
+    ).toBe("我先查看一下可用的数据源。 · Call List data sources");
   });
 
   it("shows only tool invocation when there is no thought text", () => {
@@ -63,11 +74,11 @@ describe("resolveStepSummaryText", () => {
       resolveStepSummaryText({
         content: "",
         hasToolCalls: true,
-        displayToolNames: "查看数据源",
-        toolActionLabel: "查看数据源",
+        displayToolNames: "List data sources",
+        toolActionLabel: "List data sources",
         isThought: false,
       }),
-    ).toBe("调用 查看数据源");
+    ).toBe("Call List data sources");
   });
 
   it("shows thought preview text for English-only interim messages", () => {
@@ -97,16 +108,16 @@ describe("resolveStepSummaryText", () => {
 
 describe("resolveCollaborationStepLabel", () => {
   it("labels completed ask_user steps by interaction type, not accepted result", () => {
-    expect(resolveCollaborationStepLabel(["ask_user"], false)).toBe("用户协作");
+    expect(resolveCollaborationStepLabel(["ask_user"], false)).toBe("User collaboration");
   });
 
   it("labels submit_plan steps distinctly from ask_user", () => {
-    expect(resolveCollaborationStepLabel(["submit_plan"], false)).toBe("计划审批");
+    expect(resolveCollaborationStepLabel(["submit_plan"], false)).toBe("Plan approval");
   });
 
   it("uses the linked collaboration tool name when the chat message has no raw toolCalls", () => {
-    expect(resolveCollaborationStepLabel([], false, "submit_plan")).toBe("计划审批");
-    expect(resolveCollaborationStepLabel([], false, "ask_user")).toBe("用户协作");
+    expect(resolveCollaborationStepLabel([], false, "submit_plan")).toBe("Plan approval");
+    expect(resolveCollaborationStepLabel([], false, "ask_user")).toBe("User collaboration");
   });
 });
 
@@ -123,5 +134,15 @@ describe("resolveStepBadgePresentation", () => {
         isThought: false,
       }),
     ).toEqual({ kind: "number", value: 2 });
+  });
+});
+
+describe("resolveCollaborationCompletedStepLabel", () => {
+  it("labels answered ask_user steps as Confirmation complete", () => {
+    expect(resolveCollaborationCompletedStepLabel(["ask_user"])).toBe("Confirmation complete");
+  });
+
+  it("labels answered submit_plan steps as Plan approved", () => {
+    expect(resolveCollaborationCompletedStepLabel(["submit_plan"])).toBe("Plan approved");
   });
 });

@@ -40,7 +40,7 @@ export function WorkspaceFileAssetsPanel({ onFilesChange }: WorkspaceFileAssetsP
       setFiles(workspaceFiles);
       onFilesChange?.(workspaceFiles);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "加载文件资产失败");
+      setError(err instanceof Error ? err.message : "Failed to load file assets");
     } finally {
       setLoading(false);
     }
@@ -62,7 +62,7 @@ export function WorkspaceFileAssetsPanel({ onFilesChange }: WorkspaceFileAssetsP
       await configApi.uploadWorkspaceFiles([...selected]);
       await refresh();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "上传失败");
+      setError(err instanceof Error ? err.message : "Upload failed");
     } finally {
       setLoading(false);
       if (inputRef.current) {
@@ -81,12 +81,12 @@ export function WorkspaceFileAssetsPanel({ onFilesChange }: WorkspaceFileAssetsP
       anchor.click();
       URL.revokeObjectURL(url);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "下载失败");
+      setError(err instanceof Error ? err.message : "Download failed");
     }
   };
 
   const handleDelete = async (file: FileAssetRefDto) => {
-    const confirmed = window.confirm(`确定删除工作区文件「${file.filename}」？此操作不可撤销。`);
+    const confirmed = window.confirm(`Delete workspace file "${file.filename}"? This cannot be undone.`);
     if (!confirmed) return;
     setLoading(true);
     setError(null);
@@ -94,7 +94,7 @@ export function WorkspaceFileAssetsPanel({ onFilesChange }: WorkspaceFileAssetsP
       await configApi.deleteWorkspaceFile(file.id);
       await refresh();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "删除失败");
+      setError(err instanceof Error ? err.message : "Delete failed");
     } finally {
       setLoading(false);
     }
@@ -103,7 +103,7 @@ export function WorkspaceFileAssetsPanel({ onFilesChange }: WorkspaceFileAssetsP
   return (
     <section className={panelShellClass}>
       <div className="mb-3 flex items-center justify-between gap-2">
-        <h3 className={panelTitleClass}>工作区文件资产</h3>
+        <h3 className={panelTitleClass}>Workspace File Assets</h3>
         <div className="flex items-center gap-2">
           <button
             type="button"
@@ -111,7 +111,7 @@ export function WorkspaceFileAssetsPanel({ onFilesChange }: WorkspaceFileAssetsP
             disabled={loading}
             className={`${btnSecondaryClass} disabled:opacity-60`}
           >
-            刷新
+            Refresh
           </button>
           <button
             type="button"
@@ -119,7 +119,7 @@ export function WorkspaceFileAssetsPanel({ onFilesChange }: WorkspaceFileAssetsP
             disabled={loading}
             className={`${btnSecondaryClass} disabled:opacity-60`}
           >
-            上传
+            Upload
           </button>
           <input
             ref={inputRef}
@@ -131,7 +131,7 @@ export function WorkspaceFileAssetsPanel({ onFilesChange }: WorkspaceFileAssetsP
         </div>
       </div>
       <p className="mb-3 text-[11px] leading-4 text-muted-light">
-        管理跨会话可复用的工作区文件，供后续通过 @ 文件或 run_config.fileIds 注入使用（与对话框附件不同）。
+        Manage reusable workspace files for later @file selection or run_config.fileIds injection. These are separate from chat attachments.
       </p>
       {error ? (
         <p className="mb-3 rounded-lg bg-step-error/10 px-2.5 py-2 text-xs text-step-error">
@@ -139,9 +139,9 @@ export function WorkspaceFileAssetsPanel({ onFilesChange }: WorkspaceFileAssetsP
         </p>
       ) : null}
       {loading && files.length === 0 ? (
-        <p className="text-xs text-muted-light">加载中…</p>
+        <p className="text-xs text-muted-light">Loading...</p>
       ) : files.length === 0 ? (
-        <p className="text-xs text-muted-light">暂无跨会话文件资产，可点击上传添加。</p>
+        <p className="text-xs text-muted-light">No reusable workspace files yet. Upload a file to add one.</p>
       ) : (
         <div className="grid gap-2">
           {files.map((file) => (
@@ -165,7 +165,7 @@ export function WorkspaceFileAssetsPanel({ onFilesChange }: WorkspaceFileAssetsP
                   onClick={() => void handleDownload(file)}
                   className={btnSecondaryClass}
                 >
-                  下载
+                  Download
                 </button>
                 <button
                   type="button"
@@ -173,7 +173,7 @@ export function WorkspaceFileAssetsPanel({ onFilesChange }: WorkspaceFileAssetsP
                   disabled={loading}
                   className={`${btnSecondaryClass} text-step-error hover:border-step-error/40 hover:text-step-error disabled:opacity-60`}
                 >
-                  删除
+                  Delete
                 </button>
               </div>
             </div>
@@ -181,7 +181,7 @@ export function WorkspaceFileAssetsPanel({ onFilesChange }: WorkspaceFileAssetsP
         </div>
       )}
       <div className="mt-2">
-        <span className={sectionLabelClass}>共 {files.length} 个文件</span>
+        <span className={sectionLabelClass}>{files.length} files</span>
       </div>
     </section>
   );

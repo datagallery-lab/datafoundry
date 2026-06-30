@@ -50,50 +50,50 @@ export function dataStepKindForTool(toolName?: string): DataStepKind {
 export function dataStepLabel(kind: DataStepKind): string {
   switch (kind) {
     case "inspect":
-      return "结构检查";
+      return "Schema";
     case "query":
-      return "数据查询";
+      return "Query";
     case "transform":
-      return "数据加工";
+      return "Transform";
     case "fetch":
-      return "取数";
+      return "Fetch";
     case "visualize":
-      return "可视化";
+      return "Visualize";
     case "knowledge":
-      return "知识检索";
+      return "Knowledge";
     case "other":
-      return "数据操作";
+      return "Data operation";
   }
 }
 
 const toolDisplayTitles: Record<string, string> = {
-  list_data_sources: "查看数据源",
-  inspect_schema: "检查数据源 Schema",
-  preview_table: "预览数据表",
-  run_sql_readonly: "生成并执行 SQL",
-  retrieve_knowledge: "检索知识库",
-  read_file: "读取文件",
-  edit_file: "编辑文件",
-  write_file: "写入文件",
-  list_files: "浏览工作区文件",
-  grep: "搜索文件内容",
-  mkdir: "创建目录",
-  file_stat: "查看文件信息",
-  execute_command: "执行命令",
-  publish_artifact: "发布产物",
-  promote_workspace_file: "提升工作区文件",
-  task_write: "写入任务计划",
-  task_update: "更新任务",
-  task_complete: "完成任务",
-  task_check: "检查任务状态",
-  ask_user: "询问用户",
-  submit_plan: "提交计划",
+  list_data_sources: "List data sources",
+  inspect_schema: "Inspect data source schema",
+  preview_table: "Preview table",
+  run_sql_readonly: "Run SQL query",
+  retrieve_knowledge: "Retrieve knowledge",
+  read_file: "Read file",
+  edit_file: "Edit file",
+  write_file: "Write file",
+  list_files: "Browse workspace files",
+  grep: "Search file contents",
+  mkdir: "Create directory",
+  file_stat: "Get file info",
+  execute_command: "Run command",
+  publish_artifact: "Publish output",
+  promote_workspace_file: "Promote workspace file",
+  task_write: "Write task plan",
+  task_update: "Update task",
+  task_complete: "Complete task",
+  task_check: "Check task status",
+  ask_user: "Ask user",
+  submit_plan: "Submit plan",
 };
 
 /** Human-readable title for a backend tool name (console / trace / progress). */
 export function toolDisplayTitle(toolName?: string): string {
   if (!toolName || toolName === "tool" || toolName === "unknown") {
-    return "执行工具";
+    return "Run tool";
   }
   const trimmed = toolName.trim();
   if (/[\u4e00-\u9fff]/.test(trimmed)) {
@@ -258,7 +258,7 @@ export interface ChatSession {
   config?: SessionConfigOverride;
 }
 
-const SESSIONS_STORAGE_KEY = "data-tasks:sessions:v1";
+const SESSIONS_STORAGE_KEY = "data-tasks:sessions:v2";
 
 function newThreadId(): string {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
@@ -267,7 +267,7 @@ function newThreadId(): string {
   return `thread-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
-export function createChatSession(title = "新数据任务"): ChatSession {
+export function createChatSession(title = "New data task"): ChatSession {
   const threadId = newThreadId();
   const now = Date.now();
   return {
@@ -286,7 +286,7 @@ function normalizeSessionTitle(title: string): string {
 
 export function deriveSnippetTitle(text: string): string {
   const normalized = normalizeSessionTitle(text);
-  if (!normalized) return "新数据任务";
+  if (!normalized) return "New data task";
   const maxChars = 23;
   return normalized.length > maxChars
     ? `${normalized.slice(0, maxChars)}…`
@@ -387,7 +387,7 @@ export function serverSessionDtoToChatSession(dto: ServerChatSessionDto): ChatSe
   return {
     id: dto.id ?? dto.sessionId ?? threadId,
     threadId,
-    title: normalizeSessionTitle(dto.title ?? "") || "新数据任务",
+    title: normalizeSessionTitle(dto.title ?? "") || "New data task",
     titleSource: normalizeTitleSource(dto.titleSource),
     createdAt,
     updatedAt,
@@ -564,12 +564,12 @@ export function parseSkillMdContent(
 ): ParsedSkillPackage | { error: string } {
   const trimmed = content.trim();
   if (!trimmed) {
-    return { error: "文件为空。" };
+    return { error: "File is empty." };
   }
 
   const match = trimmed.match(SKILL_FRONTMATTER_RE);
   if (!match) {
-    return { error: "缺少 YAML frontmatter（文件须以 --- 开头并闭合）。" };
+    return { error: "Missing YAML frontmatter (file must start and close with ---)." };
   }
 
   const frontmatter = match[1];
@@ -577,7 +577,7 @@ export function parseSkillMdContent(
   const name =
     readFrontmatterScalar(frontmatter, "name") ||
     fileName.replace(/\.md$/i, "") ||
-    "未命名 Skill";
+    "Untitled Skill";
   const description =
     readFrontmatterScalar(frontmatter, "description") ||
     body.split(/\r?\n/).find((line) => line.trim().length > 0)?.trim() ||
@@ -606,10 +606,10 @@ export async function parseSkillPackageFile(
   if (lower.endsWith(".zip")) {
     return {
       error:
-        "ZIP 包导入需后端 POST /api/v1/skills 支持，当前请先上传 SKILL.md 文件。",
+        "ZIP package import requires backend POST /api/v1/skills support. Upload SKILL.md for now.",
     };
   }
-  return { error: "仅支持 .md（SKILL.md）或 .zip 技能包。" };
+  return { error: "Only .md (SKILL.md) or .zip Skill packages are supported." };
 }
 
 export function skillSettingsFromPackage(
@@ -662,30 +662,30 @@ export const SKILL_PACKAGE_LOCAL_ONLY_KEYS = ["packageContent"] as const;
 export const DATA_SKILLS: DataSkill[] = [
   {
     id: "data-agent-default",
-    name: "通用数据分析",
-    description: "默认 ReAct 数据问答与探索",
+    name: "General data analysis",
+    description: "Default ReAct data Q&A and exploration",
   },
   {
     id: "schema-explore",
-    name: "Schema 探索",
-    description: "优先检查表结构与字段含义",
+    name: "Schema exploration",
+    description: "Prioritize table structure and field meaning",
   },
   {
     id: "sql-analysis",
-    name: "SQL 分析",
-    description: "聚焦只读查询与指标计算",
+    name: "SQL analysis",
+    description: "Focus on read-only queries and metric calculations",
   },
   {
     id: "report-draft",
-    name: "报告草稿",
-    description: "偏向结论整理与报告产出",
+    name: "Report draft",
+    description: "Focus on conclusions and report outputs",
   },
 ];
 
 export const DEFAULT_SKILL_ID = DATA_SKILLS[0].id;
 
-const ACTIVE_LLM_STORAGE_KEY = "data-tasks:active-llm:v1";
-const RIGHT_PANEL_WIDTH_STORAGE_KEY = "data-tasks:right-panel-width:v1";
+const ACTIVE_LLM_STORAGE_KEY = "data-tasks:active-llm:v2";
+const RIGHT_PANEL_WIDTH_STORAGE_KEY = "data-tasks:right-panel-width:v2";
 
 export function loadRightPanelWidth(): number {
   if (typeof window === "undefined") return RIGHT_PANEL_DEFAULT_WIDTH;
@@ -784,6 +784,7 @@ export type BackendCapability =
   | "chat.imageInput" // chat multimodal image parts consumed (#13a)
   | "chat.fileUpload" // chat file upload endpoint to session workspace (#13b)
   | "conversation.title" // LLM-generated session title sync
+  | "interaction.resume" // restored HITL resume after refresh / session switch
   | "files"; // workspace FileAssetRef library API
 
 export const BACKEND_CAPABILITIES: Record<BackendCapability, boolean> = {
@@ -796,6 +797,7 @@ export const BACKEND_CAPABILITIES: Record<BackendCapability, boolean> = {
   "chat.imageInput": false,
   "chat.fileUpload": false,
   "conversation.title": false,
+  "interaction.resume": false,
   files: false,
 };
 
@@ -895,10 +897,10 @@ export function isFieldDisabled(
  * types shown as disabled placeholders until adapters land.
  */
 export const DB_TYPE_OPTIONS = [
-  { value: "duckdb", label: "DuckDB（内置 demo）" },
-  { value: "sqlite", label: "SQLite（文件）" },
-  { value: "csv", label: "CSV 文件" },
-  { value: "xlsx", label: "Excel 文件" },
+  { value: "duckdb", label: "DuckDB (built-in demo)" },
+  { value: "sqlite", label: "SQLite (file)" },
+  { value: "csv", label: "CSV file" },
+  { value: "xlsx", label: "Excel file" },
 ] as const;
 
 /** Server DB types, gated behind `datasource.server` capability. */
@@ -920,7 +922,7 @@ export const DB_PENDING_TYPE_OPTIONS = [
 ] as const;
 
 export const DB_MODE_OPTIONS = [
-  { value: "readonly", label: "只读（当前唯一支持）" },
+  { value: "readonly", label: "Read-only (currently the only supported mode)" },
 ] as const;
 
 const DB_SERVER_TYPES = DB_SERVER_TYPE_OPTIONS.map((option) => option.value);
@@ -1000,13 +1002,13 @@ function dbTypeOptions(): Array<{ value: string; label: string }> {
 }
 
 export const EMBEDDING_PROVIDER_OPTIONS = [
-  { value: "bailian", label: "百炼 DashScope (bailian)" },
-  { value: "openai-compatible", label: "OpenAI 兼容" },
+  { value: "bailian", label: "Bailian DashScope (bailian)" },
+  { value: "openai-compatible", label: "OpenAI compatible" },
   { value: "openai", label: "OpenAI" },
 ] as const;
 
 export const KB_VECTOR_STORE_OPTIONS = [
-  { value: "local-sqlite", label: "本地 SQLite（当前默认）" },
+  { value: "local-sqlite", label: "Local SQLite (current default)" },
   { value: "chroma", label: "Chroma" },
   { value: "milvus", label: "Milvus" },
   { value: "pgvector", label: "pgvector" },
@@ -1014,21 +1016,21 @@ export const KB_VECTOR_STORE_OPTIONS = [
 ] as const;
 
 export const KB_SCOPE_OPTIONS = [
-  { value: "personal", label: "个人" },
-  { value: "workspace", label: "工作区" },
-  { value: "project", label: "项目" },
+  { value: "personal", label: "Personal" },
+  { value: "workspace", label: "Workspace" },
+  { value: "project", label: "Project" },
 ] as const;
 
 export const MCP_AUTH_TYPE_OPTIONS = [
-  { value: "none", label: "无认证" },
+  { value: "none", label: "No authentication" },
   { value: "bearer", label: "Bearer Token" },
-  { value: "custom-header", label: "自定义 Header（待后端）" },
+  { value: "custom-header", label: "Custom header (pending backend)" },
 ] as const;
 
 /** Aligns with dataAgent `LLM_PROVIDER` env and Mastra router provider ids. */
 export const LLM_PROVIDER_OPTIONS = [
-  { value: "openai-compatible", label: "OpenAI 兼容 (LLM_PROVIDER=openai-compatible)" },
-  { value: "bailian", label: "百炼 DashScope (bailian)" },
+  { value: "openai-compatible", label: "OpenAI compatible (LLM_PROVIDER=openai-compatible)" },
+  { value: "bailian", label: "Bailian DashScope (bailian)" },
   { value: "deepseek", label: "DeepSeek (deepseek)" },
   { value: "openai", label: "OpenAI (openai)" },
   { value: "anthropic", label: "Anthropic (anthropic)" },
@@ -1060,18 +1062,22 @@ export function summarizeLlmItems(
   if (items.length === 1) {
     return getLlmDisplayLabel(items[0]);
   }
-  return `${items.length} 项默认可用`;
+  return `${items.length} available by default`;
 }
 
 export function getLlmDisplayLabel(item: WorkspaceConfigItem): string {
+  const name = item.name.trim();
+  if (name) return name;
   const normalized = normalizeLlmSettings(item.settings);
-  return normalized.modelName || item.name;
+  return normalized.modelName;
 }
 
 export function getLlmOptionSubtitle(item: WorkspaceConfigItem): string {
-  if (item.builtin) return "服务端环境变量";
+  if (item.builtin) return "Server environment variables";
   const normalized = normalizeLlmSettings(item.settings);
-  return [normalized.provider, item.description].filter(Boolean).join(" · ");
+  return [normalized.provider, normalized.modelName, item.description]
+    .filter(Boolean)
+    .join(" · ");
 }
 
 export function getEnabledLlmItems(
@@ -1118,7 +1124,7 @@ export function resolveActiveLlmProfileId(
 export const MCP_TRANSPORT_OPTIONS = [
   { value: "sse", label: "SSE (Server-Sent Events)" },
   { value: "streamable-http", label: "Streamable HTTP" },
-  { value: "stdio", label: "stdio（本地命令）" },
+  { value: "stdio", label: "stdio (local command)" },
 ] as const;
 
 export function normalizeMcpSettings(
@@ -1186,7 +1192,7 @@ export function normalizeLlmSettingsExtended(
   return {
     ...base,
     fallbackProfileId: settings?.fallbackProfileId ?? "",
-    timeoutMs: settings?.timeoutMs ?? "60000",
+    timeoutMs: settings?.timeoutMs ?? "300000",
     temperature: settings?.temperature ?? "",
     maxTokens: settings?.maxTokens ?? "",
     topP: settings?.topP ?? "",
@@ -1203,7 +1209,7 @@ export function summarizeMcpItems(
 ): string {
   if (items.length === 0) return emptyLabel;
   if (items.length === 1) return items[0].name;
-  return `${items.length} 项默认可用`;
+  return `${items.length} available by default`;
 }
 
 export const WORKSPACE_CONFIG_FIELDS: Record<
@@ -1213,34 +1219,34 @@ export const WORKSPACE_CONFIG_FIELDS: Record<
   db: [
     {
       key: "datasourceId",
-      label: "数据源 ID",
+      label: "Data source ID",
       placeholder: "my-dataset",
-      helpText: "传给 Agent 的稳定标识（forwardedProps.datasourceId）。",
+      helpText: "Stable identifier forwarded to the Agent (forwardedProps.datasourceId).",
       required: true,
       fullWidth: true,
     },
     {
       key: "type",
-      label: "数据源类型",
+      label: "Data source type",
       inputType: "select",
       getOptions: () => dbTypeOptions(),
       pendingOptionValues: [...DB_PENDING_TYPES],
       helpText:
-        "已实现：DuckDB / SQLite / CSV / Excel / PostgreSQL / MySQL / ClickHouse。未启用扩展类型标「待后端」。",
+        "Implemented: DuckDB / SQLite / CSV / Excel / PostgreSQL / MySQL / ClickHouse. Disabled extension types are marked pending backend.",
       required: true,
     },
     {
       key: "mode",
-      label: "访问模式",
+      label: "Access mode",
       inputType: "select",
       options: [...DB_MODE_OPTIONS],
-      helpText: "当前后端仅支持只读查询（run_sql_readonly）。",
+      helpText: "The backend currently supports read-only queries only (run_sql_readonly).",
     },
     {
       key: "filePath",
-      label: "文件路径",
-      placeholder: "/data/sales.sqlite 或 /data/orders.csv",
-      helpText: "SQLite / CSV / Excel 的本地文件路径。DuckDB 为内置 demo，无需路径。",
+      label: "File path",
+      placeholder: "/data/sales.sqlite or /data/orders.csv",
+      helpText: "Local file path for SQLite / CSV / Excel. DuckDB is a built-in demo and needs no path.",
       required: true,
       fullWidth: true,
       visibleWhen: (s) => dbTypeOf(s) !== "duckdb" && !isDbServerType(s),
@@ -1288,7 +1294,7 @@ export const WORKSPACE_CONFIG_FIELDS: Record<
     },
     {
       key: "username",
-      label: "用户名",
+      label: "Username",
       placeholder: "readonly_user",
       required: true,
       requiresCapability: "datasource.server",
@@ -1298,10 +1304,10 @@ export const WORKSPACE_CONFIG_FIELDS: Record<
     },
     {
       key: "password",
-      label: "密码",
+      label: "Password",
       inputType: "password",
       placeholder: "••••••",
-      helpText: "写入 secretRef，读接口不回传明文。",
+      helpText: "Stored in secretRef; read APIs never return plaintext.",
       requiresCapability: "datasource.server",
       visibleWhen: (s) => isDbServerType(s) && !isDbBigQueryType(s),
       pendingWhen: isDbExtendedPendingType,
@@ -1365,43 +1371,43 @@ export const WORKSPACE_CONFIG_FIELDS: Record<
     },
     {
       key: "tableAllowlist",
-      label: "表白名单",
+      label: "Table allowlist",
       placeholder: "orders, customers",
-      helpText: "逗号分隔；为空表示允许全部表。",
+      helpText: "Comma-separated. Leave empty to allow all tables.",
       pendingCapability: "datasource.introspectionPolicy",
       fullWidth: true,
     },
     {
       key: "refreshIntervalSec",
-      label: "Schema 刷新间隔 (秒)",
+      label: "Schema refresh interval (seconds)",
       inputType: "number",
       placeholder: "3600",
       pendingCapability: "datasource.introspectionPolicy",
     },
     {
       key: "denyWrite",
-      label: "拒绝写入",
+      label: "Deny writes",
       inputType: "boolean",
-      helpText: "当前后端强制只读；此开关待策略下沉。",
+      helpText: "The backend currently enforces read-only access; this policy switch is pending.",
       pendingCapability: "datasource.introspectionPolicy",
     },
     {
       key: "maskFields",
-      label: "脱敏字段",
+      label: "Masked fields",
       placeholder: "phone, email",
-      helpText: "逗号分隔字段名，查询结果脱敏。",
+      helpText: "Comma-separated field names to mask in query results.",
       pendingCapability: "datasource.fieldMasking",
       fullWidth: true,
     },
     {
       key: "allowSample",
-      label: "允许采样",
+      label: "Allow sampling",
       inputType: "boolean",
       pendingCapability: "datasource.samplePolicy",
     },
     {
       key: "maxSampleRows",
-      label: "最大采样行数",
+      label: "Max sample rows",
       inputType: "number",
       placeholder: "100",
       visibleWhen: (s) => s.allowSample === "true",
@@ -1409,14 +1415,14 @@ export const WORKSPACE_CONFIG_FIELDS: Record<
     },
     {
       key: "maxRows",
-      label: "最大返回行数",
+      label: "Max returned rows",
       inputType: "number",
       placeholder: "10000",
       requiresCapability: "datasource.queryPolicy",
     },
     {
       key: "timeoutMs",
-      label: "查询超时 (ms)",
+      label: "Query timeout (ms)",
       inputType: "number",
       placeholder: "30000",
       requiresCapability: "datasource.queryPolicy",
@@ -1425,30 +1431,30 @@ export const WORKSPACE_CONFIG_FIELDS: Record<
   kb: [
     {
       key: "indexName",
-      label: "索引名称",
+      label: "Index name",
       placeholder: "metrics-docs",
       required: true,
       fullWidth: true,
     },
     {
       key: "scope",
-      label: "作用域",
+      label: "Scope",
       inputType: "select",
       options: [...KB_SCOPE_OPTIONS],
       pendingCapability: "kb.scope",
     },
     {
       key: "retrievalTopK",
-      label: "检索 Top K",
+      label: "Retrieval Top K",
       inputType: "number",
       placeholder: "5",
     },
     {
       key: "scoreThreshold",
-      label: "分数阈值",
+      label: "Score threshold",
       inputType: "number",
       placeholder: "0.3",
-      helpText: "用于 knowledge search 和 retrieve_knowledge 的默认过滤阈值。",
+      helpText: "Default filtering threshold for knowledge search and retrieve_knowledge.",
     },
     {
       key: "embeddingProvider",
@@ -1475,12 +1481,12 @@ export const WORKSPACE_CONFIG_FIELDS: Record<
       label: "Embedding API Key",
       inputType: "password",
       placeholder: "sk-...",
-      helpText: "写入 secretRef；未配置时回退服务端 EMBEDDING_* 环境变量。",
+      helpText: "Stored in secretRef. Falls back to server EMBEDDING_* environment variables when unset.",
       fullWidth: true,
     },
     {
       key: "vectorStore",
-      label: "向量库类型",
+      label: "Vector store type",
       inputType: "select",
       options: [...KB_VECTOR_STORE_OPTIONS],
       pendingCapability: "kb.vectorStore",
@@ -1488,7 +1494,7 @@ export const WORKSPACE_CONFIG_FIELDS: Record<
     },
     {
       key: "rerankEnabled",
-      label: "启用 Rerank",
+      label: "Enable rerank",
       inputType: "boolean",
       pendingCapability: "kb.rerank",
     },
@@ -1502,21 +1508,21 @@ export const WORKSPACE_CONFIG_FIELDS: Record<
     },
     {
       key: "citationRequired",
-      label: "强制引用",
+      label: "Require citations",
       inputType: "boolean",
-      helpText: "回答必须附带 KB 引用。",
+      helpText: "Answers must include KB citations.",
       pendingCapability: "kb.citationPolicy",
     },
     {
       key: "chunkSize",
-      label: "分块大小",
+      label: "Chunk size",
       inputType: "number",
       placeholder: "1600",
       pendingCapability: "kb.chunking",
     },
     {
       key: "chunkOverlap",
-      label: "分块重叠",
+      label: "Chunk overlap",
       inputType: "number",
       placeholder: "200",
       pendingCapability: "kb.chunking",
@@ -1535,24 +1541,24 @@ export const WORKSPACE_CONFIG_FIELDS: Record<
       inputType: "select",
       options: [...MCP_TRANSPORT_OPTIONS],
       pendingOptionValues: ["stdio"],
-      helpText: "远程 MCP 常用 SSE 或 Streamable HTTP；stdio 使用本地启动命令。",
+      helpText: "Remote MCP commonly uses SSE or Streamable HTTP; stdio uses a local launch command.",
       required: true,
       fullWidth: true,
     },
     {
       key: "serverUrl",
-      label: "Endpoint / 启动命令",
+      label: "Endpoint / launch command",
       placeholder: "https://example.com/mcp/sse",
-      helpText: "远程传输填 MCP 服务 URL；stdio 时也可填整行启动命令作为 fallback。",
+      helpText: "For remote transports, enter the MCP service URL. For stdio, a full launch command can be used as fallback.",
       visibleWhen: (settings) => !isMcpStdioTransport(settings),
       required: true,
       fullWidth: true,
     },
     {
       key: "command",
-      label: "可执行文件",
+      label: "Executable",
       placeholder: "/usr/bin/npx",
-      helpText: "stdio 模式下优先使用 command + args；为空时回退到上方整行命令。",
+      helpText: "In stdio mode, command + args are preferred. Leave empty to fall back to the full command above.",
       visibleWhen: isMcpStdioTransport,
       pendingCapability: "mcp.stdio",
       required: true,
@@ -1560,16 +1566,16 @@ export const WORKSPACE_CONFIG_FIELDS: Record<
     },
     {
       key: "args",
-      label: "启动参数",
+      label: "Launch arguments",
       placeholder: "-y @modelcontextprotocol/server-filesystem /data",
-      helpText: "空格分隔；会写入后端 args 数组。",
+      helpText: "Space-separated; written to the backend args array.",
       visibleWhen: isMcpStdioTransport,
       pendingCapability: "mcp.stdio",
       fullWidth: true,
     },
     {
       key: "cwd",
-      label: "工作目录",
+      label: "Working directory",
       placeholder: "/home/agent/workspace",
       visibleWhen: isMcpStdioTransport,
       pendingCapability: "mcp.stdio",
@@ -1577,17 +1583,17 @@ export const WORKSPACE_CONFIG_FIELDS: Record<
     },
     {
       key: "env",
-      label: "环境变量 (JSON)",
+      label: "Environment variables (JSON)",
       inputType: "textarea",
       placeholder: '{ "NODE_ENV": "production" }',
-      helpText: "JSON object，键值均为字符串。",
+      helpText: "JSON object with string keys and values.",
       visibleWhen: isMcpStdioTransport,
       pendingCapability: "mcp.stdio",
       fullWidth: true,
     },
     {
       key: "authType",
-      label: "认证方式",
+      label: "Authentication method",
       inputType: "select",
       options: [...MCP_AUTH_TYPE_OPTIONS],
       pendingOptionValues: ["custom-header"],
@@ -1598,22 +1604,22 @@ export const WORKSPACE_CONFIG_FIELDS: Record<
       label: "Token / API Key",
       inputType: "password",
       placeholder: "••••••",
-      helpText: "Bearer 认证时写入 secretRef。",
+      helpText: "Stored in secretRef for Bearer authentication.",
       visibleWhen: (settings) =>
         !isMcpStdioTransport(settings) && (settings.authType ?? "none") !== "none",
       fullWidth: true,
     },
     {
       key: "toolAllowlist",
-      label: "工具白名单",
+      label: "Tool allowlist",
       placeholder: "search, fetch_page",
-      helpText: "逗号分隔；为空表示允许 manifest 中全部工具。",
+      helpText: "Comma-separated. Leave empty to allow all tools in the manifest.",
       pendingCapability: "mcp.toolPolicy",
       fullWidth: true,
     },
     {
       key: "timeoutMs",
-      label: "单工具超时 (ms)",
+      label: "Per-tool timeout (ms)",
       inputType: "number",
       placeholder: "30000",
       pendingCapability: "mcp.toolPolicy",
@@ -1626,7 +1632,7 @@ export const WORKSPACE_CONFIG_FIELDS: Record<
       inputType: "select",
       options: [...LLM_PROVIDER_OPTIONS],
       helpText:
-        "openai-compatible / bailian 走 OpenAI 兼容路径；anthropic/google 等待集成验证。",
+        "openai-compatible / bailian use the OpenAI-compatible path. anthropic/google await integration validation.",
       required: true,
       fullWidth: true,
     },
@@ -1635,7 +1641,7 @@ export const WORKSPACE_CONFIG_FIELDS: Record<
       label: "Base URL",
       inputType: "url",
       placeholder: "https://dashscope.aliyuncs.com/compatible-mode/v1",
-      helpText: "OpenAI 兼容 Chat Completions 根路径（不含 /chat/completions）。",
+      helpText: "OpenAI-compatible Chat Completions base URL (without /chat/completions).",
       required: true,
       fullWidth: true,
     },
@@ -1644,14 +1650,14 @@ export const WORKSPACE_CONFIG_FIELDS: Record<
       label: "API Key",
       inputType: "password",
       placeholder: "sk-...",
-      helpText: "写入 secretRef；run 时不经 AG-UI 外发。",
+      helpText: "Stored in secretRef; never sent through AG-UI during runs.",
       fullWidth: true,
     },
     {
       key: "modelName",
       label: "Model Name",
       placeholder: "qwen-plus",
-      helpText: "Chat model id（如 gpt-4o、qwen-plus、deepseek-chat）。",
+      helpText: "Chat model id (for example gpt-4o, qwen-plus, deepseek-chat).",
       required: true,
       fullWidth: true,
     },
@@ -1659,8 +1665,8 @@ export const WORKSPACE_CONFIG_FIELDS: Record<
       key: "fallbackProfileId",
       label: "Fallback Profile",
       inputType: "select",
-      placeholder: "无",
-      helpText: "主 profile 失败时按链式 fallback 切换。",
+      placeholder: "None",
+      helpText: "Fallback chain used when the primary profile fails.",
       getOptions: ({ workspaceConfig, currentItemId }) => {
         const profiles = workspaceConfig?.llm ?? [];
         return profiles
@@ -1676,8 +1682,9 @@ export const WORKSPACE_CONFIG_FIELDS: Record<
       key: "timeoutMs",
       label: "Timeout (ms)",
       inputType: "number",
-      placeholder: "60000",
-      helpText: "用于 provider test 和 run 阶段超时控制。",
+      placeholder: "300000",
+      helpText:
+        "Whole-run timeout for multi-step agent tasks (not just a single LLM call). Use 300000–600000 for deep analysis.",
     },
     {
       key: "temperature",
@@ -1731,52 +1738,52 @@ export const WORKSPACE_CONFIG_FIELDS: Record<
   skill: [
     {
       key: "packageFileName",
-      label: "包文件",
+      label: "Package file",
       readOnly: () => true,
       fullWidth: true,
     },
     {
       key: "packageFormat",
-      label: "格式",
+      label: "Format",
       readOnly: () => true,
     },
     {
       key: "packageVersion",
-      label: "版本",
+      label: "Version",
       readOnly: () => true,
     },
     {
       key: "allowedTools",
-      label: "允许工具",
+      label: "Allowed tools",
       readOnly: () => true,
       fullWidth: true,
       visibleWhen: (settings) => (settings.allowedTools ?? "").trim().length > 0,
     },
     {
       key: "defaultDbIds",
-      label: "默认数据源",
+      label: "Default data sources",
       placeholder: "api-duckdb-demo, sales-pg",
-      helpText: "逗号分隔 datasource id；skill 命中后自动并入本次 run。",
+      helpText: "Comma-separated datasource ids. Added automatically to the run when the skill matches.",
       pendingCapability: "skill.resourceBinding",
       fullWidth: true,
     },
     {
       key: "defaultKbIds",
-      label: "默认知识库",
+      label: "Default knowledge bases",
       placeholder: "metrics-docs",
       pendingCapability: "skill.resourceBinding",
       fullWidth: true,
     },
     {
       key: "defaultMcpIds",
-      label: "默认 MCP",
+      label: "Default MCP",
       placeholder: "notion",
       pendingCapability: "skill.resourceBinding",
       fullWidth: true,
     },
     {
       key: "modelProfileId",
-      label: "默认模型 Profile",
+      label: "Default model profile",
       placeholder: "qwen-plus-default",
       pendingCapability: "skill.resourceBinding",
       fullWidth: true,
@@ -1935,7 +1942,7 @@ export function defaultWorkspaceConfig(): WorkspaceConfigStore {
       {
         id: "api-duckdb-demo",
         name: "api-duckdb-demo",
-        description: "DuckDB 演示数据源",
+        description: "DuckDB demo data source",
         enabled: true,
         builtin: true,
         settings: {
@@ -1950,15 +1957,15 @@ export function defaultWorkspaceConfig(): WorkspaceConfigStore {
     llm: [
       {
         id: "server-default",
-        name: "服务端默认",
-        description: "使用 dataAgent 服务端 .env 中的 LLM_PROVIDER / LLM_BASE_URL / LLM_MODEL",
+        name: "Server default",
+        description: "Uses LLM_PROVIDER / LLM_BASE_URL / LLM_MODEL from the dataAgent server .env",
         enabled: true,
         builtin: true,
         settings: {
-          provider: "服务端 (LLM_PROVIDER)",
-          baseUrl: "服务端 (LLM_BASE_URL)",
+          provider: "Server (LLM_PROVIDER)",
+          baseUrl: "Server (LLM_BASE_URL)",
           apiKey: "",
-          modelName: "服务端 (LLM_MODEL)",
+          modelName: "Server (LLM_MODEL)",
         },
       },
     ],
@@ -1979,7 +1986,7 @@ export function summarizeConfigItems(
 ): string {
   if (items.length === 0) return emptyLabel;
   if (items.length === 1) return items[0].name;
-  return `${items.length} 项默认可用`;
+  return `${items.length} available by default`;
 }
 
 export function createWorkspaceConfigItem(
@@ -2075,6 +2082,47 @@ export const PER_RUN_MENTION_KINDS: PerRunMentionKind[] = [
   "skill",
 ];
 
+/** Session-scoped db/kb toggles lock after the first user message or run. */
+export const SESSION_LOCKABLE_RESOURCE_KINDS: PerRunMentionKind[] = ["db", "kb"];
+
+export type SessionStartedHints = {
+  runCount?: number;
+  messageCount?: number;
+  hasRunHistory?: boolean;
+};
+
+export function isSessionStarted(
+  session: ChatSession | null | undefined,
+  hints?: SessionStartedHints,
+): boolean {
+  if (!session) return false;
+  if (session.lastMessageAt != null && session.lastMessageAt > 0) return true;
+  if ((hints?.runCount ?? 0) > 0) return true;
+  if ((hints?.messageCount ?? 0) > 0) return true;
+  if (hints?.hasRunHistory) return true;
+  return false;
+}
+
+export function isSessionResourceKindLocked(
+  session: ChatSession | null | undefined,
+  kind: PerRunMentionKind,
+  hints?: SessionStartedHints,
+): boolean {
+  return (
+    SESSION_LOCKABLE_RESOURCE_KINDS.includes(kind) &&
+    isSessionStarted(session, hints)
+  );
+}
+
+export const SESSION_RESOURCE_LABEL: Record<PerRunMentionKind, string> = {
+  db: "Data source",
+  kb: "Knowledge",
+  mcp: "Tools",
+  skill: "Skills",
+};
+
+export const SESSION_HEADER_RESOURCE_KINDS: PerRunMentionKind[] = ["db", "kb"];
+
 export type PerRunSelection = Record<PerRunMentionKind, string[]>;
 
 export function emptyPerRunSelection(): PerRunSelection {
@@ -2092,17 +2140,17 @@ export function countPerRunMentions(selection: PerRunSelection): number {
  * Per-kind metadata for the `@` picker. `backendSupported` reflects whether the
  * selection has a real runtime effect today: only `db` is honored (via
  * `datasource_id` / `forwardedProps`). The rest ride along in `run_config` for
- * forward-compatibility and are surfaced with a 「后端未支持」 hint so the UI never
+ * forward-compatibility and are surfaced with a 「Backend unsupported」 hint so the UI never
  * implies an effect the backend can't yet deliver.
  */
 export const PER_RUN_MENTION_META: Record<
   PerRunMentionKind,
   { label: string; token: string; backendSupported: boolean }
 > = {
-  db: { label: "数据源", token: "db", backendSupported: true },
-  kb: { label: "知识库", token: "kb", backendSupported: false },
+  db: { label: "Data sources", token: "db", backendSupported: true },
+  kb: { label: "Knowledge", token: "kb", backendSupported: false },
   mcp: { label: "MCP", token: "mcp", backendSupported: false },
-  skill: { label: "技能", token: "skill", backendSupported: false },
+  skill: { label: "Skills", token: "skill", backendSupported: false },
 };
 
 export type MentionSupportMap = Record<PerRunMentionKind, boolean>;

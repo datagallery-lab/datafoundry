@@ -31,6 +31,8 @@ export type {
   DatasourceDto,
   DatasourceSchemaDto,
   DatasourceSchemaTableDto,
+  DatasourceTablePreviewDto,
+  DatasourceTablePreviewColumnDto,
   DatasourceTypeDto,
   DatasourceTypeParamDto,
   FileAssetRefDto,

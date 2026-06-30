@@ -13,6 +13,7 @@ const DEFAULT_BACKEND_CAPABILITIES: Record<BackendCapability, boolean> = {
   "chat.imageInput": false,
   "chat.fileUpload": false,
   "conversation.title": false,
+  "interaction.resume": false,
   files: false,
 };
 
@@ -44,6 +45,7 @@ export function applyBackendCapabilities(
     "chat.imageInput": response["chat.imageInput"] ?? false,
     "chat.fileUpload": response["chat.fileUpload"] ?? false,
     "conversation.title": response["conversation.title"] ?? false,
+    "interaction.resume": response["interaction.resume"] ?? false,
     files: response.files ?? false,
   };
   runtimeCapabilities = {

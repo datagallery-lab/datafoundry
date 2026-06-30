@@ -78,16 +78,16 @@ describe("parseToolResultError", () => {
       }),
     );
     expect(failure?.kind).toBe("protocol");
-    expect(failure?.title).toBe("结果同步失败");
+    expect(failure?.title).toBe("Result sync failed");
     expect(toolResultLooksLikeError(JSON.stringify({ status: "error" }))).toBe(true);
   });
 });
 
 describe("toolDisplayStatusLabel", () => {
   it("uses unified Chinese labels", () => {
-    expect(toolDisplayStatusLabel("pending")).toBe("等待执行");
-    expect(toolDisplayStatusLabel("executing")).toBe("执行中");
-    expect(toolDisplayStatusLabel("complete")).toBe("已完成");
-    expect(toolDisplayStatusLabel("failed")).toBe("执行失败");
+    expect(toolDisplayStatusLabel("pending")).toBe("Pending");
+    expect(toolDisplayStatusLabel("executing")).toBe("Running");
+    expect(toolDisplayStatusLabel("complete")).toBe("Completed");
+    expect(toolDisplayStatusLabel("failed")).toBe("Failed");
   });
 });

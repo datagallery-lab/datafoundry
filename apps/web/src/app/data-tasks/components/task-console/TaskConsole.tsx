@@ -24,9 +24,12 @@ import { dataStepKindForTool, dataStepLabel, hasCapability, toolDisplayTitle } f
 import { artifactExportClient } from "../../artifact-export-client";
 import {
   artifactDetailFromPreview,
+  artifactDetailNeedsPreviewFetch,
   deriveRunUsage,
   formatSandboxOutputText,
   formatWorkspaceMetadataSummary,
+  mergeArtifactDetail,
+  parseCsvTextPreview,
   resolveProducedArtifacts,
   resolveSandboxOutputsForToolCall,
   resolveTokenUsageForEvent,
@@ -37,6 +40,10 @@ import {
   type LiveToolCallRecord,
   type SessionUsageStats,
 } from "../../live-run-state";
+import {
+  deriveProcessGroupUsage,
+  type ProcessToolGroup,
+} from "../../process-tool-groups";
 import type { TaskSelection } from "../../page";
 import { overviewSectionPlan } from "../../task-console-layout";
 import {
@@ -47,6 +54,7 @@ import {
 } from "../../table-rows";
 import { RunConfigurationPanel } from "./RunConfigurationPanel";
 import { TraceList } from "./TraceList";
+import { ArtifactMarkdownPreview } from "./ArtifactMarkdownPreview";
 import {
   consoleCodeBlockBaseClass,
   consoleCodeInnerClass,
@@ -76,11 +84,12 @@ type ConsoleTab = "overview" | "trace" | "outputs" | "detail";
 type TaskConsoleProps = {
   artifacts: DataArtifact[];
   liveRun: LiveRun;
+  toolGroups: ProcessToolGroup[];
   sessionUsage: SessionUsageStats;
   selection: TaskSelection;
   visibleEvents: TimelineEvent[];
   currentQuestion?: string;
-  /** When set (e.g. from TraceOverlay), jump to 产出 and expand this artifact. */
+  /** When set (e.g. from TraceOverlay), jump to Outputs and expand this artifact. */
   artifactFocusId?: string | null;
   onArtifactFocusHandled?: () => void;
   onClearSelection: () => void;
@@ -90,34 +99,35 @@ type TaskConsoleProps = {
   onPromoteArtifact?: (artifact: DataArtifact) => Promise<void> | void;
   onArtifactExportJob?: (job: JobDto) => void;
   onSelectEvent: (eventId: string) => void;
+  onSelectToolGroup: (groupId: string) => void;
   promotedArtifactIds?: ReadonlySet<string>;
 };
 
 function runStatusLabel(status: LiveRun["runStatus"]): string {
   switch (status) {
     case "running":
-      return "运行中";
+      return "Running";
     case "suspended":
-      return "等待回复";
+      return "Waiting";
     case "completed":
-      return "已完成";
+      return "Completed";
     case "failed":
-      return "失败";
+      return "Failed";
     case "canceled":
-      return "已取消";
+      return "Canceled";
     default:
-      return "空闲";
+      return "Idle";
   }
 }
 
 function toolStatusLabel(status: LiveToolCallRecord["status"]): string {
   switch (status) {
     case "running":
-      return "进行中";
+      return "Running";
     case "success":
-      return "已完成";
+      return "Completed";
     case "failed":
-      return "失败";
+      return "Failed";
   }
 }
 
@@ -131,19 +141,20 @@ function formatCount(value: number): string {
   return value.toLocaleString();
 }
 
-/** Single-step elapsed time; running/未结束 steps show a soft placeholder. */
+/** Single-step elapsed time; running/unfinished steps show a soft placeholder. */
 function stepDurationLabel(call?: LiveToolCallRecord): string {
   if (!call) return "—";
   if (call.startedAtMs !== undefined && call.finishedAtMs !== undefined) {
     return formatDuration(Math.max(0, call.finishedAtMs - call.startedAtMs));
   }
-  if (call.status === "running") return "进行中";
+  if (call.status === "running") return "Running";
   return "—";
 }
 
 export function TaskConsole({
   artifacts,
   liveRun,
+  toolGroups,
   sessionUsage,
   selection,
   visibleEvents,
@@ -157,6 +168,7 @@ export function TaskConsole({
   onPromoteArtifact,
   onArtifactExportJob,
   onSelectEvent,
+  onSelectToolGroup,
   promotedArtifactIds,
 }: TaskConsoleProps) {
   const [activeTab, setActiveTab] = useState<ConsoleTab>("overview");
@@ -169,9 +181,11 @@ export function TaskConsole({
     hasToolDistribution: Object.keys(runUsage.toolCalls.byTool).length > 0,
   });
 
-  // Only step/action selection drives the detail tab; artifacts expand in-place on 产出.
+  // Only step/action selection drives the detail tab; artifacts expand in-place on Outputs.
   useEffect(() => {
-    if (selection?.type === "action") setActiveTab("detail");
+    if (selection?.type === "action" || selection?.type === "toolGroup") {
+      setActiveTab("detail");
+    }
   }, [selection]);
 
   useEffect(() => {
@@ -198,12 +212,16 @@ export function TaskConsole({
     selection?.type === "action"
       ? visibleEvents.find((event) => event.id === selection.id) ?? null
       : null;
+  const selectedGroup =
+    selection?.type === "toolGroup"
+      ? toolGroups.find((group) => group.id === selection.id) ?? null
+      : null;
 
   return (
     <section className="flex h-full min-h-0 w-full flex-1 flex-col overflow-hidden border-l border-border bg-surface">
       <header className="flex h-16 items-center justify-between gap-3 border-b border-border bg-surface px-4">
         <div className="min-w-0">
-          <h2 className={panelTitleClass}>任务控制台</h2>
+          <h2 className={panelTitleClass}>Task Console</h2>
           <div className="mt-1 flex min-w-0 items-center gap-2 text-[11px] text-muted-light">
             <span className="inline-flex items-center gap-1.5">
               <span
@@ -222,7 +240,7 @@ export function TaskConsole({
             </span>
             <span className="text-border">/</span>
             <span className="tabular">
-              {liveRun.runStatus !== "idle" ? formatDuration(runUsage.durationMs) : "尚未开始"}
+              {liveRun.runStatus !== "idle" ? formatDuration(runUsage.durationMs) : "Not started"}
             </span>
           </div>
         </div>
@@ -230,8 +248,8 @@ export function TaskConsole({
           <button
             type="button"
             onClick={onClose}
-            aria-label="关闭任务控制台"
-            title="关闭任务控制台"
+            aria-label="Close Task Console"
+            title="Close Task Console"
             className={`flex h-8 w-8 shrink-0 items-center justify-center ${btnGhostClass}`}
           >
             <span aria-hidden="true" className="text-lg leading-none">
@@ -243,28 +261,28 @@ export function TaskConsole({
 
       <nav className="flex shrink-0 items-center gap-1 border-b border-border px-3 py-2">
         <TabButton active={activeTab === "overview"} onClick={() => handleTabClick("overview")}>
-          概览
+          Overview
         </TabButton>
         <TabButton
           active={activeTab === "trace"}
           badge={liveRun.toolCalls.length}
           onClick={() => handleTabClick("trace")}
         >
-          追溯
+          Trace
         </TabButton>
         <TabButton
           active={activeTab === "outputs"}
           badge={artifacts.length}
           onClick={() => handleTabClick("outputs")}
         >
-          产出
+          Outputs
         </TabButton>
         <TabButton
           active={activeTab === "detail"}
-          badge={selection?.type === "action" ? 1 : undefined}
+          badge={selection?.type === "action" || selection?.type === "toolGroup" ? 1 : undefined}
           onClick={() => handleTabClick("detail")}
         >
-          详情
+          Details
         </TabButton>
       </nav>
 
@@ -278,6 +296,7 @@ export function TaskConsole({
                     key={section.id}
                     currentQuestion={currentQuestion}
                     liveRun={liveRun}
+                    toolGroups={toolGroups}
                     sessionUsage={sessionUsage}
                   />
                 );
@@ -286,9 +305,11 @@ export function TaskConsole({
                 return (
                   <DynamicStepsList
                     key={section.id}
-                    toolCalls={liveRun.toolCalls}
+                    liveRun={liveRun}
+                    toolGroups={toolGroups}
                     events={visibleEvents}
                     onSelectEvent={onSelectEvent}
+                    onSelectToolGroup={onSelectToolGroup}
                   />
                 );
               }
@@ -325,7 +346,16 @@ export function TaskConsole({
         ) : null}
 
         {activeTab === "detail" ? (
-          selection?.type === "action" ? (
+          selection?.type === "toolGroup" ? (
+            <ToolGroupDetailView
+              artifacts={artifacts}
+              events={visibleEvents}
+              group={selectedGroup}
+              liveRun={liveRun}
+              onBack={onClearSelection}
+              onSelectEvent={onSelectEvent}
+            />
+          ) : selection?.type === "action" ? (
             <DetailView
               artifacts={artifacts}
               event={selectedEvent}
@@ -337,8 +367,8 @@ export function TaskConsole({
             />
           ) : (
             <EmptyState
-              title="未选择步骤"
-              description="在中间栏的工具卡或「追溯」时间线中点选一个步骤，即可在此查看单步耗时、动作详情与产出血缘。"
+              title="No step selected"
+              description="Select a step from the center tool card or Trace timeline to inspect duration, action details, and output lineage."
             />
           )
         ) : null}
@@ -446,17 +476,23 @@ function ConsoleSection({
   );
 }
 
-// 区块 1：结论前置 —— 当前问题、状态、与工具无关的整轮汇总指标。
+// Section 1: Summary first - current question, status, and run-level metrics.
 function ConclusionZone({
   currentQuestion,
   liveRun,
+  toolGroups,
   sessionUsage,
 }: {
   currentQuestion?: string;
   liveRun: LiveRun;
+  toolGroups: ProcessToolGroup[];
   sessionUsage: SessionUsageStats;
 }) {
   const runUsage = useMemo(() => deriveRunUsage(liveRun), [liveRun]);
+  const groupUsage = useMemo(
+    () => deriveProcessGroupUsage(toolGroups, liveRun),
+    [liveRun, toolGroups],
+  );
   const hasRun = liveRun.runStatus !== "idle";
   const toolRatio =
     runUsage.toolCalls.total > 0
@@ -471,24 +507,24 @@ function ConclusionZone({
   const displayTokens = runUsage.tokenUsageReported ? runUsage.tokens : sessionUsage.tokens;
   const displayModels = runUsage.models.length > 0 ? runUsage.models : sessionUsage.models;
   const totalTokens = displayTokens.inputTokens + displayTokens.outputTokens;
-  const tokenKpi = tokenReported ? formatCount(totalTokens) : "待上报";
+  const tokenKpi = tokenReported ? formatCount(totalTokens) : "Not reported";
   const costKpi =
     displayTokens.costUsd !== undefined
       ? `$${displayTokens.costUsd.toFixed(4)}`
-      : "待上报";
+      : "Not reported";
   const tokenLine = tokenReported
-    ? `入 ${formatCount(displayTokens.inputTokens)} / 出 ${formatCount(
+    ? `In ${formatCount(displayTokens.inputTokens)} / Out ${formatCount(
         displayTokens.outputTokens,
       )}${displayModels.length > 0 ? ` · ${displayModels.slice(0, 2).join(" / ")}` : ""}`
     : costKpi;
 
   return (
-    <ConsoleSection title="结论">
+    <ConsoleSection title="Summary">
       <div>
-        <div className={sectionLabelClass}>当前问题</div>
+        <div className={sectionLabelClass}>Current question</div>
         <p className="mt-1 text-sm leading-6 text-foreground">
           {currentQuestion ?? (
-            <span className="text-muted-light">发送问题以启动 dataAgent。</span>
+            <span className="text-muted-light">Send a question to start dataAgent.</span>
           )}
         </p>
       </div>
@@ -501,24 +537,29 @@ function ConclusionZone({
 
       <div className="mt-4 grid grid-cols-2 gap-2">
         <KpiMetric
-          label={liveRun.runHistory?.length ? "步骤数（会话）" : "步骤数"}
-          value={hasRun ? formatCount(runUsage.toolCalls.total) : "—"}
+          label={liveRun.runHistory?.length ? "Steps (session)" : "Steps"}
+          value={hasRun ? formatCount(groupUsage.stepCount) : "—"}
+          meta={
+            hasRun && groupUsage.toolCallCount > 0
+              ? `${formatCount(groupUsage.toolCallCount)} tool calls`
+              : undefined
+          }
           accentClass="text-primary"
         />
         <KpiMetric
-          label="成功率"
+          label="Success rate"
           value={successRate}
           meta={toolRatio}
           accentClass="text-step-success"
         />
         <KpiMetric
-          label={liveRun.runHistory?.length ? "产出（会话）" : "产出"}
+          label={liveRun.runHistory?.length ? "Outputs (session)" : "Outputs"}
           value={hasRun ? formatCount(runUsage.artifactCount) : "—"}
-          meta="项"
+          meta="items"
           accentClass="text-step-query"
         />
         <KpiMetric
-          label="Token / 成本"
+          label="Token / Cost"
           value={tokenKpi}
           meta={tokenLine}
           accentClass={tokenReported ? "text-step-knowledge" : "text-muted-light"}
@@ -534,13 +575,13 @@ function WorkspaceRunSignalsSummary({ liveRun }: { liveRun: LiveRun }) {
   const sandbox = liveRun.sandboxOutputs.slice(0, 4);
 
   return (
-    <ConsoleSection title="工作区信号" collapsible defaultExpanded={false}>
+    <ConsoleSection title="Workspace signals" collapsible defaultExpanded={false}>
       <p className="mt-1 text-[11px] leading-4 text-muted-light">
-        来自 AG-UI CUSTOM 事件：workspace.metadata（文件/工作区操作）与 sandbox.output（命令输出）。
+        From AG-UI CUSTOM events: workspace.metadata (file/workspace operations) and sandbox.output (command output).
       </p>
       {metadata.length > 0 ? (
         <div className="mt-3">
-          <div className="text-[11px] font-semibold text-foreground">工作区元数据</div>
+          <div className="text-[11px] font-semibold text-foreground">Workspace metadata</div>
           <ul className="mt-1 grid gap-1.5">
             {metadata.map((entry, index) => (
               <li
@@ -555,7 +596,7 @@ function WorkspaceRunSignalsSummary({ liveRun }: { liveRun: LiveRun }) {
       ) : null}
       {sandbox.length > 0 ? (
         <div className="mt-3">
-          <div className="text-[11px] font-semibold text-foreground">沙箱输出</div>
+          <div className="text-[11px] font-semibold text-foreground">Sandbox output</div>
           <ul className="mt-1 grid gap-1.5">
             {sandbox.map((entry, index) => (
               <li
@@ -577,92 +618,128 @@ function WorkspaceRunSignalsSummary({ liveRun }: { liveRun: LiveRun }) {
   );
 }
 
-// 区块 2：进展 —— 从真实执行的工具调用派生（tool-agnostic），每步可跳到详情。
+// Section 2: Progress derived from actual tool calls; each step can open details.
 function DynamicStepsList({
-  toolCalls,
+  liveRun,
+  toolGroups,
   events,
   onSelectEvent,
+  onSelectToolGroup,
 }: {
-  toolCalls: LiveToolCallRecord[];
+  liveRun: LiveRun;
+  toolGroups: ProcessToolGroup[];
   events: TimelineEvent[];
   onSelectEvent: (eventId: string) => void;
+  onSelectToolGroup: (groupId: string) => void;
 }) {
   const eventById = useMemo(
     () => new Map(events.map((event) => [event.id, event] as const)),
     [events],
   );
-  const badge = toolCalls.length > 0 ? (
+  const toolCallById = useMemo(
+    () => new Map(liveRun.toolCalls.map((call) => [call.id, call] as const)),
+    [liveRun.toolCalls],
+  );
+  const badge = toolGroups.length > 0 ? (
     <span className="tabular text-xs font-medium text-muted-light">
-      {toolCalls.filter((call) => call.status === "success").length}/{toolCalls.length}
+      {toolGroups.filter((group) => group.status === "success").length}/{toolGroups.length}
     </span>
   ) : null;
 
   return (
-    <ConsoleSection title="进展" badge={badge}>
-      {toolCalls.length === 0 ? (
+    <ConsoleSection title="Progress" badge={badge}>
+      {toolGroups.length === 0 ? (
         <EmptyState
-          title="尚无步骤"
-          description="发送问题后，Agent 实际执行的每个数据工具会在这里按顺序出现。"
+          title="No steps yet"
+          description="After you send a question, process steps appear here in order. Parallel tools are grouped under one step."
         />
       ) : (
         <ol className={["grid gap-1.5", consoleStepsListClass].join(" ")}>
-          {toolCalls.map((call) => {
-            const event = eventById.get(call.id);
-            const rawName = event?.toolName ?? call.name;
-            const title =
-              event?.title && event.title !== "tool" && event.title !== "unknown"
-                ? event.title
-                : toolDisplayTitle(rawName);
-            const kind = dataStepKindForTool(rawName);
+          {toolGroups.map((group) => {
+            const calls = group.toolCallIds
+              .map((id) => toolCallById.get(id))
+              .filter((call): call is LiveToolCallRecord => Boolean(call));
+            const primaryCall = calls[0];
+            const primaryEvent = primaryCall ? eventById.get(primaryCall.id) : undefined;
+            const rawName = primaryEvent?.toolName ?? primaryCall?.name;
+            const kind = calls.length > 1 ? "other" : dataStepKindForTool(rawName);
             const kindLabel = dataStepLabel(kind);
             const tone = stepKindTone(kind);
+            const groupDuration =
+              group.startedAtMs !== undefined && group.finishedAtMs !== undefined
+                ? formatDuration(Math.max(0, group.finishedAtMs - group.startedAtMs))
+                : group.status === "running"
+                  ? "Running"
+                  : "—";
             const body = (
               <>
                 <span className={["h-8 w-1 shrink-0 rounded-full", tone.bar].join(" ")} />
-                <StepStatusDot status={call.status} />
+                <StepStatusDot status={group.status} />
                 <span className="min-w-0 flex-1">
                   <span
                     className={[
                       "block truncate text-xs leading-5",
-                      call.status === "failed"
+                      group.status === "failed"
                         ? "font-medium text-step-error"
-                        : call.status === "running"
+                        : group.status === "running"
                           ? "font-medium text-foreground"
                           : "text-muted",
                     ].join(" ")}
                   >
-                    {title}
+                    {group.title}
                   </span>
-                  <span className="text-[10px] text-muted-light">{kindLabel}</span>
+                  <span className="text-[10px] text-muted-light">
+                    Step {group.stepNumber} · {kindLabel}
+                    {calls.length > 1 ? ` · ${calls.length} tool calls` : ""}
+                  </span>
                 </span>
                 <span className="shrink-0 text-right text-[10px] text-muted-light">
-                  <span className="block">{toolStatusLabel(call.status)}</span>
-                  <span className="tabular block font-mono">{stepDurationLabel(call)}</span>
+                  <span className="block">{toolStatusLabel(group.status)}</span>
+                  <span className="tabular block font-mono">{groupDuration}</span>
                 </span>
               </>
             );
             return (
               <li
-                key={call.id}
-                className={call.status === "running" ? "step-streaming rounded-lg" : "step-enter"}
+                key={group.id}
+                className={group.status === "running" ? "step-streaming rounded-lg" : "step-enter"}
               >
-                {event ? (
-                  <button
-                    type="button"
-                    onClick={() => onSelectEvent(call.id)}
-                    className={[
-                      "flex w-full cursor-pointer items-center gap-2 rounded-lg border px-2 py-1.5 text-left transition-colors duration-200",
-                      tone.border,
-                      call.status === "running" ? tone.bg : "border-transparent hover:bg-primary-light/5",
-                    ].join(" ")}
-                  >
-                    {body}
-                  </button>
-                ) : (
-                  <div className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5">
-                    {body}
+                <button
+                  type="button"
+                  onClick={() => onSelectToolGroup(group.id)}
+                  className={[
+                    "flex w-full cursor-pointer items-center gap-2 rounded-lg border px-2 py-1.5 text-left transition-colors duration-200",
+                    tone.border,
+                    group.status === "running" ? tone.bg : "border-transparent hover:bg-surface-subtle",
+                  ].join(" ")}
+                >
+                  {body}
+                </button>
+                {calls.length > 1 ? (
+                  <div className="ml-5 mt-1 grid gap-1 border-l border-border pl-2">
+                    {calls.map((call) => {
+                      const event = eventById.get(call.id);
+                      const title =
+                        event?.title && event.title !== "tool" && event.title !== "unknown"
+                          ? event.title
+                          : toolDisplayTitle(event?.toolName ?? call.name);
+                      return (
+                        <button
+                          key={call.id}
+                          type="button"
+                          onClick={() => onSelectEvent(call.id)}
+                          className="flex min-w-0 cursor-pointer items-center gap-2 rounded-md px-2 py-1 text-left text-[11px] transition-colors duration-150 hover:bg-surface"
+                        >
+                          <StepStatusDot status={call.status} compact />
+                          <span className="min-w-0 flex-1 truncate text-muted">{title}</span>
+                          <span className="shrink-0 tabular font-mono text-muted-light">
+                            {stepDurationLabel(call)}
+                          </span>
+                        </button>
+                      );
+                    })}
                   </div>
-                )}
+                ) : null}
               </li>
             );
           })}
@@ -672,14 +749,14 @@ function DynamicStepsList({
   );
 }
 
-// 区块 3：按工具分布 —— 谁跑了显示谁，工具无关。
+// Section 3: Tool distribution, derived from whatever tools ran.
 function ToolDistributionZone({ liveRun }: { liveRun: LiveRun }) {
   const runUsage = useMemo(() => deriveRunUsage(liveRun), [liveRun]);
   const entries = Object.entries(runUsage.toolCalls.byTool);
   if (entries.length === 0) return null;
 
   return (
-    <ConsoleSection title="按工具分布" collapsible defaultExpanded={false}>
+    <ConsoleSection title="Tool distribution" collapsible defaultExpanded={false}>
       <div className="grid gap-1.5">
         {entries.map(([name, bucket]) => {
           const kind = dataStepKindForTool(name);
@@ -698,10 +775,10 @@ function ToolDistributionZone({ liveRun }: { liveRun: LiveRun }) {
                   <span className="block truncate font-mono text-xs text-foreground">{name}</span>
                   <span className={["text-[10px]", tone.text].join(" ")}>{kindLabel}</span>
                 </span>
-                <span className="tabular shrink-0 text-[11px] text-muted">{bucket.calls} 次</span>
+                <span className="tabular shrink-0 text-[11px] text-muted">{bucket.calls} calls</span>
                 {bucket.failed > 0 ? (
                   <span className="shrink-0 rounded-full bg-step-error/10 px-2 py-0.5 text-[10px] font-semibold text-step-error">
-                    失败 {bucket.failed}
+                    Failed {bucket.failed}
                   </span>
                 ) : null}
               </div>
@@ -716,7 +793,13 @@ function ToolDistributionZone({ liveRun }: { liveRun: LiveRun }) {
   );
 }
 
-function StepStatusDot({ status }: { status: LiveToolCallRecord["status"] }) {
+function StepStatusDot({
+  status,
+  compact = false,
+}: {
+  status: LiveToolCallRecord["status"];
+  compact?: boolean;
+}) {
   const tone =
     status === "success"
       ? "border-step-success bg-step-success"
@@ -726,16 +809,17 @@ function StepStatusDot({ status }: { status: LiveToolCallRecord["status"] }) {
   return (
     <span
       className={[
-        "flex h-4 w-4 shrink-0 items-center justify-center rounded-full border-2",
+        "flex shrink-0 items-center justify-center rounded-full border-2",
+        compact ? "h-3 w-3" : "h-4 w-4",
         tone,
       ].join(" ")}
     >
       {status === "success" ? (
-        <svg viewBox="0 0 12 12" className="h-2.5 w-2.5 text-white" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+        <svg viewBox="0 0 12 12" className={compact ? "h-2 w-2 text-white" : "h-2.5 w-2.5 text-white"} fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round" aria-hidden>
           <path d="m2.5 6.5 2.5 2.5 4.5-5" />
         </svg>
       ) : status === "running" ? (
-        <span className="h-1.5 w-1.5 rounded-full bg-primary-light" />
+        <span className={compact ? "h-1 w-1 rounded-full bg-primary-light" : "h-1.5 w-1.5 rounded-full bg-primary-light"} />
       ) : (
         <span className="text-[9px] font-bold leading-none text-white">!</span>
       )}
@@ -743,7 +827,7 @@ function StepStatusDot({ status }: { status: LiveToolCallRecord["status"] }) {
   );
 }
 
-// 区块 3：数据足迹 / 证据链 —— 持久内联时间线，可放大为全屏。
+// Section 3: Data trail, an inline trace that can expand full-screen.
 function EvidenceZone({
   artifacts,
   liveRun,
@@ -761,14 +845,14 @@ function EvidenceZone({
     <div className="grid gap-4">
       <RunConfigurationPanel liveRun={liveRun} />
       <ConsoleSection
-        title="数据足迹 · 证据链"
+        title="Data trail"
         badge={
           <button
             type="button"
             onClick={onOpenTrace}
             className={btnSecondaryClass}
           >
-            放大全屏
+            Open full screen
           </button>
         }
       >
@@ -783,7 +867,7 @@ function EvidenceZone({
   );
 }
 
-// 区块 4：产物 —— 在本 Tab 内展开查看内容，不跳转到「详情」。
+// Section 4: Outputs expand in place without jumping to Details.
 function DeliverablesZone({
   artifacts,
   events,
@@ -814,11 +898,11 @@ function DeliverablesZone({
 
   return (
     <div className="grid gap-4">
-      <ConsoleSection title="产物" badge={badge}>
+      <ConsoleSection title="Outputs" badge={badge}>
         {artifacts.length === 0 ? (
           <EmptyState
-            title="暂无产出"
-            description="发送问题后，SQL、数据集、图表和报告会在这里显示，可点击展开查看完整内容。"
+            title="No outputs yet"
+            description="SQL, datasets, charts, and reports appear here after a question. Expand an item to inspect it."
           />
         ) : (
           <div className="grid gap-3">
@@ -865,13 +949,13 @@ function DeliverablesZone({
                     <div className="max-h-[min(480px,55vh)] overflow-y-auto overflow-x-hidden border-t border-border px-3 pb-3 pt-2">
                       {sourceEvent ? (
                         <div className="mb-3 rounded-lg border border-border bg-surface-subtle p-2.5">
-                          <div className={sectionLabelClass}>来源步骤</div>
+                          <div className={sectionLabelClass}>Source step</div>
                           <button
                             type="button"
                             onClick={() => onSelectEvent(sourceEvent.id)}
                             className="mt-1 cursor-pointer rounded-sm text-left text-xs font-semibold text-primary underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-light/50"
                           >
-                            {sourceEvent.title} → 在详情中查看
+                            {sourceEvent.title} → View in Details
                           </button>
                         </div>
                       ) : null}
@@ -886,7 +970,7 @@ function DeliverablesZone({
                         />
                       ) : (
                         <p className="mt-3 text-[11px] leading-4 text-muted-light">
-                          连接配置 API 后可预览与下载完整产物。
+                          Connect the configuration API to preview and download complete outputs.
                         </p>
                       )}
                     </div>
@@ -896,8 +980,8 @@ function DeliverablesZone({
             })}
             <p className="text-[11px] leading-4 text-muted-light">
               {exportReady
-                ? "展开产物后可查看或下载完整内容。"
-                : "预览与下载需后端 artifact 接口可用。"}
+                ? "Expand an output to view or download the full content."
+                : "Preview and download require the backend artifact API."}
             </p>
           </div>
         )}
@@ -946,7 +1030,7 @@ function ArtifactFileActions({
       anchor.click();
       URL.revokeObjectURL(url);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "下载失败");
+      setError(err instanceof Error ? err.message : "DownloadFailed");
     } finally {
       setBusy(null);
     }
@@ -959,7 +1043,7 @@ function ArtifactFileActions({
     try {
       await onPromoteArtifact(artifact);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "加入工作区失败");
+      setError(err instanceof Error ? err.message : "Add to workspaceFailed");
     } finally {
       setBusy(null);
     }
@@ -973,31 +1057,31 @@ function ArtifactFileActions({
           onClick={handleDownload}
           disabled={!exportReady || busy === "download"}
           className={`${btnSecondaryClass} disabled:cursor-not-allowed disabled:opacity-60`}
-          title={exportReady ? "下载产物文件" : "后端未支持 artifact.export"}
+          title={exportReady ? "Download output file" : "Backend unsupported: artifact.export"}
         >
-          {busy === "download" ? "下载中" : "下载"}
+          {busy === "download" ? "Downloading" : "Download"}
         </button>
         <button
           type="button"
           onClick={() => onMentionArtifact?.(artifact)}
           disabled={!canMention}
           className={`${btnSecondaryClass} disabled:cursor-not-allowed disabled:opacity-60`}
-          title={canMention ? "引用本对话产物路径" : "缺少可 pin 的工作区路径"}
+          title={canMention ? "Reference this chat output path" : "Missing a workspace path that can be pinned"}
         >
-          @ 引用
+          @ Mention
         </button>
         <button
           type="button"
           onClick={handlePromote}
           disabled={!promoteReady || promoted || busy === "promote"}
           className={`${btnSecondaryClass} disabled:cursor-not-allowed disabled:opacity-60`}
-          title={promoteReady ? "加入跨会话工作区文件" : "后端未支持 artifact.promote"}
+          title={promoteReady ? "Add as reusable workspace file" : "Backend unsupported: artifact.promote"}
         >
-          {promoted ? "已加入工作区" : busy === "promote" ? "加入中" : "加入工作区"}
+          {promoted ? "Added to workspace" : busy === "promote" ? "Adding" : "Add to workspace"}
         </button>
         {!promoteReady ? (
           <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-400">
-            加入工作区后端未支持
+            Add to workspace is backend unsupported
           </span>
         ) : null}
       </div>
@@ -1006,6 +1090,294 @@ function ArtifactFileActions({
           {error}
         </p>
       ) : null}
+    </div>
+  );
+}
+
+function eventForToolCall(
+  events: TimelineEvent[],
+  call: LiveToolCallRecord | undefined,
+): TimelineEvent | undefined {
+  if (!call) return undefined;
+  return (
+    events.find((event) => event.id === call.id) ??
+    (call.stepId ? events.find((event) => event.stepId === call.stepId) : undefined)
+  );
+}
+
+function resolveGroupProducedArtifacts(
+  liveRun: LiveRun,
+  group: ProcessToolGroup,
+  events: TimelineEvent[],
+  artifacts: DataArtifact[],
+): DataArtifact[] {
+  const artifactIds = new Set<string>();
+  const linkedEventIds = new Set(group.toolCallIds);
+  for (const event of events) {
+    if (group.toolCallIds.includes(event.id)) {
+      linkedEventIds.add(event.id);
+      event.artifactIds?.forEach((id) => artifactIds.add(id));
+    }
+  }
+  for (const call of liveRun.toolCalls) {
+    if (!group.toolCallIds.includes(call.id) || !call.stepId) continue;
+    for (const event of events) {
+      if (event.stepId === call.stepId) {
+        linkedEventIds.add(event.id);
+        event.artifactIds?.forEach((id) => artifactIds.add(id));
+      }
+    }
+  }
+  for (const artifact of artifacts) {
+    if (artifact.createdByEventId && linkedEventIds.has(artifact.createdByEventId)) {
+      artifactIds.add(artifact.id);
+    }
+  }
+  return artifacts.filter((artifact) => artifactIds.has(artifact.id));
+}
+
+function resolveTokenUsageForGroup(
+  liveRun: LiveRun,
+  group: ProcessToolGroup,
+): ReturnType<typeof resolveTokenUsageForEvent> {
+  const toolCallIds = new Set(group.toolCallIds);
+  const stepIds = new Set(
+    liveRun.toolCalls
+      .filter((call) => toolCallIds.has(call.id) && call.stepId)
+      .map((call) => call.stepId as string),
+  );
+  const exactMatches = liveRun.tokenUsageEvents.filter(
+    (record) =>
+      (record.toolCallId && toolCallIds.has(record.toolCallId)) ||
+      (record.stepId && stepIds.has(record.stepId)),
+  );
+
+  // Mastra attaches model-step usage to the last tool call in a parallel batch.
+  const lastToolCallId = group.toolCallIds.at(-1);
+  const lastToolMatches = lastToolCallId
+    ? exactMatches.filter((record) => record.toolCallId === lastToolCallId)
+    : [];
+
+  let matches = lastToolMatches.length > 0 ? lastToolMatches : exactMatches;
+  let approximate = false;
+
+  if (matches.length > 1) {
+    matches = [
+      matches.reduce((best, current) =>
+        current.inputTokens + current.outputTokens >
+        best.inputTokens + best.outputTokens
+          ? current
+          : best,
+      ),
+    ];
+  }
+
+  if (matches.length === 0) {
+    const toolIndices = group.toolCallIds
+      .map((id) => liveRun.toolCalls.findIndex((call) => call.id === id))
+      .filter((index) => index >= 0);
+    const maxStepNumber =
+      toolIndices.length > 0 ? Math.max(...toolIndices) + 1 : undefined;
+    if (maxStepNumber !== undefined) {
+      matches = liveRun.tokenUsageEvents.filter(
+        (record) => record.stepNumber === maxStepNumber,
+      );
+      approximate = matches.length > 0;
+    }
+  }
+
+  const inputTokens = matches.reduce((sum, record) => sum + record.inputTokens, 0);
+  const outputTokens = matches.reduce((sum, record) => sum + record.outputTokens, 0);
+  const costs = matches
+    .map((record) => record.costUsd)
+    .filter((value): value is number => value !== undefined);
+  const models = [
+    ...new Set(
+      matches
+        .map((record) => record.model)
+        .filter((model): model is string => Boolean(model)),
+    ),
+  ];
+  return {
+    inputTokens,
+    outputTokens,
+    ...(costs.length > 0 ? { costUsd: costs.reduce((sum, value) => sum + value, 0) } : {}),
+    reported: inputTokens > 0 || outputTokens > 0 || costs.length > 0,
+    models,
+    ...(approximate ? { approximate: true } : {}),
+  };
+}
+
+function ToolGroupDetailView({
+  artifacts,
+  events,
+  group,
+  liveRun,
+  onBack,
+  onSelectEvent,
+}: {
+  artifacts: DataArtifact[];
+  events: TimelineEvent[];
+  group: ProcessToolGroup | null;
+  liveRun: LiveRun;
+  onBack: () => void;
+  onSelectEvent: (eventId: string) => void;
+}) {
+  const calls = useMemo(
+    () =>
+      group
+        ? group.toolCallIds
+            .map((id) => liveRun.toolCalls.find((call) => call.id === id))
+            .filter((call): call is LiveToolCallRecord => Boolean(call))
+        : [],
+    [group, liveRun.toolCalls],
+  );
+  const [selectedToolCallId, setSelectedToolCallId] = useState<string | null>(
+    calls[0]?.id ?? null,
+  );
+
+  useEffect(() => {
+    setSelectedToolCallId(calls[0]?.id ?? null);
+  }, [calls, group?.id]);
+
+  if (!group) {
+    return (
+      <EmptyState
+        title="No step selected"
+        description="Select a process step to inspect batch duration, child tools, and output lineage."
+      />
+    );
+  }
+
+  const selectedCall =
+    calls.find((call) => call.id === selectedToolCallId) ?? calls[0];
+  const selectedEvent = eventForToolCall(events, selectedCall);
+  const producedArtifacts = resolveGroupProducedArtifacts(liveRun, group, events, artifacts);
+  const selectedProducedArtifacts = selectedEvent
+    ? resolveProducedArtifacts(liveRun, selectedEvent, artifacts)
+    : [];
+  const tokenUsage = resolveTokenUsageForGroup(liveRun, group);
+  const groupDuration =
+    group.startedAtMs !== undefined && group.finishedAtMs !== undefined
+      ? formatDuration(Math.max(0, group.finishedAtMs - group.startedAtMs))
+      : group.status === "running"
+        ? "Running"
+        : "—";
+
+  return (
+    <div className="grid gap-3">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className={sectionLabelClass}>Step details · Step {group.stepNumber}</div>
+          <h3 className="mt-1 text-sm font-semibold text-foreground">
+            {group.title}
+          </h3>
+          <p className="mt-1 text-xs leading-5 text-muted">{group.summary}</p>
+        </div>
+        <button type="button" onClick={onBack} className={btnSecondaryClass}>
+          Back
+        </button>
+      </div>
+
+      <div className="grid grid-cols-2 gap-2">
+        <Metric label="Step duration" value={groupDuration} />
+        <Metric label="Status" value={toolStatusLabel(group.status)} />
+        <Metric label="Tool calls" value={`${calls.length} calls`} />
+        <Metric label="Outputs" value={`${producedArtifacts.length} items`} />
+      </div>
+
+      <Panel title="Tool calls">
+        <div className="divide-y divide-border overflow-hidden rounded-lg border border-border bg-surface">
+          {calls.map((call) => {
+            const event = eventForToolCall(events, call);
+            const active = selectedCall?.id === call.id;
+            return (
+              <button
+                key={call.id}
+                type="button"
+                onClick={() => setSelectedToolCallId(call.id)}
+                className={[
+                  "flex w-full cursor-pointer items-center gap-2 px-3 py-2 text-left transition-colors duration-150",
+                  active ? "bg-surface-subtle" : "hover:bg-surface-subtle",
+                ].join(" ")}
+              >
+                <StepStatusDot status={call.status} compact />
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-xs font-medium text-foreground">
+                    {event?.title ?? toolDisplayTitle(call.name)}
+                  </span>
+                  <span className="mt-0.5 block truncate font-mono text-[10px] text-muted-light">
+                    {call.name}
+                  </span>
+                </span>
+                <span className="shrink-0 text-right text-[10px] text-muted-light">
+                  <span className="block">{toolStatusLabel(call.status)}</span>
+                  <span className="tabular block font-mono">{stepDurationLabel(call)}</span>
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      </Panel>
+
+      <Panel title="Usage">
+        <TokenUsagePanel usage={tokenUsage} />
+      </Panel>
+
+      <Panel title="Tool details">
+        {selectedEvent && selectedCall ? (
+          <div className="grid gap-3">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <div className={sectionLabelClass}>
+                  {dataStepLabel(selectedEvent.kind)} · {selectedEvent.ts}
+                </div>
+                <div className="mt-1 truncate text-xs font-semibold text-foreground">
+                  {selectedEvent.title}
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => onSelectEvent(selectedEvent.id)}
+                className={btnSecondaryClass}
+              >
+                Tool details
+              </button>
+            </div>
+            <EventPayloadView
+              event={selectedEvent}
+              producedArtifacts={selectedProducedArtifacts}
+              toolCall={selectedCall}
+            />
+          </div>
+        ) : (
+          <p className="text-xs leading-5 text-muted-light">
+            This tool call is not yet linked to a displayable step event.
+          </p>
+        )}
+      </Panel>
+
+      <Panel title="Output lineage">
+        {producedArtifacts.length > 0 ? (
+          <div className="grid gap-2">
+            {producedArtifacts.map((artifact) => (
+              <div
+                key={artifact.id}
+                className="border-b border-border pb-2 last:border-b-0 last:pb-0"
+              >
+                <div className="truncate text-xs font-semibold text-foreground">
+                  {artifact.title}
+                </div>
+                <p className="mt-1 text-[11px] leading-4 text-muted-light">
+                  {artifact.summary}
+                </p>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p className="text-xs text-muted-light">This step has not directly produced outputs yet.</p>
+        )}
+      </Panel>
     </div>
   );
 }
@@ -1031,14 +1403,12 @@ function DetailView({
   const producedArtifacts = event
     ? resolveProducedArtifacts(liveRun, event, artifacts)
     : [];
-  const tokenUsage = resolveTokenUsageForEvent(liveRun, event);
 
   return (
     <ActionDetail
       event={event}
       liveRun={liveRun}
       producedArtifacts={producedArtifacts}
-      tokenUsage={tokenUsage}
       toolCall={toolCall}
       onBack={onBack}
     />
@@ -1059,8 +1429,8 @@ function ArtifactDetailPanel({
   if (!artifact) {
     return (
       <EmptyState
-        title="未选择内容"
-        description="选择一个可见产出物，即可在此查看完整 SQL、数据集、图表或报告。"
+        title="No content selected"
+        description="Select a visible output to inspect the full SQL, dataset, chart, or report."
       />
     );
   }
@@ -1087,14 +1457,14 @@ function ArtifactDetailPanel({
           onClick={onBack}
           className={btnSecondaryClass}
         >
-          返回
+          Back
         </button>
       </div>
 
       {sourceEvent && (
         <div className="rounded-lg border border-border bg-surface-subtle p-3">
           <div className={sectionLabelClass}>
-            来源
+            Source
           </div>
           <button
             type="button"
@@ -1118,9 +1488,9 @@ function detailStatusLabel(
   if (toolCall) {
     return toolStatusLabel(resolveTraceToolStatus(toolCall.status, activityStatus));
   }
-  if (activityStatus === "failed") return "失败";
-  if (activityStatus === "completed") return "已完成";
-  if (activityStatus === "running") return "进行中";
+  if (activityStatus === "failed") return "Failed";
+  if (activityStatus === "completed") return "Completed";
+  if (activityStatus === "running") return "Running";
   return "—";
 }
 
@@ -1128,14 +1498,12 @@ function ActionDetail({
   event,
   liveRun,
   producedArtifacts,
-  tokenUsage,
   toolCall,
   onBack,
 }: {
   event: TimelineEvent | null;
   liveRun: LiveRun;
   producedArtifacts: DataArtifact[];
-  tokenUsage: ReturnType<typeof resolveTokenUsageForEvent>;
   toolCall?: LiveToolCallRecord;
   onBack: () => void;
 }) {
@@ -1151,8 +1519,8 @@ function ActionDetail({
   if (!event) {
     return (
       <EmptyState
-        title="未选择动作"
-        description="选择一个数据动作，即可查看它的参数、观察结果与产出。"
+        title="No action selected"
+        description="Select a data action to inspect its parameters, observations, and outputs."
       />
     );
   }
@@ -1176,27 +1544,27 @@ function ActionDetail({
           onClick={onBack}
           className={btnSecondaryClass}
         >
-          返回
+          Back
         </button>
       </div>
 
       <div className="grid grid-cols-2 gap-2">
-        <Metric label="单步耗时" value={stepDurationLabel(toolCall)} />
+        <Metric label="Step duration" value={stepDurationLabel(toolCall)} />
         <Metric
-          label="状态"
+          label="Status"
           value={detailStatusLabel(toolCall, event.activityStatus)}
         />
       </div>
 
       {event.thought && (
-        <Panel title="推理">
+        <Panel title="Reasoning">
           <p className="text-sm italic leading-6 text-muted">
             {event.thought}
           </p>
         </Panel>
       )}
 
-      <Panel title="动作详情">
+      <Panel title="Action details">
         <EventPayloadView
           event={event}
           producedArtifacts={producedArtifacts}
@@ -1205,7 +1573,7 @@ function ActionDetail({
       </Panel>
 
       {workspaceMetadata ? (
-        <Panel title="工作区元数据">
+        <Panel title="Workspace metadata">
           <p className="text-xs leading-5 text-muted">
             {formatWorkspaceMetadataSummary(workspaceMetadata)}
           </p>
@@ -1220,7 +1588,7 @@ function ActionDetail({
       ) : null}
 
       {sandboxOutputs.length > 0 ? (
-        <Panel title="沙箱输出">
+        <Panel title="Sandbox output">
           <div className="grid gap-2">
             {sandboxOutputs.map((output, index) => (
               <div
@@ -1239,11 +1607,7 @@ function ActionDetail({
         </Panel>
       ) : null}
 
-      <Panel title="用量">
-        <TokenUsagePanel usage={tokenUsage} />
-      </Panel>
-
-      <Panel title="产出血缘">
+      <Panel title="Output lineage">
         {producedArtifacts.length > 0 ? (
           <div className="grid gap-2">
             {producedArtifacts.map((artifact) => {
@@ -1270,10 +1634,10 @@ function ActionDetail({
                     </p>
                     <span className="mt-1 inline-block text-[10px] font-medium text-muted">
                       {expanded
-                        ? "收起"
+                        ? "Collapse"
                         : artifact.detail || artifact.previewAvailable
-                          ? "展开内容"
-                          : "无详情"}
+                          ? "Expand content"
+                          : "No details"}
                     </span>
                   </button>
                   {expanded ? (
@@ -1285,11 +1649,11 @@ function ActionDetail({
               );
             })}
             <p className="text-[11px] leading-4 text-muted-light">
-              完整列表见「产出」Tab。
+              See the Outputs tab for the full list.
             </p>
           </div>
         ) : (
-          <p className="text-xs text-muted-light">该动作未直接生成产出物。</p>
+          <p className="text-xs text-muted-light">This action did not directly produce outputs.</p>
         )}
       </Panel>
     </div>
@@ -1305,10 +1669,10 @@ function TokenUsagePanel({
     return (
       <div className="rounded-lg border border-dashed border-border bg-surface-subtle p-3">
         <div className="mb-2 inline-flex rounded-full bg-surface px-2 py-0.5 text-[10px] font-semibold text-muted-light">
-          后端未支持
+          Backend unsupported
         </div>
         <p className="text-xs leading-5 text-muted-light">
-          按步骤 Token、模型与成本用量待后端通过 token_usage 事件上报。整轮用量见「概览」。
+          Per-step token, model, and cost usage require backend token_usage events. Run-level usage is shown in Overview.
         </p>
       </div>
     );
@@ -1324,22 +1688,22 @@ function TokenUsagePanel({
     <div className="grid gap-3">
       {usage.approximate ? (
         <div className="inline-flex w-fit rounded-full bg-step-warning/10 px-2 py-0.5 text-[10px] font-semibold text-step-warning">
-          近似匹配（仅 step_number）
+          Approximate match (step_number only)
         </div>
       ) : null}
       <div className="grid grid-cols-2 gap-2">
-        <Metric label="输入 Token" value={formatCount(usage.inputTokens)} />
-        <Metric label="输出 Token" value={formatCount(usage.outputTokens)} />
+        <Metric label="Input tokens" value={formatCount(usage.inputTokens)} />
+        <Metric label="Output tokens" value={formatCount(usage.outputTokens)} />
       </div>
       <div className="grid gap-2 rounded-lg border border-border bg-surface-subtle p-3">
         <TokenUsageBar
-          label="输入"
+          label="Input"
           value={usage.inputTokens}
           width={inputShare}
           tone="bg-step-knowledge"
         />
         <TokenUsageBar
-          label="输出"
+          label="Output"
           value={usage.outputTokens}
           width={outputShare}
           tone="bg-primary-light"
@@ -1356,14 +1720,14 @@ function TokenUsagePanel({
             </span>
           ))
         ) : (
-          <span>模型待上报</span>
+          <span>Model not reported</span>
         )}
         {usage.costUsd !== undefined ? (
           <span className="rounded-full bg-step-knowledge/10 px-2 py-0.5 font-semibold text-step-knowledge">
             ${usage.costUsd.toFixed(4)}
           </span>
         ) : (
-          <span>成本待上报</span>
+          <span>CostNot reported</span>
         )}
       </div>
     </div>
@@ -1427,7 +1791,7 @@ function EventPayloadView({
     if (payload.tables.length === 0) {
       return (
         <p className="text-xs leading-5 text-muted-light">
-          Agent 正在检查所选数据源的表结构（inspect_schema）。
+          Agent is inspecting the selected data source schema (inspect_schema).
         </p>
       );
     }
@@ -1467,7 +1831,7 @@ function EventPayloadView({
     )?.detail;
     return (
       <div className="grid gap-3">
-        {payload.question && <Metric label="问题" value={payload.question} />}
+        {payload.question && <Metric label="Question" value={payload.question} />}
         {payload.sql ? (
           <div className={[consoleScrollXShellClass, "min-w-0"].join(" ")}>
             <pre className={[consoleCodeBlockBaseClass, "max-h-80"].join(" ")}>
@@ -1476,11 +1840,11 @@ function EventPayloadView({
           </div>
         ) : failed ? (
           <p className="text-xs leading-5 text-step-error">
-            {errorMessage || "只读 SQL 执行失败，未返回 SQL 参数。"}
+            {errorMessage || "Read-only SQL execution failed and returned no SQL parameters."}
           </p>
         ) : (
           <p className="text-xs leading-5 text-muted-light">
-            正在生成只读 SQL，参数返回后会显示在这里。
+            Generating read-only SQL. Parameters will appear here after they arrive.
           </p>
         )}
         {failed && errorMessage && payload.sql ? (
@@ -1490,19 +1854,19 @@ function EventPayloadView({
         ) : null}
         {(payload.scannedRows > 0 || payload.durationMs > 0) && (
           <div className="flex flex-wrap items-center gap-2 text-xs text-muted">
-            <span>扫描 {payload.scannedRows.toLocaleString()} 行</span>
+            <span>Scanned {payload.scannedRows.toLocaleString()} rows</span>
             <span>·</span>
             <span>{payload.durationMs}ms</span>
           </div>
         )}
         {datasetDetail?.type === "dataset" ? (
           <div className="grid gap-2">
-            <div className={sectionLabelClass}>结果预览</div>
+            <div className={sectionLabelClass}>Result preview</div>
             <ArtifactDetailView detail={datasetDetail} />
           </div>
         ) : (
           <p className="rounded-lg border border-dashed border-border bg-surface-subtle px-2.5 py-2 text-[11px] leading-4 text-muted-light">
-            SQL 结果表将从关联的 dataset artifact 展示；当前步骤尚未返回可预览结果行。
+            SQL result tables are shown from linked dataset artifacts. This step has not returned preview rows yet.
           </p>
         )}
       </div>
@@ -1534,7 +1898,7 @@ function EventPayloadView({
         <p className="text-xs leading-5 text-muted">{payload.description}</p>
       ) : (
         <p className="text-xs leading-5 text-muted-light">
-          该数据操作暂无更多参数。
+          This data operation has no additional parameters yet.
         </p>
       )}
       {payload.rawResult ? (
@@ -1555,7 +1919,7 @@ function ArtifactExportActions({
   artifact: DataArtifact;
   onExportJob?: (job: JobDto) => void;
 }) {
-  const [previewText, setPreviewText] = useState<string | null>(null);
+  const [previewDetail, setPreviewDetail] = useState<ArtifactDetail | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [loadingPreview, setLoadingPreview] = useState(false);
   const [busyFormat, setBusyFormat] = useState<ArtifactExportFormat | "job" | null>(null);
@@ -1571,15 +1935,16 @@ function ArtifactExportActions({
     void artifactExportClient
       .fetchPreview(artifact.id)
       .then((preview) => {
-        if (typeof preview.content === "string") {
-          setPreviewText(preview.content);
+        const loaded = artifactDetailFromPreview(artifact, preview);
+        if (loaded) {
+          setPreviewDetail(loaded);
           return;
         }
-        setPreviewText(JSON.stringify(preview, null, 2));
+        setPreviewError("Preview data is empty or unsupported.");
       })
       .catch((error: unknown) => {
         setPreviewError(
-          error instanceof Error ? error.message : "预览加载失败",
+          error instanceof Error ? error.message : "Failed to load preview",
         );
       })
       .finally(() => {
@@ -1598,7 +1963,7 @@ function ArtifactExportActions({
       anchor.click();
       URL.revokeObjectURL(url);
     }).catch((error: unknown) => {
-      setPreviewError(error instanceof Error ? error.message : "下载失败");
+      setPreviewError(error instanceof Error ? error.message : "DownloadFailed");
     }).finally(() => {
       setBusyFormat(null);
     });
@@ -1610,7 +1975,7 @@ function ArtifactExportActions({
     void artifactExportClient.export(artifact.id, format)
       .then((job) => onExportJob?.(job))
       .catch((error: unknown) => {
-        setPreviewError(error instanceof Error ? error.message : "导出任务创建失败");
+        setPreviewError(error instanceof Error ? error.message : "Failed to create export job");
       })
       .finally(() => {
         setBusyFormat(null);
@@ -1626,7 +1991,7 @@ function ArtifactExportActions({
           disabled={loadingPreview}
           className={`${btnSecondaryClass} disabled:cursor-not-allowed disabled:opacity-60`}
         >
-          {loadingPreview ? "加载中…" : "预览"}
+          {loadingPreview ? "Loading..." : "Preview"}
         </button>
         <button
           type="button"
@@ -1634,7 +1999,7 @@ function ArtifactExportActions({
           disabled={busyFormat !== null}
           className={`${btnSecondaryClass} disabled:cursor-not-allowed disabled:opacity-60`}
         >
-          {busyFormat === "job" ? "下载中…" : "下载"}
+          {busyFormat === "job" ? "Downloading…" : "Download"}
         </button>
         {canFormatExport ? (
           <>
@@ -1644,7 +2009,7 @@ function ArtifactExportActions({
               disabled={busyFormat !== null}
               className={`${btnSecondaryClass} disabled:cursor-not-allowed disabled:opacity-60`}
             >
-              {busyFormat === "csv" ? "CSV 中…" : "下载 CSV"}
+              {busyFormat === "csv" ? "Preparing CSV..." : "Download CSV"}
             </button>
             <button
               type="button"
@@ -1652,7 +2017,7 @@ function ArtifactExportActions({
               disabled={busyFormat !== null}
               className={`${btnSecondaryClass} disabled:cursor-not-allowed disabled:opacity-60`}
             >
-              {busyFormat === "xlsx" ? "XLSX 中…" : "下载 XLSX"}
+              {busyFormat === "xlsx" ? "Preparing XLSX..." : "Download XLSX"}
             </button>
             <button
               type="button"
@@ -1660,7 +2025,7 @@ function ArtifactExportActions({
               disabled={busyFormat !== null}
               className={`${btnSecondaryClass} disabled:cursor-not-allowed disabled:opacity-60`}
             >
-              后台导出
+              Background export
             </button>
           </>
         ) : null}
@@ -1670,12 +2035,8 @@ function ArtifactExportActions({
           {previewError}
         </p>
       ) : null}
-      {previewText ? (
-        <div className={consoleScrollXShellClass}>
-          <pre className={[consoleCodeBlockBaseClass, "max-h-80"].join(" ")}>
-            <code className={consoleCodeInnerClass}>{previewText}</code>
-          </pre>
-        </div>
+      {previewDetail ? (
+        <ArtifactDetailView detail={previewDetail} artifact={artifact} />
       ) : null}
     </div>
   );
@@ -1698,7 +2059,7 @@ function ArtifactExpandedDetail({
   }, [artifact.detail, artifact.id]);
 
   useEffect(() => {
-    if (detail || !artifact.previewAvailable || !exportReady) {
+    if (!exportReady || !artifactDetailNeedsPreviewFetch(artifact, detail)) {
       return;
     }
 
@@ -1714,17 +2075,17 @@ function ArtifactExpandedDetail({
         }
         const loaded = artifactDetailFromPreview(artifact, preview);
         if (loaded) {
-          setDetail(loaded);
+          setDetail((current) => mergeArtifactDetail(current, loaded));
           return;
         }
-        setError("预览数据为空或格式暂不支持。");
+        setError("Preview data is empty or unsupported.");
       })
       .catch((fetchError: unknown) => {
         if (cancelled) {
           return;
         }
         setError(
-          fetchError instanceof Error ? fetchError.message : "预览加载失败",
+          fetchError instanceof Error ? fetchError.message : "Failed to load preview",
         );
       })
       .finally(() => {
@@ -1747,11 +2108,11 @@ function ArtifactExpandedDetail({
   ]);
 
   if (detail) {
-    return <ArtifactDetailView detail={detail} />;
+    return <ArtifactDetailView detail={detail} artifact={artifact} />;
   }
 
   if (loading) {
-    return <p className="text-xs text-muted-light">正在加载预览…</p>;
+    return <p className="text-xs text-muted-light">Loading preview...</p>;
   }
 
   if (error) {
@@ -1764,17 +2125,23 @@ function ArtifactExpandedDetail({
 
   return (
     <EmptyState
-      title="暂无详情"
+      title="No details"
       description={
         artifact.previewAvailable && exportReady
-          ? "展开时未能加载预览，请稍后重试。"
-          : "该产出物尚未包含可查看的详细内容。"
+          ? "Preview could not be loaded after expanding. Try again later."
+          : "This output does not include viewable details yet."
       }
     />
   );
 }
 
-function ArtifactDetailView({ detail }: { detail: ArtifactDetail }) {
+function ArtifactDetailView({
+  detail,
+  artifact,
+}: {
+  detail: ArtifactDetail;
+  artifact?: DataArtifact;
+}) {
   if (detail.type === "sql") {
     return (
       <div className="grid min-w-0 gap-3">
@@ -1785,9 +2152,9 @@ function ArtifactDetailView({ detail }: { detail: ArtifactDetail }) {
         </div>
         <div className="flex flex-wrap items-center gap-2 text-xs text-muted">
           <span className="rounded-full bg-step-success/10 px-2.5 py-1 font-semibold text-step-success">
-            已执行
+            Executed
           </span>
-          <span>扫描 {detail.scannedRows.toLocaleString()} 行</span>
+          <span>Scanned {detail.scannedRows.toLocaleString()} rows</span>
           <span>·</span>
           <span>{detail.durationMs}ms</span>
         </div>
@@ -1804,27 +2171,7 @@ function ArtifactDetailView({ detail }: { detail: ArtifactDetail }) {
   }
 
   if (detail.type === "file") {
-    return (
-      <div className="grid gap-2 rounded-xl border border-border bg-surface-subtle p-3 text-xs text-muted">
-        <div className="font-mono font-semibold text-foreground">{detail.path}</div>
-        <div className="flex flex-wrap gap-3 text-muted">
-          {detail.size !== undefined ? <span>{detail.size.toLocaleString()} bytes</span> : null}
-          {detail.mtime ? <span>modified {detail.mtime}</span> : null}
-          {detail.tool ? <span>via {detail.tool}</span> : null}
-        </div>
-        {detail.content ? (
-          <div className={consoleScrollXShellClass}>
-            <pre className={[consoleCodeBlockBaseClass, "max-h-80"].join(" ")}>
-              <code className={consoleCodeInnerClass}>{detail.content}</code>
-            </pre>
-          </div>
-        ) : (
-          <p className="text-[11px] leading-4 text-muted-light">
-            文件内容未内嵌预览（体积过大或非文本）。完整查看 / 下载需后端 artifact 接口（#9）。
-          </p>
-        )}
-      </div>
-    );
+    return <FileDetailView detail={detail} artifact={artifact} />;
   }
 
   return (
@@ -1837,11 +2184,178 @@ function ArtifactDetailView({ detail }: { detail: ArtifactDetail }) {
           <div className="text-xs font-semibold text-foreground">
             {section.heading}
           </div>
-          <p className="mt-1 text-xs leading-5 text-muted">
-            {section.body}
-          </p>
+          <div className="mt-1 text-xs leading-5 text-muted">
+            <ArtifactMarkdownPreview content={section.body} />
+          </div>
         </div>
       ))}
+    </div>
+  );
+}
+
+type FileKind = "image" | "markdown" | "csv" | "tsv" | "json" | "yaml" | "html" | "text";
+
+function classifyFileKind(path: string): FileKind {
+  const ext = /\.([a-z0-9]+)$/u.exec(path.toLowerCase())?.[1];
+  switch (ext) {
+    case "png":
+    case "jpg":
+    case "jpeg":
+    case "gif":
+    case "webp":
+    case "svg":
+    case "bmp":
+    case "ico":
+      return "image";
+    case "md":
+    case "markdown":
+    case "mdx":
+      return "markdown";
+    case "csv":
+      return "csv";
+    case "tsv":
+      return "tsv";
+    case "json":
+    case "jsonl":
+    case "geojson":
+      return "json";
+    case "yaml":
+    case "yml":
+      return "yaml";
+    case "html":
+    case "htm":
+      return "html";
+    default:
+      return "text";
+  }
+}
+
+function tryFormatJson(content: string): string | undefined {
+  try {
+    return JSON.stringify(JSON.parse(content), null, 2);
+  } catch {
+    return undefined;
+  }
+}
+
+function FileCodeBlock({ content }: { content: string }) {
+  return (
+    <div className={consoleScrollXShellClass}>
+      <pre className={[consoleCodeBlockBaseClass, "max-h-80"].join(" ")}>
+        <code className={consoleCodeInnerClass}>{content}</code>
+      </pre>
+    </div>
+  );
+}
+
+function FileNotEmbeddedNote({ downloadable }: { downloadable: boolean }) {
+  return (
+    <p className="text-[11px] leading-4 text-muted-light">
+      {downloadable
+        ? "Inline preview is unavailable for this file (binary or too large). Use Download to get the full file."
+        : "File content is not embedded for preview (too large or non-text)."}
+    </p>
+  );
+}
+
+function HtmlFilePreview({ content }: { content: string }) {
+  const [showSource, setShowSource] = useState(false);
+  return (
+    <div className="grid gap-2">
+      <div className="flex justify-end">
+        <button
+          type="button"
+          onClick={() => setShowSource((value) => !value)}
+          className={`h-7 ${btnSecondaryClass}`}
+        >
+          {showSource ? "Rendered" : "Source"}
+        </button>
+      </div>
+      {showSource ? (
+        <FileCodeBlock content={content} />
+      ) : (
+        <iframe
+          sandbox=""
+          srcDoc={content}
+          title="HTML preview"
+          className="h-80 w-full rounded-lg border border-border bg-white"
+        />
+      )}
+    </div>
+  );
+}
+
+function FileDetailView({
+  detail,
+  artifact,
+}: {
+  detail: Extract<ArtifactDetail, { type: "file" }>;
+  artifact?: DataArtifact;
+}) {
+  const kind = classifyFileKind(detail.path);
+  const fileBacked = Boolean(artifact?.fileId);
+  const imageSrc =
+    kind === "image" && artifact?.fileId
+      ? artifactExportClient.contentUrl(artifact.id)
+      : undefined;
+
+  const renderBody = () => {
+    if (kind === "image") {
+      if (!imageSrc) {
+        return <FileNotEmbeddedNote downloadable={fileBacked} />;
+      }
+      return (
+        <a href={imageSrc} target="_blank" rel="noreferrer" className="block">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={imageSrc}
+            alt={detail.path}
+            className="max-h-80 w-auto max-w-full rounded-lg border border-border bg-white object-contain"
+          />
+        </a>
+      );
+    }
+
+    if (!detail.content) {
+      return <FileNotEmbeddedNote downloadable={fileBacked} />;
+    }
+
+    if (kind === "markdown") {
+      return <ArtifactMarkdownPreview content={detail.content} />;
+    }
+
+    if (kind === "csv" || kind === "tsv") {
+      const parsed = parseCsvTextPreview(detail.content, kind === "tsv" ? "\t" : ",");
+      if (parsed) {
+        return (
+          <DatasetDetailView
+            detail={{ type: "dataset", columns: parsed.columns, rows: parsed.rows }}
+          />
+        );
+      }
+      return <FileCodeBlock content={detail.content} />;
+    }
+
+    if (kind === "json") {
+      return <FileCodeBlock content={tryFormatJson(detail.content) ?? detail.content} />;
+    }
+
+    if (kind === "html") {
+      return <HtmlFilePreview content={detail.content} />;
+    }
+
+    return <FileCodeBlock content={detail.content} />;
+  };
+
+  return (
+    <div className="grid gap-2 rounded-xl border border-border bg-surface-subtle p-3 text-xs text-muted">
+      <div className="font-mono font-semibold text-foreground">{detail.path}</div>
+      <div className="flex flex-wrap gap-3 text-muted">
+        {detail.size !== undefined ? <span>{detail.size.toLocaleString()} bytes</span> : null}
+        {detail.mtime ? <span>modified {detail.mtime}</span> : null}
+        {detail.tool ? <span>via {detail.tool}</span> : null}
+      </div>
+      {renderBody()}
     </div>
   );
 }
@@ -1874,7 +2388,7 @@ async function downloadSvgAsPng(container: HTMLDivElement | null, filename: stri
   const image = new Image();
   await new Promise<void>((resolve, reject) => {
     image.onload = () => resolve();
-    image.onerror = () => reject(new Error("图表导出失败"));
+    image.onerror = () => reject(new Error("Failed to export chart"));
     image.src = url;
   });
   const canvas = document.createElement("canvas");
@@ -1911,8 +2425,8 @@ function ChartDetailView({
   if (points.length === 0) {
     return (
       <EmptyState
-        title="暂无图表数据"
-        description="后端已声明 chart artifact，但尚未上报 points/series 预览数据。"
+        title="No chart data"
+        description="The backend declared a chart artifact but has not reported points/series preview data yet."
       />
     );
   }
@@ -1950,7 +2464,7 @@ function ChartDetailView({
           }}
           className={`h-7 ${btnSecondaryClass}`}
         >
-          导出 PNG
+          Export PNG
         </button>
       </div>
       <div ref={chartRef} className="h-64 min-w-0">
@@ -2048,19 +2562,19 @@ function DatasetDetailView({
     <div className="grid gap-2">
       <div className="flex flex-wrap items-center gap-2">
         <label className="min-w-[180px] flex-1">
-          <span className="sr-only">搜索结果表</span>
+          <span className="sr-only">Search result table</span>
           <input
             value={query}
             onChange={(event) => setQuery(event.target.value)}
             className="h-8 w-full rounded-lg border border-border bg-white px-2.5 text-xs text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-slate-400"
-            placeholder="搜索结果表"
+            placeholder="Search result table"
           />
         </label>
         <button type="button" onClick={exportCsv} className={`h-8 ${btnSecondaryClass}`}>
-          导出 CSV
+          Export CSV
         </button>
         <span className="text-[11px] text-muted-light">
-          {rows.length.toLocaleString()} / {detail.rows.length.toLocaleString()} 行
+          {rows.length.toLocaleString()} / {detail.rows.length.toLocaleString()} rows
         </span>
       </div>
       <div className={consoleTableShellClass}>
@@ -2081,7 +2595,7 @@ function DatasetDetailView({
                         type="button"
                         onClick={() => toggleSort(columnIndex)}
                         className="cursor-pointer text-left transition hover:text-foreground"
-                        title={`按 ${column} 排序`}
+                        title={`Sort by ${column} `}
                       >
                         {column}
                         {suffix}
@@ -2098,7 +2612,7 @@ function DatasetDetailView({
                     colSpan={Math.max(detail.columns.length, 1)}
                     className="border-t border-border px-3 py-6 text-center text-muted-light"
                   >
-                    没有匹配的结果行。
+                    No matching result rows.
                   </td>
                 </tr>
               ) : (
@@ -2188,17 +2702,17 @@ function ArtifactCardHeader({
               {dataStepLabel(sourceEvent.kind)}
             </span>
             <span className="min-w-0 truncate text-muted-light" title={sourceEvent.title}>
-              来自 {sourceEvent.title}
+              From {sourceEvent.title}
             </span>
           </>
         ) : (
-          <span className="text-muted-light">来源步骤未关联</span>
+          <span className="text-muted-light">Source step not linked</span>
         )}
       </div>
       <div className="mt-3 flex items-center justify-between text-[11px] text-muted-light">
         <span>{artifact.version ?? "v1"}</span>
         <span className="font-medium text-muted">
-          {expanded ? "收起 ↑" : artifact.detail || artifact.previewAvailable ? "展开内容 ↓" : "无详情"}
+          {expanded ? "Collapse ↑" : artifact.detail || artifact.previewAvailable ? "Expand content ↓" : "No details"}
         </span>
       </div>
     </>

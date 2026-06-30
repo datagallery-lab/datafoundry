@@ -4,9 +4,12 @@ import {
   collaborationResponsesFromConversation,
   conversationToAgentMessages,
   hydrateLiveRunFromConversation,
+  hydratePendingInteractionLiveRun,
   isIgnorableConversationRestoreError,
   agentMessagesMatchConversation,
   latestUserQuestionFromConversation,
+  pendingInteractionsFromConversation,
+  replayRestorableCustomEvents,
   shouldHydrateLiveRunFromConversation,
   shouldRestoreConversation,
   shouldRestoreConversationMessages,
@@ -333,6 +336,158 @@ describe("conversationToAgentMessages", () => {
     );
     expect(restored.find((message) => message.id === "msg-assistant-3")?.toolCalls).toBeUndefined();
   });
+
+  it("groups parallel tool calls that share an ephemeral parent message into one restored step", () => {
+    const dto: SessionConversationDto = {
+      sessionId: "thread-1",
+      messages: [
+        {
+          id: "m-user",
+          runId: "run-1",
+          role: "user",
+          source: "client",
+          messageId: "msg-user-1",
+          contentText: "同时执行三个list_data_sources",
+          position: 1,
+          createdAt: "2026-06-30T10:00:01Z",
+        },
+        {
+          id: "m-assistant-1",
+          runId: "run-1",
+          role: "assistant",
+          source: "agent",
+          messageId: "msg-assistant-1",
+          contentText: "已确认数据源，接下来检查 schema。",
+          position: 2,
+          createdAt: "2026-06-30T10:00:02Z",
+        },
+        {
+          id: "m-assistant-2",
+          runId: "run-1",
+          role: "assistant",
+          source: "agent",
+          messageId: "msg-assistant-2",
+          contentText: "schema 已检查完成。",
+          position: 3,
+          createdAt: "2026-06-30T10:00:03Z",
+        },
+      ],
+      runEventRefs: [],
+      toolCalls: [
+        {
+          runId: "run-1",
+          toolCallId: "tc-list-1",
+          status: "completed",
+          toolName: "list_data_sources",
+          parentMessageId: "msg-ephemeral-tools",
+          callEventSeq: 8,
+        },
+        {
+          runId: "run-1",
+          toolCallId: "tc-list-2",
+          status: "completed",
+          toolName: "list_data_sources",
+          parentMessageId: "msg-ephemeral-tools",
+          callEventSeq: 11,
+        },
+        {
+          runId: "run-1",
+          toolCallId: "tc-list-3",
+          status: "completed",
+          toolName: "list_data_sources",
+          parentMessageId: "msg-ephemeral-tools",
+          callEventSeq: 14,
+        },
+        {
+          runId: "run-1",
+          toolCallId: "tc-schema",
+          status: "completed",
+          toolName: "inspect_schema",
+          parentMessageId: "msg-assistant-1",
+          callEventSeq: 46,
+        },
+      ],
+    };
+
+    const restored = conversationToAgentMessages(dto);
+    const parallelStep = restored.find((message) =>
+      message.toolCalls?.some((call) => call.id === "tc-list-1"),
+    );
+    expect(parallelStep?.toolCalls).toHaveLength(3);
+    expect(parallelStep?.toolCalls?.map((call) => call.function.name)).toEqual([
+      "list_data_sources",
+      "list_data_sources",
+      "list_data_sources",
+    ]);
+    expect(
+      restored.find((message) => message.id === "msg-assistant-1")?.toolCalls?.[0]?.function.name,
+    ).toBe("inspect_schema");
+  });
+
+  it("restores empty assistant placeholders needed for collaboration tool anchoring", () => {
+    const dto: SessionConversationDto = {
+      sessionId: "thread-1",
+      messages: [
+        {
+          id: "m-user",
+          runId: "run-1",
+          role: "user",
+          source: "user",
+          messageId: "msg-user-1",
+          contentText: "选择数据源",
+          position: 0,
+          createdAt: "2026-06-25T10:00:01Z",
+        },
+        {
+          id: "m-ask",
+          runId: "run-1",
+          role: "assistant",
+          source: "agent",
+          messageId: "msg-assistant-ask",
+          contentText: "",
+          position: 1,
+          createdAt: "2026-06-25T10:00:02Z",
+        },
+        {
+          id: "m-data",
+          runId: "run-1",
+          role: "assistant",
+          source: "agent",
+          messageId: "msg-assistant-data",
+          contentText: "Conversation Summary",
+          position: 2,
+          createdAt: "2026-06-25T10:00:03Z",
+        },
+      ],
+      runEventRefs: [],
+      toolCalls: [
+        {
+          runId: "run-1",
+          toolCallId: "tc-ask",
+          status: "completed",
+          toolName: "ask_user",
+          callEventSeq: 1,
+          result: "orders",
+        },
+        {
+          runId: "run-1",
+          toolCallId: "tc-data",
+          status: "completed",
+          toolName: "list_data_sources",
+          callEventSeq: 2,
+        },
+      ],
+    };
+
+    const restored = conversationToAgentMessages(dto);
+    expect(restored.some((message) => message.id === "msg-assistant-ask")).toBe(true);
+    expect(
+      restored.find((message) => message.id === "msg-assistant-ask")?.toolCalls?.[0]?.function.name,
+    ).toBe("ask_user");
+    expect(
+      restored.find((message) => message.id === "msg-assistant-data")?.toolCalls?.[0]?.function.name,
+    ).toBe("list_data_sources");
+  });
 });
 
 describe("collaborationResponsesFromConversation", () => {
@@ -360,7 +515,7 @@ describe("collaborationResponsesFromConversation", () => {
           toolName: "ask_user",
           args: {
             question: "继续哪种分析？",
-            options: [{ label: "检查表结构", value: "schema" }],
+            options: [{ label: "Inspect schema", value: "schema" }],
           },
           result: "schema",
         },
@@ -373,9 +528,45 @@ describe("collaborationResponsesFromConversation", () => {
         toolCallId: "tc-ask",
         toolName: "ask_user",
         question: "继续哪种分析？",
-        displayText: "检查表结构",
+        displayText: "Inspect schema",
         assistantMessageId: "msg-assistant-1",
       },
+    ]);
+  });
+
+  it("rebuilds ask_user records when persisted tool name is missing", () => {
+    const dto: SessionConversationDto = {
+      sessionId: "thread-1",
+      messages: [
+        {
+          id: "m1",
+          runId: "run-1",
+          role: "assistant",
+          source: "agent",
+          messageId: "msg-assistant-1",
+          contentText: "Conversation Summary",
+          position: 1,
+          createdAt: "2026-06-25T10:00:02Z",
+        },
+      ],
+      runEventRefs: [],
+      toolCalls: [
+        {
+          runId: "run-1",
+          toolCallId: "tc-ask",
+          status: "completed",
+          result: { content: "User answered: orders" },
+        },
+      ],
+    };
+
+    expect(collaborationResponsesFromConversation("thread-1", dto)).toEqual([
+      expect.objectContaining({
+        threadId: "thread-1",
+        toolCallId: "tc-ask",
+        toolName: "ask_user",
+        displayText: "orders",
+      }),
     ]);
   });
 
@@ -402,7 +593,7 @@ describe("collaborationResponsesFromConversation", () => {
           status: "completed",
           toolName: "submit_plan",
           args: {
-            title: "执行计划审批",
+            title: "执行Plan approval",
             plan: "1. 查 schema\n2. 跑 SQL",
           },
           result: { action: "approved" },
@@ -415,12 +606,106 @@ describe("collaborationResponsesFromConversation", () => {
         threadId: "thread-1",
         toolCallId: "tc-plan",
         toolName: "submit_plan",
-        question: "执行计划审批",
+        question: "执行Plan approval",
         plan: "1. 查 schema\n2. 跑 SQL",
         displayText: "已批准执行计划",
         assistantMessageId: "msg-assistant-1",
       },
     ]);
+  });
+
+  it("rebuilds submit_plan when persisted tool name is mislabeled ask_user", () => {
+    const dto: SessionConversationDto = {
+      sessionId: "thread-1",
+      messages: [
+        {
+          id: "m1",
+          runId: "run-1",
+          role: "assistant",
+          source: "agent",
+          messageId: "msg-assistant-1",
+          contentText: "请审批计划",
+          position: 1,
+          createdAt: "2026-06-25T10:00:02Z",
+        },
+      ],
+      runEventRefs: [],
+      toolCalls: [
+        {
+          runId: "run-1",
+          toolCallId: "tc-plan",
+          status: "completed",
+          toolName: "ask_user",
+          args: {
+            title: "简单计划",
+            plan: "步骤1：确认收到审批",
+          },
+          result: { action: "approved" },
+        },
+      ],
+    };
+
+    expect(collaborationResponsesFromConversation("thread-1", dto)).toEqual([
+      expect.objectContaining({
+        toolCallId: "tc-plan",
+        toolName: "submit_plan",
+        plan: "步骤1：确认收到审批",
+        displayText: "已批准执行计划",
+      }),
+    ]);
+
+    const restored = conversationToAgentMessages(dto);
+    expect(
+      restored.find((message) => message.id === "msg-assistant-1")?.toolCalls?.[0]?.function.name,
+    ).toBe("submit_plan");
+
+    const run = hydrateLiveRunFromConversation(createInitialLiveRun(), dto);
+    expect(run.toolCalls.find((call) => call.id === "tc-plan")?.name).toBe("submit_plan");
+  });
+
+  it("infers submit_plan from approval result when tool name is missing", () => {
+    const dto: SessionConversationDto = {
+      sessionId: "thread-1",
+      messages: [
+        {
+          id: "m1",
+          runId: "run-1",
+          role: "assistant",
+          source: "agent",
+          messageId: "msg-assistant-1",
+          contentText: "",
+          position: 1,
+          createdAt: "2026-06-25T10:00:02Z",
+        },
+      ],
+      runEventRefs: [],
+      toolCalls: [
+        {
+          runId: "run-1",
+          toolCallId: "tc-plan",
+          status: "completed",
+          resultPreview: JSON.stringify({
+            action: "approved",
+            content: "Plan approved",
+            source: "mastra-collaboration",
+          }),
+          args: {
+            title: "数据源计划",
+            plan: "步骤1：调用list_data_sources",
+          },
+        },
+      ],
+    };
+
+    expect(collaborationResponsesFromConversation("thread-1", dto)).toEqual([
+      expect.objectContaining({
+        toolCallId: "tc-plan",
+        toolName: "submit_plan",
+      }),
+    ]);
+
+    const run = hydrateLiveRunFromConversation(createInitialLiveRun(), dto);
+    expect(run.toolCalls.find((call) => call.id === "tc-plan")?.name).toBe("submit_plan");
   });
 });
 
@@ -944,5 +1229,110 @@ describe("isIgnorableConversationRestoreError", () => {
         new ConfigApiError("INTERNAL_ERROR", "database unavailable", 500),
       ),
     ).toBe(false);
+  });
+});
+
+describe("hydratePendingInteractionLiveRun", () => {
+  it("bootstraps suspended live run when only pendingInteractions are persisted", () => {
+    const dto: SessionConversationDto = {
+      sessionId: "thread-1",
+      messages: [],
+      runEventRefs: [],
+      toolCalls: [],
+      pendingInteractions: [
+        {
+          interactionId: "int-1",
+          runId: "run-1",
+          toolCallId: "tc-ask",
+          toolName: "ask_user",
+          interruptEvent: {
+            type: "mastra_suspend",
+            toolCallId: "tc-ask",
+            toolName: "ask_user",
+          },
+        },
+      ],
+    };
+
+    const run = hydratePendingInteractionLiveRun(
+      createInitialLiveRun(),
+      "thread-1",
+      dto,
+      [],
+    );
+
+    expect(run.runStatus).toBe("suspended");
+    expect(run.toolCalls).toEqual([
+      expect.objectContaining({ id: "tc-ask", name: "ask_user", status: "running" }),
+    ]);
+  });
+});
+
+describe("pendingInteractionsFromConversation", () => {
+  it("maps pending interactions with interrupt payloads", () => {
+    const dto: SessionConversationDto = {
+      sessionId: "thread-1",
+      messages: [],
+      runEventRefs: [],
+      toolCalls: [],
+      pendingInteractions: [
+        {
+          interactionId: "int-1",
+          runId: "run-1",
+          toolCallId: "tc-ask",
+          toolName: "ask_user",
+          interruptEvent: {
+            type: "mastra_suspend",
+            toolCallId: "tc-ask",
+            toolName: "ask_user",
+            runId: "run-1",
+          },
+        },
+      ],
+    };
+
+    expect(pendingInteractionsFromConversation("thread-1", dto)).toEqual([
+      {
+        threadId: "thread-1",
+        runId: "run-1",
+        toolCallId: "tc-ask",
+        toolName: "ask_user",
+        interruptEvent: {
+          type: "mastra_suspend",
+          toolCallId: "tc-ask",
+          toolName: "ask_user",
+          runId: "run-1",
+        },
+      },
+    ]);
+  });
+});
+
+describe("replayRestorableCustomEvents", () => {
+  it("replays persisted custom events into live run state", () => {
+    const dto: SessionConversationDto = {
+      sessionId: "thread-1",
+      messages: [],
+      runEventRefs: [],
+      toolCalls: [],
+      restorableCustomEvents: [
+        {
+          runId: "run-1",
+          seq: 2,
+          name: "token_usage",
+          value: { input_tokens: 10, output_tokens: 5 },
+        },
+        {
+          runId: "run-1",
+          seq: 1,
+          name: "sql_audit",
+          value: { audit_log_id: "audit-1", status: "succeeded" },
+        },
+      ],
+    };
+
+    const run = replayRestorableCustomEvents(createInitialLiveRun(), dto);
+    expect(run.audits).toHaveLength(1);
+    expect(run.tokenUsageEvents).toHaveLength(1);
   });
 });

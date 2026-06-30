@@ -1,25 +1,25 @@
 const toolActionLabels: Record<string, string> = {
-  list_data_sources: "查看数据源",
-  inspect_schema: "检查表结构",
-  preview_table: "预览数据",
-  run_sql_readonly: "执行查询",
-  retrieve_knowledge: "检索知识",
-  read_file: "读取文件",
-  edit_file: "编辑文件",
-  write_file: "写入文件",
-  list_files: "浏览文件",
-  grep: "搜索文件",
-  mkdir: "创建目录",
-  file_stat: "查看文件信息",
-  execute_command: "执行命令",
-  publish_artifact: "发布产物",
-  promote_workspace_file: "提升工作区文件",
-  task_write: "写入任务",
-  task_update: "更新任务",
-  task_complete: "完成任务",
-  task_check: "检查任务",
-  ask_user: "等待确认",
-  submit_plan: "提交计划",
+  list_data_sources: "List data sources",
+  inspect_schema: "Inspect schema",
+  preview_table: "Preview data",
+  run_sql_readonly: "Run query",
+  retrieve_knowledge: "Retrieve knowledge",
+  read_file: "Read file",
+  edit_file: "Edit file",
+  write_file: "Write file",
+  list_files: "Browse files",
+  grep: "Search files",
+  mkdir: "Create directory",
+  file_stat: "Get file info",
+  execute_command: "Run command",
+  publish_artifact: "Publish output",
+  promote_workspace_file: "Promote workspace file",
+  task_write: "Write task",
+  task_update: "Update task",
+  task_complete: "Complete task",
+  task_check: "Check task",
+  ask_user: "Waiting for confirmation",
+  submit_plan: "Submit plan",
 };
 
 const SUMMARY_PREVIEW_MAX = 48;
@@ -75,7 +75,7 @@ function formatSnakeCaseLabel(toolName: string): string {
 
 function resolveSingleToolStepActionLabel(toolName: string): string {
   const trimmed = toolName.trim();
-  if (!trimmed) return "思考";
+  if (!trimmed) return "Thinking";
 
   const direct = toolActionLabels[trimmed];
   if (direct) return direct;
@@ -105,18 +105,23 @@ export function resolveToolStepActionLabel(toolNames: string[]): string {
     .map((name) => name.trim())
     .filter((name) => isDisplayableToolName(name));
   const unique = [...new Set(normalized)];
-  if (unique.length === 0) return "思考";
-  if (unique.length === 1) return resolveSingleToolStepActionLabel(unique[0]);
+  if (unique.length === 0) return "Thinking";
+  if (unique.length === 1) {
+    if (normalized.length > 1) {
+      return `Run ${normalized.length} tools in parallel`;
+    }
+    return resolveSingleToolStepActionLabel(unique[0]);
+  }
 
-  if (unique.every((name) => fileToolNames.has(name))) return "处理文件";
-  if (unique.every((name) => dataToolNames.has(name))) return "分析数据";
-  if (unique.every((name) => workspaceToolNames.has(name))) return "操作工作区";
+  if (unique.every((name) => fileToolNames.has(name))) return "Handle files";
+  if (unique.every((name) => dataToolNames.has(name))) return "Analyze data";
+  if (unique.every((name) => workspaceToolNames.has(name))) return "Operate workspace";
 
   const firstKnown = unique.find((name) => toolActionLabels[name]);
   if (firstKnown && unique.length === 2) {
-    return `${toolActionLabels[firstKnown]}等`;
+    return `${toolActionLabels[firstKnown]} etc.`;
   }
-  return `调用 ${unique.length} 个工具`;
+  return `Call ${unique.length} tools`;
 }
 
 function firstSummaryLine(text: string): string {
@@ -153,7 +158,7 @@ export function resolveStepSummaryText(input: {
   const thoughtPreview = buildThoughtPreview(input.content);
   const toolPart = input.hasToolCalls
     ? input.displayToolNames
-      ? `调用 ${input.displayToolNames}`
+      ? `Call ${input.displayToolNames}`
       : input.toolActionLabel
     : undefined;
 
@@ -178,12 +183,23 @@ export function resolveStepSummaryText(input: {
     if (thoughtPreview) {
       return thoughtPreview;
     }
-    return "思考";
+    return "Thinking";
   }
   if (thoughtPreview && looksChinese(thoughtPreview)) {
     return thoughtPreview;
   }
-  return thoughtPreview ? "思考" : "步骤";
+  return thoughtPreview ? "Thinking" : "Step";
+}
+
+export function resolveCollaborationCompletedStepLabel(
+  toolNames: string[],
+  linkedToolName?: string,
+): string {
+  const normalized = new Set(toolNames.map((name) => name.trim()).filter(Boolean));
+  if (linkedToolName) normalized.add(linkedToolName);
+  if (normalized.has("submit_plan")) return "Plan approved";
+  if (normalized.has("ask_user")) return "Confirmation complete";
+  return "Collaboration complete";
 }
 
 export function resolveCollaborationStepLabel(
@@ -193,9 +209,9 @@ export function resolveCollaborationStepLabel(
 ): string {
   const normalized = new Set(toolNames.map((name) => name.trim()).filter(Boolean));
   if (linkedToolName) normalized.add(linkedToolName);
-  if (normalized.has("submit_plan")) return "计划审批";
-  if (normalized.has("ask_user")) return isActive ? "等待用户选择" : "用户协作";
-  return isActive ? "等待确认" : "协作步骤";
+  if (normalized.has("submit_plan")) return "Plan approval";
+  if (normalized.has("ask_user")) return isActive ? "Waiting for user choice" : "User collaboration";
+  return isActive ? "Waiting for confirmation" : "Collaboration step";
 }
 
 export function resolveStepBadgePresentation({

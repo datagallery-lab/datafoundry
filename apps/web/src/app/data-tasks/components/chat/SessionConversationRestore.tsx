@@ -8,11 +8,22 @@ import {
   collaborationResponsesFromConversation,
   conversationToAgentMessages,
   hydrateLiveRunFromConversation,
+  hydratePendingInteractionLiveRun,
   isIgnorableConversationRestoreError,
   latestUserQuestionFromConversation,
+  pendingInteractionsFromConversation,
   shouldRestoreConversationMessages,
 } from "../../conversation-restore";
-import { hydrateCollaborationResponses } from "./collaboration-responses";
+import { reconcileSuspendedLiveRunState } from "../../collaboration-recap";
+import {
+  getCollaborationResponsesForThread,
+  hydrateCollaborationResponses,
+} from "./collaboration-responses";
+import {
+  clearRestoredInterrupts,
+  hydrateRestoredInterrupts,
+} from "./restored-interrupts";
+import { clearPendingCollaborationInterrupt } from "./pending-collaboration-interrupt";
 import {
   useConversationRestoreGate,
   useLiveRunSetters,
@@ -31,6 +42,7 @@ export function SessionConversationRestore({
   const { setLiveRun, setLatestQuestion } = useLiveRunSetters();
   const { setIsRestoringConversation } = useConversationRestoreGate();
   const fetchGenerationRef = useRef(0);
+  const prevThreadIdRef = useRef<string | undefined>(undefined);
 
   useLayoutEffect(() => {
     if (!threadId || !capabilitiesReady) {
@@ -39,11 +51,18 @@ export function SessionConversationRestore({
     if (!getRuntimeCapabilities().conversationMemory) {
       return;
     }
+    const threadChanged = prevThreadIdRef.current !== threadId;
+    prevThreadIdRef.current = threadId;
+    if (!threadChanged) {
+      return;
+    }
     if (Boolean(agent.isRunning)) {
       return;
     }
     setIsRestoringConversation(true);
     agent.setMessages([]);
+    clearRestoredInterrupts(threadId);
+    clearPendingCollaborationInterrupt(threadId);
   }, [agent, capabilitiesReady, setIsRestoringConversation, threadId]);
 
   useEffect(() => {
@@ -85,16 +104,33 @@ export function SessionConversationRestore({
           }
         }
 
-        setLiveRun((current) => hydrateLiveRunFromConversation(current, conversation));
+        const restoredCollaboration = collaborationResponsesFromConversation(
+          threadId,
+          conversation,
+        );
+        hydrateCollaborationResponses(restoredCollaboration);
+
+        hydrateRestoredInterrupts(
+          pendingInteractionsFromConversation(threadId, conversation),
+        );
+
+        const collaborationRecords = getCollaborationResponsesForThread(threadId);
+        setLiveRun((current) =>
+          reconcileSuspendedLiveRunState(
+            hydratePendingInteractionLiveRun(
+              hydrateLiveRunFromConversation(current, conversation),
+              threadId,
+              conversation,
+              collaborationRecords,
+            ),
+            collaborationRecords,
+          ),
+        );
 
         const question = latestUserQuestionFromConversation(conversation);
         if (question) {
           setLatestQuestion(question);
         }
-
-        hydrateCollaborationResponses(
-          collaborationResponsesFromConversation(threadId, conversation),
-        );
       } catch (error) {
         if (isIgnorableConversationRestoreError(error)) {
           return;

@@ -350,12 +350,13 @@ describe("config api adapter", () => {
 
   it("calls backend implemented data-task extension endpoints", async () => {
     process.env.NEXT_PUBLIC_CONFIG_API_URL = "http://config.test";
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValue(new Response(JSON.stringify({
-        success: true,
-        data: {},
-      }), { headers: { "Content-Type": "application/json" }, status: 200 }));
+    const fetchMock = vi.fn().mockImplementation(
+      () =>
+        new Response(JSON.stringify({ success: true, data: {} }), {
+          headers: { "Content-Type": "application/json" },
+          status: 200,
+        }),
+    );
     vi.stubGlobal("fetch", fetchMock);
 
     await configApi.cancelRun("run-1", "user-click");
@@ -401,5 +402,33 @@ describe("config api adapter", () => {
       "http://config.test/api/v1/query-history/query-1/favorite",
       expect.objectContaining({ method: "POST" }),
     );
+  });
+
+  it("builds datasource table preview requests", async () => {
+    process.env.NEXT_PUBLIC_CONFIG_API_URL = "http://config.test";
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
+      success: true,
+      data: {
+        columns: [{ name: "order_id", type: "VARCHAR" }],
+        rows: [{ order_id: "A001" }],
+        total: 42,
+        hasMore: true,
+      },
+    }), { headers: { "Content-Type": "application/json" }, status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const preview = await configApi.getDatasourceTablePreview("sales-pg", "orders", {
+      schema: "public",
+      limit: 25,
+      offset: 50,
+      orderBy: "created_at",
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://config.test/api/v1/datasources/sales-pg/tables/orders/preview?schema=public&limit=25&offset=50&orderBy=created_at",
+      expect.objectContaining({ headers: expect.objectContaining({ Accept: "application/json" }) }),
+    );
+    expect(preview.rows[0]?.order_id).toBe("A001");
+    expect(preview.hasMore).toBe(true);
   });
 });

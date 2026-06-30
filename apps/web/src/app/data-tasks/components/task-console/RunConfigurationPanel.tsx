@@ -29,7 +29,7 @@ export function RunConfigurationPanel({ liveRun }: { liveRun: LiveRun }) {
         onClick={() => setExpanded((value) => !value)}
         className="flex w-full cursor-pointer items-center justify-between gap-3 rounded-lg text-left transition-colors duration-200 hover:bg-surface-subtle focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-light/50"
       >
-        <h3 className={panelTitleClass}>运行诊断</h3>
+        <h3 className={panelTitleClass}>Run Diagnostics</h3>
         <span
           aria-hidden="true"
           className={[
@@ -44,14 +44,14 @@ export function RunConfigurationPanel({ liveRun }: { liveRun: LiveRun }) {
       </button>
       {expanded ? (
       <div className="mt-3 grid gap-2">
-        <DiagnosticCard title="生效资源">
+        <DiagnosticCard title="Resolved Resources">
           {config ? (
             <div className="grid gap-1.5">
-              <ConfigLine label="数据源" value={config.activeDatasourceId} />
-              <ConfigLine label="模型" value={config.activeLlmProfileId} />
+              <ConfigLine label="Datasource" value={config.activeDatasourceId} />
+              <ConfigLine label="Model" value={config.activeLlmProfileId} />
               <ConfigLine label="KB" value={countList(config.enabledKnowledgeIds)} />
               <ConfigLine label="MCP" value={countList(config.enabledMcpServerIds)} />
-              <ConfigLine label="文件" value={countList(config.fileIds)} />
+              <ConfigLine label="Files" value={countList(config.fileIds)} />
               {config.selectedSkills?.length ? (
                 <ChipRow
                   values={config.selectedSkills.map((skill) => skill.name ?? skill.id)}
@@ -60,21 +60,21 @@ export function RunConfigurationPanel({ liveRun }: { liveRun: LiveRun }) {
             </div>
           ) : (
             <PendingDiagnosticText>
-              等待 `run.config.resolved` 事件提供服务端最终生效配置。
+              Waiting for `run.config.resolved` to report the final server-side configuration.
             </PendingDiagnosticText>
           )}
         </DiagnosticCard>
 
-        <DiagnosticCard title="技能选择">
+        <DiagnosticCard title="Skill Selection">
           {skillSelection ? (
             <div className="grid gap-2">
-              <ConfigLine label="模式" value={skillSelection.mode ?? "未标注"} />
+              <ConfigLine label="Mode" value={skillSelection.mode ?? "Unlabeled"} />
               {skillSelection.selected.length > 0 ? (
                 <ChipRow
                   values={skillSelection.selected.map((skill) => skill.name ?? skill.id)}
                 />
               ) : (
-                <p className="text-[11px] text-muted-light">本轮未选择技能。</p>
+                <p className="text-[11px] text-muted-light">No skills selected for this run.</p>
               )}
               {skillSelection.effectiveToolPolicy ? (
                 <p className="text-[11px] leading-4 text-muted-light">
@@ -84,22 +84,22 @@ export function RunConfigurationPanel({ liveRun }: { liveRun: LiveRun }) {
             </div>
           ) : (
             <PendingDiagnosticText>
-              等待 `skill.selection` 事件提供本轮启用技能与工具策略。
+              Waiting for `skill.selection` to report enabled skills and tool policy.
             </PendingDiagnosticText>
           )}
         </DiagnosticCard>
 
-        <DiagnosticCard title="目标与上下文">
+        <DiagnosticCard title="Goal And Context">
           {goal || contextReports.length > 0 ? (
             <div className="grid gap-2">
               {goal ? (
                 <div className="rounded-lg border border-border bg-surface px-2.5 py-2">
                   <div className="text-[11px] font-semibold text-foreground">
-                    {goal.objective ?? "未命名目标"}
+                    {goal.objective ?? "Untitled goal"}
                   </div>
                   <div className="mt-1 flex flex-wrap gap-2 text-[10px] text-muted-light">
-                    {goal.status ? <span>状态 {goal.status}</span> : null}
-                    {goal.source ? <span>来源 {goal.source}</span> : null}
+                    {goal.status ? <span>Status {goal.status}</span> : null}
+                    {goal.source ? <span>Source {goal.source}</span> : null}
                   </div>
                 </div>
               ) : null}
@@ -121,7 +121,7 @@ export function RunConfigurationPanel({ liveRun }: { liveRun: LiveRun }) {
             </div>
           ) : (
             <PendingDiagnosticText>
-              等待 `goal.updated` 与 `context.*` 事件提供目标状态和上下文预算。
+              Waiting for `goal.updated` and `context.*` to report goal state and context budget.
             </PendingDiagnosticText>
           )}
         </DiagnosticCard>
@@ -154,7 +154,7 @@ function ConfigLine({ label, value }: { label: string; value?: string }) {
   return (
     <div className="flex items-center justify-between gap-2 text-[11px]">
       <span className="text-muted-light">{label}</span>
-      <span className="truncate font-medium text-muted">{value || "未指定"}</span>
+      <span className="truncate font-medium text-muted">{value || "Not set"}</span>
     </div>
   );
 }
@@ -175,8 +175,8 @@ function ChipRow({ values }: { values: string[] }) {
 }
 
 function countList(values?: string[]): string {
-  if (!values?.length) return "0 项";
-  return `${values.length.toLocaleString()} 项`;
+  if (!values?.length) return "0 items";
+  return `${values.length.toLocaleString()} items`;
 }
 
 function formatCount(value: number): string {
@@ -195,15 +195,15 @@ function summarizeToolPolicy(policy: Record<string, unknown>): string {
       ? policy.denied_tools.length
       : undefined;
   return [
-    allowed !== undefined ? `允许 ${allowed}` : undefined,
-    denied !== undefined ? `拒绝 ${denied}` : undefined,
+    allowed !== undefined ? `allowed ${allowed}` : undefined,
+    denied !== undefined ? `denied ${denied}` : undefined,
   ]
     .filter(Boolean)
-    .join(" · ") || "已上报";
+    .join(" · ") || "reported";
 }
 
 function summarizeContextReport(value: unknown): string {
-  if (typeof value !== "object" || value === null) return "已上报";
+  if (typeof value !== "object" || value === null) return "reported";
   const record = value as Record<string, unknown>;
   const tokenReport =
     typeof record.token_report === "object" && record.token_report !== null
@@ -227,5 +227,5 @@ function summarizeContextReport(value: unknown): string {
     budget !== undefined ? `budget ${formatCount(budget)}` : undefined,
   ]
     .filter(Boolean)
-    .join(" · ") || "已上报";
+    .join(" · ") || "reported";
 }

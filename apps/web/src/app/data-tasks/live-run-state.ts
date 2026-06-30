@@ -7,6 +7,7 @@ import type {
   TimelineEvent,
 } from "./data-task-state";
 import { dataStepKindForTool, emptyStepPayload, toolDisplayTitle } from "./data-task-state";
+import { formatRunErrorMessage } from "./run-error-message";
 
 export type LiveTaskStatus = "pending" | "running" | "completed" | "failed";
 
@@ -188,9 +189,9 @@ type AgUiLikeEvent = {
 };
 
 const defaultPlan: LivePlanTask[] = [
-  { id: "schema", title: "检查数据源 schema", status: "pending" },
-  { id: "sql", title: "生成并执行只读 SQL", status: "pending" },
-  { id: "final", title: "生成最终回答", status: "pending" },
+  { id: "schema", title: "Inspect data source schema", status: "pending" },
+  { id: "sql", title: "Generate and run read-only SQL", status: "pending" },
+  { id: "final", title: "Generate final answer", status: "pending" },
 ];
 
 export function createInitialLiveRun(): LiveRun {
@@ -222,7 +223,7 @@ export function deriveSegmentRunUsage(liveRun: LiveRun): RunUsageSnapshot {
   const auditStart = getSegmentAuditStartIndex(liveRun);
   const segmentTools = liveRun.toolCalls.slice(toolCallStart);
   const segmentToolIds = new Set(segmentTools.map((call) => call.id));
-  const segmentAudits = liveRun.audits.slice(0, Math.max(0, liveRun.audits.length - auditStart));
+  const segmentAudits = liveRun.audits.slice(auditStart);
   const segmentArtifactCount = liveRun.artifacts.filter(
     (artifact) => artifact.createdByEventId && segmentToolIds.has(artifact.createdByEventId),
   ).length;
@@ -436,7 +437,7 @@ export function reduceLiveRunEvent(state: LiveRun, event: AgUiLikeEvent): LiveRu
         ...state,
         runStatus: "failed",
         runFinishedAt: Date.now(),
-        errorMessage: stringValue(event.message) ?? "Agent 运行失败",
+        errorMessage: formatRunErrorMessage(stringValue(event.message) ?? undefined),
         toolCalls: finalizeRunningToolCalls(state.toolCalls, "failed"),
       };
     case "STATE_SNAPSHOT":
@@ -459,14 +460,28 @@ export function reduceLiveRunEvent(state: LiveRun, event: AgUiLikeEvent): LiveRu
   }
 }
 
+const TERMINAL_RUN_STATUSES = new Set<LiveRunStatus>(["completed", "failed", "canceled"]);
+
+function shouldIgnoreStaleRunStatusSnapshot(
+  current: LiveRunStatus,
+  incoming: LiveRunStatus,
+): boolean {
+  if (!TERMINAL_RUN_STATUSES.has(current)) {
+    return false;
+  }
+  return incoming === "idle" || incoming === "running" || incoming === "suspended";
+}
+
 function reduceStateSnapshot(state: LiveRun, event: AgUiLikeEvent): LiveRun {
   const snapshot = recordValue(event.snapshot);
   const status = liveStatusFromValue(snapshot?.runStatus);
   const runId = eventRunId(event) ?? stringValue(snapshot?.runId) ?? stringValue(snapshot?.run_id);
   if (!status && !runId) return state;
+  const nextStatus =
+    status && shouldIgnoreStaleRunStatusSnapshot(state.runStatus, status) ? undefined : status;
   return {
     ...state,
-    ...(status ? { runStatus: status } : {}),
+    ...(nextStatus ? { runStatus: nextStatus } : {}),
     ...(runId ? { runId } : {}),
   };
 }
@@ -479,7 +494,12 @@ function reduceStateDelta(state: LiveRun, event: AgUiLikeEvent): LiveRun {
   for (const op of patch) {
     if (op.path === "/runStatus") {
       const status = liveStatusFromValue(op.value);
-      if (status) next = { ...next, runStatus: status };
+      if (
+        status &&
+        !shouldIgnoreStaleRunStatusSnapshot(next.runStatus, status)
+      ) {
+        next = { ...next, runStatus: status };
+      }
     }
     if (op.path === "/runId" || op.path === "/run_id") {
       const runId = stringValue(op.value);
@@ -516,7 +536,7 @@ function reduceActivitySnapshot(state: LiveRun, event: AgUiLikeEvent): LiveRun {
     if (!content) return state;
 
     const stepId = stringValue(content.step_id);
-    const title = stringValue(content.title) ?? stringValue(content.tool_name) ?? "执行工具";
+    const title = stringValue(content.title) ?? stringValue(content.tool_name) ?? "Run tool";
     const toolName = stringValue(content.tool_name);
     const kind = dataStepKindForTool(toolName);
     const activityStatus = activityStatusFromValue(content.status);
@@ -647,7 +667,7 @@ function reduceToolEvent(state: LiveRun, event: AgUiLikeEvent): LiveRun {
         toolName: effectiveToolName,
         title,
         summary: summarizeSqlResult(result, parsed, event.type),
-        thought: "Agent 将自然语言问题转换成只读 SQL，并通过后端 Data Gateway 执行。",
+        thought: "Agent converts the natural language question into read-only SQL and runs it through the backend Data Gateway.",
         payload: {
           question: "",
           sql: sql || extractSql(existing),
@@ -672,7 +692,7 @@ function reduceToolEvent(state: LiveRun, event: AgUiLikeEvent): LiveRun {
         toolName: effectiveToolName,
         title,
         summary: summarizeSchemaResult(result, tables, event.type),
-        thought: "Agent 先确认数据源结构，避免在不可靠字段上直接下结论。",
+        thought: "Agent checks the data source structure before drawing conclusions from uncertain fields.",
         payload: { tables },
         ...(existingEvent?.artifactIds ? { artifactIds: existingEvent.artifactIds } : {}),
         ...(existingEvent?.stepId ? { stepId: existingEvent.stepId } : {}),
@@ -689,7 +709,7 @@ function reduceToolEvent(state: LiveRun, event: AgUiLikeEvent): LiveRun {
       toolName: effectiveToolName,
       title,
       summary: summarizeGenericResult(result, event.type),
-      thought: "Agent 正在执行一次数据操作。",
+      thought: "Agent is running a data operation.",
       payload: { description: result || "", rawResult: result || undefined },
       ...(existingEvent?.artifactIds ? { artifactIds: existingEvent.artifactIds } : {}),
       ...(existingEvent?.stepId ? { stepId: existingEvent.stepId } : {}),
@@ -712,9 +732,9 @@ function finalizeToolEventState(
 function summarizeGenericResult(result: string, eventType?: string): string {
   if (result) return result.length > 160 ? `${result.slice(0, 160)}…` : result;
   if (eventType === "TOOL_CALL_RESULT" || eventType === "TOOL_CALL_END") {
-    return "数据操作已完成。";
+    return "Data operation completed.";
   }
-  return "正在执行数据操作。";
+  return "Running data operation.";
 }
 
 function parseResultObject(result: string): Record<string, unknown> | null {
@@ -739,11 +759,11 @@ function summarizeSqlResult(
   eventType?: string,
 ): string {
   const rowCount = numberValue(parsed?.row_count);
-  if (rowCount !== undefined) return `已执行，返回 ${rowCount} 行。`;
+  if (rowCount !== undefined) return `Executed and returned ${rowCount} rows.`;
   // Non-JSON results are usually human-readable text (or an error); keep them.
   if (result && !parsed) return result;
-  if (eventType === "TOOL_CALL_RESULT") return "SQL 已执行。";
-  return "正在准备只读 SQL 查询。";
+  if (eventType === "TOOL_CALL_RESULT") return "SQL executed.";
+  return "Preparing a read-only SQL query.";
 }
 
 function summarizeSchemaResult(
@@ -751,10 +771,10 @@ function summarizeSchemaResult(
   tables: SchemaTable[],
   eventType?: string,
 ): string {
-  if (tables.length > 0) return `已检查 ${tables.length} 张表。`;
+  if (tables.length > 0) return `Inspected ${tables.length} tables.`;
   if (result && !parseResultObject(result)) return result;
-  if (eventType === "TOOL_CALL_RESULT") return "已检查数据源 schema。";
-  return "正在调用后端数据工具。";
+  if (eventType === "TOOL_CALL_RESULT") return "Inspected data source schema.";
+  return "Calling backend data tool.";
 }
 
 function parseSchemaTables(parsed: Record<string, unknown> | null): SchemaTable[] {
@@ -799,7 +819,7 @@ function reduceCustomEvent(state: LiveRun, event: AgUiLikeEvent): LiveRun {
       rowCount: numberValue(value?.row_count),
       elapsedMs: numberValue(value?.elapsed_ms),
     };
-    return { ...state, audits: [audit, ...state.audits] };
+    return { ...state, audits: [...state.audits, audit] };
   }
 
   if (event.name === "artifact") {
@@ -1089,9 +1109,63 @@ function parseSelectedSkills(value: unknown): Array<{ id: string; name?: string 
     .filter((item): item is { id: string; name?: string } => Boolean(item));
 }
 
+export function parseCsvTextPreview(
+  text: string,
+  delimiter = ",",
+): { columns: string[]; rows: string[][] } | null {
+  const lines = text.trim().split(/\r?\n/u).filter((line) => line.length > 0);
+  if (lines.length < 2) return null;
+  if (!lines[0].includes(delimiter) || lines[0].trimStart().startsWith("#")) {
+    return null;
+  }
+
+  const parseLine = (line: string): string[] => {
+    const cells: string[] = [];
+    let current = "";
+    let inQuotes = false;
+    for (let index = 0; index < line.length; index += 1) {
+      const char = line[index];
+      if (char === "\"") {
+        if (inQuotes && line[index + 1] === "\"") {
+          current += "\"";
+          index += 1;
+        } else {
+          inQuotes = !inQuotes;
+        }
+        continue;
+      }
+      if (char === delimiter && !inQuotes) {
+        cells.push(current);
+        current = "";
+        continue;
+      }
+      current += char;
+    }
+    cells.push(current);
+    return cells;
+  };
+
+  const columns = parseLine(lines[0]).map((column) => column.trim());
+  if (columns.length < 2 || columns.every((column) => column.length === 0)) {
+    return null;
+  }
+
+  const rows = lines
+    .slice(1)
+    .map((line) => parseLine(line).map((cell) => cell.trim()))
+    .filter((row) => row.some((cell) => cell.length > 0));
+
+  if (rows.length === 0) return null;
+  return { columns, rows };
+}
+
 function parseTablePreview(
   preview: unknown,
 ): { columns: string[]; rows: string[][] } | null {
+  if (typeof preview === "string") {
+    return parseCsvTextPreview(preview);
+  }
+
   const record = recordValue(preview);
   if (!record) return null;
 
@@ -1178,6 +1252,43 @@ function chartTypeValue(value: unknown): Extract<ArtifactDetail, { type: "chart"
   return undefined;
 }
 
+export function artifactDetailNeedsPreviewFetch(
+  artifact: Pick<DataArtifact, "previewAvailable">,
+  detail: ArtifactDetail | undefined,
+): boolean {
+  if (!artifact.previewAvailable) return false;
+  if (!detail) return true;
+  if (detail.type === "file" && !detail.content) return true;
+  if (detail.type === "report") {
+    return !detail.sections.some((section) => section.body.trim().length > 0);
+  }
+  return false;
+}
+
+export function mergeArtifactDetail(
+  existing: ArtifactDetail | undefined,
+  loaded: ArtifactDetail,
+): ArtifactDetail {
+  if (!existing) return loaded;
+  if (existing.type === "file" && loaded.type === "file") {
+    return {
+      ...loaded,
+      path: loaded.path || existing.path,
+      size: loaded.size ?? existing.size,
+      mtime: loaded.mtime ?? existing.mtime,
+      tool: loaded.tool ?? existing.tool,
+      content: loaded.content ?? existing.content,
+    };
+  }
+  if (existing.type === "report" && loaded.type === "report") {
+    const hasExistingBody = existing.sections.some(
+      (section) => section.body.trim().length > 0,
+    );
+    return hasExistingBody ? existing : loaded;
+  }
+  return loaded;
+}
+
 /** Builds inline artifact detail from REST preview JSON or stream preview_json. */
 export function artifactDetailFromPreview(
   artifact: Pick<DataArtifact, "type" | "kind" | "title">,
@@ -1229,12 +1340,23 @@ export function artifactDetailFromPreview(
   const textContent =
     stringValue(payloadRecord?.content) ??
     stringValue(payloadRecord?.body) ??
-    (typeof payload === "string" ? payload : undefined);
+    (typeof payload === "string" && backendType !== "table" ? payload : undefined);
   if (textContent) {
     return {
       type: "report",
-      sections: [{ heading: "预览", body: textContent }],
+      sections: [{ heading: "Preview", body: textContent }],
     };
+  }
+
+  if (typeof payload === "string" && (backendType === "table" || artifact.type === "dataset")) {
+    const tablePreview = parseCsvTextPreview(payload);
+    if (tablePreview) {
+      return {
+        type: "dataset",
+        columns: tablePreview.columns,
+        rows: tablePreview.rows,
+      };
+    }
   }
 
   return undefined;
@@ -1246,7 +1368,7 @@ function parseArtifactFromCustom(value: Record<string, unknown>): DataArtifact {
     stringValue(value.artifact_id) ??
     `artifact-${Date.now()}`;
   const title =
-    stringValue(value.title) ?? stringValue(value.name) ?? "Agent 产出物";
+    stringValue(value.title) ?? stringValue(value.name) ?? "Agent output";
   const backendType = stringValue(value.type);
   const fileId = stringValue(value.file_id) ?? stringValue(value.fileId);
   const downloadUrl =
@@ -1272,19 +1394,29 @@ function parseArtifactFromCustom(value: Record<string, unknown>): DataArtifact {
       };
       summary =
         summary ??
-        `${tablePreview.rows.length.toLocaleString()} 行 × ${tablePreview.columns.length} 列`;
+        `${tablePreview.rows.length.toLocaleString()} rows x ${tablePreview.columns.length} columns`;
     } else if (rowCount !== undefined) {
-      summary = summary ?? `数据集，${rowCount.toLocaleString()} 行`;
+      summary = summary ?? `Dataset, ${rowCount.toLocaleString()} rows`;
     }
   } else if (backendType === "chart") {
     type = "chart";
     kind = "chart";
     detail = parseChartPreview(preview) ?? undefined;
-    summary = summary ?? "图表产出";
+    summary = summary ?? "Chart output";
   } else if (backendType === "markdown" || backendType === "html") {
     type = "report";
     kind = "memo";
-    summary = summary ?? `${backendType} 报告`;
+    const reportContent =
+      stringValue(previewRecord?.content) ??
+      stringValue(previewRecord?.body) ??
+      (typeof preview === "string" ? preview : undefined);
+    if (reportContent) {
+      detail = {
+        type: "report",
+        sections: [{ heading: "Preview", body: reportContent }],
+      };
+    }
+    summary = summary ?? `${backendType} report`;
   } else if (backendType === "file") {
     type = "file";
     kind = "file";
@@ -1304,8 +1436,8 @@ function parseArtifactFromCustom(value: Record<string, unknown>): DataArtifact {
     summary =
       summary ??
       (fileSize !== undefined
-        ? `文件 ${filePath}（${fileSize.toLocaleString()} bytes）`
-        : `文件 ${filePath}`);
+        ? `File ${filePath}（${fileSize.toLocaleString()} bytes）`
+        : `File ${filePath}`);
   }
 
   return {
@@ -1313,7 +1445,7 @@ function parseArtifactFromCustom(value: Record<string, unknown>): DataArtifact {
     title,
     kind,
     type,
-    summary: summary ?? "后端通过 AG-UI artifact 事件返回的产出物。",
+    summary: summary ?? "Output returned by the backend through an AG-UI artifact event.",
     version: stringValue(value.version) ?? "v1",
     ...(fileId ? { fileId } : {}),
     ...(downloadUrl ? { downloadUrl } : {}),
@@ -1616,7 +1748,7 @@ function applyInteractionToolIdentity(
       toolName,
       title,
       summary: statusSummary(existingCall.status === "success" ? "completed" : existingCall.status),
-      thought: "Agent 正在与用户协作。",
+      thought: "Agent is collaborating with the user.",
       payload: emptyStepPayload(kind),
     });
   }
@@ -1695,11 +1827,11 @@ function liveStatusFromValue(value: unknown): LiveRunStatus | null {
 
 function statusSummary(value: unknown): string {
   const status = stringValue(value);
-  if (status === "running") return "正在执行。";
-  if (status === "completed") return "已完成。";
-  if (status === "failed") return "执行失败。";
-  if (status === "canceled" || status === "cancelled") return "已取消。";
-  return "等待执行。";
+  if (status === "running") return "Running.";
+  if (status === "completed") return "Completed.";
+  if (status === "failed") return "Failed.";
+  if (status === "canceled" || status === "cancelled") return "Canceled.";
+  return "Pending.";
 }
 
 export function resolveIncomingToolName(
@@ -1866,9 +1998,9 @@ export function formatWorkspaceMetadataSummary(entry: LiveWorkspaceMetadata): st
   const status = stringValue(record?.status);
   const path = stringValue(record?.path);
   const parts = [
-    entry.toolName ? `工具 ${entry.toolName}` : undefined,
-    status ? `状态 ${status}` : undefined,
-    path ? `路径 ${path}` : undefined,
+    entry.toolName ? `Tool ${entry.toolName}` : undefined,
+    status ? `Status ${status}` : undefined,
+    path ? `Path ${path}` : undefined,
   ].filter(Boolean);
   if (parts.length > 0) {
     return parts.join(" · ");
@@ -1964,17 +2096,17 @@ function thoughtForActivityStatus(
 ): string {
   if (status === "failed") {
     return kind === "query"
-      ? "只读 SQL 执行未成功，Agent 将根据错误信息调整策略。"
-      : "数据工具步骤未成功完成。";
+      ? "Read-only SQL did not complete successfully. Agent will adjust based on the error."
+      : "The data tool step did not complete successfully.";
   }
   if (status === "completed") {
     return kind === "query"
-      ? "Agent 已通过后端 Data Gateway 完成只读 SQL 查询。"
-      : "Agent 已通过后端数据工具完成当前步骤。";
+      ? "Agent completed the read-only SQL query through the backend Data Gateway."
+      : "Agent completed the current step through the backend data tool.";
   }
   return kind === "query"
-    ? "Agent 将自然语言问题转换成只读 SQL，并通过后端 Data Gateway 执行。"
-    : "Agent 正在通过后端数据工具推进当前分析。";
+    ? "Agent converts the natural language question into read-only SQL and runs it through the backend Data Gateway."
+    : "Agent is advancing the analysis through the backend data tool.";
 }
 
 function mergeActivityPayload(

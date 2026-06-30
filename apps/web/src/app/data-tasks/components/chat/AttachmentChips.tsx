@@ -22,10 +22,10 @@ export function AttachmentChips({
           <span
             key={att.id}
             className="inline-flex max-w-[220px] items-center gap-1.5 rounded-lg border border-border bg-surface-subtle px-2 py-1 text-xs text-foreground"
-            title={unsupported ? "后端接入后将随消息发送" : att.filename}
+            title={unsupported ? "Will be sent with the message after backend support lands" : att.filename}
           >
             <AttachmentIcon modality={att.type} />
-            <span className="truncate">{att.filename ?? "附件"}</span>
+            <span className="truncate">{att.filename ?? "Attachment"}</span>
             {typeof att.size === "number" && (
               <span className="shrink-0 text-muted-light">
                 {formatFileSize(att.size)}
@@ -36,12 +36,12 @@ export function AttachmentChips({
             )}
             {unsupported && (
               <span className="shrink-0 rounded bg-amber-100 px-1 text-[10px] font-medium text-amber-700">
-                后端未支持
+                Backend unsupported
               </span>
             )}
             <button
               type="button"
-              aria-label="移除附件"
+              aria-label="Remove attachment"
               onClick={() => onRemove(att.id)}
               className="shrink-0 cursor-pointer text-muted-light hover:text-foreground"
             >

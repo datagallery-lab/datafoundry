@@ -18,21 +18,26 @@
   --muted-foreground: var(--text-secondary);
   --code-bg: #171717;
 
-  /* Semantic step tones */
-  --step-inspect: #2563eb;
-  --step-query: #7c3aed;
-  --step-transform: #0891b2;
-  --step-fetch: #0284c7;
-  --step-visualize: #6d28d9;
-  --step-knowledge: #0e7490;
-  --step-success: #047857;
-  --step-warning: #b45309;
-  --step-error: #b91c1c;
+  /* Semantic step tones — muted, low-chroma jewel palette for a restrained feel */
+  --step-inspect: #4d6f96;
+  --step-query: #74628f;
+  --step-transform: #3f827f;
+  --step-fetch: #3f769b;
+  --step-visualize: #635c8e;
+  --step-knowledge: #3f7480;
+  --step-success: #3f7d63;
+  --step-warning: #9a6a30;
+  --step-error: #a24f49;
   --step-glow: rgb(13 13 13 / 0.08);
 
   --radius-card: 0.625rem;
   --shadow-card: 0 1px 1px rgb(13 13 13 / 0.02);
   --shadow-card-hover: 0 2px 8px rgb(13 13 13 / 0.04);
+
+  /* Overlay scrollbars — hidden until the scroll container is hovered/focused */
+  --scrollbar-size: 6px;
+  --scrollbar-thumb: rgb(13 13 13 / 0.16);
+  --scrollbar-thumb-hover: rgb(13 13 13 / 0.28);
 }
 
 @theme inline {
@@ -64,6 +69,63 @@ body {
   background: var(--surface-subtle);
   color: var(--foreground);
   font-family: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+}
+
+/* macOS / VS Code–style overlay scrollbars: hidden by default, visible on hover/focus */
+@supports (scrollbar-width: thin) {
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: transparent transparent;
+  }
+
+  *:hover,
+  *:focus-within {
+    scrollbar-color: var(--scrollbar-thumb) transparent;
+  }
+
+  .scrollbar-always {
+    scrollbar-color: var(--scrollbar-thumb) transparent;
+  }
+}
+
+*::-webkit-scrollbar {
+  width: var(--scrollbar-size);
+  height: var(--scrollbar-size);
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  background-color: transparent;
+  border-radius: 9999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+  transition: background-color 0.15s ease;
+}
+
+*:hover::-webkit-scrollbar-thumb,
+*:focus-within::-webkit-scrollbar-thumb {
+  background-color: var(--scrollbar-thumb);
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background-color: var(--scrollbar-thumb-hover);
+}
+
+*::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+.scrollbar-always::-webkit-scrollbar-thumb {
+  background-color: var(--scrollbar-thumb);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *::-webkit-scrollbar-thumb {
+    transition: none;
+  }
 }
 
 nextjs-portal {
@@ -273,9 +335,43 @@ nextjs-portal {
   }
 }
 
+/* Sidebar session running indicator — dual counter-rotating orbits */
+.session-sidebar-running-icon {
+  color: var(--primary-light);
+}
+
+.session-sidebar-running-orbit {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: session-sidebar-running-orbit 1.15s linear infinite;
+}
+
+.session-sidebar-running-orbit-inner {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: session-sidebar-running-orbit-reverse 0.95s linear infinite;
+}
+
+@keyframes session-sidebar-running-orbit {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes session-sidebar-running-orbit-reverse {
+  to {
+    transform: rotate(-360deg);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .chat-assistant-loading-dot {
     animation: none;
     opacity: 0.85;
+  }
+
+  .session-sidebar-running-orbit,
+  .session-sidebar-running-orbit-inner {
+    animation: none;
   }
 }

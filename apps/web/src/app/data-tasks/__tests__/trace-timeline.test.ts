@@ -139,7 +139,7 @@ describe("buildTraceTimeline", () => {
 
     const entry = buildTraceTimeline(run).find((item) => item.eventId === "sql-1");
     expect(entry).toMatchObject({
-      summary: "执行失败。",
+      summary: "Failed.",
       toolStatus: "failed",
     });
   });
@@ -161,8 +161,8 @@ describe("buildTraceTimeline", () => {
     expect(entries.some((entry) => entry.kind === "run_finished")).toBe(false);
     expect(entries.at(-1)).toMatchObject({
       kind: "run_suspended",
-      title: "运行暂停",
-      summary: "Agent 等待你的回答后继续。",
+      title: "Run paused",
+      summary: "Agent is waiting for your response before continuing.",
     });
   });
 
@@ -191,11 +191,11 @@ describe("buildTraceTimeline", () => {
 
     const entries = buildTraceTimeline(run);
     expect(entries.find((entry) => entry.id === "run-history-0-suspended")).toMatchObject({
-      title: "运行暂停",
+      title: "Run paused",
     });
     expect(entries.find((entry) => entry.id === "run-started-current")).toMatchObject({
-      title: "运行继续",
-      summary: "Agent 已收到你的回答，继续执行。",
+      title: "Run resumed",
+      summary: "Agent received your response and resumed.",
     });
   });
 
@@ -248,7 +248,7 @@ describe("buildTraceTimeline", () => {
     expect(entries.filter((entry) => entry.kind === "run_started")).toHaveLength(1);
     expect(entries.filter((entry) => entry.kind === "run_finished")).toHaveLength(1);
     expect(entries.find((entry) => entry.toolCallId === "schema-1")?.title).toBe(
-      "检查数据源 Schema",
+      "Inspect data source schema",
     );
   });
 

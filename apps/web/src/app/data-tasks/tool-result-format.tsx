@@ -168,7 +168,7 @@ export function ToolFormattedParams({
   if (!formatted) {
     return (
       <div className="mt-2 rounded-lg border border-dashed border-border bg-surface-subtle px-2.5 py-2 text-xs text-muted-light">
-        无参数
+        No parameters
       </div>
     );
   }
@@ -176,10 +176,10 @@ export function ToolFormattedParams({
   return (
     <div className="mt-2 grid gap-2">
       <div className="text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-light">
-        参数
+        Parameters
       </div>
       {formatted}
-      <details className="rounded-lg border border-border bg-surface-subtle">
+      <details className="rounded-lg border border-border bg-surface-subtle" data-no-tool-select>
         <summary className="cursor-pointer px-2.5 py-1.5 text-[11px] font-semibold text-muted-light">
           raw
         </summary>
@@ -325,7 +325,7 @@ function ResultDataTable({
       </table>
       {rows.length > previewRows.length ? (
         <div className="border-t border-border bg-surface-subtle px-2.5 py-1 text-[10px] text-muted-light">
-          仅预览前 {previewRows.length} 行，共 {rows.length} 行。
+          Showing the first {previewRows.length} rows of {rows.length}.
         </div>
       ) : null}
     </div>
@@ -365,11 +365,11 @@ function TaskStatusBadge({ status }: { status: string }) {
           : statusTone("muted");
   const label =
     normalized === "completed"
-      ? "已完成"
+      ? "Completed"
       : normalized === "in_progress" || normalized === "in progress"
-        ? "进行中"
+        ? "In progress"
         : normalized === "pending"
-          ? "待处理"
+          ? "Pending"
           : status;
 
   return (
@@ -433,8 +433,8 @@ function renderPreviewTable(record: Record<string, unknown>, variant: ToolResult
     <div className="grid gap-2">
       <MetaChips
         items={[
-          ...(table ? [{ label: "表", value: table }] : []),
-          { label: "行数", value: String(rowCount) },
+          ...(table ? [{ label: "Table", value: table }] : []),
+          { label: "Rows", value: String(rowCount) },
         ]}
       />
       <ResultDataTable columns={displayColumns} rows={rows} variant={variant} />
@@ -449,11 +449,11 @@ function renderWorkspaceObservation(toolName: string, text: string, variant: Too
       <div className="grid gap-2">
         <MetaChips
           items={[
-            { label: "路径", value: writeMatch[2] },
-            { label: "大小", value: `${writeMatch[1]} bytes` },
+            { label: "Path", value: writeMatch[2] },
+            { label: "Size", value: `${writeMatch[1]} bytes` },
           ]}
         />
-        <p className="text-xs text-step-success">文件已写入工作区。</p>
+        <p className="text-xs text-step-success">File written to the workspace.</p>
       </div>
     );
   }
@@ -462,8 +462,8 @@ function renderWorkspaceObservation(toolName: string, text: string, variant: Too
   if (mkdirMatch) {
     return (
       <div className="grid gap-2">
-        <MetaChips items={[{ label: "目录", value: mkdirMatch[1] }]} />
-        <p className="text-xs text-muted">目录已创建。</p>
+        <MetaChips items={[{ label: "Directory", value: mkdirMatch[1] }]} />
+        <p className="text-xs text-muted">Directory created.</p>
       </div>
     );
   }
@@ -473,10 +473,10 @@ function renderWorkspaceObservation(toolName: string, text: string, variant: Too
     return (
       <MetaChips
         items={[
-          { label: "路径", value: statMatch[1] },
-          { label: "类型", value: statMatch[2] },
-          { label: "大小", value: `${statMatch[3]} bytes` },
-          { label: "修改时间", value: statMatch[4] },
+          { label: "Path", value: statMatch[1] },
+          { label: "Type", value: statMatch[2] },
+          { label: "Size", value: `${statMatch[3]} bytes` },
+          { label: "Modified", value: statMatch[4] },
         ]}
       />
     );
@@ -532,7 +532,7 @@ function renderWorkspaceObservation(toolName: string, text: string, variant: Too
       return <TextBlock text={text} variant={variant} tone="terminal" />;
     }
     return (
-      <p className="text-xs text-muted-light">命令已执行，无标准输出。</p>
+      <p className="text-xs text-muted-light">Command ran with no stdout.</p>
     );
   }
 
@@ -556,9 +556,9 @@ function renderTaskTools(record: Record<string, unknown>, variant: ToolResultVar
       {total > 0 ? (
         <MetaChips
           items={[
-            { label: "任务", value: String(total) },
-            ...(completed !== undefined ? [{ label: "已完成", value: String(completed) }] : []),
-            ...(allCompleted ? [{ label: "状态", value: "全部完成" }] : []),
+            { label: "Tasks", value: String(total) },
+            ...(completed !== undefined ? [{ label: "Completed", value: String(completed) }] : []),
+            ...(allCompleted ? [{ label: "Status", value: "All completed" }] : []),
           ]}
         />
       ) : null}
@@ -600,7 +600,7 @@ function renderKnowledge(record: Record<string, unknown>, variant: ToolResultVar
   return (
     <div className="grid gap-2">
       {collectionId ? (
-        <MetaChips items={[{ label: "知识库", value: collectionId }]} />
+        <MetaChips items={[{ label: "Knowledge base", value: collectionId }]} />
       ) : null}
       {chunks.map((chunk, index) => {
         const item = chunk as Record<string, unknown>;
@@ -702,7 +702,7 @@ export function ToolRawFallback({
   if (!payload) {
     return (
       <p className="rounded-lg border border-dashed border-border bg-surface-subtle px-2.5 py-2 text-xs text-muted-light">
-        工具已返回，但无可见输出内容。
+        The tool returned no visible output.
       </p>
     );
   }
@@ -712,9 +712,9 @@ export function ToolRawFallback({
   }
 
   return (
-    <details className="rounded-lg border border-border bg-surface-subtle">
+    <details className="rounded-lg border border-border bg-surface-subtle" data-no-tool-select>
       <summary className="cursor-pointer px-2.5 py-1.5 text-[11px] font-semibold text-muted-light">
-        原始返回
+        Raw response
       </summary>
       <pre className={`border-t border-border ${preClass}`}>{payload}</pre>
     </details>

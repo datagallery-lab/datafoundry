@@ -1,5 +1,20 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createElement } from "react";
+
+vi.mock("@copilotkit/react-core/v2", () => ({
+  CopilotChatAssistantMessage: {
+    MarkdownRenderer: ({ content }: { content: string }) =>
+      createElement("span", null, content),
+  },
+  useAgent: () => ({ agent: { messages: [], threadId: "t" } }),
+  useCopilotChatConfiguration: () => ({ threadId: "t", agentId: "dataAgent" }),
+  useCopilotKit: () => ({
+    copilotkit: {
+      renderCustomMessages: [],
+      setRenderCustomMessages: vi.fn(),
+    },
+  }),
+}));
 import { renderToStaticMarkup } from "react-dom/server";
 import { CollaborationChoiceBubble } from "../components/chat/collaboration-responses";
 import {
@@ -38,10 +53,10 @@ describe("formatCollaborationResponseDisplay", () => {
   it("maps ask_user multi-select values to option labels", () => {
     expect(
       formatCollaborationResponseDisplay("ask_user", ["schema", "sql"], [
-        { label: "检查表结构", value: "schema" },
+        { label: "Inspect schema", value: "schema" },
         { label: "执行 SQL", value: "sql" },
       ]),
-    ).toBe("检查表结构、执行 SQL");
+    ).toBe("Inspect schema、执行 SQL");
   });
 
   it("formats submit_plan rejection without feedback", () => {
@@ -81,8 +96,8 @@ describe("formatCollaborationResponseDisplay", () => {
       }),
     );
 
-    expect(html.indexOf("回答的问题")).toBeGreaterThan(-1);
+    expect(html.indexOf("answered question")).toBeGreaterThan(-1);
     expect(html.indexOf("已确认满意")).toBeGreaterThan(-1);
-    expect(html.indexOf("回答的问题")).toBeLessThan(html.indexOf("已确认满意"));
+    expect(html.indexOf("answered question")).toBeLessThan(html.indexOf("已确认满意"));
   });
 });

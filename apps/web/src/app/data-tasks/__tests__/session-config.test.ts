@@ -17,6 +17,9 @@ import {
   togglePinChatSession,
   togglePerRunMention,
   toggleSessionResource,
+  isSessionResourceKindLocked,
+  isSessionStarted,
+  SESSION_LOCKABLE_RESOURCE_KINDS,
   type WorkspaceConfigStore,
 } from "../data-task-state";
 
@@ -59,6 +62,32 @@ describe("session config disabled map", () => {
       "db-default",
       "db-orders",
     ]);
+  });
+
+  it("locks db and kb after the session has started", () => {
+    const fresh = createChatSession();
+    expect(SESSION_LOCKABLE_RESOURCE_KINDS).toEqual(["db", "kb"]);
+    expect(isSessionStarted(fresh)).toBe(false);
+    expect(isSessionResourceKindLocked(fresh, "db")).toBe(false);
+    expect(isSessionResourceKindLocked(fresh, "kb")).toBe(false);
+    expect(isSessionResourceKindLocked(fresh, "mcp")).toBe(false);
+
+    const started = {
+      ...fresh,
+      lastMessageAt: Date.now(),
+    };
+    expect(isSessionStarted(started)).toBe(true);
+    expect(isSessionResourceKindLocked(started, "db")).toBe(true);
+    expect(isSessionResourceKindLocked(started, "kb")).toBe(true);
+    expect(isSessionResourceKindLocked(started, "mcp")).toBe(false);
+    expect(isSessionResourceKindLocked(started, "skill")).toBe(false);
+  });
+
+  it("treats run and message hints as session started", () => {
+    const fresh = createChatSession();
+    expect(isSessionStarted(fresh, { runCount: 1 })).toBe(true);
+    expect(isSessionStarted(fresh, { messageCount: 2 })).toBe(true);
+    expect(isSessionStarted(fresh, { hasRunHistory: true })).toBe(true);
   });
 
   it("sessionResourceCounts reflects enabled vs total", () => {
@@ -174,7 +203,7 @@ describe("session config disabled map", () => {
     expect(deriveSnippetTitle("  帮我分析一下\n最近 30 天不同渠道的订单走势和异常原因  ")).toBe(
       "帮我分析一下 最近 30 天不同渠道的订单走势…",
     );
-    expect(deriveSnippetTitle("")).toBe("新数据任务");
+    expect(deriveSnippetTitle("")).toBe("New data task");
   });
 
   it("deletes sessions and keeps pinned sessions ahead of others", () => {

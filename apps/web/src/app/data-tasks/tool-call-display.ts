@@ -46,43 +46,43 @@ export function parseToolResultError(result?: string): ParsedToolResultError | n
       if (parsed.reason === "missing_terminal_event") {
         return {
           kind: "protocol",
-          title: "结果同步失败",
-          message: "工具结果在对话 run 结束后才到达，前端未能接收 observation。",
-          hint: "SQL 可能已在后端执行，请查看右侧「完整追溯」；然后重试本问题。",
+          title: "Result sync failed",
+          message: "The tool result arrived after the chat run ended, so the frontend could not receive the observation.",
+          hint: "The SQL may have run on the backend. Check the right-side full trace, then retry this question.",
         };
       }
       return {
         kind: "protocol",
-        title: "结果同步失败",
+        title: "Result sync failed",
         message:
           typeof parsed.message === "string" && parsed.message.trim()
             ? parsed.message
-            : "工具 observation 未能写入对话线程。",
+            : "The tool observation could not be written to the chat thread.",
       };
     }
 
     if (parsed.error === "TOOL_RESULT_NOT_DELIVERED") {
       return {
         kind: "delivery",
-        title: "结果未送达",
+        title: "Result not delivered",
         message:
           typeof parsed.message === "string" && parsed.message.trim()
             ? parsed.message
-            : "后端未在 AG-UI 流中推送 TOOL_CALL_RESULT。",
-        hint: "请查看右侧追溯面板中的 SQL 审计或 step 状态。",
+            : "The backend did not push TOOL_CALL_RESULT in the AG-UI stream.",
+        hint: "Check the SQL audit or step status in the right-side trace panel.",
       };
     }
 
     if (parsed.error !== undefined) {
       return {
         kind: "tool",
-        title: "工具执行失败",
+        title: "Tool execution failed",
         message:
           typeof parsed.message === "string" && parsed.message.trim()
             ? parsed.message
             : typeof parsed.error === "string"
               ? parsed.error
-              : "工具执行失败。",
+              : "Tool execution failed。",
       };
     }
   } catch {
@@ -101,13 +101,13 @@ export function resolveToolFailurePresentation(result?: string): ParsedToolResul
   if (!result) {
     return {
       kind: "delivery",
-      title: "结果未送达",
-      message: "后端未返回 observation。",
+      title: "Result not delivered",
+      message: "The backend did not return an observation.",
     };
   }
   return {
     kind: "tool",
-    title: "工具执行失败",
+    title: "Tool execution failed",
     message: result.length > 240 ? `${result.slice(0, 240)}…` : result,
   };
 }
@@ -115,24 +115,24 @@ export function resolveToolFailurePresentation(result?: string): ParsedToolResul
 export function toolDisplayStatusLabel(status: ToolDisplayStatus): string {
   switch (status) {
     case "complete":
-      return "已完成";
+      return "Completed";
     case "executing":
-      return "执行中";
+      return "Running";
     case "failed":
-      return "执行失败";
+      return "Failed";
     default:
-      return "等待执行";
+      return "Pending";
   }
 }
 
 export function toolPendingHint(status: ToolDisplayStatus): string {
   switch (status) {
     case "executing":
-      return "工具正在执行，等待后端返回结果。";
+      return "The tool is running. Waiting for the backend result.";
     case "failed":
-      return "工具执行失败，请查看对话或重试。";
+      return "Tool execution failed. Check the chat or retry.";
     default:
-      return "已规划此工具调用，等待开始执行。";
+      return "This tool call is planned and waiting to start.";
   }
 }
 

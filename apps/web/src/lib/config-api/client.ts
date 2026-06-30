@@ -5,6 +5,7 @@ import type {
   BackendCapabilitiesResponse,
   DatasourceDto,
   DatasourceSchemaDto,
+  DatasourceTablePreviewDto,
   DatasourceTypeDto,
   FileAssetRefDto,
   JobDto,
@@ -197,6 +198,21 @@ export const configApi = {
     if (options.includeStats) params.set("includeStats", "true");
     return requestEnvelope<DatasourceSchemaDto>(
       `/api/v1/datasources/${encodeURIComponent(id)}/schema${queryString(params)}`,
+    );
+  },
+
+  getDatasourceTablePreview(
+    id: string,
+    table: string,
+    options: { schema?: string; limit?: number; offset?: number; orderBy?: string } = {},
+  ): Promise<DatasourceTablePreviewDto> {
+    const params = new URLSearchParams();
+    if (options.schema) params.set("schema", options.schema);
+    if (options.limit !== undefined) params.set("limit", String(options.limit));
+    if (options.offset !== undefined) params.set("offset", String(options.offset));
+    if (options.orderBy) params.set("orderBy", options.orderBy);
+    return requestEnvelope<DatasourceTablePreviewDto>(
+      `/api/v1/datasources/${encodeURIComponent(id)}/tables/${encodeURIComponent(table)}/preview${queryString(params)}`,
     );
   },
 

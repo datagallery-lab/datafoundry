@@ -41,7 +41,7 @@ describe("workspace config defaults", () => {
     expect(getEnabledLlmItems(workspaceConfig).map((item) => item.id)).toEqual([
       "server-default",
     ]);
-    expect(summarizeLlmItems(workspaceConfig.llm, "未配置")).toBe("qwen-plus");
+    expect(summarizeLlmItems(workspaceConfig.llm, "未配置")).toBe("服务端默认");
   });
 });
 

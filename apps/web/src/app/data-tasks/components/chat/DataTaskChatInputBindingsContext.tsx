@@ -8,6 +8,7 @@ import type {
   PerRunMentionKind,
   PerRunFileSelection,
   PerRunSelection,
+  SessionStartedHints,
   WorkspaceConfigItem,
   WorkspaceConfigStore,
 } from "../../data-task-state";
@@ -30,6 +31,7 @@ export type DataTaskChatInputBindings = {
   onClearPerRunFileMentions: () => void;
   workspaceConfig: WorkspaceConfigStore;
   activeSession: ChatSession | null;
+  sessionStartedHints?: SessionStartedHints;
   onToggleSessionResource: (kind: PerRunMentionKind, id: string) => void;
   chatColumnWidth: number;
   agentId: string;

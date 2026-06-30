@@ -27,11 +27,11 @@ export function JobProgressBanner({
   if (!job) return null;
 
   const statusLabel: Record<JobDto["status"], string> = {
-    pending: "排队中",
-    running: "执行中",
-    completed: "已完成",
-    failed: "失败",
-    canceled: "已取消",
+    pending: "Queued",
+    running: "Running",
+    completed: "Completed",
+    failed: "Failed",
+    canceled: "Canceled",
   };
 
   const tone =
@@ -48,7 +48,7 @@ export function JobProgressBanner({
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="text-sm font-semibold">
-            {job.type === "datasource-introspect" ? "Schema 抓取" : "索引重建"}
+            {job.type === "datasource-introspect" ? "Schema sync" : "Index rebuild"}
           </div>
           <div className="mt-1 text-xs opacity-80">
             {statusLabel[job.status]} · {job.progress}%
@@ -70,7 +70,7 @@ export function JobProgressBanner({
               }}
               className="rounded-lg border border-current/20 px-2 py-1 text-xs font-medium"
             >
-              取消
+              Cancel
             </button>
           ) : null}
           {(job.status === "completed" ||
@@ -82,7 +82,7 @@ export function JobProgressBanner({
               onClick={onDismiss}
               className="rounded-lg border border-current/20 px-2 py-1 text-xs font-medium"
             >
-              关闭
+              Close
             </button>
           ) : null}
         </div>

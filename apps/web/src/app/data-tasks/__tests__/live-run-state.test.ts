@@ -2,12 +2,14 @@ import { describe, expect, it } from "vitest";
 import {
   accumulateSessionUsage,
   artifactDetailFromPreview,
+  artifactDetailNeedsPreviewFetch,
   createInitialLiveRun,
   createInitialSessionUsage,
   deriveLiveSessionView,
   deriveRunUsage,
   deriveSegmentRunUsage,
   formatSandboxOutputText,
+  mergeArtifactDetail,
   resolveSandboxOutputsForToolCall,
   resolveTokenUsageForEvent,
   resolveWorkspaceMetadataForToolCall,
@@ -25,7 +27,7 @@ describe("live run state reducer", () => {
       content: {
         tasks: [
           { id: "schema", title: "检查数据源 schema", status: "pending" },
-          { id: "sql", title: "生成并执行只读 SQL", status: "pending" },
+          { id: "sql", title: "Generate and run read-only SQL", status: "pending" },
         ],
       },
     });
@@ -39,7 +41,7 @@ describe("live run state reducer", () => {
 
     expect(updated.plan).toEqual([
       { id: "schema", title: "检查数据源 schema", status: "pending" },
-      { id: "sql", title: "生成并执行只读 SQL", status: "running" },
+      { id: "sql", title: "Generate and run read-only SQL", status: "running" },
     ]);
   });
 
@@ -240,6 +242,115 @@ describe("live run state reducer", () => {
     });
   });
 
+  it("parses CSV string previews for table artifacts", () => {
+    const artifact = {
+      type: "dataset" as const,
+      kind: "csv" as const,
+      title: "category_sales_summary.csv",
+    };
+    const preview =
+      "category,total_sales,percentage\nelectronics,1280,45.07\nbeauty,640,22.54";
+
+    expect(artifactDetailFromPreview(artifact, preview)).toEqual({
+      type: "dataset",
+      columns: ["category", "total_sales", "percentage"],
+      rows: [
+        ["electronics", "1280", "45.07"],
+        ["beauty", "640", "22.54"],
+      ],
+    });
+  });
+
+  it("parses markdown preview strings from REST preview payloads", () => {
+    const artifact = {
+      type: "report" as const,
+      kind: "memo" as const,
+      title: "Category Sales Summary",
+    };
+
+    expect(
+      artifactDetailFromPreview(artifact, "# Category Sales Summary\n\nDone."),
+    ).toEqual({
+      type: "report",
+      sections: [{ heading: "Preview", body: "# Category Sales Summary\n\nDone." }],
+    });
+  });
+
+  it("parses markdown preview_json strings from artifact events", () => {
+    const run = reduceLiveRunEvent(createInitialLiveRun(), {
+      type: "CUSTOM",
+      name: "artifact",
+      value: {
+        id: "artifact-md-string-1",
+        type: "markdown",
+        name: "Category Sales Summary",
+        preview_json: "# Category Sales Summary\n\nDone.",
+      },
+    });
+
+    expect(run.artifacts[0]?.detail).toEqual({
+      type: "report",
+      sections: [{ heading: "Preview", body: "# Category Sales Summary\n\nDone." }],
+    });
+  });
+
+  it("requests preview fetch for file artifacts that only have path metadata", () => {
+    const artifact = {
+      previewAvailable: true,
+      type: "file" as const,
+      kind: "file" as const,
+      title: "report.md",
+    };
+    const detail = {
+      type: "file" as const,
+      path: "report.md",
+      size: 128,
+    };
+
+    expect(artifactDetailNeedsPreviewFetch(artifact, detail)).toBe(true);
+    expect(
+      artifactDetailNeedsPreviewFetch(artifact, {
+        ...detail,
+        content: "# Hello",
+      }),
+    ).toBe(false);
+  });
+
+  it("merges fetched file preview content into existing file detail", () => {
+    expect(
+      mergeArtifactDetail(
+        { type: "file", path: "report.md", size: 128 },
+        { type: "file", path: "report.md", content: "# Hello" },
+      ),
+    ).toEqual({
+      type: "file",
+      path: "report.md",
+      size: 128,
+      content: "# Hello",
+    });
+  });
+
+  it("parses markdown artifact preview_json into report detail", () => {
+    const run = reduceLiveRunEvent(createInitialLiveRun(), {
+      type: "CUSTOM",
+      name: "artifact",
+      value: {
+        id: "artifact-md-1",
+        type: "markdown",
+        name: "analysis.md",
+        preview_json: {
+          path: "analysis.md",
+          content: "# Summary\n\nDone.",
+        },
+      },
+    });
+
+    expect(run.artifacts[0]?.detail).toEqual({
+      type: "report",
+      sections: [{ heading: "Preview", body: "# Summary\n\nDone." }],
+    });
+  });
+
   it("links multiple sql artifacts to distinct tool calls", () => {
     let run = createInitialLiveRun();
     run = reduceLiveRunEvent(run, { type: "RUN_STARTED" });
@@ -380,6 +491,49 @@ describe("live run state reducer", () => {
     });
 
     expect(withArtifact.artifacts).toHaveLength(1);
+  });
+
+  it("derives segment SQL usage from audits after the archived segment", () => {
+    const run = {
+      ...createInitialLiveRun(),
+      runStatus: "completed" as const,
+      runStartedAt: 3_000,
+      runFinishedAt: 4_000,
+      runHistory: [
+        {
+          startedAt: 1_000,
+          finishedAt: 2_000,
+          status: "completed" as const,
+          toolCallEndIndex: 1,
+          auditEndIndex: 1,
+        },
+      ],
+      toolCalls: [
+        { id: "tool-old", name: "run_sql_readonly", status: "success" as const },
+        { id: "tool-current", name: "run_sql_readonly", status: "success" as const },
+      ],
+      audits: [
+        {
+          id: "audit-old",
+          status: "success",
+          rowCount: 10,
+          elapsedMs: 5,
+        },
+        {
+          id: "audit-current",
+          status: "success",
+          rowCount: 20,
+          elapsedMs: 7,
+        },
+      ],
+    };
+
+    expect(deriveSegmentRunUsage(run).sql).toMatchObject({
+      total: 1,
+      success: 1,
+      rowsScanned: 20,
+      elapsedMs: 7,
+    });
   });
 
   it("parses file artifacts and links them to write_file tool calls", () => {
@@ -907,7 +1061,7 @@ describe("live run state reducer", () => {
       id: "tool-1",
       kind: "query",
       toolName: "run_sql_readonly",
-      title: "生成并执行 SQL",
+      title: "Run SQL query",
       summary: "total: 42",
       payload: {
         sql: "SELECT count(*) AS total FROM orders",
@@ -1295,7 +1449,7 @@ describe("live run state reducer", () => {
       id: "tool-sql-1",
       stepId: "sql-1",
       activityStatus: "failed",
-      summary: "执行失败。",
+      summary: "Failed.",
       payload: {
         sql: "SELECT 1",
         errorMessage: "permission denied",
@@ -1431,6 +1585,24 @@ describe("live run state reducer", () => {
     expect(formatSandboxOutputText(run.sandboxOutputs[0]!)).toBe("hello\n");
   });
 
+  it("ignores stale running status snapshots after a completed run", () => {
+    let run = reduceLiveRunEvent(createInitialLiveRun(), { type: "RUN_STARTED" });
+    run = reduceLiveRunEvent(run, { type: "RUN_FINISHED" });
+    expect(run.runStatus).toBe("completed");
+
+    run = reduceLiveRunEvent(run, {
+      type: "STATE_SNAPSHOT",
+      snapshot: { runStatus: "running" },
+    });
+    expect(run.runStatus).toBe("completed");
+
+    run = reduceLiveRunEvent(run, {
+      type: "STATE_DELTA",
+      delta: [{ op: "replace", path: "/runStatus", value: "running" }],
+    });
+    expect(run.runStatus).toBe("completed");
+  });
+
   it("keeps suspended status when RUN_FINISHED follows ask_user suspension", () => {
     let run = reduceLiveRunEvent(createInitialLiveRun(), { type: "RUN_STARTED" });
     run = reduceLiveRunEvent(run, {
@@ -1463,7 +1635,7 @@ describe("live run state reducer", () => {
     expect(run.events[0]).toMatchObject({
       id: "call-ask-1",
       toolName: "ask_user",
-      title: "询问用户",
+      title: "Ask user",
     });
   });
 });

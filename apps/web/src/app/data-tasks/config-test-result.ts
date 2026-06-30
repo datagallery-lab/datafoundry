@@ -22,16 +22,16 @@ export function formatConfigTestResult(
   const response = stringValue(result.response);
   const status = stringValue(result.status);
 
-  if (kind === "llm" && model) details.push(`模型：${model}`);
-  if (latencyMs) details.push(`耗时：${latencyMs} ms`);
-  if (kind === "llm" && response) details.push(`响应：${response}`);
-  if (details.length === 0 && status) details.push(`状态：${status}`);
-  if (details.length === 0) details.push("测试连接已完成。");
+  if (kind === "llm" && model) details.push(`Model: ${model}`);
+  if (latencyMs) details.push(`Duration: ${latencyMs} ms`);
+  if (kind === "llm" && response) details.push(`Response: ${response}`);
+  if (details.length === 0 && status) details.push(`Status: ${status}`);
+  if (details.length === 0) details.push("Connection test completed.");
 
-  return { tone: "success", title: "测试成功", details };
+  return { tone: "success", title: "Test succeeded", details };
 }
 
 export function formatConfigTestError(error: unknown): ConfigTestPresentation {
-  const message = error instanceof Error ? error.message : "测试失败";
-  return { tone: "error", title: "测试失败", details: [message] };
+  const message = error instanceof Error ? error.message : "Test failed";
+  return { tone: "error", title: "Test failed", details: [message] };
 }

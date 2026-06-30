@@ -17,15 +17,15 @@ type TraceOverlayProps = {
 function runStatusLabel(status: LiveRun["runStatus"]): string {
   switch (status) {
     case "running":
-      return "运行中";
+      return "Running";
     case "completed":
-      return "已完成";
+      return "Completed";
     case "failed":
-      return "失败";
+      return "Failed";
     case "canceled":
-      return "已取消";
+      return "Canceled";
     default:
-      return "空闲";
+      return "Idle";
   }
 }
 
@@ -66,10 +66,10 @@ export function TraceOverlay({
           <div className="flex items-start justify-between gap-3">
             <div>
               <h2 className="text-base font-semibold text-foreground">
-                完整任务链追溯
+                Full Task Trace
               </h2>
               <p className="mt-1 text-xs text-muted-light">
-                按时间查看数据操作、SQL、原始结果与产出血缘；对话区结果缺失时可在此排障。
+                Review data operations, SQL, raw results, and artifact lineage by time. Use this when chat results need investigation.
               </p>
             </div>
             <button
@@ -77,7 +77,7 @@ export function TraceOverlay({
               onClick={onClose}
               className="shrink-0 rounded-lg border border-border px-3 py-1.5 text-xs font-semibold text-muted transition hover:bg-surface-subtle"
             >
-              关闭
+              Close
             </button>
           </div>
 
@@ -97,7 +97,7 @@ export function TraceOverlay({
                 {runStatusLabel(stats.runStatus)}
               </span>
               <span className="text-muted-light">
-                运行耗时 {formatDuration(stats.durationMs)}
+                Run duration {formatDuration(stats.durationMs)}
               </span>
               {liveRun.errorMessage ? (
                 <span className="text-step-error">{liveRun.errorMessage}</span>
@@ -117,8 +117,8 @@ export function TraceOverlay({
 
         {stats.entryCount > 0 ? (
           <footer className="border-t border-border px-5 py-3 text-[11px] text-muted-light">
-            {stats.entryCount} 条记录 · {stats.toolCount} 次数据操作 ·{" "}
-            {stats.artifactCount} 项产出
+            {stats.entryCount} records · {stats.toolCount} data operations ·{" "}
+            {stats.artifactCount} artifacts
           </footer>
         ) : null}
       </div>

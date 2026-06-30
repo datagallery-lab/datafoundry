@@ -98,6 +98,38 @@ describe("resolveStepAssistantFlags", () => {
     expect(flags.isActive).toBe(true);
   });
 
+  it("keeps completed final answers labeled as answers after a later user turn", () => {
+    const messages = [
+      { id: "user-1", role: "user", content: "你好" },
+      { id: "assistant-1", role: "assistant", content: "你好！很高兴为你提供帮助。" },
+      { id: "user-2", role: "user", content: "你好" },
+      { id: "assistant-2", role: "assistant", content: "你好！很高兴再次见到你。" },
+    ];
+    const firstTurnFlags = resolveStepAssistantFlags({
+      message: messages[1],
+      messages,
+      content: "你好！很高兴为你提供帮助。",
+      isRunning: false,
+      liveRunStatus: "completed",
+      liveRun: createInitialLiveRun(),
+      collaborationResponses: [],
+    });
+    const secondTurnFlags = resolveStepAssistantFlags({
+      message: messages[3],
+      messages,
+      content: "你好！很高兴再次见到你。",
+      isRunning: false,
+      liveRunStatus: "completed",
+      liveRun: createInitialLiveRun(),
+      collaborationResponses: [],
+    });
+
+    expect(firstTurnFlags.isFinalAnswer).toBe(true);
+    expect(firstTurnFlags.isThought).toBe(false);
+    expect(secondTurnFlags.isFinalAnswer).toBe(true);
+    expect(secondTurnFlags.isThought).toBe(false);
+  });
+
   it("does not classify a final text answer as collaboration only because the live run has a collaboration tool", () => {
     const messages = [
       { id: "msg-final", role: "assistant", content: "收到，计划已批准，可以继续执行。" },
@@ -202,6 +234,46 @@ describe("resolveStepAssistantFlags", () => {
     expect(flags.isFinalAnswer).toBe(false);
   });
 
+  it("does not infer collaboration on a preamble when a later message already answered HITL", () => {
+    const messages = [
+      { id: "assistant-preamble", role: "assistant", content: "我先提交计划。" },
+      { id: "assistant-plan", role: "assistant", content: "" },
+      { id: "assistant-answer", role: "assistant", content: "计划已批准。" },
+    ];
+    const liveRun = {
+      ...createInitialLiveRun(),
+      toolCalls: [
+        {
+          id: "tc-plan",
+          name: "submit_plan",
+          status: "success" as const,
+          startedAtMs: 1,
+          finishedAtMs: 2,
+        },
+      ],
+    };
+    const flags = resolveStepAssistantFlags({
+      message: messages[0],
+      messages,
+      content: "我先提交计划。",
+      isRunning: false,
+      liveRunStatus: "completed",
+      liveRun,
+      collaborationResponses: [
+        {
+          ...baseResponse,
+          toolCallId: "tc-plan",
+          toolName: "submit_plan",
+          displayText: "批准",
+          assistantMessageId: "assistant-plan",
+        },
+      ],
+    });
+
+    expect(flags.isCollaborationStep).toBe(false);
+    expect(flags.isThought).toBe(true);
+  });
+
   it("does not infer ask_user on a preamble when a later assistant message owns the tool call", () => {
     const messages = [
       { id: "assistant-preamble", role: "assistant", content: "我需要确认你的选择。" },
@@ -246,6 +318,100 @@ describe("resolveStepAssistantFlags", () => {
     expect(askFlags.isWaitingForUser).toBe(true);
     expect(askFlags.isCollaborationStep).toBe(true);
   });
+
+  it("splits post-resume text from the HITL tool step card", () => {
+    const messages = [
+      {
+        id: "assistant-ask",
+        role: "assistant",
+        content: "收到，用户选择了选项A。",
+        toolCalls: [{ id: "tc-ask", function: { name: "ask_user" } }],
+      },
+    ];
+    const liveRun = {
+      ...createInitialLiveRun(),
+      toolCalls: [
+        {
+          id: "tc-ask",
+          name: "ask_user",
+          status: "success" as const,
+          startedAtMs: 1,
+          finishedAtMs: 2,
+        },
+      ],
+    };
+    const flags = resolveStepAssistantFlags({
+      message: messages[0],
+      messages,
+      content: "收到，用户选择了选项A。",
+      isRunning: false,
+      liveRunStatus: "completed",
+      liveRun,
+      collaborationResponses: [
+        {
+          id: "t:tc-ask",
+          threadId: "t",
+          toolCallId: "tc-ask",
+          toolName: "ask_user",
+          displayText: "选项A",
+          createdAt: 1,
+          assistantMessageId: "assistant-ask",
+        },
+      ],
+    });
+
+    expect(flags.isCollaborationFollowUpAnswer).toBe(true);
+    expect(flags.isFinalAnswer).toBe(false);
+    expect(flags.isThought).toBe(false);
+    expect(flags.isFollowUpAnswerActive).toBe(false);
+  });
+
+  it("does not show waiting state after collaboration was already answered", () => {
+    const messages = [
+      { id: "assistant-1", role: "assistant", toolCalls: [{ id: "tc-data", function: { name: "list_data_sources" } }] },
+      { id: "assistant-ask", role: "assistant", content: "请选择下一步" },
+    ];
+    const liveRun = {
+      ...createInitialLiveRun(),
+      runStatus: "suspended" as const,
+      toolCalls: [
+        {
+          id: "tc-data",
+          name: "list_data_sources",
+          status: "success" as const,
+          startedAtMs: 1,
+        },
+        {
+          id: "tc-ask",
+          name: "ask_user",
+          status: "success" as const,
+          startedAtMs: 2,
+        },
+      ],
+    };
+    const flags = resolveStepAssistantFlags({
+      message: messages[1],
+      messages,
+      content: "请选择下一步",
+      isRunning: false,
+      liveRunStatus: "suspended",
+      liveRun,
+      collaborationResponses: [
+        {
+          id: "t:tc-ask",
+          threadId: "t",
+          toolCallId: "tc-ask",
+          toolName: "ask_user",
+          displayText: "orders",
+          createdAt: 1,
+          assistantMessageId: "assistant-ask",
+        },
+      ],
+    });
+
+    expect(flags.isWaitingForUser).toBe(false);
+    expect(flags.isCollaborationComplete).toBe(true);
+  });
 });
 
 describe("resolveAssistantToolStepNumber", () => {
@@ -255,6 +421,41 @@ describe("resolveAssistantToolStepNumber", () => {
       { id: "assistant-2", role: "assistant", toolCalls: [{ id: "tc-sql", function: { name: "run_sql_readonly" } }] },
     ];
 
+    expect(
+      resolveAssistantToolStepNumber({
+        message: messages[1],
+        messages,
+        liveRun: createInitialLiveRun(),
+        collaborationResponses: [],
+      }),
+    ).toBe(2);
+  });
+
+  it("counts parallel tool calls in one assistant message as one process step", () => {
+    const messages = [
+      {
+        id: "assistant-1",
+        role: "assistant",
+        toolCalls: [
+          { id: "tc-list", function: { name: "list_data_sources" } },
+          { id: "tc-schema", function: { name: "inspect_schema" } },
+        ],
+      },
+      {
+        id: "assistant-2",
+        role: "assistant",
+        toolCalls: [{ id: "tc-sql", function: { name: "run_sql_readonly" } }],
+      },
+    ];
+
+    expect(
+      resolveAssistantToolStepNumber({
+        message: messages[0],
+        messages,
+        liveRun: createInitialLiveRun(),
+        collaborationResponses: [],
+      }),
+    ).toBe(1);
     expect(
       resolveAssistantToolStepNumber({
         message: messages[1],

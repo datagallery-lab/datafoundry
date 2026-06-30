@@ -37,7 +37,7 @@ allowed-tools: inspect_schema, run_sql_readonly
   it("rejects markdown without frontmatter", () => {
     const result = parseSkillMdContent("# hello", "skill.md");
     expect(result).toEqual({
-      error: "缺少 YAML frontmatter（文件须以 --- 开头并闭合）。",
+      error: "Missing YAML frontmatter (file must start and close with ---).",
     });
   });
 

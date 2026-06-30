@@ -2,10 +2,9 @@
 
 import {
   CopilotChatAssistantMessage,
-  useCopilotChatConfiguration,
   useCopilotKit,
 } from "@copilotkit/react-core/v2";
-import {
+import React, {
   createContext,
   useCallback,
   useContext,
@@ -15,8 +14,6 @@ import {
   type ReactNode,
 } from "react";
 import type { Message } from "@ag-ui/core";
-import type { LiveRun } from "../../live-run-state";
-import { useLiveRun } from "../../use-data-agent-run";
 import {
   collaborationResponseLayout,
   formatCollaborationResponseDisplay,
@@ -73,6 +70,12 @@ function recordResponse(entry: CollaborationResponseRecord) {
   emitChange();
 }
 
+export function getCollaborationResponsesForThread(
+  threadId: string,
+): CollaborationResponseRecord[] {
+  return responsesForThread(threadId);
+}
+
 export function hydrateCollaborationResponses(
   entries: Array<Omit<CollaborationResponseRecord, "id" | "createdAt">>,
 ): void {
@@ -85,29 +88,12 @@ export function hydrateCollaborationResponses(
   }
 }
 
-export function shouldShowCollaborationRecap(
-  message: Message,
-  response: CollaborationResponseRecord,
-  liveRun: LiveRun | null,
-): boolean {
-  if (messageHasToolCall(message, response.toolCallId)) {
-    return false;
-  }
-  const liveCall = liveRun?.toolCalls.find((call) => call.id === response.toolCallId);
-  if (liveCall && liveCall.status !== "running") {
-    return false;
-  }
-  return true;
-}
+import { CollaborationPendingInterruptSlot } from "./CollaborationPendingInterruptSlot";
+
+export { shouldShowCollaborationRecapOnMessage } from "../../collaboration-recap";
 
 export { formatCollaborationResponseDisplay };
 
-
-function messageHasToolCall(message: Message, toolCallId: string): boolean {
-  const toolCalls = (message as { toolCalls?: Array<{ id?: string }> }).toolCalls;
-  if (!Array.isArray(toolCalls)) return false;
-  return toolCalls.some((call) => call?.id === toolCallId);
-}
 
 type CollaborationResponsesContextValue = {
   recordResponse: (entry: Omit<CollaborationResponseRecord, "id" | "createdAt">) => void;
@@ -182,7 +168,7 @@ export function CollaborationChoiceBubble({
   inline?: boolean;
 }) {
   const mono = looksLikeToolName(response.displayText);
-  const recapLabel = response.toolName === "submit_plan" ? "审批的计划" : "回答的问题";
+  const recapLabel = response.toolName === "submit_plan" ? "approved plan" : "answered question";
   const layout = collaborationResponseLayout(response.toolName);
   const recapClass =
     layout.recapSide === "assistant"
@@ -193,7 +179,7 @@ export function CollaborationChoiceBubble({
     return (
       <div className="rounded-xl border border-border bg-surface px-3 py-2.5 shadow-[var(--shadow-card)]">
         <div className="mb-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-light">
-          我的选择
+          My choice
         </div>
         <div className={`text-sm leading-6 text-foreground ${mono ? "font-mono tracking-tight" : ""}`}>
           {response.displayText}
@@ -219,7 +205,7 @@ export function CollaborationChoiceBubble({
               </svg>
             </span>
             <span className="text-[11px] font-semibold text-muted">
-              已采纳你的选择
+              Your choice was applied
             </span>
             <span className={`rounded-md bg-surface-subtle px-2 py-0.5 text-xs text-foreground ${mono ? "font-mono tracking-tight" : ""}`}>
               {response.displayText}
@@ -247,30 +233,46 @@ export function CollaborationResponseAfterMessage({
   agentId: string;
   stateSnapshot: unknown;
 }) {
-  const chatConfig = useCopilotChatConfiguration();
-  const threadId = chatConfig?.threadId;
-  const responses = useThreadCollaborationResponses(threadId);
-  const { liveRun } = useLiveRun();
+  // Recap is rendered inline from StepAssistantMessage (between HITL step and answer).
+  void message;
+  void position;
+  return null;
+}
 
-  if (position !== "after" || message.role !== "assistant") {
+export function CollaborationPendingInterruptAfterMessage({
+  message,
+  position,
+  messageIndexInRun,
+  numberOfMessagesInRun,
+}: {
+  message: Message;
+  position: "before" | "after";
+  runId: string;
+  messageIndex: number;
+  messageIndexInRun: number;
+  numberOfMessagesInRun: number;
+  agentId: string;
+  stateSnapshot: unknown;
+}) {
+  // Fallback when suspend lands before any assistant message is rendered.
+  if (position !== "after") {
     return null;
   }
-
-  const matching = responses.filter(
-    (response) =>
-      (response.assistantMessageId === message.id ||
-        messageHasToolCall(message, response.toolCallId)) &&
-      shouldShowCollaborationRecap(message, response, liveRun),
-  );
-  if (matching.length === 0) {
+  const isLastInRun = messageIndexInRun === numberOfMessagesInRun - 1;
+  if (!isLastInRun || message.role === "assistant") {
     return null;
   }
+  return <CollaborationPendingInterruptSlot message={message} />;
+}
 
+/** Single custom renderer: CopilotKit stops at the first registered renderer. */
+export function CollaborationAfterMessageRenderer(
+  props: Parameters<typeof CollaborationResponseAfterMessage>[0],
+) {
   return (
     <>
-      {matching.map((response) => (
-        <CollaborationChoiceBubble key={response.id} response={response} />
-      ))}
+      <CollaborationResponseAfterMessage {...props} />
+      <CollaborationPendingInterruptAfterMessage {...props} />
     </>
   );
 }
@@ -279,17 +281,25 @@ export function CollaborationResponseBridge() {
   const { copilotkit } = useCopilotKit();
 
   useEffect(() => {
-    const existing = copilotkit.renderCustomMessages;
-    const alreadyRegistered = existing.some(
-      (renderer) => renderer.render === CollaborationResponseAfterMessage,
+    const legacyRenderers = new Set([
+      CollaborationResponseAfterMessage,
+      CollaborationPendingInterruptAfterMessage,
+    ]);
+    const existing = copilotkit.renderCustomMessages.filter(
+      (entry) => !legacyRenderers.has(entry.render as typeof CollaborationResponseAfterMessage),
     );
-    if (alreadyRegistered) return;
+    const hasCombined = existing.some(
+      (entry) => entry.render === CollaborationAfterMessageRenderer,
+    );
+    if (hasCombined) {
+      return;
+    }
 
     copilotkit.setRenderCustomMessages([
       ...existing,
       {
         agentId: "dataAgent",
-        render: CollaborationResponseAfterMessage,
+        render: CollaborationAfterMessageRenderer,
       },
     ]);
 

@@ -17,21 +17,25 @@ import {
   artifactToneForType,
   sectionLabelClass,
 } from "../../ui-tokens";
+import {
+  ArtifactMarkdownPreview,
+  isMarkdownFilePath,
+} from "./ArtifactMarkdownPreview";
 
 function entryKindLabel(entry: TraceEntry): string {
   switch (entry.kind) {
     case "run_started":
-      return "运行";
+      return "Run";
     case "run_finished":
-      return "运行";
+      return "Run";
     case "run_suspended":
-      return "运行";
+      return "Run";
     case "run_failed":
-      return "运行";
+      return "Run";
     case "tool":
-      return entry.toolName ? toolKindLabel(entry.toolName) : "数据操作";
+      return entry.toolName ? toolKindLabel(entry.toolName) : "Data operation";
     case "artifact":
-      return "产出";
+      return "Output";
   }
 }
 
@@ -65,6 +69,35 @@ function toolStatusTone(status: TraceEntry["toolStatus"]): string {
   }
 }
 
+function CompactFilePreview({
+  detail,
+}: {
+  detail: Extract<ArtifactDetail, { type: "file" }>;
+}) {
+  if (!detail.content) return null;
+  const previewText = detail.content.slice(0, 600);
+  const truncated = detail.content.length > previewText.length;
+  return (
+    <div className="mt-3 overflow-hidden rounded-xl border border-border">
+      <div className="border-b border-border bg-surface-subtle px-3 py-2 text-[11px] font-semibold text-muted">
+        File preview · {detail.path}
+      </div>
+      <div className="p-3">
+        {isMarkdownFilePath(detail.path) ? (
+          <ArtifactMarkdownPreview content={previewText + (truncated ? "\n\n…" : "")} />
+        ) : (
+          <pre className={[consoleCodeBlockBaseClass, "max-h-48"].join(" ")}>
+            <code className={consoleCodeInnerClass}>
+              {previewText}
+              {truncated ? "\n…" : ""}
+            </code>
+          </pre>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function CompactDatasetPreview({
   detail,
 }: {
@@ -74,7 +107,7 @@ function CompactDatasetPreview({
   return (
     <div className="mt-3 overflow-hidden rounded-xl border border-border">
       <div className="border-b border-border bg-surface-subtle px-3 py-2 text-[11px] font-semibold text-muted">
-        数据预览 · {detail.rows.length.toLocaleString()} 行 × {detail.columns.length} 列
+        Data preview · {detail.rows.length.toLocaleString()} rows x {detail.columns.length} columns
       </div>
       <div className="overflow-x-auto">
         <table className="min-w-max w-full text-left text-[11px]">
@@ -102,11 +135,22 @@ function CompactDatasetPreview({
       </div>
       {detail.rows.length > previewRows.length ? (
         <div className="border-t border-border bg-surface-subtle px-3 py-2 text-[11px] text-muted-light">
-          另有 {detail.rows.length - previewRows.length} 行未展示，可在产物区查看完整内容。
+          Another {detail.rows.length - previewRows.length} rows are hidden. View the full content in Outputs.
         </div>
       ) : null}
     </div>
   );
+}
+
+function resolveFileDetail(
+  entry: TraceEntry,
+  producedArtifacts: DataArtifact[],
+): Extract<ArtifactDetail, { type: "file" }> | undefined {
+  if (entry.artifactDetail?.type === "file") {
+    return entry.artifactDetail;
+  }
+  return producedArtifacts.find((artifact) => artifact.detail?.type === "file")
+    ?.detail as Extract<ArtifactDetail, { type: "file" }> | undefined;
 }
 
 function resolveArtifactDetail(
@@ -139,6 +183,7 @@ export function TraceEntryCard({
   );
   const canOpenDetail = entry.eventId !== undefined;
   const datasetDetail = resolveArtifactDetail(entry, producedArtifacts);
+  const fileDetail = resolveFileDetail(entry, producedArtifacts);
 
   return (
     <article className="min-w-0 max-w-full rounded-xl border border-border bg-surface p-4 shadow-sm">
@@ -218,22 +263,22 @@ export function TraceEntryCard({
         <div className="mt-3 flex flex-wrap gap-2 text-[11px]">
           {entry.auditStatus ? (
             <span className="rounded-full bg-surface-subtle px-2.5 py-1 font-medium text-muted">
-              审计 {auditStatusLabel(entry.auditStatus)}
+              Audit {auditStatusLabel(entry.auditStatus)}
             </span>
           ) : null}
           {entry.scannedRows !== undefined && entry.scannedRows > 0 ? (
             <span className="rounded-full bg-surface-subtle px-2.5 py-1 font-medium text-muted">
-              扫描 {entry.scannedRows.toLocaleString()} 行
+              Scanned {entry.scannedRows.toLocaleString()} rows
             </span>
           ) : null}
           {entry.durationMs !== undefined && entry.durationMs > 0 ? (
             <span className="rounded-full bg-surface-subtle px-2.5 py-1 font-medium text-muted">
-              耗时 {entry.durationMs}ms
+              Duration {entry.durationMs}ms
             </span>
           ) : null}
           {entry.datasourceId ? (
             <span className="rounded-full bg-surface-subtle px-2.5 py-1 font-medium text-muted">
-              数据源 {entry.datasourceId}
+              Data source {entry.datasourceId}
             </span>
           ) : null}
         </div>
@@ -262,7 +307,7 @@ export function TraceEntryCard({
                 ))}
                 {table.fields.length > 12 ? (
                   <span className="text-[10px] text-muted-light">
-                    +{table.fields.length - 12} 字段
+                    +{table.fields.length - 12} fields
                   </span>
                 ) : null}
               </div>
@@ -272,15 +317,16 @@ export function TraceEntryCard({
       ) : null}
 
       {datasetDetail ? <CompactDatasetPreview detail={datasetDetail} /> : null}
+      {fileDetail ? <CompactFilePreview detail={fileDetail} /> : null}
 
-      {entry.rawResult && !entry.sql && !datasetDetail ? (
+      {entry.rawResult && !entry.sql && !datasetDetail && !fileDetail ? (
         <div className="mt-3">
           <button
             type="button"
             onClick={() => setShowRawResult((current) => !current)}
             className="text-[11px] font-semibold text-primary underline-offset-2 hover:underline"
           >
-            {showRawResult ? "收起原始结果" : "查看原始结果"}
+            {showRawResult ? "Hide raw result" : "View raw result"}
           </button>
           {showRawResult ? (
             <pre className={[consoleCodeBlockBaseClass, "mt-2 max-h-48"].join(" ")}>
@@ -319,7 +365,7 @@ export function TraceEntryCard({
           onClick={() => onSelectArtifact(entry.artifactIds![0])}
           className="mt-3 text-xs font-semibold text-primary underline-offset-2 hover:underline"
         >
-          查看产出详情 →
+          View output details →
         </button>
       ) : null}
     </article>
@@ -348,9 +394,9 @@ export function TraceList({
   if (entries.length === 0) {
     return (
       <div className="rounded-xl border border-dashed border-border bg-surface-subtle p-5 text-center">
-        <div className="text-sm font-semibold text-foreground">尚无可追溯事件</div>
+        <div className="text-sm font-semibold text-foreground">No trace events yet</div>
         <p className="mt-2 text-xs leading-5 text-muted">
-          {emptyHint ?? "发送问题后，Agent 的数据足迹会按时间显示在这里。"}
+          {emptyHint ?? "After you send a question, Agent data trail events appear here in time order."}
         </p>
       </div>
     );

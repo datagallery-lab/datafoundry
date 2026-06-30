@@ -33,7 +33,7 @@ export function formatCollaborationResponseDisplay(
           : "已拒绝执行计划";
       }
     }
-    return "已提交计划审批结果";
+    return "已提交计划审查";
   }
 
   if (typeof response === "string") {

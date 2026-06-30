@@ -2,6 +2,7 @@ import type { Message } from "@ag-ui/core";
 import type {
   ConversationMessageDto,
   ConversationToolCallDto,
+  RestorableCustomEventDto,
   SessionConversationDto,
 } from "../../lib/config-api/types";
 import { ConfigApiError } from "../../lib/config-api/types";
@@ -11,12 +12,71 @@ import {
 } from "./components/chat/collaboration-response-display";
 import type { CollaborationResponseRecord } from "./components/chat/collaboration-responses";
 import {
+  canResumeCollaborationInterrupt,
+  hasCollaborationResponse,
+} from "./collaboration-recap";
+import {
   archiveCurrentRunSegment,
   createInitialLiveRun,
   reconcileLiveRunArtifacts,
   reduceLiveRunEvent,
   type LiveRun,
 } from "./live-run-state";
+
+/** Pending HITL interaction restored from server conversation metadata. */
+export type RestoredPendingInteraction = {
+  threadId: string;
+  runId: string;
+  toolCallId: string;
+  toolName: "ask_user" | "submit_plan";
+  interruptEvent: unknown;
+};
+
+/** Maps server pending interactions into client-side resume records. */
+export function pendingInteractionsFromConversation(
+  threadId: string,
+  dto: SessionConversationDto,
+): RestoredPendingInteraction[] {
+  const records: RestoredPendingInteraction[] = [];
+  for (const interaction of dto.pendingInteractions ?? []) {
+    if (interaction.interruptEvent === undefined) {
+      continue;
+    }
+    records.push({
+      threadId,
+      runId: interaction.runId,
+      toolCallId: interaction.toolCallId,
+      toolName: interaction.toolName,
+      interruptEvent: interaction.interruptEvent,
+    });
+  }
+  return records;
+}
+
+/** Replays persisted CUSTOM events into LiveRun after tool-call hydrate. */
+export function replayRestorableCustomEvents(
+  state: LiveRun,
+  dto: SessionConversationDto,
+): LiveRun {
+  const events = [...(dto.restorableCustomEvents ?? [])].sort(
+    (left, right) => (left.seq ?? 0) - (right.seq ?? 0),
+  );
+  let next = state;
+  for (const entry of events) {
+    next = reduceLiveRunEvent(next, {
+      type: "CUSTOM",
+      name: entry.name,
+      value: entry.value,
+    } as Parameters<typeof reduceLiveRunEvent>[1]);
+  }
+  return next;
+}
+
+export function sortRestorableCustomEvents(
+  events: RestorableCustomEventDto[],
+): RestorableCustomEventDto[] {
+  return [...events].sort((left, right) => (left.seq ?? 0) - (right.seq ?? 0));
+}
 
 /** Whether the client should fetch server conversation history for this thread. */
 export function shouldRestoreConversation(input: {
@@ -261,7 +321,12 @@ function parseCollaborationResumeValue(
         };
       }
       if (typeof record.content === "string" && record.content.trim()) {
-        return record.content.trim();
+        const content = record.content.trim();
+        const answered = content.match(/^User answered:\s*(.+)$/iu);
+        if (answered?.[1]) {
+          return answered[1].trim();
+        }
+        return content;
       }
     }
     return trimmed;
@@ -276,7 +341,12 @@ function parseCollaborationResumeValue(
       };
     }
     if (typeof record.content === "string" && record.content.trim()) {
-      return record.content.trim();
+      const content = record.content.trim();
+      const answered = content.match(/^User answered:\s*(.+)$/iu);
+      if (answered?.[1]) {
+        return answered[1].trim();
+      }
+      return content;
     }
   }
   return undefined;
@@ -298,6 +368,84 @@ function resolvePersistedMessageId(
   return entry?.messageId ?? entry?.id;
 }
 
+export function syntheticToolParentMessageId(parentMessageId: string): string {
+  return `restored-tool-parent:${parentMessageId}`;
+}
+
+function groupToolCallsByParentMessageId(
+  toolCalls: ConversationToolCallDto[],
+): ConversationToolCallDto[][] {
+  const groups = new Map<string, ConversationToolCallDto[]>();
+  const order: string[] = [];
+
+  for (const toolCall of toolCalls) {
+    const key = toolCall.parentMessageId ?? `__solo__:${toolCall.toolCallId}`;
+    if (!groups.has(key)) {
+      order.push(key);
+      groups.set(key, []);
+    }
+    groups.get(key)?.push(toolCall);
+  }
+
+  return order
+    .map((key) => groups.get(key) ?? [])
+    .map((group) =>
+      [...group].sort((left, right) => toolCallSortKey(left) - toolCallSortKey(right)),
+    )
+    .sort((left, right) => {
+      const leftKey = left[0] ? toolCallSortKey(left[0]) : 0;
+      const rightKey = right[0] ? toolCallSortKey(right[0]) : 0;
+      return leftKey - rightKey;
+    });
+}
+
+function insertSyntheticToolParentMessages(
+  messages: Message[],
+  sortedEntries: ConversationMessageDto[],
+  toolCalls: ConversationToolCallDto[],
+): Message[] {
+  const orphanedParentIds = new Set<string>();
+  for (const toolCall of toolCalls) {
+    if (!toolCall.parentMessageId) {
+      continue;
+    }
+    if (resolvePersistedMessageId(sortedEntries, toolCall.parentMessageId)) {
+      continue;
+    }
+    orphanedParentIds.add(toolCall.parentMessageId);
+  }
+  if (orphanedParentIds.size === 0) {
+    return messages;
+  }
+
+  const firstAssistantIndex = messages.findIndex((message) => message.role === "assistant");
+  if (firstAssistantIndex < 0) {
+    return messages;
+  }
+
+  const placeholders = [...orphanedParentIds]
+    .map((parentMessageId) => ({
+      parentMessageId,
+      minSeq: Math.min(
+        ...toolCalls
+          .filter((toolCall) => toolCall.parentMessageId === parentMessageId)
+          .map((toolCall) => toolCallSortKey(toolCall)),
+      ),
+    }))
+    .sort((left, right) => left.minSeq - right.minSeq)
+    .map(({ parentMessageId }) => ({
+      id: syntheticToolParentMessageId(parentMessageId),
+      role: "assistant" as const,
+      content: "",
+    }));
+
+  return [
+    ...messages.slice(0, firstAssistantIndex),
+    ...placeholders,
+    ...messages.slice(firstAssistantIndex),
+  ];
+}
+
 function findAssistantMessageIdForToolCall(
   sortedEntries: ConversationMessageDto[],
   toolCall: ConversationToolCallDto,
@@ -307,6 +455,7 @@ function findAssistantMessageIdForToolCall(
     if (resolved) {
       return resolved;
     }
+    return syntheticToolParentMessageId(toolCall.parentMessageId);
   }
 
   const entryIndexByMessageId = new Map<string, number>();
@@ -339,14 +488,53 @@ function assistantMessageIdsForRun(
     if (entry.role !== "assistant" || entry.runId !== runId) {
       continue;
     }
-    if (!entry.contentText.trim()) {
-      continue;
-    }
     const id = entry.messageId ?? entry.id;
     if (restoredMessageIds.has(id)) {
       ids.push(id);
     }
   }
+  return ids;
+}
+
+function assistantMessageIdsToRestore(
+  sortedEntries: ConversationMessageDto[],
+  toolCalls: ConversationToolCallDto[],
+): Set<string> {
+  const ids = new Set<string>();
+  for (const entry of sortedEntries) {
+    if (entry.role !== "assistant") {
+      continue;
+    }
+    const id = entry.messageId ?? entry.id;
+    if (entry.contentText.trim()) {
+      ids.add(id);
+    }
+  }
+
+  for (const toolCall of toolCalls) {
+    const ownerId = findAssistantMessageIdForToolCall(sortedEntries, toolCall);
+    if (ownerId) {
+      ids.add(ownerId);
+    }
+  }
+
+  const toolsByRun = new Map<string, ConversationToolCallDto[]>();
+  for (const toolCall of toolCalls) {
+    const bucket = toolsByRun.get(toolCall.runId) ?? [];
+    bucket.push(toolCall);
+    toolsByRun.set(toolCall.runId, bucket);
+  }
+  for (const [runId, runTools] of toolsByRun) {
+    const assistants = sortedEntries.filter(
+      (entry) => entry.role === "assistant" && entry.runId === runId,
+    );
+    if (assistants.length > 0 && assistants.length <= runTools.length) {
+      for (const entry of assistants) {
+        ids.add(entry.messageId ?? entry.id);
+      }
+    }
+  }
+
   return ids;
 }
 
@@ -371,46 +559,23 @@ function assignToolCallsByAssistantOrder(
   const toolsByMessageId = new Map<string, RestoredToolCall[]>();
 
   for (const [runId, runTools] of toolsByRun) {
-    const sortedTools = [...runTools].sort(
-      (left, right) => toolCallSortKey(left) - toolCallSortKey(right),
-    );
+    const sortedGroups = groupToolCallsByParentMessageId(runTools);
     const assistantIds = assistantMessageIdsForRun(
       sortedEntries,
       runId,
       restoredMessageIds,
     );
-    if (assistantIds.length === 0 || sortedTools.length === 0) {
+    if (assistantIds.length === 0 || sortedGroups.length === 0) {
       continue;
     }
 
-    if (sortedTools.length <= assistantIds.length) {
-      sortedTools.forEach((toolCall, index) => {
-        const messageId = assistantIds[index];
-        if (!messageId) return;
-        const restoredCall = toRestoredToolCall(toolCall);
-        const existing = toolsByMessageId.get(messageId) ?? [];
-        existing.push(restoredCall);
-        toolsByMessageId.set(messageId, existing);
-      });
-      continue;
-    }
-
-    const lastAssistantId = assistantIds[assistantIds.length - 1];
-    for (let index = 0; index < assistantIds.length - 1; index += 1) {
-      const toolCall = sortedTools[index];
-      const messageId = assistantIds[index];
-      if (!toolCall || !messageId) continue;
+    sortedGroups.forEach((group, index) => {
+      const messageId = assistantIds[index] ?? assistantIds[assistantIds.length - 1];
+      if (!messageId) return;
+      const restoredCalls = group.map(toRestoredToolCall);
       const existing = toolsByMessageId.get(messageId) ?? [];
-      existing.push(toRestoredToolCall(toolCall));
-      toolsByMessageId.set(messageId, existing);
-    }
-    if (lastAssistantId) {
-      const trailing = sortedTools.slice(assistantIds.length - 1).map(toRestoredToolCall);
-      if (trailing.length > 0) {
-        const existing = toolsByMessageId.get(lastAssistantId) ?? [];
-        toolsByMessageId.set(lastAssistantId, [...existing, ...trailing]);
-      }
-    }
+      toolsByMessageId.set(messageId, [...existing, ...restoredCalls]);
+    });
   }
 
   return toolsByMessageId;
@@ -458,7 +623,7 @@ function resolveToolCallAssistantMessageId(
 }
 
 function toRestoredToolCall(toolCall: ConversationToolCallDto): RestoredToolCall {
-  const toolName = toolCall.toolName ?? toolCall.name ?? "tool";
+  const toolName = resolveConversationToolName(toolCall);
   return {
     id: toolCall.toolCallId,
     type: "function",
@@ -531,6 +696,19 @@ function attachRestoredToolCalls(
   });
 }
 
+function dedupeRestoredToolCalls(toolCalls: RestoredToolCall[]): RestoredToolCall[] {
+  const seen = new Set<string>();
+  const deduped: RestoredToolCall[] = [];
+  for (const toolCall of toolCalls) {
+    if (seen.has(toolCall.id)) {
+      continue;
+    }
+    seen.add(toolCall.id);
+    deduped.push(toolCall);
+  }
+  return deduped;
+}
+
 /**
  * Maps server-authoritative conversation messages to AG-UI chat messages.
  * Tool calls from `dto.toolCalls` are attached to the nearest preceding
@@ -540,6 +718,7 @@ export function conversationToAgentMessages(
   dto: SessionConversationDto,
 ): Message[] {
   const sorted = [...dto.messages].sort((a, b) => a.position - b.position);
+  const assistantIdsToRestore = assistantMessageIdsToRestore(sorted, dto.toolCalls);
   const messages: Message[] = [];
 
   for (const entry of sorted) {
@@ -547,16 +726,19 @@ export function conversationToAgentMessages(
       continue;
     }
     const content = entry.contentText.trim();
-    if (!content) {
-      continue;
-    }
     const id = entry.messageId ?? entry.id;
     if (entry.role === "user") {
+      if (!content) {
+        continue;
+      }
       messages.push({
         id,
         role: "user",
         content,
       });
+      continue;
+    }
+    if (!content && !assistantIdsToRestore.has(id)) {
       continue;
     }
     messages.push({
@@ -566,7 +748,17 @@ export function conversationToAgentMessages(
     });
   }
 
-  return attachRestoredToolCalls(messages, sorted, dto.toolCalls);
+  const withPlaceholders = insertSyntheticToolParentMessages(messages, sorted, dto.toolCalls);
+  const restored = attachRestoredToolCalls(withPlaceholders, sorted, dto.toolCalls);
+  return restored.map((message) => {
+    if (!("toolCalls" in message) || !message.toolCalls?.length) {
+      return message;
+    }
+    return {
+      ...message,
+      toolCalls: dedupeRestoredToolCalls(message.toolCalls),
+    };
+  });
 }
 
 /**
@@ -585,8 +777,8 @@ export function collaborationResponsesFromConversation(
   const records: Array<Omit<CollaborationResponseRecord, "id" | "createdAt">> = [];
 
   for (const toolCall of dto.toolCalls) {
-    const toolName = (toolCall.toolName ?? toolCall.name) as CollaborationToolName | undefined;
-    if (!toolName || !COLLABORATION_TOOL_NAMES.has(toolName)) {
+    const toolName = resolveCollaborationToolName(toolCall);
+    if (!toolName) {
       continue;
     }
     if (toolCall.status !== "completed") {
@@ -692,10 +884,85 @@ function groupToolCallsByRun(
   );
 }
 
+function isSubmitPlanApprovalResult(result: string): boolean {
+  try {
+    const record = JSON.parse(result) as Record<string, unknown>;
+    if (typeof record.action === "string") {
+      return record.action === "approved" || record.action === "rejected";
+    }
+  } catch {
+    // not JSON
+  }
+  return /Plan (approved|rejected)/i.test(result);
+}
+
+function inferCollaborationToolNameFromToolCall(
+  toolCall: ConversationToolCallDto,
+): CollaborationToolName | undefined {
+  const { plan, question, options } = readCollaborationArgs(toolCall);
+  if (plan) {
+    return "submit_plan";
+  }
+
+  const result = serializeToolCallResult(toolCall);
+  if (result && isSubmitPlanApprovalResult(result)) {
+    return "submit_plan";
+  }
+
+  if (question || options.length > 0) {
+    return "ask_user";
+  }
+
+  if (result) {
+    if (result.includes("mastra-collaboration") || result.includes("User answered")) {
+      return "ask_user";
+    }
+    try {
+      const parsed = JSON.parse(result) as { source?: string };
+      if (parsed.source === "mastra-collaboration") {
+        return "ask_user";
+      }
+    } catch {
+      // ignore malformed JSON
+    }
+  }
+
+  return undefined;
+}
+
+function resolveCollaborationToolName(
+  toolCall: ConversationToolCallDto,
+): CollaborationToolName | undefined {
+  const inferred = inferCollaborationToolNameFromToolCall(toolCall);
+  const direct = toolCall.toolName ?? toolCall.name;
+  if (direct && COLLABORATION_TOOL_NAMES.has(direct as CollaborationToolName)) {
+    if (direct === "ask_user" && inferred === "submit_plan") {
+      return "submit_plan";
+    }
+    return direct as CollaborationToolName;
+  }
+  if (inferred) {
+    return inferred;
+  }
+  const resolved = resolveConversationToolName(toolCall);
+  if (COLLABORATION_TOOL_NAMES.has(resolved as CollaborationToolName)) {
+    return resolved as CollaborationToolName;
+  }
+  return undefined;
+}
+
 function resolveConversationToolName(toolCall: ConversationToolCallDto): string {
+  const inferred = inferCollaborationToolNameFromToolCall(toolCall);
   const direct = toolCall.toolName ?? toolCall.name;
   if (direct && direct !== "tool" && direct !== "unknown") {
+    if (direct === "ask_user" && inferred === "submit_plan") {
+      return "submit_plan";
+    }
     return direct;
+  }
+
+  if (inferred) {
+    return inferred;
   }
 
   const result = serializeToolCallResult(toolCall);
@@ -719,9 +986,9 @@ function resolveConversationToolName(toolCall: ConversationToolCallDto): string 
 function isPendingCollaborationRunEnd(tools: ConversationToolCallDto[]): boolean {
   const last = tools.at(-1);
   if (!last) return false;
-  const toolName = last.toolName ?? last.name;
+  const toolName = resolveCollaborationToolName(last);
   if (last.status === "pending") return true;
-  if (toolName !== "ask_user" && toolName !== "submit_plan") return false;
+  if (!toolName) return false;
   return serializeToolCallResult(last) === undefined;
 }
 
@@ -844,5 +1111,77 @@ export function hydrateLiveRunFromConversation(
   }
 
   next = reconcileLiveRunArtifacts(mergePreservedLiveRunSessionData(state, next));
+  next = replayRestorableCustomEvents(next, dto);
+  return next;
+}
+
+/**
+ * When pendingInteractions exist but toolCalls are not yet persisted, bootstrap a
+ * minimal suspended LiveRun so HITL resume gates and the task console stay aligned.
+ */
+export function hydratePendingInteractionLiveRun(
+  state: LiveRun,
+  threadId: string,
+  dto: SessionConversationDto,
+  collaborationResponses: CollaborationResponseRecord[],
+): LiveRun {
+  const pendingRecords = pendingInteractionsFromConversation(threadId, dto);
+  if (pendingRecords.length === 0) {
+    return state;
+  }
+
+  const unanswered = pendingRecords.filter(
+    (record) => !hasCollaborationResponse(record.toolCallId, collaborationResponses),
+  );
+  if (unanswered.length === 0) {
+    return state;
+  }
+
+  const target = unanswered[unanswered.length - 1];
+  if (
+    target &&
+    canResumeCollaborationInterrupt({
+      toolCallId: target.toolCallId,
+      collaborationResponses,
+      liveRun: state,
+      liveRunStatus: state.runStatus,
+    })
+  ) {
+    return state;
+  }
+
+  let next =
+    state.runStatus === "idle" || state.runStatus === "completed"
+      ? createInitialLiveRun()
+      : state;
+
+  if (next.runStatus === "running") {
+    return next;
+  }
+
+  const runId = target?.runId;
+  if (next.runStatus !== "suspended") {
+    next = reduceLiveRunEvent(next, { type: "RUN_STARTED", ...(runId ? { runId } : {}) });
+  }
+
+  for (const record of unanswered) {
+    if (next.toolCalls.some((call) => call.id === record.toolCallId)) {
+      continue;
+    }
+    next = reduceLiveRunEvent(next, {
+      type: "TOOL_CALL_START",
+      toolCallId: record.toolCallId,
+      toolCallName: record.toolName,
+    });
+  }
+
+  if (next.runStatus !== "suspended") {
+    next = reduceLiveRunEvent(next, {
+      type: "STATE_DELTA",
+      delta: [{ op: "replace", path: "/runStatus", value: "suspended" }],
+    });
+    next = reduceLiveRunEvent(next, { type: "RUN_FINISHED" });
+  }
+
   return next;
 }

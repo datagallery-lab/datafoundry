@@ -114,7 +114,7 @@ export function useMentionAutocomplete({
         resource.name,
         resource.description,
         "file",
-        resource.scope === "workspace" ? "工作区" : "本对话",
+        resource.scope === "workspace" ? "Workspace" : "This chat",
       ];
       return haystack.join(" ").toLowerCase().includes(query);
     });
@@ -313,19 +313,19 @@ function MentionMenu({
   return (
     <div
       role="listbox"
-      aria-label="选择能力（@）"
+      aria-label="Select capabilities (@)"
       className="absolute bottom-full left-0 z-50 mb-2 w-[min(420px,calc(100vw-2rem))] overflow-hidden rounded-xl border border-border bg-surface shadow-lg"
       onMouseDown={(event) => event.preventDefault()}
     >
       <div className="flex items-center justify-between gap-3 border-b border-border px-3 py-2">
         <span className="text-[11px] font-medium uppercase tracking-[0.06em] text-muted-light">
-          通过 @ 指定本轮能力
+          Select run capabilities with @
         </span>
         <div className="flex shrink-0 items-center gap-1.5 text-[11px] text-muted-light">
           <span className="rounded bg-surface-subtle px-1.5 py-0.5 font-medium text-muted">
-            ↑↓ 移动
+            ↑↓ Move
           </span>
-          <span className="hidden sm:inline">Enter 选择</span>
+          <span className="hidden sm:inline">Enter Select</span>
           <button
             type="button"
             onClick={onClose}
@@ -337,7 +337,7 @@ function MentionMenu({
       </div>
       {items.length === 0 ? (
         <p className="px-3 py-4 text-sm text-muted-light">
-          没有匹配的资源，先在左侧配置中添加
+          No matching resources. Add one from the configuration panel first.
         </p>
       ) : (
         <ul className="max-h-72 overflow-y-auto py-1">
@@ -389,7 +389,7 @@ function MentionMenu({
                     {resource.description && (
                       <span className="mt-0.5 block truncate text-xs text-muted-light">
                         {item.type === "file"
-                          ? `${item.resource.scope === "workspace" ? "工作区" : "本对话"} · ${resource.description}`
+                          ? `${item.resource.scope === "workspace" ? "Workspace" : "This chat"} · ${resource.description}`
                           : resource.description}
                       </span>
                     )}
@@ -463,7 +463,7 @@ export function MentionChips({
               "inline-flex items-center gap-1 rounded-full border py-0.5 pl-2 pr-1 text-xs",
               appearance.chip,
             ].join(" ")}
-            title={`${meta.label}：${resource.name}`}
+            title={`${meta.label}: ${resource.name}`}
           >
             <span
               className={[
@@ -478,7 +478,7 @@ export function MentionChips({
             </span>
             <button
               type="button"
-              aria-label={`移除 ${resource.name}`}
+              aria-label={`Remove ${resource.name}`}
               onClick={() => onRemove(resource.kind, resource.id)}
               className="ml-0.5 grid h-4 w-4 place-items-center rounded-full text-muted-light transition hover:bg-surface-subtle hover:text-muted"
             >
@@ -491,7 +491,7 @@ export function MentionChips({
         <span
           key={`file:${resource.id}`}
           className="inline-flex items-center gap-1 rounded-full border border-indigo-200 bg-indigo-50 py-0.5 pl-2 pr-1 text-xs text-indigo-700"
-          title={`文件：${resource.name}`}
+          title={`File: ${resource.name}`}
         >
           <span className="rounded bg-white/70 px-1 py-px text-[10px] font-semibold uppercase tracking-wide">
             @file
@@ -501,12 +501,12 @@ export function MentionChips({
           </span>
           {!resource.backendSupported ? (
             <span className="rounded bg-white/70 px-1 py-px text-[10px]">
-              后端未支持
+              Backend unsupported
             </span>
           ) : null}
           <button
             type="button"
-            aria-label={`移除 ${resource.name}`}
+            aria-label={`Remove ${resource.name}`}
             onClick={() => onRemoveFile?.(resource)}
             className="ml-0.5 grid h-4 w-4 place-items-center rounded-full text-indigo-400 transition hover:bg-white/70 hover:text-indigo-700"
           >
@@ -522,7 +522,7 @@ export function MentionChips({
         }}
         className="ml-0.5 rounded-full px-2 py-0.5 text-[11px] text-muted-light transition hover:bg-surface-subtle hover:text-muted"
       >
-        清除
+        Clear
       </button>
     </div>
   );

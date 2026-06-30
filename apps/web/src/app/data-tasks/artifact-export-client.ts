@@ -54,4 +54,9 @@ export const artifactExportClient = {
     const query = format ? `?format=${encodeURIComponent(format)}` : "";
     return `${getConfigApiBaseUrl()}/api/v1/artifacts/${encodeURIComponent(id)}/download${query}`;
   },
+
+  /** Inline content URL (Content-Disposition: inline) — used as <img>/<iframe> src. */
+  contentUrl(id: string): string {
+    return `${getConfigApiBaseUrl()}/api/v1/artifacts/${encodeURIComponent(id)}/content`;
+  },
 };

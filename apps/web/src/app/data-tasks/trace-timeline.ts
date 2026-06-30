@@ -52,9 +52,9 @@ export function formatTraceTime(ms: number): string {
 function toolTitle(name: string): string {
   switch (name) {
     case "inspect_schema":
-      return "检查数据源 Schema";
+      return "Inspect data source schema";
     case "run_sql_readonly":
-      return "生成并执行 SQL";
+      return "Run SQL query";
     default:
       return name;
   }
@@ -83,11 +83,11 @@ function activityStatusToToolStatus(
 function toolStatusLabel(status: LiveToolCallRecord["status"]): string {
   switch (status) {
     case "running":
-      return "执行中";
+      return "Running";
     case "success":
-      return "已完成";
+      return "Completed";
     case "failed":
-      return "失败";
+      return "Failed";
   }
 }
 
@@ -96,10 +96,10 @@ function auditStatusLabel(status?: string): string {
   switch (status.toLowerCase()) {
     case "success":
     case "succeeded":
-      return "成功";
+      return "Success";
     case "error":
     case "failed":
-      return "失败";
+      return "Failed";
     default:
       return status;
   }
@@ -215,10 +215,10 @@ function buildToolEntry(
     const summary =
       event?.summary ||
       (scannedRows !== undefined
-        ? `已执行，返回 ${scannedRows.toLocaleString()} 行。`
+        ? `Executed and returned ${scannedRows.toLocaleString()} rows.`
         : toolCall.result && !parsed
           ? toolCall.result.slice(0, 160)
-          : "正在准备只读 SQL 查询。");
+          : "Preparing a read-only SQL query.");
 
     return withTimestamp(
       {
@@ -254,8 +254,8 @@ function buildToolEntry(
     const summary =
       event?.summary ||
       (schemaTables.length > 0
-        ? `已加载 ${schemaTables.length} 张表的结构。`
-        : "正在检查数据源表结构。");
+        ? `Loaded ${schemaTables.length} table schemas.`
+        : "Inspecting data source schema.");
 
     return withTimestamp(
       {
@@ -407,10 +407,10 @@ function pushRunStartEntry(
     kind: "run_started",
     tsMs: startedAt,
     ts: formatTraceTime(startedAt),
-    title: options?.resumeAfterSuspend ? "运行继续" : "运行开始",
+    title: options?.resumeAfterSuspend ? "Run resumed" : "Run started",
     summary: options?.resumeAfterSuspend
-      ? "Agent 已收到你的回答，继续执行。"
-      : "Agent 开始处理本轮请求。",
+      ? "Agent received your response and resumed."
+      : "Agent started processing this request.",
   });
 }
 
@@ -435,8 +435,8 @@ function pushRunEndEntry(
       kind: "run_suspended",
       tsMs: segment.finishedAt,
       ts: formatTraceTime(segment.finishedAt),
-      title: "运行暂停",
-      summary: "Agent 等待你的回答后继续。",
+      title: "Run paused",
+      summary: "Agent is waiting for your response before continuing.",
     });
     return;
   }
@@ -446,8 +446,8 @@ function pushRunEndEntry(
       kind: "run_finished",
       tsMs: segment.finishedAt,
       ts: formatTraceTime(segment.finishedAt),
-      title: "运行完成",
-      summary: "Agent 已完成本轮任务。",
+      title: "Run completed",
+      summary: "Agent completed this task.",
     });
     return;
   }
@@ -460,8 +460,8 @@ function pushRunEndEntry(
         segment.finishedAt !== undefined
           ? formatTraceTime(segment.finishedAt)
           : undefined,
-      title: "运行失败",
-      summary: segment.errorMessage ?? "Agent 运行失败。",
+      title: "Run failed",
+      summary: segment.errorMessage ?? "Agent Run failed。",
       errorMessage: segment.errorMessage,
     });
   }

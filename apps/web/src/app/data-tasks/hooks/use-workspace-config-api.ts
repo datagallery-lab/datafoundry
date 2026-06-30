@@ -11,7 +11,7 @@ import {
   mergeItemFromDto,
   workspaceConfigDtoToStore,
 } from "../../../lib/config-api";
-import type { JobDto, RunDefaultsDto } from "../../../lib/config-api";
+import type { DatasourceTypeDto, JobDto, RunDefaultsDto } from "../../../lib/config-api";
 import {
   defaultWorkspaceConfig,
   setLiveBackendCapabilities,
@@ -26,6 +26,7 @@ import {
 export type WorkspaceApiState = {
   workspaceConfig: WorkspaceConfigStore;
   runDefaults: RunDefaultsDto | null;
+  datasourceTypes: DatasourceTypeDto[];
   loading: boolean;
   error: string | null;
   capabilitiesReady: boolean;
@@ -85,6 +86,7 @@ export function useWorkspaceConfigApi(): WorkspaceApiState & WorkspaceApiActions
     defaultWorkspaceConfig,
   );
   const [runDefaults, setRunDefaults] = useState<RunDefaultsDto | null>(null);
+  const [datasourceTypes, setDatasourceTypes] = useState<DatasourceTypeDto[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [capabilitiesReady, setCapabilitiesReady] = useState(false);
@@ -121,6 +123,7 @@ export function useWorkspaceConfigApi(): WorkspaceApiState & WorkspaceApiActions
         configApi.listDatasourceTypes(),
       ]);
       setLiveDatasourceTypes(datasourceTypes);
+      setDatasourceTypes(datasourceTypes);
       setWorkspaceConfig(workspaceConfigDtoToStore(workspace));
       setRunDefaults(defaults);
     } catch (err) {
@@ -129,9 +132,10 @@ export function useWorkspaceConfigApi(): WorkspaceApiState & WorkspaceApiActions
           ? `${err.code}: ${err.message}`
           : err instanceof Error
             ? err.message
-            : "加载工作区配置失败";
+            : "Failed to load workspace configuration";
       setError(message);
       setWorkspaceConfig(defaultWorkspaceConfig());
+      setDatasourceTypes([]);
     } finally {
       setLoading(false);
     }
@@ -155,7 +159,7 @@ export function useWorkspaceConfigApi(): WorkspaceApiState & WorkspaceApiActions
     if (err instanceof ConfigApiError) {
       if (err.code === "SECRET_MASTER_KEY_REQUIRED") {
         return new Error(
-          "服务端未配置 SECRET_MASTER_KEY，无法保存 API Key。请在 .env 中设置后重启 API。",
+          "SECRET_MASTER_KEY is not configured on the server, so API keys cannot be saved. Set it in .env and restart the API.",
         );
       }
       if (
@@ -163,11 +167,11 @@ export function useWorkspaceConfigApi(): WorkspaceApiState & WorkspaceApiActions
         err.message.includes("CONFIG_RESOURCE_NOT_FOUND")
       ) {
         return new Error(
-          "该配置在后端不存在，请确认已点击「创建」且保存成功后再使用。",
+          "This configuration does not exist on the backend. Create and save it before using it.",
         );
       }
     }
-    return err instanceof Error ? err : new Error("配置操作失败");
+    return err instanceof Error ? err : new Error("Configuration action failed");
   }, []);
 
   const createItem = useCallback(
@@ -179,7 +183,7 @@ export function useWorkspaceConfigApi(): WorkspaceApiState & WorkspaceApiActions
       try {
         if (kind === "skill") {
           if (!skillFile) {
-            throw new Error("Skill 创建需要上传 SKILL.md 或 .zip 包");
+            throw new Error("Creating a skill requires a SKILL.md or .zip package");
           }
           const form = new FormData();
           form.append("file", skillFile);
@@ -276,7 +280,7 @@ export function useWorkspaceConfigApi(): WorkspaceApiState & WorkspaceApiActions
       } catch (err) {
         if (err instanceof ConfigApiError && err.code === "REVISION_CONFLICT") {
           await refresh();
-          throw new Error("配置已被其他操作更新，已刷新最新版本，请重试。");
+          throw new Error("This configuration was updated elsewhere. The latest version has been loaded; try again.");
         }
         if (
           err instanceof ConfigApiError &&
@@ -285,12 +289,12 @@ export function useWorkspaceConfigApi(): WorkspaceApiState & WorkspaceApiActions
         ) {
           await refresh();
           throw new Error(
-            "该配置在后端不存在（可能未成功创建或服务已重启），已刷新列表，请重新创建。",
+            "This configuration does not exist on the backend. The list has been refreshed; create it again.",
           );
         }
         if (err instanceof ConfigApiError && err.code === "SECRET_MASTER_KEY_REQUIRED") {
           throw new Error(
-            "服务端未配置 SECRET_MASTER_KEY，无法保存 API Key。请在 .env 中设置后重启 API。",
+            "SECRET_MASTER_KEY is not configured on the server, so API keys cannot be saved. Set it in .env and restart the API.",
           );
         }
         throw err;
@@ -374,7 +378,7 @@ export function useWorkspaceConfigApi(): WorkspaceApiState & WorkspaceApiActions
         }
         await sleep(500);
       }
-      throw new Error("任务超时，请稍后在任务列表中查看状态。");
+      throw new Error("The job timed out. Check the job list for status later.");
     },
     [],
   );
@@ -411,6 +415,7 @@ export function useWorkspaceConfigApi(): WorkspaceApiState & WorkspaceApiActions
   return {
     workspaceConfig,
     runDefaults,
+    datasourceTypes,
     loading,
     error,
     capabilitiesReady,

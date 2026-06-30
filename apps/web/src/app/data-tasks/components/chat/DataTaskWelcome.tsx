@@ -4,19 +4,19 @@ import { chipClass } from "../../ui-tokens";
 
 const EXAMPLE_PROMPTS = [
   {
-    title: "查看表结构",
-    description: "列出当前数据源的所有表及字段",
-    prompt: "帮我查看数据源里有哪些表，并说明每张表的主要字段",
+    title: "Inspect Schema",
+    description: "List tables and fields for the active datasource",
+    prompt: "Show the tables in the datasource and summarize the main fields for each table",
   },
   {
-    title: "运行 SQL 查询",
-    description: "用自然语言生成并执行只读 SQL",
-    prompt: "查询最近 30 天的订单总数，按日期分组",
+    title: "Run SQL Query",
+    description: "Generate and run read-only SQL from natural language",
+    prompt: "Query total orders in the last 30 days, grouped by date",
   },
   {
-    title: "数据趋势分析",
-    description: "探索指标变化与异常",
-    prompt: "分析销售数据的月度趋势，找出波动最大的月份",
+    title: "Analyze Trends",
+    description: "Explore metric changes and anomalies",
+    prompt: "Analyze monthly sales trends and identify the months with the largest swings",
   },
 ] as const;
 
@@ -63,18 +63,18 @@ export function DataTaskWelcomeScreen() {
         <DatabaseIcon className="h-7 w-7" />
       </div>
       <h2 className="text-center text-lg font-semibold text-foreground">
-        数据分析工作台
+        Data Analysis Workbench
       </h2>
       <p className="mt-2 max-w-md text-center text-sm leading-6 text-muted">
-        用自然语言提问，Agent 会自动检查表结构、执行只读 SQL，并在右侧控制台展示完整追溯链。
+        Ask in natural language. The agent can inspect schemas, run read-only SQL, and show the full trace in the console.
       </p>
       <div className="mt-6 flex flex-wrap justify-center gap-2">
         <span className={chipClass}>
           <SparkIcon className="h-3.5 w-3.5 text-muted-light" />
-          SQL 查询
+          SQL Query
         </span>
-        <span className={chipClass}>Schema 检查</span>
-        <span className={chipClass}>数据追溯</span>
+        <span className={chipClass}>Schema Check</span>
+        <span className={chipClass}>Data Trace</span>
       </div>
       <div className="mt-8 grid w-full max-w-lg gap-3">
         {EXAMPLE_PROMPTS.map((item) => (
@@ -85,13 +85,13 @@ export function DataTaskWelcomeScreen() {
             <div className="text-sm font-medium text-foreground">{item.title}</div>
             <p className="mt-0.5 text-xs text-muted-light">{item.description}</p>
             <p className="mt-2 font-mono text-[11px] leading-5 text-muted">
-              「{item.prompt}」
+              "{item.prompt}"
             </p>
           </div>
         ))}
       </div>
       <p className="mt-6 text-xs text-muted-light">
-        在下方输入框直接提问，或使用 <kbd className="rounded border border-border bg-surface-subtle px-1 py-0.5 font-mono text-[10px]">@</kbd> 指定数据源
+        Ask directly in the input below, or use <kbd className="rounded border border-border bg-surface-subtle px-1 py-0.5 font-mono text-[10px]">@</kbd> to select a datasource.
       </p>
     </div>
   );
@@ -111,7 +111,7 @@ export function ChatInitializingState() {
     <div className="grid flex-1 place-items-center px-6">
       <div className="text-center">
         <div className="mx-auto mb-3 h-8 w-8 animate-pulse rounded-full bg-surface-subtle ring-1 ring-border" />
-        <p className="text-sm text-muted">正在初始化会话…</p>
+        <p className="text-sm text-muted">Initializing session...</p>
       </div>
     </div>
   );

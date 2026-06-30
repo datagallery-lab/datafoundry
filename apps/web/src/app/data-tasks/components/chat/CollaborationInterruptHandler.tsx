@@ -1,11 +1,7 @@
 "use client";
 
-import {
-  CopilotChatAssistantMessage,
-  useAgent,
-  useInterrupt,
-} from "@copilotkit/react-core/v2";
-import { useCallback, useState, type ComponentProps } from "react";
+import { CopilotChatAssistantMessage, useAgent, useCopilotKit } from "@copilotkit/react-core/v2";
+import { useCallback, useEffect, useMemo, useRef, useState, type ComponentProps } from "react";
 import {
   btnPrimaryClass,
   btnSecondaryClass,
@@ -20,6 +16,15 @@ import {
   useCollaborationResponses,
   useThreadCollaborationResponsesForChat,
 } from "./collaboration-responses";
+import {
+  canResumeCollaborationInterrupt,
+  findPendingCollaborationToolCall,
+} from "../../collaboration-recap";
+import { useLiveRun } from "../../use-data-agent-run";
+import {
+  clearPendingCollaborationInterrupt,
+  setPendingCollaborationInterrupt,
+} from "./pending-collaboration-interrupt";
 
 type MastraInterrupt = {
   type?: string;
@@ -52,7 +57,7 @@ function readQuestion(interrupt: MastraInterrupt): string {
   if (interrupt.args && typeof interrupt.args.question === "string") {
     return interrupt.args.question;
   }
-  return "Agent 需要你补充信息";
+  return "The agent needs more information";
 }
 
 function normalizeOption(item: unknown): ChoiceOption | null {
@@ -175,14 +180,16 @@ function PlanMarkdown({ content }: { content: string }) {
 
 function AskUserPrompt({
   interrupt,
-  resolve,
+  onSubmit,
   threadId,
   agentId,
+  canResume,
 }: {
   interrupt: MastraInterrupt;
-  resolve: (response: unknown) => void;
+  onSubmit: (response: unknown) => void;
   threadId: string;
   agentId: string;
+  canResume: boolean;
 }) {
   const { recordResponse } = useCollaborationResponses();
   const { agent } = useAgent({ agentId });
@@ -193,7 +200,7 @@ function AskUserPrompt({
 
   const submit = useCallback(
     (value: unknown) => {
-      if (submitted) return;
+      if (submitted || !canResume) return;
       setSubmitted(true);
       const assistantMessageId = [...(agent.messages ?? [])]
         .reverse()
@@ -208,24 +215,25 @@ function AskUserPrompt({
           assistantMessageId,
         });
       }
-      resolve(value);
+      onSubmit(value);
     },
     [
       agent.messages,
       interrupt.toolCallId,
       options,
       question,
+      onSubmit,
       recordResponse,
-      resolve,
       submitted,
       threadId,
+      canResume,
     ],
   );
 
   if (options.length > 0) {
     return (
       <CollaborationInterruptPanel data-testid="collaboration-interrupt-ask-user">
-        <div className={sectionLabelClass}>用户协作</div>
+        <div className={sectionLabelClass}>User Collaboration</div>
         <p className="mt-1.5 text-sm font-medium leading-6 text-foreground">{question}</p>
         <ChoiceOptionList
           options={options}
@@ -238,7 +246,7 @@ function AskUserPrompt({
 
   return (
     <CollaborationInterruptPanel data-testid="collaboration-interrupt-ask-user">
-      <div className={sectionLabelClass}>用户协作</div>
+      <div className={sectionLabelClass}>User Collaboration</div>
       <p className="mt-1.5 text-sm font-medium text-foreground">{question}</p>
       <textarea
         value={answer}
@@ -246,7 +254,7 @@ function AskUserPrompt({
         rows={3}
         disabled={submitted}
         className="mt-3 w-full resize-none rounded-lg border border-border bg-surface px-3 py-2 text-sm text-foreground outline-none transition-colors duration-150 focus:border-muted-light focus-visible:ring-2 focus-visible:ring-primary/20 disabled:opacity-60"
-        placeholder="输入你的回答…"
+        placeholder="Enter your answer..."
       />
       <div className="mt-3 flex justify-end">
         <button
@@ -255,7 +263,7 @@ function AskUserPrompt({
           disabled={submitted || !answer.trim()}
           onClick={() => submit(answer.trim())}
         >
-          提交回答
+          Submit Answer
         </button>
       </div>
     </CollaborationInterruptPanel>
@@ -264,14 +272,16 @@ function AskUserPrompt({
 
 function SubmitPlanPrompt({
   interrupt,
-  resolve,
+  onSubmit,
   threadId,
   agentId,
+  canResume,
 }: {
   interrupt: MastraInterrupt;
-  resolve: (response: unknown) => void;
+  onSubmit: (response: unknown) => void;
   threadId: string;
   agentId: string;
+  canResume: boolean;
 }) {
   const { recordResponse } = useCollaborationResponses();
   const { agent } = useAgent({ agentId });
@@ -279,11 +289,11 @@ function SubmitPlanPrompt({
   const title =
     typeof interrupt.args?.title === "string"
       ? interrupt.args.title
-      : "执行计划审批";
+      : "Execution Plan Approval";
   const plan = readPlan(interrupt);
 
   const submit = (response: unknown) => {
-    if (submitted) return;
+    if (submitted || !canResume) return;
     setSubmitted(true);
     const assistantMessageId = [...(agent.messages ?? [])]
       .reverse()
@@ -299,7 +309,7 @@ function SubmitPlanPrompt({
         assistantMessageId,
       });
     }
-    resolve(response);
+    onSubmit(response);
   };
 
   return (
@@ -313,9 +323,9 @@ function SubmitPlanPrompt({
           type="button"
           className={`hitl-action-btn-secondary ${btnSecondaryClass}`}
           disabled={submitted}
-          onClick={() => submit({ action: "rejected", feedback: "需要调整计划" })}
+          onClick={() => submit({ action: "rejected", feedback: "Needs changes" })}
         >
-          拒绝
+          Reject
         </button>
         <button
           type="button"
@@ -323,7 +333,7 @@ function SubmitPlanPrompt({
           disabled={submitted}
           onClick={() => submit({ action: "approved" })}
         >
-          批准
+          Approve
         </button>
       </div>
     </CollaborationInterruptPanel>
@@ -351,6 +361,21 @@ function CollaborationInterruptPanel({
   );
 }
 
+export type { MastraInterrupt };
+export { parseInterruptValue, AskUserPrompt, SubmitPlanPrompt };
+
+const INTERRUPT_EVENT_NAME = "on_interrupt";
+
+type PendingInterruptEvent = {
+  name: string;
+  value: unknown;
+};
+
+function isCollaborationInterruptEvent(event: PendingInterruptEvent): boolean {
+  const interrupt = parseInterruptValue(event.value);
+  return interrupt?.toolName === "ask_user" || interrupt?.toolName === "submit_plan";
+}
+
 /** CopilotKit interrupt UI for Mastra ask_user / submit_plan suspension. */
 export function CollaborationInterruptHandler({
   agentId,
@@ -359,61 +384,152 @@ export function CollaborationInterruptHandler({
   agentId: string;
   threadId: string;
 }) {
+  const { copilotkit } = useCopilotKit();
   const { agent } = useAgent({ agentId });
+  const { liveRun } = useLiveRun();
   const collaborationResponses = useThreadCollaborationResponsesForChat(threadId);
+  const [pendingEvent, setPendingEvent] = useState<PendingInterruptEvent | null>(null);
+  const pendingEventRef = useRef(pendingEvent);
+  pendingEventRef.current = pendingEvent;
+  const submittingRef = useRef(false);
 
-  useInterrupt({
-    agentId,
-    enabled: (event) => {
-      if (agent.threadId !== threadId) return false;
-      const interrupt = parseInterruptValue(event.value);
-      if (
-        interrupt?.toolName !== "ask_user" &&
-        interrupt?.toolName !== "submit_plan"
-      ) {
-        return false;
+  useEffect(() => {
+    let localInterrupt: PendingInterruptEvent | null = null;
+    const finalizeInterrupt = () => {
+      if (localInterrupt) {
+        setPendingEvent(localInterrupt);
+        localInterrupt = null;
       }
-      if (
-        interrupt.toolCallId &&
-        collaborationResponses.some(
-          (response) => response.toolCallId === interrupt.toolCallId,
-        )
-      ) {
-        return false;
-      }
-      return true;
-    },
-    render: ({ event, resolve }) => {
-      if (agent.threadId !== threadId) {
-        return <></>;
-      }
+    };
+    const subscription = agent.subscribe({
+      onCustomEvent: ({ event }) => {
+        if (event.name !== INTERRUPT_EVENT_NAME) {
+          return;
+        }
+        const wrapped = { name: event.name, value: event.value };
+        if (!isCollaborationInterruptEvent(wrapped)) {
+          return;
+        }
+        localInterrupt = wrapped;
+      },
+      onRunStartedEvent: () => {
+        localInterrupt = null;
+        setPendingEvent(null);
+      },
+      onRunFinalized: finalizeInterrupt,
+      onRunFinishedEvent: finalizeInterrupt,
+      onRunFailed: () => {
+        localInterrupt = null;
+        setPendingEvent(null);
+      },
+    });
+    return () => subscription.unsubscribe();
+  }, [agent]);
 
-      const interrupt = parseInterruptValue(event.value);
-      if (!interrupt?.toolName) {
-        return <></>;
-      }
+  const interruptElement = useMemo(() => {
+    if (!pendingEvent || agent.threadId !== threadId) {
+      return null;
+    }
 
-      if (interrupt.toolName === "submit_plan") {
-        return (
-          <SubmitPlanPrompt
-            interrupt={interrupt}
-            resolve={resolve}
-            threadId={threadId}
-            agentId={agentId}
-          />
-        );
-      }
+    const interrupt = parseInterruptValue(pendingEvent.value);
+    if (!interrupt?.toolName) {
+      return null;
+    }
 
+    const canResume = canResumeCollaborationInterrupt({
+      toolCallId: interrupt.toolCallId,
+      collaborationResponses,
+      liveRun,
+      liveRunStatus: liveRun.runStatus,
+    });
+    const showPrompt =
+      canResume ||
+      liveRun.runStatus === "suspended" ||
+      liveRun.runStatus === "running";
+    if (!showPrompt) {
+      return null;
+    }
+
+    const submitLive = (response: unknown) => {
+      if (submittingRef.current || !canResume) {
+        return;
+      }
+      submittingRef.current = true;
+      clearPendingCollaborationInterrupt(threadId, "live");
+      setPendingEvent(null);
+      void copilotkit.runAgent({
+        agent,
+        forwardedProps: {
+          command: {
+            resume: response,
+            interruptEvent: pendingEventRef.current?.value,
+          },
+        },
+      });
+    };
+
+    if (interrupt.toolName === "submit_plan") {
       return (
-        <AskUserPrompt
+        <SubmitPlanPrompt
           interrupt={interrupt}
-          resolve={resolve}
+          onSubmit={submitLive}
           threadId={threadId}
           agentId={agentId}
+          canResume={canResume}
         />
       );
-    },
-  });
+    }
+
+    return (
+      <AskUserPrompt
+        interrupt={interrupt}
+        onSubmit={submitLive}
+        threadId={threadId}
+        agentId={agentId}
+        canResume={canResume}
+      />
+    );
+  }, [
+    agent,
+    agentId,
+    collaborationResponses,
+    copilotkit,
+    liveRun,
+    pendingEvent,
+    threadId,
+  ]);
+
+  useEffect(() => {
+    if (!interruptElement) {
+      clearPendingCollaborationInterrupt(threadId, "live");
+      return;
+    }
+
+    const pendingToolCall =
+      findPendingCollaborationToolCall(liveRun, collaborationResponses, liveRun.runStatus);
+    const interruptToolCallId = parseInterruptValue(pendingEvent?.value)?.toolCallId;
+    const runningCollaborationCall = liveRun.toolCalls.find(
+      (call) =>
+        (call.name === "ask_user" || call.name === "submit_plan") && call.status === "running",
+    );
+    const toolCallId =
+      pendingToolCall?.id ?? interruptToolCallId ?? runningCollaborationCall?.id;
+    if (!toolCallId) {
+      clearPendingCollaborationInterrupt(threadId, "live");
+      return;
+    }
+
+    setPendingCollaborationInterrupt({
+      threadId,
+      toolCallId,
+      element: interruptElement,
+      source: "live",
+    });
+
+    return () => {
+      clearPendingCollaborationInterrupt(threadId, "live");
+    };
+  }, [collaborationResponses, interruptElement, liveRun, pendingEvent, threadId]);
 
   return null;
 }
