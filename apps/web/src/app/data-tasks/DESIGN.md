@@ -10,7 +10,7 @@ This page (`/data-tasks`) is a **data-agent workbench** built on CopilotKit v2
 the backend actually streams. There is no mock scenario or scripted demo.
 
 The backend protocol surface is the source of truth for what is renderable; see
-[copilotkit-ag-ui-frontend-protocol.md](../../../../../docs/engineering/copilotkit-ag-ui-frontend-protocol.md).
+[copilotkit-ag-ui-frontend-protocol.md](../../../../../.docs-internal/engineering/copilotkit-ag-ui-frontend-protocol.md).
 This document describes how the page maps that protocol to UI.
 
 ## Layout
@@ -25,12 +25,16 @@ collapsed-left: 56px minmax(400px, 1fr) 400px
 config-panel-open: 320px minmax(400px, 1fr)
 ```
 
-- **Left — `SessionPane`**: workspace default config rows (DB/KB/MCP/LLM/Skill,
-  opening `WorkspaceConfigPanel`), the cross-session「工作区文件」asset entry,
-  and the client-side session list.
-- **Middle — `ChatPane`**: a stock `CopilotChat` bound to the active session's
-  `threadId`, the inline tool-call trace cards, the HITL interrupt renderer, and
-  the data-task welcome screen for an empty thread.
+- **Left — `SessionPane`**: product-level workspace resource navigation
+  (`Data Sources`, `Knowledge`, `Agent Tools`, `Assets`) and the client-side
+  conversation list. LLM model profiles are configured from the chat dialog
+  (`ChatModelPicker` / model config entry), not the left sidebar.
+- **Middle — `ChatPane`**: a `CopilotChat` bound to the active session's
+  `threadId` with a custom assistant renderer. The renderer groups each assistant
+  process turn as `Step -> Tool calls`: collapsed steps show an optional thinking
+  preview plus compact tool chips with duration/status; expanded steps separate
+  `Thinking` from `Tool calls`. HITL interrupts and the data-task welcome screen
+  are rendered in this pane as well.
 - **Right — `TaskConsole`**: a tabbed data-task console with four tabs —
   Overview / Trace / Outputs / Detail — derived from the live run. The Detail
   tab is selection-driven: clicking a tool card in the middle column (or a
@@ -67,16 +71,14 @@ Layout behavior:
 State + schema live in [data-task-state.ts](./data-task-state.ts); UI lives in
 [page.tsx](./page.tsx). Backend config I/O is handled by
 [use-workspace-config-api.ts](./hooks/use-workspace-config-api.ts), which wraps
-`lib/config-api`. The backend-side contract and the capability gap list:
+`lib/config-api`. The backend-side contract and runtime capability surface:
 
-- [config-management-api.md](../../../../../docs/engineering/config-management-api.md)
+- [config-management-api.md](../../../../../.docs-internal/engineering/config-management-api.md)
   — REST contract for config management and the **`run_config` merge model**
   section (server-side merge of workspace defaults, session overrides, and per-run
   selections).
-- [2026-06-25-backend-requirements.md](../../../../../docs/engineering/2026-06-25-backend-requirements.md)
-  — what the frontend needs the backend to implement, prioritized.
-- [2026-06-25-frontend-capability-status.md](../../../../../docs/engineering/2026-06-25-frontend-capability-status.md)
-  — the current frontend-side capability/gating state.
+- `GET /api/v1/capabilities` — current backend availability and frontend
+  gating state.
 
 ### Three-layer resolution
 
@@ -87,16 +89,22 @@ more layers before a run is dispatched.
 effectiveRunConfig = merge(workspaceDefaults, sessionEnabled, perRunMentioned, serverPolicy)
 ```
 
-1. **Workspace defaults (left panel)** — DB / KB / MCP / LLM / Skill entries are
-   *static defaults*. Every entry is **default-available**; there are **no
-   per-item enable toggles**. Wording is "工作区默认配置 / 默认可用", never
-   "本轮启用/禁用". The list is loaded from the config REST API
+1. **Workspace defaults (left panel)** — `Data Sources` / `Knowledge` /
+   `Agent Tools` / `Assets` are product-level entry points over DB / KB / MCP /
+   Skill / workspace file configuration. LLM profiles stay in the chat input layer. These
+   entries are *static defaults*. Every entry is **default-available**; there
+   are **no per-item enable toggles**. Wording is about workspace resources and
+   management, never "本轮启用/禁用".
+   The list is loaded from the config REST API
    (`getWorkspaceConfig`) after `getCapabilities`; failed loads fall back to
    `defaultWorkspaceConfig()` so the UI can still render a safe local shape.
 2. **Session config (chat input bottom pills)** — `SessionConfigBar` shows four
-   per-kind pills (`数据源 / 知识库 / MCP / 技能`) with `启用数/总数`. Clicking a
+   per-kind pills (`数据源 / 知识库 / 工具 / 技能`) with `启用数/总数`. Clicking a
    pill opens an upward popover with a switch list to disable specific resources
-   for **this chat session only**. Stored as a per-session *disabled* list on
+   for **this chat session only**. The popover must explicitly say that it only
+   affects the current conversation; global management stays in the left
+   `Workspace Resources` navigation and the middle config library. Stored as a
+   per-session *disabled* list on
    `ChatSession.config.disabled` (default = all workspace resources enabled; new
    resources added to the left panel auto-appear in old sessions). Persisted in
    `localStorage` (`data-tasks:sessions:v1`). See
@@ -112,7 +120,7 @@ effectiveRunConfig = merge(workspaceDefaults, sessionEnabled, perRunMentioned, s
 4. **Server policy (backend)** — the final authority; merges the above with
    permission/policy. The frontend always sends the forward-compatible
    `run_config`; backend support is discovered through runtime capabilities and
-   tracked in [2026-06-25-backend-requirements.md](../../../../../docs/engineering/2026-06-25-backend-requirements.md).
+   current internal contracts.
 
 LLM model selection stays in `ChatModelPicker` (not a session pill).
 
@@ -121,8 +129,8 @@ LLM model selection stays in `ChatModelPicker` (not a session pill).
 Earlier this page hid anything the backend could not yet consume. That rule is
 **relaxed**: the frontend MAY ship UX ahead of the backend **as long as**
 
-1. the requirement is a reasonable ask of the backend, and is written down in
-   [2026-06-25-backend-requirements.md](../../../../../docs/engineering/2026-06-25-backend-requirements.md);
+1. the requirement is a reasonable ask of the backend, and is represented by a
+   runtime capability or current internal contract;
 2. nothing the user sees implies an effect the backend can't deliver — anything
    inert is surfaced with a 「后端未支持」 hint (the `ConfigRow` `unsupported`
    badge, the `@` menu/chip badge, etc.); and
@@ -222,7 +230,7 @@ Two `useAgentContext` items (+ `forwardedProps.datasourceId`):
 - `datasource_id` — the one field the backend currently honors (protocol §2).
 - `run_config` — single forward-compatible payload built by `buildRunConfig`
   matching the **`run_config` merge model** in
-  [config-management-api.md](../../../../../docs/engineering/config-management-api.md);
+  [config-management-api.md](../../../../../.docs-internal/engineering/config-management-api.md);
   **ids / selections only, no secrets**:
 
 ```jsonc
@@ -330,7 +338,10 @@ flowchart LR
 - Events consumed: `RUN_STARTED/FINISHED/ERROR`, `STATE_SNAPSHOT/DELTA`,
   `ACTIVITY_SNAPSHOT/DELTA` (plan + step), `TOOL_CALL_*`, and
   `CUSTOM` (`sql_audit`, `artifact`, `token_usage`, `workspace.metadata`,
-  `sandbox.output`). Text and reasoning are rendered by the stock `CopilotChat`.
+  `sandbox.output`). Assistant text/reasoning is rendered by the custom
+  `StepAssistantMessage`: hidden chain-of-thought is never shown; only explicit
+  reasoning summary / reasoning content parts / adjacent assistant preambles are
+  displayed, and empty thinking slots are omitted.
 - Timeline events use a **tool-agnostic** `DataStepKind`
   (`inspect | query | transform | fetch | visualize | knowledge | other`),
   mapped from the tool name by `dataStepKindForTool`. Today the backend only
@@ -449,8 +460,17 @@ tab clears the selection. Artifact clicks stay on **产出** and expand in-place
 - **Full trace (`TraceOverlay`)** — the same evidence chain as a full-screen
   overlay for focused triage when the chat result is missing.
 
-The middle→right linkage for steps is via the right console itself: click a step
-in **概览** progress list or **追溯** timeline to open the Detail tab.
+The middle→right linkage mirrors the Step / Tool hierarchy:
+
+- Click the center Step main area to open **Detail → Step details** for the
+  `ProcessToolGroup`.
+- Click a center tool chip, expanded tool row, or Trace timeline tool entry to
+  open **Detail → Tool details** for that single tool call.
+- The Step chevron only expands/collapses the center Step; it does not change the
+  right-side selection.
+- **Trace** remains the chronological evidence chain. Center steps and Step
+  details are grouped by assistant message ownership, while Trace preserves event
+  arrival order for concurrency/debugging.
 
 ## Design tokens and visual semantics
 
@@ -480,8 +500,8 @@ can evolve consistently.
   job progress, trace overlay status pills, and tool-result status badges.
   `overlayBackdropClass` / `overlayPanelClass` standardize drawer and modal shells
   (`TaskConsoleDrawer`, `TraceOverlay`).
-- **Token usage contract:** [2026-06-25-backend-requirements.md R-002](../../../../../docs/engineering/2026-06-25-backend-requirements.md#r-002-llm-token-用量上报)
-  defines `CUSTOM(name="token_usage")`. Besides `input_tokens` /
+- **Token usage contract:** backend `CUSTOM(name="token_usage")` events define
+  usage reporting. Besides `input_tokens` /
   `output_tokens`, the frontend consumes `tool_call_id`, `step_id`, `model`, and
   optional `cost_usd` for the Overview KPI and Detail usage panel. `step_number`
   is a **last-resort fallback** only when ids are absent; matches are labeled
@@ -517,8 +537,7 @@ console usage hint) when runtime capabilities say the backend cannot honor them:
 
 - `/` slash commands for run-level **actions** (e.g. `/clear`, `/export`); the
   `@` mention picker (layer 2 resource selection) has shipped.
-- Backend-gated runtime behaviors — see runtime capabilities and
-  `2026-06-25-backend-requirements.md`; the UI can expose forward-compatible
+- Backend-gated runtime behaviors — see runtime capabilities; the UI can expose forward-compatible
   controls, but must label anything the backend cannot honor yet.
 - secretRef hardening and multi-user workspace isolation as the backend
   production path matures.

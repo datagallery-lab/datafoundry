@@ -5,15 +5,11 @@
 </p>
 
 <p align="center">
-  English · <a href="README_zh.md">简体中文</a>
-</p>
-
-<p align="center">
-  <a href="docs/quick-start.md"><strong>Quick Start</strong></a>
+  <a href="docs/zh/quick-start.md"><strong>Quick Start</strong></a>
   ·
   <a href="docs/README.md"><strong>Docs</strong></a>
   ·
-  <a href="docs/engineering/supported-databases.md"><strong>Supported Databases</strong></a>
+  <a href="docs/zh/reference/supported-datasources.md"><strong>Supported Data Sources</strong></a>
   ·
   <a href="#-contributing"><strong>Contributing</strong></a>
   ·
@@ -152,23 +148,22 @@ DataAgent is moving quickly, so small, well-scoped contributions are easiest to 
 
 <table>
   <tr>
-    <td><a href="docs/quick-start.md"><strong>Quick Start</strong></a><br/>Install, configure a model key, and run the workbench.</td>
-    <td><a href="docs/engineering/copilotkit-ag-ui-frontend-protocol.md"><strong>AG-UI Protocol</strong></a><br/>Frontend runtime events and integration behavior.</td>
+    <td><a href="docs/zh/quick-start.md"><strong>Quick Start</strong></a><br/>Install, configure a model key, and run the workbench.</td>
+    <td><a href="docs/zh/overview.md"><strong>Product Overview</strong></a><br/>Understand the product positioning and analysis workflow.</td>
   </tr>
   <tr>
-    <td><a href="docs/engineering/supported-databases.md"><strong>Supported Databases</strong></a><br/>Datasource types, fields, and registration examples.</td>
-    <td><a href="docs/engineering/2026-06-23-conversation-memory-design.md"><strong>Conversation Memory</strong></a><br/>Server-authoritative history and memory assembly.</td>
+    <td><a href="docs/zh/reference/supported-datasources.md"><strong>Supported Data Sources</strong></a><br/>Datasource types, fields, and connection boundaries.</td>
+    <td><a href="docs/zh/reference/agent-runtime.md"><strong>Agent Runtime</strong></a><br/>CopilotKit / AG-UI run input, events, and safety boundaries.</td>
   </tr>
   <tr>
-    <td><a href="docs/engineering/agent-context-management-design.md"><strong>Context Governance</strong></a><br/>Context inventory, policy, projection, and prompt budget.</td>
-    <td><a href="docs/engineering/2026-06-24-file-asset-workspace-artifact-knowledge-design.md"><strong>Files and Artifacts</strong></a><br/>Unified lifecycle for files, workspace, artifacts, and knowledge.</td>
+    <td><a href="docs/zh/reference/rest-api.md"><strong>REST API</strong></a><br/>HTTP endpoints for local development and integration.</td>
+    <td><a href="docs/zh/architecture/overview.md"><strong>Architecture</strong></a><br/>High-level runtime, Data Gateway, files, knowledge, and artifacts.</td>
   </tr>
 </table>
 
 ## 🧪 Status
 
-DataAgent is under active development. Current code and passing smoke checks are the source of truth; dated planning and
-review documents are kept for context but should not override implemented runtime behavior.
+DataAgent is under active development. Current code, public docs, and passing smoke checks are the source of truth.
 
 ## 📄 License
 

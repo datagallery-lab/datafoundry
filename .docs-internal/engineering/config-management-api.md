@@ -191,6 +191,7 @@ Skill package materialization 均使用同一 `(user_id, workspace_id)`。产品
 | POST | `/api/v1/datasources/:id/test` | 连接测试 |
 | POST | `/api/v1/datasources/:id/introspect` | 触发 schema 抓取/刷新 |
 | GET | `/api/v1/datasources/:id/schema` | 读取已缓存 schema |
+| GET | `/api/v1/datasources/:id/tables/:table/preview` | 表数据只读预览（契约已定义，后端待实现） |
 
 资源模型：
 
@@ -231,6 +232,33 @@ Skill package materialization 均使用同一 `(user_id, workspace_id)`。产品
 `introspect` 生成带 revision、抓取时间和 adapter schema version 的持久化 schema snapshot；
 `GET /schema` 返回最近成功快照。首次实现允许小型数据源同步执行，超过服务端阈值时返回
 `202 + jobId`，由统一 Job API 查询进度。
+
+#### 表数据预览契约（待后端实现）
+
+前端数据源浏览器会调用：
+
+```text
+GET /api/v1/datasources/:id/tables/:table/preview?schema=&limit=&offset=&orderBy=
+```
+
+返回包络内的 `data`：
+
+```jsonc
+{
+  "columns": [{ "name": "order_id", "type": "VARCHAR" }],
+  "rows": [{ "order_id": "A001" }],
+  "total": 1200,
+  "hasMore": true
+}
+```
+
+约束：
+
+- 必须复用 Data Gateway 只读边界、SQL guard、timeout、allowlist、mask 与 sample policy。
+- `samplePolicy.allowSample=false` 时拒绝预览；`limit` 需被 `samplePolicy.maxSampleRows` 与服务端上限压制。
+- `introspection.tableAllowlist` 应同时限制 schema、preview 和 agent SQL 访问。
+- MongoDB / Redis / Elasticsearch / OpenSearch 使用已文档化的 table-like 映射，不暴露原生命令或 DSL。
+- 响应不返回任何凭据或 secret 明文。
 
 #### 前端统一填写方案（类型驱动）
 

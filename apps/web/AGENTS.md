@@ -15,15 +15,10 @@ Primary UI: `/data-tasks` — design doc at
 
 ## Implementation docs (read in order)
 
-1. [`docs/engineering/copilotkit-ag-ui-frontend-protocol.md`](../../docs/engineering/copilotkit-ag-ui-frontend-protocol.md)
+1. [`copilotkit-ag-ui-frontend-protocol.md`](../../.docs-internal/engineering/copilotkit-ag-ui-frontend-protocol.md)
 2. [`src/app/data-tasks/DESIGN.md`](src/app/data-tasks/DESIGN.md)
-3. [`docs/engineering/config-management-api.md`](../../docs/engineering/config-management-api.md) (when wiring config REST)
-4. [`docs/engineering/2026-06-25-frontend-capability-status.md`](../../docs/engineering/2026-06-25-frontend-capability-status.md) (前端现状自述)
-5. [`docs/engineering/2026-06-25-backend-requirements.md`](../../docs/engineering/2026-06-25-backend-requirements.md) (对后端要求 / gap tracking)
-6. [`docs/engineering/2026-06-26-frontend-capability-status.md`](../../docs/engineering/2026-06-26-frontend-capability-status.md) (最新前端增量)
-7. [`docs/engineering/2026-06-26-backend-requirements.md`](../../docs/engineering/2026-06-26-backend-requirements.md) (最新后端增量)
-8. [`docs/engineering/2026-06-27-frontend-capability-status.md`](../../docs/engineering/2026-06-27-frontend-capability-status.md) (会话命名 / 数据结果交互增量)
-9. [`docs/engineering/2026-06-27-backend-requirements.md`](../../docs/engineering/2026-06-27-backend-requirements.md) (会话标题 / 数据增强后端需求)
+3. [`config-management-api.md`](../../.docs-internal/engineering/config-management-api.md) (when wiring config REST)
+4. [`backend-rest-api-reference.md`](../../.docs-internal/engineering/backend-rest-api-reference.md) (when wiring REST endpoints)
 
 ## Code conventions
 
