@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/assets/readme/hero.svg" alt="DataAgent workbench preview" width="100%">
+  <img src="docs/assets/readme/hero.png" alt="DataAgent workbench preview" width="100%">
 </p>
 
 <h1 align="center">DataAgent 🚀</h1>
@@ -43,7 +43,7 @@ DataAgent puts those pieces behind one runtime:
 </table>
 
 <p align="center">
-  <img src="docs/assets/readme/capability-cards.svg" alt="DataAgent capabilities" width="100%">
+  <img src="docs/assets/readme/capability-cards.png" alt="DataAgent capabilities" width="100%">
 </p>
 
 ## 🗄️ Bring Your Data Stack
@@ -52,13 +52,13 @@ DataAgent is built around a Data Gateway adapter boundary. The current runtime a
 embedded databases, cloud warehouses, lakehouse engines, operational databases, and search / NoSQL systems.
 
 <p align="center">
-  <img src="docs/assets/readme/database-wall.svg" alt="Supported DataAgent datasource adapters" width="100%">
+  <img src="docs/assets/readme/database-wall.png" alt="Supported DataAgent datasource adapters" width="100%">
 </p>
 
 ## 🧭 How It Works
 
 <p align="center">
-  <img src="docs/assets/readme/runtime-flow.svg" alt="DataAgent runtime flow" width="100%">
+  <img src="docs/assets/readme/runtime-flow.png" alt="DataAgent runtime flow" width="100%">
 </p>
 
 The frontend talks to a single backend runtime. The backend owns identity, run replay, context assembly, memory,
@@ -72,10 +72,10 @@ and TUI demos are ready.
 
 <table>
   <tr>
-    <td><img src="docs/assets/readme/gui-slot.svg" alt="GUI screenshot placeholder" width="100%"></td>
+    <td><img src="docs/assets/readme/gui-slot.png" alt="GUI screenshot placeholder" width="100%"></td>
   </tr>
   <tr>
-    <td><img src="docs/assets/readme/tui-slot.svg" alt="TUI screenshot placeholder" width="100%"></td>
+    <td><img src="docs/assets/readme/tui-slot.png" alt="TUI screenshot placeholder" width="100%"></td>
   </tr>
 </table>
 
