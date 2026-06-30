@@ -780,19 +780,20 @@ const createFileAssetTools = (input: {
       const sourcePath = resolveWorkspaceRelativePath(input.sessionDir, toolInput.path);
       const filename = toolInput.filename ?? basename(sourcePath);
       const targetPath = resolveWorkspaceRelativePath(input.workspaceDir, filename);
+      const sourceRef = input.fileAssetService.createRefFromPath({
+        user_id: input.runContext.user_id,
+        workspace_id: input.runContext.workspace_id ?? "default",
+        session_id: input.runContext.session_id,
+        run_id: input.runContext.run_id,
+        filename,
+        declared_mime_type: mimeTypeForFilename(filename),
+        source: "workspace",
+        path: sourcePath,
+        ...(toolInput.description ? { metadata: { description: toolInput.description } } : {})
+      }).ref;
       // Materialize into the workspace root (hardlink, fall back to copy).
       input.fileAssetService.materializeRefToPath({
-        ref: input.fileAssetService.createRefFromPath({
-          user_id: input.runContext.user_id,
-          workspace_id: input.runContext.workspace_id ?? "default",
-          session_id: input.runContext.session_id,
-          run_id: input.runContext.run_id,
-          filename,
-          declared_mime_type: mimeTypeForFilename(filename),
-          source: "workspace",
-          path: sourcePath,
-          ...(toolInput.description ? { metadata: { description: toolInput.description } } : {})
-        }).ref,
+        ref: sourceRef,
         targetPath,
         linkStrategy: "hardlink"
       });
@@ -800,16 +801,7 @@ const createFileAssetTools = (input: {
       const resolved = input.fileAssetService.promoteFileToWorkspace({
         user_id: input.runContext.user_id,
         workspace_id: input.runContext.workspace_id ?? "default",
-        file_asset_ref_id: input.fileAssetService.createRefFromPath({
-          user_id: input.runContext.user_id,
-          workspace_id: input.runContext.workspace_id ?? "default",
-          session_id: input.runContext.session_id,
-          run_id: input.runContext.run_id,
-          filename,
-          declared_mime_type: mimeTypeForFilename(filename),
-          source: "workspace",
-          path: sourcePath
-        }).ref.id,
+        file_asset_ref_id: sourceRef.id,
         filename,
         declared_mime_type: mimeTypeForFilename(filename)
       });

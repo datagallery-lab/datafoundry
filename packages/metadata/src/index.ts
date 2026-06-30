@@ -1573,6 +1573,37 @@ export class FileAssetRefRepository {
     return rows.map(mapRequiredFileAssetRefRow);
   }
 
+  findActiveByFilename(input: {
+    user_id: string;
+    workspace_id: string;
+    filename: string;
+    source?: FileAssetRefSource;
+    session_id?: string | null;
+    has_session?: boolean;
+  }): FileAssetRefRecord | undefined {
+    const where: string[] = ["user_id = ?", "workspace_id = ?", "filename = ?", "status != 'deleted'"];
+    const params: string[] = [input.user_id, input.workspace_id, input.filename];
+    if (input.source) {
+      where.push("source = ?");
+      params.push(input.source);
+    }
+    if (input.session_id === null) {
+      where.push("session_id IS NULL");
+    } else if (input.session_id) {
+      where.push("session_id = ?");
+      params.push(input.session_id);
+    } else if (input.has_session) {
+      where.push("session_id IS NOT NULL");
+    }
+    const row = this.db.prepare(`
+      SELECT * FROM file_asset_refs
+      WHERE ${where.join(" AND ")}
+      ORDER BY created_at DESC
+      LIMIT 1
+    `).get(...params);
+    return mapFileAssetRefRow(row) ?? undefined;
+  }
+
   softDelete(input: { user_id: string; workspace_id: string; id: string }): FileAssetRefRecord {
     this.db.prepare(`
       UPDATE file_asset_refs SET status = 'deleted'
@@ -1808,6 +1839,7 @@ export const artifactRecordToSummary = (record: ArtifactRecord): ArtifactSummary
 });
 
 const runMigrations = (db: DatabaseSync): void => {
+  initializeSchemaMigrationTable(db);
   db.exec(`
     CREATE TABLE IF NOT EXISTS users (
       id TEXT PRIMARY KEY,
@@ -1990,6 +2022,8 @@ const runMigrations = (db: DatabaseSync): void => {
     );
     CREATE INDEX IF NOT EXISTS idx_file_asset_refs_scope
       ON file_asset_refs(user_id, workspace_id, status, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_file_asset_refs_filename_scope
+      ON file_asset_refs(user_id, workspace_id, filename, source, session_id, status, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_file_asset_refs_asset
       ON file_asset_refs(file_asset_id, status);
 
@@ -2077,20 +2111,60 @@ const runMigrations = (db: DatabaseSync): void => {
     );
     CREATE INDEX IF NOT EXISTS idx_interactions_user_run ON interactions(user_id, run_id);
   `);
+  recordSchemaMigration(db, "0001_core_schema", "Create core metadata tables");
 
-  ensureDataSourceRevision(db);
-  ensureArtifactFileAssetRefColumn(db);
-  ensureSessionTitleColumns(db);
+  runSchemaMigration(db, "0002_data_source_revision", "Ensure data source revision column", () => {
+    ensureDataSourceRevision(db);
+  });
+  runSchemaMigration(db, "0003_artifact_file_asset_ref", "Ensure artifact file asset ref column", () => {
+    ensureArtifactFileAssetRefColumn(db);
+  });
+  runSchemaMigration(db, "0004_session_title_columns", "Ensure session title metadata columns", () => {
+    ensureSessionTitleColumns(db);
+  });
+  runSchemaMigration(db, "0005_user_scoped_identity", "Migrate identity tables to user-scoped primary keys", () => {
+    if (requiresUserScopedIdentityMigration(db)) {
+      migrateUserScopedIdentity(db);
+    }
+  });
+  runSchemaMigration(db, "0006_user_scoped_datasources", "Migrate datasource tables to user-scoped primary keys", () => {
+    if (requiresUserScopedDataSourcesMigration(db)) {
+      migrateUserScopedDataSources(db);
+    }
+  });
+  runSchemaMigration(db, "0007_metadata_indexes", "Ensure metadata indexes", () => {
+    createMetadataIndexes(db);
+  });
+  runSchemaMigration(db, "0008_config_schema", "Ensure configuration schema", () => {
+    initializeConfigSchema(db);
+  });
+};
 
-  if (requiresUserScopedIdentityMigration(db)) {
-    migrateUserScopedIdentity(db);
-  }
-  if (requiresUserScopedDataSourcesMigration(db)) {
-    migrateUserScopedDataSources(db);
-  }
+const initializeSchemaMigrationTable = (db: DatabaseSync): void => {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS schema_migrations (
+      id TEXT PRIMARY KEY,
+      description TEXT NOT NULL,
+      applied_at TEXT NOT NULL
+    );
+  `);
+};
 
-  createMetadataIndexes(db);
-  initializeConfigSchema(db);
+const runSchemaMigration = (
+  db: DatabaseSync,
+  id: string,
+  description: string,
+  runner: () => void
+): void => {
+  runner();
+  recordSchemaMigration(db, id, description);
+};
+
+const recordSchemaMigration = (db: DatabaseSync, id: string, description: string): void => {
+  db.prepare(`
+    INSERT OR IGNORE INTO schema_migrations (id, description, applied_at)
+    VALUES (?, ?, ?)
+  `).run(id, description, new Date().toISOString());
 };
 
 const requiresUserScopedIdentityMigration = (db: DatabaseSync): boolean => {

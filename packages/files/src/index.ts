@@ -238,13 +238,12 @@ export class LocalFileAssetService implements FileAssetService {
     // file named "report.md" would hijack the workspace-root "report.md" ref via
     // reassignAsset — silently turning a cross-session asset into session content.
     const filename = safeWorkspacePath(input.filename);
-    const candidates = this.metadataStore.fileAssetRefs.list({
+    const existing = this.metadataStore.fileAssetRefs.findActiveByFilename({
       user_id: input.user_id,
       workspace_id: input.workspace_id,
-      limit: 500,
+      filename,
       ...(input.session_id ? { session_id: input.session_id } : { session_id: null })
     });
-    const existing = candidates.find((ref) => ref.filename === filename);
 
     if (!existing) {
       const ref = this.metadataStore.fileAssetRefs.create({
@@ -313,13 +312,13 @@ export class LocalFileAssetService implements FileAssetService {
     // Idempotent by filename across cross-session workspace refs (session_id IS NULL).
     // We scan all refs to find a name match, but only treat a cross-session workspace
     // ref as the reuse target — session-scoped refs are left alone.
-    const existing = this.metadataStore.fileAssetRefs.list({
+    const existing = this.metadataStore.fileAssetRefs.findActiveByFilename({
       user_id: input.user_id,
       workspace_id: input.workspace_id,
-      limit: 500,
+      filename,
       source: "workspace",
       session_id: null
-    }).find((ref) => ref.filename === filename);
+    });
     if (existing && existing.file_asset_id === source.asset.id) {
       // Already promoted to the same asset — no-op, return stable ref.
       return { asset: source.asset, ref: existing };
