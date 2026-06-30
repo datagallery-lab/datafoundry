@@ -1,11 +1,12 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Box, Text, useApp, useInput, useStdin, useStdout } from 'ink';
 import { randomUUID } from 'node:crypto';
-import { SessionBanner, StatusFooter } from './Header.js';
-import { ChatArea, estimateChatRows } from './ChatArea.js';
+import { StatusFooter } from './Header.js';
+import { ChatArea, countChatLines } from './ChatArea.js';
 import { OutputsView } from './OutputsView.js';
 import { ActivityPanel } from './ActivityPanel.js';
 import { InputBox } from './InputBox.js';
+import { WorkspaceFrame, chatViewportRows } from './workspace-layout.js';
 import { KeybindingsHelp } from './KeybindingsHelp.js';
 import { SessionPicker } from './SessionPicker.js';
 import { getStatusBarShortcuts } from './keybindings.js';
@@ -102,15 +103,29 @@ export const App: React.FC<AppProps> = ({
   const startupResumeAttempted = useRef(false);
   const terminalRows = stdout.rows ?? 40;
   const terminalColumns = stdout.columns ?? 100;
+  const modelName = resolveModelName(state);
+  const directory = formatDirectory(process.env.PWD || process.cwd());
+  const startup = {
+    threadId: state.threadId,
+    connectionStatus: state.connectionStatus,
+    runStatus: state.runStatus,
+    modelName,
+    directory,
+  };
   const visibleMessages = state.messages;
-  const chatViewportRows = Math.max(5, terminalRows - (commandNotice ? 15 : 14));
-  const chatContentRows = estimateChatRows({
+  const chatViewportRowCount = chatViewportRows(terminalRows, {
+    commandNotice: Boolean(commandNotice),
+    activeTab,
+  });
+  const chatContentRows = countChatLines({
     messages: visibleMessages,
     artifacts: state.artifacts,
+    toolCalls: state.toolCalls,
     totalMessageCount: state.messages.length,
     columns: terminalColumns,
+    startup,
   });
-  const maxChatScrollbackRows = Math.max(0, chatContentRows - chatViewportRows);
+  const maxChatScrollbackRows = Math.max(0, chatContentRows - chatViewportRowCount);
 
   const clampChatScrollback = (value: number): number => {
     return Math.max(0, Math.min(maxChatScrollbackRows, value));
@@ -264,12 +279,12 @@ export const App: React.FC<AppProps> = ({
     if (pickerOpen || inputFocused) return;
 
     if (activeTab === 'chat' && key.pageUp) {
-      scrollChatBy(Math.max(3, Math.floor(chatViewportRows * 0.8)));
+      scrollChatBy(Math.max(3, Math.floor(chatViewportRowCount * 0.8)));
       return;
     }
 
     if (activeTab === 'chat' && key.pageDown) {
-      scrollChatBy(-Math.max(3, Math.floor(chatViewportRows * 0.8)));
+      scrollChatBy(-Math.max(3, Math.floor(chatViewportRowCount * 0.8)));
       return;
     }
 
@@ -618,8 +633,6 @@ export const App: React.FC<AppProps> = ({
 
   const { chatWidth, panelWidth } = getContentWidth();
   const visibleArtifacts = state.artifacts;
-  const modelName = resolveModelName(state);
-  const directory = formatDirectory(process.env.PWD || process.cwd());
   const liveActivity = state.runStatus === 'running'
     ? {
         plan: state.plan,
@@ -744,16 +757,6 @@ export const App: React.FC<AppProps> = ({
 
   return (
     <>
-      <Box paddingX={1} marginBottom={1}>
-        <SessionBanner
-          threadId={state.threadId}
-          connectionStatus={state.connectionStatus}
-          runStatus={state.runStatus}
-          modelName={modelName}
-          directory={directory}
-        />
-      </Box>
-
       {pickerOpen ? (
         <Box flexDirection="column">
           <SessionPicker
@@ -770,93 +773,100 @@ export const App: React.FC<AppProps> = ({
           />
         </Box>
       ) : (
-        <Box flexDirection="column">
-          {/* Main content area */}
-          <Box flexDirection="row" flexGrow={1}>
-            {activeTab === 'chat' ? (
-              <>
-                {/* Chat area: Message history (70% width) */}
-                <Box
-                  flexDirection="column"
-                  width={showLiveActivity ? `${chatWidth}%` : '100%'}
-                  paddingX={1}
-                >
-                  <ChatArea
-                    messages={visibleMessages}
-                    artifacts={visibleArtifacts}
-                    totalMessageCount={state.messages.length}
-                    toolCalls={state.toolCalls}
-                    viewportRows={chatViewportRows}
-                    scrollbackRows={chatScrollbackRows}
-                  />
-                </Box>
-
-                {/* Activity panel: Plan and tool call progress (30% width) */}
-                {showLiveActivity && (
+        <WorkspaceFrame
+          rows={terminalRows}
+          scrollable={
+            <Box flexDirection="row" flexGrow={1} overflowY="hidden">
+              {activeTab === 'chat' ? (
+                <>
                   <Box
                     flexDirection="column"
-                    width={`${panelWidth}%`}
-                    borderStyle="single"
-                    borderColor="cyan"
+                    width={showLiveActivity ? `${chatWidth}%` : '100%'}
+                    flexGrow={1}
                     paddingX={1}
+                    overflowY="hidden"
                   >
-                    <ActivityPanel
-                      plan={liveActivity.plan}
-                      toolCalls={liveActivity.toolCalls}
-                      events={liveActivity.events}
+                    <ChatArea
+                      messages={visibleMessages}
+                      artifacts={visibleArtifacts}
+                      totalMessageCount={state.messages.length}
+                      toolCalls={state.toolCalls}
+                      viewportRows={chatViewportRowCount}
+                      scrollbackRows={chatScrollbackRows}
+                      columns={terminalColumns}
+                      startup={startup}
                     />
                   </Box>
-                )}
-              </>
-            ) : activeTab === 'stats' ? (
-              <Box flexDirection="column" flexGrow={1}>
-                {renderStatsPanel()}
-              </Box>
-            ) : activeTab === 'config' ? (
-              <Box flexDirection="column" flexGrow={1}>
-                {renderConfigPanel()}
-              </Box>
-            ) : (
-              <Box flexDirection="column" flexGrow={1}>
-                <OutputsView
-                  artifacts={visibleArtifacts}
-                  events={state.events}
-                />
-              </Box>
-            )}
-          </Box>
 
-          {/* Status bar with keyboard shortcuts */}
-          {activeTab !== 'chat' && renderStatusBar()}
-
-          {commandNotice && (
-            <Box paddingX={1} flexShrink={0}>
-              <Text color={commandNotice.kind === 'error' ? 'red' : 'cyan'}>
-                {commandNotice.message}
-              </Text>
+                  {showLiveActivity && (
+                    <Box
+                      flexDirection="column"
+                      width={`${panelWidth}%`}
+                      borderStyle="single"
+                      borderColor="cyan"
+                      paddingX={1}
+                    >
+                      <ActivityPanel
+                        plan={liveActivity.plan}
+                        toolCalls={liveActivity.toolCalls}
+                        events={liveActivity.events}
+                      />
+                    </Box>
+                  )}
+                </>
+              ) : activeTab === 'stats' ? (
+                <Box flexDirection="column" flexGrow={1} overflowY="hidden">
+                  {renderStatsPanel()}
+                </Box>
+              ) : activeTab === 'config' ? (
+                <Box flexDirection="column" flexGrow={1} overflowY="hidden">
+                  {renderConfigPanel()}
+                </Box>
+              ) : (
+                <Box flexDirection="column" flexGrow={1} overflowY="hidden">
+                  <OutputsView
+                    artifacts={visibleArtifacts}
+                    events={state.events}
+                  />
+                </Box>
+              )}
             </Box>
-          )}
+          }
+          bottom={
+            <>
+              {activeTab !== 'chat' && renderStatusBar()}
 
-          {/* Tab Navigation */}
-          <Box paddingX={1}>
-            {renderTabs()}
-          </Box>
+              {commandNotice && (
+                <Box paddingX={1} flexShrink={0}>
+                  <Text color={commandNotice.kind === 'error' ? 'red' : 'cyan'}>
+                    {commandNotice.message}
+                  </Text>
+                </Box>
+              )}
 
-          {/* Input box at the bottom */}
-          <InputBox
-            onChange={handleInputChange}
-            onSubmit={handleSubmit}
-            disabled={state.connectionStatus !== 'connected' || state.runStatus === 'running'}
-          />
+              {activeTab !== 'chat' && (
+                <Box paddingX={1}>
+                  {renderTabs()}
+                </Box>
+              )}
 
-          {/* Pinned status footer below input box */}
-          <StatusFooter
-            connectionStatus={state.connectionStatus}
-            runStatus={state.runStatus}
-            modelName={modelName}
-            directory={directory}
-          />
-        </Box>
+              <InputBox
+                onChange={handleInputChange}
+                onSubmit={handleSubmit}
+                disabled={state.connectionStatus !== 'connected' || state.runStatus === 'running'}
+              />
+
+              {activeTab !== 'chat' && (
+                <StatusFooter
+                  connectionStatus={state.connectionStatus}
+                  runStatus={state.runStatus}
+                  modelName={modelName}
+                  directory={directory}
+                />
+              )}
+            </>
+          }
+        />
       )}
     </>
   );
