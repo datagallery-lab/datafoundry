@@ -52,17 +52,19 @@ The frontend talks to a single backend runtime. The backend owns identity, run r
 tool policy, SQL guardrails, file references, and artifact creation. The model sees a governed prompt; it never sees raw
 datasource credentials. 🛡️
 
-## 🎬 GUI And TUI Preview Slots
+## 🎬 GUI And TUI Preview
 
-These are reserved for polished product captures. Replace the placeholder assets with screenshots or GIFs when the GUI
-and TUI demos are ready.
+The GUI capture is still pending. The TUI recording below shows the current terminal workflow.
 
 <table>
   <tr>
     <td><img src="docs/assets/readme/gui-slot.png" alt="GUI screenshot placeholder" width="100%"></td>
   </tr>
   <tr>
-    <td><img src="docs/assets/readme/tui-slot.png" alt="TUI screenshot placeholder" width="100%"></td>
+    <td>
+      <video src="docs/assets/readme/tui-demo.mov" controls muted width="100%" title="DataFoundry TUI demo"></video>
+      <p><a href="docs/assets/readme/tui-demo.mov">Open the TUI demo video</a></p>
+    </td>
   </tr>
 </table>
 
