@@ -134,22 +134,21 @@ DataFoundry is moving quickly, so small, well-scoped contributions are easiest t
 4. Update docs when a change affects setup, APIs, datasource configuration, event behavior, or user-visible output.
 5. Do not commit credentials, local databases, generated storage, or private benchmark data.
 
-## 🛣️ Roadmap
+## 🛣️ Progress And Roadmap
 
-<table>
-  <tr>
-    <td><strong>Semantic data operating layer</strong><br/>Build a durable business semantic layer for metrics, entities, joins, lineage, policies, and reusable analytical concepts.</td>
-    <td><strong>Autonomous analyst loops</strong><br/>Let agents plan investigations, run controlled experiments, critique findings, and converge on evidence-backed conclusions.</td>
-  </tr>
-  <tr>
-    <td><strong>Evaluation and reliability lab</strong><br/>Create repeatable NL2SQL, retrieval, tool-use, and end-to-end task benchmarks with regression gates and failure forensics.</td>
-    <td><strong>Multimodal knowledge fabric</strong><br/>Unify tables, documents, notebooks, charts, images, logs, and generated files into one governed context and retrieval fabric.</td>
-  </tr>
-  <tr>
-    <td><strong>Agent app platform</strong><br/>Expose DataFoundry as a platform for domain-specific analytical agents, reusable workflows, custom tools, and shareable agent apps.</td>
-    <td><strong>Enterprise control plane</strong><br/>Add multi-tenant governance for identity, RBAC, approvals, audit export, policy-as-code, cost limits, and deployment operations.</td>
-  </tr>
-</table>
+- [ ] **Semantic data operating layer** - Build a durable business semantic layer for metrics, entities, joins, lineage, policies, and reusable analytical concepts.
+- [ ] **Autonomous analyst loops** - Let agents plan investigations, run controlled experiments, critique findings, and converge on evidence-backed conclusions.
+- [ ] **Evaluation and reliability lab** - Create repeatable NL2SQL, retrieval, tool-use, and end-to-end task benchmarks with regression gates and failure forensics.
+- [ ] **Multimodal knowledge fabric** - Unify tables, documents, notebooks, charts, images, logs, and generated files into one governed context and retrieval fabric.
+- [ ] **Agent app platform** - Expose DataFoundry as a platform for domain-specific analytical agents, reusable workflows, custom tools, and shareable agent apps.
+- [ ] **Enterprise control plane** - Add multi-tenant governance for identity, RBAC, approvals, audit export, policy-as-code, cost limits, and deployment operations.
+
+### Recent Progress
+
+- **2026-07-01: DataFoundry brand migration** - Standardized the repository, package scope, docs, runtime symbols, TUI command, and GitHub links around the DataFoundry name.
+- **2026-07-01: TUI demo and terminal workflow** - Added README-ready TUI demo media and improved terminal-side datasource selection and status presentation.
+- **2026-07-01: Shared skill cache search** - Enabled selected and unselected skill packages to be materialized and searched from the shared run workspace cache.
+- **2026-07-01: Built-in data analysis skill** - Added a packaged built-in data-analysis skill and expanded smoke coverage for skill parsing, selection, materialization, and context projection.
 
 ## 📚 Documentation
 
