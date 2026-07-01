@@ -2147,7 +2147,7 @@ export function isSessionResourceKindLocked(
 export const SESSION_RESOURCE_LABEL: Record<PerRunMentionKind, string> = {
   db: "Data source",
   kb: "Knowledge",
-  mcp: "Tools",
+  mcp: "MCP",
   skill: "Skills",
 };
 
@@ -2531,6 +2531,50 @@ export function buildRunConfig(
     mentioned,
     fileIds: uniqueStrings(fileSelection.fileIds),
     pinnedPaths: uniqueStrings(fileSelection.pinnedPaths),
+  };
+}
+
+export type RunForwardedProps = {
+  datasourceId: string;
+  run_config: RunConfigPayload;
+};
+
+/** CopilotKit `forwardedProps` payload for each agent run (highest backend merge priority). */
+export function buildRunForwardedProps(
+  datasourceId: string,
+  runConfig: RunConfigPayload,
+): RunForwardedProps {
+  return {
+    datasourceId,
+    run_config: runConfig,
+  };
+}
+
+/** Merge HITL resume command into the current run forwarded props. */
+export function mergeRunForwardedPropsWithCommand(
+  base: RunForwardedProps,
+  command: Record<string, unknown>,
+): RunForwardedProps & { command: Record<string, unknown> } {
+  return {
+    ...base,
+    command,
+  };
+}
+
+/** Patch LangGraph-visible agent state so thread checkpoints carry the latest run_config. */
+export function buildAgentRunStatePatch(
+  forwardedProps: RunForwardedProps,
+  prevState: unknown,
+): Record<string, unknown> {
+  const prev =
+    typeof prevState === "object" && prevState !== null
+      ? (prevState as Record<string, unknown>)
+      : {};
+  const { errorMessage: _errorMessage, runStatus: _runStatus, ...rest } = prev;
+  return {
+    ...rest,
+    datasourceId: forwardedProps.datasourceId,
+    run_config: forwardedProps.run_config,
   };
 }
 

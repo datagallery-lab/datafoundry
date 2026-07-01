@@ -8,6 +8,7 @@ import type {
   PerRunMentionKind,
   PerRunFileSelection,
   PerRunSelection,
+  RunForwardedProps,
   SessionStartedHints,
   WorkspaceConfigItem,
   WorkspaceConfigStore,
@@ -42,6 +43,7 @@ export type DataTaskChatInputBindings = {
   liveRunRunId: string | null;
   onCancelRun?: () => Promise<void> | void;
   cancelRunBusy?: boolean;
+  getRunForwardedProps: () => RunForwardedProps;
 };
 
 const DataTaskChatInputBindingsContext =

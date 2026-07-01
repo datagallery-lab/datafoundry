@@ -174,6 +174,50 @@ try {
   });
   assert.equal(timeoutProfileResponse.status, 201);
 
+  const badModelRunId = `copilotkit-bad-model-run-${Date.now()}`;
+  const badModelThreadId = `copilotkit-bad-model-thread-${Date.now()}`;
+  const badModelEvents = await runCopilotKitAgent(baseUrl, {
+    threadId: badModelThreadId,
+    runId: badModelRunId,
+    parentRunId: undefined,
+    state: {},
+    messages: [{
+      id: "user-message-bad-model",
+      role: "user",
+      content: "这条错误模型请求应该保留并显示失败。"
+    }],
+    tools: [],
+    context: [],
+    forwardedProps: {
+      run_config: {
+        activeDatasourceId: "api-duckdb-demo",
+        activeLlmProfileId: "copilotkit-missing-profile",
+        enabledDatasourceIds: ["api-duckdb-demo"],
+        enabledKnowledgeIds: [],
+        enabledMcpServerIds: [],
+        enabledSkillIds: []
+      }
+    }
+  });
+  assert(
+    badModelEvents.some((event) => event.type === EventType.RUN_ERROR),
+    "Missing model profile should emit RUN_ERROR"
+  );
+  assertRunStatusDelta(badModelEvents, "failed");
+  const badModelConversationResponse = await fetch(
+    `${baseUrl}/api/v1/sessions/${badModelThreadId}/conversation?limit=10`
+  );
+  assert.equal(badModelConversationResponse.status, 200);
+  const badModelConversation = await badModelConversationResponse.json();
+  assert(
+    badModelConversation.data.messages.some((message) =>
+      message.runId === badModelRunId
+      && message.role === "user"
+      && message.contentText === "这条错误模型请求应该保留并显示失败。"
+    ),
+    `Early model config failure should persist the failed user turn: ${JSON.stringify(badModelConversation.data.messages)}`
+  );
+
   const runId = `copilotkit-run-smoke-${Date.now()}`;
   const threadId = `copilotkit-thread-smoke-${Date.now()}`;
   const events = await runCopilotKitAgent(baseUrl, {
@@ -371,7 +415,7 @@ try {
   }
 
   console.log(
-    "CopilotKit run smoke OK: endpoint run, terminal order, tool results, persistence, replay, suspended state, run timeout"
+    "CopilotKit run smoke OK: endpoint run, bad model failure persistence, terminal order, tool results, persistence, replay, suspended state, run timeout"
   );
 } finally {
   await closeHttpServer(server);

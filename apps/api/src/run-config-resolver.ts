@@ -36,6 +36,7 @@ export type ResolvedRunConfig = {
 export type McpRuntime = {
   servers: PolicyMcpClientConfig[];
   toolNames: string[];
+  skipped?: { id: string; reason: string }[];
 };
 
 type ResolveRunConfigInput = {
@@ -110,6 +111,20 @@ export const resolveRunConfig = (input: ResolveRunConfigInput): ResolvedRunConfi
     input.userId,
     input.workspaceId
   );
+  if (mcpRuntime.skipped && mcpRuntime.skipped.length > 0) {
+    const skippedIds = new Set(mcpRuntime.skipped.map((entry) => entry.id));
+    effectiveRunConfig.enabledMcpServerIds = effectiveRunConfig.enabledMcpServerIds.filter(
+      (id) => !skippedIds.has(id)
+    );
+    effectiveRunConfig.unavailableResources = [
+      ...(effectiveRunConfig.unavailableResources ?? []),
+      ...mcpRuntime.skipped.map((entry) => ({
+        kind: "mcp-server" as const,
+        id: entry.id,
+        reason: entry.reason
+      }))
+    ];
+  }
   enforceSkillMcpPolicy(skillSelection.effectiveToolPolicy.allowedTools, mcpRuntime.toolNames);
 
   return {
@@ -441,78 +456,112 @@ const resolveMcpRuntime = (
 ): McpRuntime => {
   const usedNames = new Set<string>();
   const toolNames: string[] = [];
-  const servers = serverIds.map((id): PolicyMcpClientConfig => {
-    const resource = metadataStore.configResources.get({
-      id,
-      workspace_id: workspaceId,
-      user_id: userId,
-      kind: "mcp-server"
-    });
-    const transport = stringRecordValue(resource.payload, "transport") ?? "streamable-http";
-    if (transport !== "streamable-http" && transport !== "sse" && transport !== "stdio") {
-      throw new Error(`MCP_TRANSPORT_UNSUPPORTED:${id}:${transport}`);
+  const servers: PolicyMcpClientConfig[] = [];
+  const skipped: { id: string; reason: string }[] = [];
+  for (const id of serverIds) {
+    try {
+      servers.push(
+        buildMcpServerConfig({
+          id,
+          metadataStore,
+          usedNames,
+          toolNames,
+          userId,
+          workspaceId
+        })
+      );
+    } catch (error) {
+      skipped.push({
+        id,
+        reason: error instanceof Error ? error.message : String(error)
+      });
     }
-    const urlOrCommand = stringRecordValue(resource.payload, "serverUrl") ?? stringRecordValue(resource.payload, "url");
-    if (!urlOrCommand) {
-      throw new Error(`MCP_SERVER_URL_REQUIRED:${id}`);
-    }
-    const manifest = resource.payload.toolManifest;
-    if (!Array.isArray(manifest)) {
-      throw new Error(`MCP_TOOL_MANIFEST_REQUIRED:${id}`);
-    }
-    const toolAllowlist = stringArrayRecordValue(resource.payload, "toolAllowlist")
-      ?? csvRecordValue(resource.payload, "toolAllowlist");
-    manifest.forEach((tool) => {
-      if (!isRecord(tool) || typeof tool.name !== "string") {
-        throw new Error(`MCP_TOOL_MANIFEST_INVALID:${id}`);
-      }
-      if (!matchesMcpToolAllowlist(id, tool.name, toolAllowlist)) {
-        return;
-      }
-      const baseName = `mcp__${sanitizeMcpName(id)}__${sanitizeMcpName(tool.name)}`;
-      let resolved = baseName.slice(0, 64);
-      let suffix = 1;
-      while (usedNames.has(resolved)) {
-        const marker = `_${suffix}`;
-        resolved = `${baseName.slice(0, 64 - marker.length)}${marker}`;
-        suffix += 1;
-      }
-      usedNames.add(resolved);
-      toolNames.push(resolved);
-    });
-    const secret = resource.secret_ref
-      ? metadataStore.secrets.get({ ref: resource.secret_ref, workspace_id: workspaceId, user_id: userId })
-      : {};
-    const headers = resolveMcpHeaders(resource.payload, secret);
-    const timeoutMs = numericRecordValue(resource.payload, "timeoutMs") ?? numericRecordValue(resource.payload, "timeout_ms");
-    const common = {
-      serverId: id,
-      ...(toolAllowlist && toolAllowlist.length > 0 ? { toolAllowlist } : {}),
-      ...(timeoutMs !== undefined ? { timeoutMs: Math.max(1000, Math.min(10 * 60 * 1000, Math.floor(timeoutMs))) } : {})
-    };
-    if (transport === "stdio") {
-      const stdio = resolveStdioCommand(resource.payload, urlOrCommand);
-      const cwd = stringRecordValue(resource.payload, "cwd");
-      const env = recordStringMapValue(resource.payload.env);
-      return {
-        ...common,
-        type: "stdio",
-        command: stdio.command,
-        ...(stdio.args.length > 0 ? { args: stdio.args } : {}),
-        ...(cwd ? { cwd } : {}),
-        ...(env ? { env } : {})
-      };
-    }
-    return {
-      type: transport === "streamable-http" ? "http" : "sse",
-      url: urlOrCommand,
-      serverId: id,
-      ...(toolAllowlist && toolAllowlist.length > 0 ? { toolAllowlist } : {}),
-      ...(timeoutMs !== undefined ? { timeoutMs: Math.max(1000, Math.min(10 * 60 * 1000, Math.floor(timeoutMs))) } : {}),
-      ...(Object.keys(headers).length > 0 ? { headers } : {})
-    };
+  }
+  return {
+    servers,
+    toolNames,
+    ...(skipped.length > 0 ? { skipped } : {})
+  };
+};
+
+const buildMcpServerConfig = (input: {
+  id: string;
+  metadataStore: MetadataStore;
+  usedNames: Set<string>;
+  toolNames: string[];
+  userId: string;
+  workspaceId: string;
+}): PolicyMcpClientConfig => {
+  const { id, metadataStore, usedNames, toolNames, userId, workspaceId } = input;
+  const resource = metadataStore.configResources.get({
+    id,
+    workspace_id: workspaceId,
+    user_id: userId,
+    kind: "mcp-server"
   });
-  return { servers, toolNames };
+  const transport = stringRecordValue(resource.payload, "transport") ?? "streamable-http";
+  if (transport !== "streamable-http" && transport !== "sse" && transport !== "stdio") {
+    throw new Error(`MCP_TRANSPORT_UNSUPPORTED:${id}:${transport}`);
+  }
+  const urlOrCommand = stringRecordValue(resource.payload, "serverUrl") ?? stringRecordValue(resource.payload, "url");
+  if (!urlOrCommand) {
+    throw new Error(`MCP_SERVER_URL_REQUIRED:${id}`);
+  }
+  const manifest = resource.payload.toolManifest;
+  if (!Array.isArray(manifest)) {
+    throw new Error(`MCP_TOOL_MANIFEST_REQUIRED:${id}`);
+  }
+  const toolAllowlist = stringArrayRecordValue(resource.payload, "toolAllowlist")
+    ?? csvRecordValue(resource.payload, "toolAllowlist");
+  manifest.forEach((tool) => {
+    if (!isRecord(tool) || typeof tool.name !== "string") {
+      throw new Error(`MCP_TOOL_MANIFEST_INVALID:${id}`);
+    }
+    if (!matchesMcpToolAllowlist(id, tool.name, toolAllowlist)) {
+      return;
+    }
+    const baseName = `mcp__${sanitizeMcpName(id)}__${sanitizeMcpName(tool.name)}`;
+    let resolved = baseName.slice(0, 64);
+    let suffix = 1;
+    while (usedNames.has(resolved)) {
+      const marker = `_${suffix}`;
+      resolved = `${baseName.slice(0, 64 - marker.length)}${marker}`;
+      suffix += 1;
+    }
+    usedNames.add(resolved);
+    toolNames.push(resolved);
+  });
+  const secret = resource.secret_ref
+    ? metadataStore.secrets.get({ ref: resource.secret_ref, workspace_id: workspaceId, user_id: userId })
+    : {};
+  const headers = resolveMcpHeaders(resource.payload, secret);
+  const timeoutMs = numericRecordValue(resource.payload, "timeoutMs") ?? numericRecordValue(resource.payload, "timeout_ms");
+  const common = {
+    serverId: id,
+    ...(toolAllowlist && toolAllowlist.length > 0 ? { toolAllowlist } : {}),
+    ...(timeoutMs !== undefined ? { timeoutMs: Math.max(1000, Math.min(10 * 60 * 1000, Math.floor(timeoutMs))) } : {})
+  };
+  if (transport === "stdio") {
+    const stdio = resolveStdioCommand(resource.payload, urlOrCommand);
+    const cwd = stringRecordValue(resource.payload, "cwd");
+    const env = recordStringMapValue(resource.payload.env);
+    return {
+      ...common,
+      type: "stdio",
+      command: stdio.command,
+      ...(stdio.args.length > 0 ? { args: stdio.args } : {}),
+      ...(cwd ? { cwd } : {}),
+      ...(env ? { env } : {})
+    };
+  }
+  return {
+    type: transport === "streamable-http" ? "http" : "sse",
+    url: urlOrCommand,
+    serverId: id,
+    ...(toolAllowlist && toolAllowlist.length > 0 ? { toolAllowlist } : {}),
+    ...(timeoutMs !== undefined ? { timeoutMs: Math.max(1000, Math.min(10 * 60 * 1000, Math.floor(timeoutMs))) } : {}),
+    ...(Object.keys(headers).length > 0 ? { headers } : {})
+  };
 };
 
 const resolveMcpHeaders = (

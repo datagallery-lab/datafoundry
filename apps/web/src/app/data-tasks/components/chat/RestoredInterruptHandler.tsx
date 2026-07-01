@@ -2,7 +2,8 @@
 
 import { useAgent, useCopilotKit } from "@copilotkit/react-core/v2";
 import { useEffect, useMemo, useRef } from "react";
-import { hasCapability } from "../../data-task-state";
+import { buildAgentRunStatePatch, hasCapability, mergeRunForwardedPropsWithCommand } from "../../data-task-state";
+import { useDataTaskChatInputBindings } from "./DataTaskChatInputBindingsContext";
 import { canResumeRestoredInteraction } from "../../collaboration-recap";
 import { useThreadCollaborationResponsesForChat } from "./collaboration-responses";
 import {
@@ -37,6 +38,7 @@ export function RestoredInterruptHandler({
 }) {
   const { copilotkit } = useCopilotKit();
   const { agent } = useAgent({ agentId });
+  const { getRunForwardedProps } = useDataTaskChatInputBindings();
   const collaborationResponses = useThreadCollaborationResponsesForChat(threadId);
   const restoredInterrupts = useRestoredInterrupts(threadId);
   const livePending = usePendingCollaborationInterrupt(threadId);
@@ -78,14 +80,17 @@ export function RestoredInterruptHandler({
       submittingRef.current = true;
       removeRestoredInterrupt(threadId, pending.toolCallId);
       clearPendingCollaborationInterrupt(threadId, "restored");
+      const forwardedProps = mergeRunForwardedPropsWithCommand(
+        getRunForwardedProps(),
+        {
+          resume: response,
+          interruptEvent: pending.interruptEvent,
+        },
+      );
+      agent.setState(buildAgentRunStatePatch(forwardedProps, agent.state));
       void copilotkit.runAgent({
         agent,
-        forwardedProps: {
-          command: {
-            resume: response,
-            interruptEvent: pending.interruptEvent,
-          },
-        },
+        forwardedProps,
       });
     };
 

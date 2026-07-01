@@ -25,6 +25,7 @@ import { artifactExportClient } from "../../artifact-export-client";
 import {
   artifactDetailFromPreview,
   artifactDetailNeedsPreviewFetch,
+  deriveLiveSessionView,
   deriveRunUsage,
   formatSandboxOutputText,
   formatWorkspaceMetadataSummary,
@@ -33,6 +34,7 @@ import {
   resolveProducedArtifacts,
   resolveSandboxOutputsForToolCall,
   resolveTokenUsageForEvent,
+  resolveTokenUsageForToolCallIds,
   resolveToolCallForEvent,
   resolveTraceToolStatus,
   resolveWorkspaceMetadataForToolCall,
@@ -174,6 +176,10 @@ export function TaskConsole({
   const [activeTab, setActiveTab] = useState<ConsoleTab>("overview");
   const [outputsExpandedId, setOutputsExpandedId] = useState<string | null>(null);
   const runUsage = useMemo(() => deriveRunUsage(liveRun), [liveRun]);
+  const sessionView = useMemo(
+    () => deriveLiveSessionView(sessionUsage, liveRun),
+    [liveRun, sessionUsage],
+  );
   const workspaceHasSignals =
     liveRun.workspaceMetadata.length > 0 || liveRun.sandboxOutputs.length > 0;
   const overviewSections = overviewSectionPlan({
@@ -503,20 +509,20 @@ function ConclusionZone({
       ? `${Math.round((runUsage.toolCalls.success / runUsage.toolCalls.total) * 100)}%`
       : "—";
 
-  const tokenReported = runUsage.tokenUsageReported || sessionUsage.tokenUsageReported;
-  const displayTokens = runUsage.tokenUsageReported ? runUsage.tokens : sessionUsage.tokens;
-  const displayModels = runUsage.models.length > 0 ? runUsage.models : sessionUsage.models;
+  const tokenReported = sessionView.tokenUsageReported;
+  const displayTokens = sessionView.tokens;
+  const displayModels = sessionView.models;
   const totalTokens = displayTokens.inputTokens + displayTokens.outputTokens;
-  const tokenKpi = tokenReported ? formatCount(totalTokens) : "Not reported";
-  const costKpi =
-    displayTokens.costUsd !== undefined
-      ? `$${displayTokens.costUsd.toFixed(4)}`
-      : "Not reported";
-  const tokenLine = tokenReported
-    ? `In ${formatCount(displayTokens.inputTokens)} / Out ${formatCount(
-        displayTokens.outputTokens,
-      )}${displayModels.length > 0 ? ` · ${displayModels.slice(0, 2).join(" / ")}` : ""}`
-    : costKpi;
+  const tokenKpi =
+    hasRun && tokenReported ? formatCount(totalTokens) : "—";
+  const tokenLine =
+    hasRun && tokenReported
+      ? `In ${formatCount(displayTokens.inputTokens)} / Out ${formatCount(
+          displayTokens.outputTokens,
+        )}${displayModels.length > 0 ? ` · ${displayModels.slice(0, 2).join(" / ")}` : ""}${
+          displayTokens.costUsd !== undefined ? ` · $${displayTokens.costUsd.toFixed(4)}` : ""
+        }`
+      : undefined;
 
   return (
     <ConsoleSection title="Summary">
@@ -1140,72 +1146,7 @@ function resolveTokenUsageForGroup(
   liveRun: LiveRun,
   group: ProcessToolGroup,
 ): ReturnType<typeof resolveTokenUsageForEvent> {
-  const toolCallIds = new Set(group.toolCallIds);
-  const stepIds = new Set(
-    liveRun.toolCalls
-      .filter((call) => toolCallIds.has(call.id) && call.stepId)
-      .map((call) => call.stepId as string),
-  );
-  const exactMatches = liveRun.tokenUsageEvents.filter(
-    (record) =>
-      (record.toolCallId && toolCallIds.has(record.toolCallId)) ||
-      (record.stepId && stepIds.has(record.stepId)),
-  );
-
-  // Mastra attaches model-step usage to the last tool call in a parallel batch.
-  const lastToolCallId = group.toolCallIds.at(-1);
-  const lastToolMatches = lastToolCallId
-    ? exactMatches.filter((record) => record.toolCallId === lastToolCallId)
-    : [];
-
-  let matches = lastToolMatches.length > 0 ? lastToolMatches : exactMatches;
-  let approximate = false;
-
-  if (matches.length > 1) {
-    matches = [
-      matches.reduce((best, current) =>
-        current.inputTokens + current.outputTokens >
-        best.inputTokens + best.outputTokens
-          ? current
-          : best,
-      ),
-    ];
-  }
-
-  if (matches.length === 0) {
-    const toolIndices = group.toolCallIds
-      .map((id) => liveRun.toolCalls.findIndex((call) => call.id === id))
-      .filter((index) => index >= 0);
-    const maxStepNumber =
-      toolIndices.length > 0 ? Math.max(...toolIndices) + 1 : undefined;
-    if (maxStepNumber !== undefined) {
-      matches = liveRun.tokenUsageEvents.filter(
-        (record) => record.stepNumber === maxStepNumber,
-      );
-      approximate = matches.length > 0;
-    }
-  }
-
-  const inputTokens = matches.reduce((sum, record) => sum + record.inputTokens, 0);
-  const outputTokens = matches.reduce((sum, record) => sum + record.outputTokens, 0);
-  const costs = matches
-    .map((record) => record.costUsd)
-    .filter((value): value is number => value !== undefined);
-  const models = [
-    ...new Set(
-      matches
-        .map((record) => record.model)
-        .filter((model): model is string => Boolean(model)),
-    ),
-  ];
-  return {
-    inputTokens,
-    outputTokens,
-    ...(costs.length > 0 ? { costUsd: costs.reduce((sum, value) => sum + value, 0) } : {}),
-    reported: inputTokens > 0 || outputTokens > 0 || costs.length > 0,
-    models,
-    ...(approximate ? { approximate: true } : {}),
-  };
+  return resolveTokenUsageForToolCallIds(liveRun, group.toolCallIds);
 }
 
 function ToolGroupDetailView({
@@ -1719,16 +1660,12 @@ function TokenUsagePanel({
               {model}
             </span>
           ))
-        ) : (
-          <span>Model not reported</span>
-        )}
+        ) : null}
         {usage.costUsd !== undefined ? (
           <span className="rounded-full bg-step-knowledge/10 px-2 py-0.5 font-semibold text-step-knowledge">
             ${usage.costUsd.toFixed(4)}
           </span>
-        ) : (
-          <span>CostNot reported</span>
-        )}
+        ) : null}
       </div>
     </div>
   );

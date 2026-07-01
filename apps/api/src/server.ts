@@ -28,6 +28,7 @@ import { join } from "node:path";
 import { Observable } from "rxjs";
 
 import { handleConfigApiRequest } from "./config-api.js";
+import { persistCurrentUserMessage } from "./conversation-memory.js";
 import { createRunAgentAssembly, createRunAgentContext } from "./run-agent-assembly.js";
 import { resolveRunConfig } from "./run-config-resolver.js";
 import { resolveRunIdentity } from "./run-identity-orchestrator.js";
@@ -36,7 +37,7 @@ import { extractLastUserText } from "./run-input.js";
 import { extractInteractionResume, InteractionRuntimeAdapter } from "./interaction-runtime-adapter.js";
 import { RunCancelRegistry } from "./run-cancel-registry.js";
 import { RunEventPipeline } from "./run-event-pipeline.js";
-import { RunFinalizer } from "./run-finalizer.js";
+import { RunFinalizer, createRunStatusDelta } from "./run-finalizer.js";
 import { startSessionTitleTask } from "./session-title.js";
 import { TaskPlanProjector } from "./task-plan-projector.js";
 import { ToolCallResultBridge } from "./tool-call-result-bridge.js";
@@ -49,6 +50,69 @@ const DEV_USER: MeResponse = {
 
 const COPILOTKIT_PATH = "/api/copilotkit";
 const DEFAULT_WORKSPACE_ID = "default";
+
+const emitEarlyRunFailure = (
+  subscriber: { complete(): void; next(event: BaseEvent): void },
+  runId: string,
+  message: string
+): void => {
+  const timestamp = Date.now();
+  subscriber.next({ type: EventType.RUN_STARTED, runId, timestamp });
+  subscriber.next(createRunStatusDelta("failed", message));
+  subscriber.next({ type: EventType.RUN_ERROR, message, timestamp });
+  subscriber.complete();
+};
+
+const persistEarlyFailedUserMessage = (input: {
+  errorMessage: string;
+  isResume: boolean;
+  metadataStore: MetadataStore;
+  runId: string;
+  runInput: RunAgentInput;
+  sessionId: string;
+  userId: string;
+  userInput: string;
+}): void => {
+  if (input.isResume || !input.userInput.trim()) {
+    return;
+  }
+  try {
+    input.metadataStore.sessions.create({
+      user_id: input.userId,
+      id: input.sessionId
+    });
+    input.metadataStore.runs.claim({
+      user_id: input.userId,
+      id: input.runId,
+      session_id: input.sessionId,
+      user_input: input.userInput,
+      status: "running",
+      model_name: "unresolved"
+    });
+    input.metadataStore.runs.updateStatus({
+      user_id: input.userId,
+      run_id: input.runId,
+      status: "failed",
+      error_message: input.errorMessage
+    });
+    const record = persistCurrentUserMessage({
+      currentUserText: input.userInput,
+      repository: input.metadataStore.conversationMessages,
+      runId: input.runId,
+      runInput: input.runInput,
+      sessionId: input.sessionId,
+      userId: input.userId
+    });
+    input.metadataStore.sessions.touchLastMessage({
+      user_id: input.userId,
+      session_id: input.sessionId,
+      last_message_at: record.created_at
+    });
+  } catch (error) {
+    // Keep the transport error visible even if best-effort history persistence fails.
+    console.warn("[data-agent] failed to persist early failed user message", error);
+  }
+};
 
 export type CreateServerOptions = {
   conversationMemoryMode?: AgentMemoryMode | undefined;
@@ -299,33 +363,58 @@ class DataAgentAgUiAgent extends AbstractAgent {
 
   run(runInput: RunAgentInput): Observable<BaseEvent> {
     return new Observable<BaseEvent>((subscriber) => {
+      const interactionResume = extractInteractionResume(runInput);
+      const runId = interactionResume?.interrupt.runId ?? runInput.runId;
       const run = async (): Promise<void> => {
         const sessionId = runInput.threadId;
-        const interactionResume = extractInteractionResume(runInput);
-        const runId = interactionResume?.interrupt.runId ?? runInput.runId;
         // CopilotKit may send a fresh runId on resume; Mastra embeds runInput.runId in
         // on_interrupt payloads, so keep AG-UI identity aligned with the suspended run.
         const normalizedRunInput =
           runId === runInput.runId ? runInput : { ...runInput, runId };
         const userInput = extractLastUserText(normalizedRunInput) ?? "CopilotKit AG-UI run";
-        const {
-          effectiveRunConfig,
-          mcpRuntime,
-          modelContextProfile,
-          modelProvider,
-          modelSettings,
-          reasoningModel,
-          runTimeoutMs,
-          selectedSkills,
-          skillSelection
-        } = resolveRunConfig({
-          defaultDatasourceId: this.input.defaultDatasourceId,
-          metadataStore: this.input.metadataStore,
-          runInput: normalizedRunInput,
-          userId: this.input.user.id,
-          userInput,
-          workspaceId: this.input.workspaceId
-        });
+        let effectiveRunConfig;
+        let mcpRuntime;
+        let modelContextProfile;
+        let modelProvider;
+        let modelSettings;
+        let reasoningModel;
+        let runTimeoutMs;
+        let selectedSkills;
+        let skillSelection;
+        try {
+          ({
+            effectiveRunConfig,
+            mcpRuntime,
+            modelContextProfile,
+            modelProvider,
+            modelSettings,
+            reasoningModel,
+            runTimeoutMs,
+            selectedSkills,
+            skillSelection
+          } = resolveRunConfig({
+            defaultDatasourceId: this.input.defaultDatasourceId,
+            metadataStore: this.input.metadataStore,
+            runInput: normalizedRunInput,
+            userId: this.input.user.id,
+            userInput,
+            workspaceId: this.input.workspaceId
+          }));
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          persistEarlyFailedUserMessage({
+            errorMessage: message,
+            isResume: Boolean(interactionResume),
+            metadataStore: this.input.metadataStore,
+            runId,
+            runInput: normalizedRunInput,
+            sessionId,
+            userId: this.input.user.id,
+            userInput
+          });
+          emitEarlyRunFailure(subscriber, runId, message);
+          return;
+        }
         const runEventWriter = new RunEventWriter(this.input.metadataStore.runEvents);
         const identity = resolveRunIdentity({
           effectiveRunConfig,
@@ -613,6 +702,9 @@ class DataAgentAgUiAgent extends AbstractAgent {
                   : {}),
                 ...(effectiveRunConfig.disabledByPolicy && effectiveRunConfig.disabledByPolicy.length > 0
                   ? { disabled_by_policy: effectiveRunConfig.disabledByPolicy }
+                  : {}),
+                ...(effectiveRunConfig.unavailableResources && effectiveRunConfig.unavailableResources.length > 0
+                  ? { unavailable_resources: effectiveRunConfig.unavailableResources }
                   : {})
               }));
               emit(createCustomEvent("skill.selection", {
@@ -663,7 +755,7 @@ class DataAgentAgUiAgent extends AbstractAgent {
               timestamp: Date.now()
             };
             failRun(message, event);
-            subscriber.error(error);
+            subscriber.complete();
           },
           complete: () => {
             clearRunTimeout();
@@ -696,7 +788,18 @@ class DataAgentAgUiAgent extends AbstractAgent {
       };
 
       run().catch((error: unknown) => {
-        subscriber.error(error);
+        const message = error instanceof Error ? error.message : String(error);
+        persistEarlyFailedUserMessage({
+          errorMessage: message,
+          isResume: Boolean(interactionResume),
+          metadataStore: this.input.metadataStore,
+          runId,
+          runInput,
+          sessionId: runInput.threadId,
+          userId: this.input.user.id,
+          userInput: extractLastUserText(runInput) ?? "CopilotKit AG-UI run"
+        });
+        emitEarlyRunFailure(subscriber, runId, message);
       });
     });
   }

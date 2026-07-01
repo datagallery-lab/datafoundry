@@ -50,6 +50,11 @@ export type EffectiveRunConfig = {
    * The run continues; this list is surfaced in `run.config.resolved` for diagnostics.
    */
   disabledByPolicy?: { kind: "knowledge-base" | "mcp-server" | "model-profile"; id: string }[];
+  /**
+   * Resources silently dropped because runtime configuration is invalid (missing manifest,
+   * URL, etc.). The run continues without those MCP tools.
+   */
+  unavailableResources?: { kind: "mcp-server"; id: string; reason: string }[];
 };
 
 export type PerRunMentionKind = "db" | "kb" | "mcp" | "skill";

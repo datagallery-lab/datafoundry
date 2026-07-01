@@ -16,11 +16,15 @@ import {
   hasCollaborationResponse,
 } from "./collaboration-recap";
 import {
+  accumulateSessionUsage,
   archiveCurrentRunSegment,
   createInitialLiveRun,
+  createInitialSessionUsage,
+  deriveRunUsage,
   reconcileLiveRunArtifacts,
   reduceLiveRunEvent,
   type LiveRun,
+  type SessionUsageStats,
 } from "./live-run-state";
 
 /** Pending HITL interaction restored from server conversation metadata. */
@@ -63,6 +67,13 @@ export function replayRestorableCustomEvents(
   );
   let next = state;
   for (const entry of events) {
+    if (
+      next.runId &&
+      RUN_SCOPED_RESTORABLE_CUSTOM_EVENTS.has(entry.name) &&
+      entry.runId !== next.runId
+    ) {
+      continue;
+    }
     next = reduceLiveRunEvent(next, {
       type: "CUSTOM",
       name: entry.name,
@@ -70,6 +81,45 @@ export function replayRestorableCustomEvents(
     } as Parameters<typeof reduceLiveRunEvent>[1]);
   }
   return next;
+}
+
+export function hydrateSessionUsageFromConversation(
+  dto: SessionConversationDto,
+): SessionUsageStats {
+  const events = sortRestorableCustomEvents(dto.restorableCustomEvents ?? []);
+  let session = createInitialSessionUsage();
+
+  for (const segment of collectRestorableRunSegments(dto)) {
+    const status = hydratedSegmentStatus(segment);
+    if (status === "suspended" || status === "running" || status === "idle" || status === "canceled") {
+      continue;
+    }
+
+    let run = reduceLiveRunEvent(createInitialLiveRun(), {
+      type: "RUN_STARTED",
+      runId: segment.runId,
+    });
+    for (const entry of events) {
+      if (entry.runId !== segment.runId || entry.name !== "token_usage") {
+        continue;
+      }
+      run = reduceLiveRunEvent(run, {
+        type: "CUSTOM",
+        name: entry.name,
+        value: entry.value,
+      });
+    }
+    run =
+      status === "failed"
+        ? reduceLiveRunEvent(run, {
+            type: "RUN_ERROR",
+            message: ORPHANED_RUN_ASSISTANT_PLACEHOLDER,
+          })
+        : reduceLiveRunEvent(run, { type: "RUN_FINISHED" });
+    session = accumulateSessionUsage(session, deriveRunUsage(run), status);
+  }
+
+  return session;
 }
 
 export function sortRestorableCustomEvents(
@@ -113,6 +163,59 @@ export function agentMessagesMatchConversation(
   return lastAgent?.id === lastExpected?.id;
 }
 
+function messageText(message: unknown): string | undefined {
+  if (typeof message !== "object" || message === null) {
+    return undefined;
+  }
+  const content = (message as { content?: unknown }).content;
+  if (typeof content === "string") {
+    return content.trim() || undefined;
+  }
+  if (!Array.isArray(content)) {
+    return undefined;
+  }
+  const text = content
+    .map((part) => {
+      if (typeof part === "string") {
+        return part;
+      }
+      if (typeof part === "object" && part !== null) {
+        const record = part as { type?: unknown; text?: unknown };
+        if (record.type === "text" && typeof record.text === "string") {
+          return record.text;
+        }
+      }
+      return "";
+    })
+    .join("")
+    .trim();
+  return text || undefined;
+}
+
+function hasUnpersistedTrailingUserMessage(
+  agentMessages: unknown,
+  expected: Message[],
+): boolean {
+  if (!Array.isArray(agentMessages) || agentMessages.length <= expected.length) {
+    return false;
+  }
+
+  for (let index = 0; index < expected.length; index += 1) {
+    const agent = agentMessages[index] as { id?: unknown } | undefined;
+    if (agent?.id !== expected[index]?.id) {
+      return false;
+    }
+  }
+
+  const trailing = agentMessages.slice(expected.length);
+  const last = trailing.at(-1) as { id?: unknown; role?: unknown } | undefined;
+  if (!last || last.role !== "user" || !messageText(last)) {
+    return false;
+  }
+  const expectedIds = new Set(expected.map((message) => message.id));
+  return typeof last.id !== "string" || !expectedIds.has(last.id);
+}
+
 /** Whether chat messages should be replaced from server conversation metadata. */
 export function shouldRestoreConversationMessages(input: {
   conversationMemoryEnabled: boolean;
@@ -127,6 +230,9 @@ export function shouldRestoreConversationMessages(input: {
   if (expected.length === 0) {
     return false;
   }
+  if (hasUnpersistedTrailingUserMessage(input.agentMessages, expected)) {
+    return false;
+  }
   return !agentMessagesMatchConversation(input.agentMessages, input.dto);
 }
 
@@ -135,12 +241,13 @@ export function shouldHydrateLiveRunFromConversation(
   state: LiveRun,
   dto: SessionConversationDto,
 ): boolean {
-  if (dto.toolCalls.length === 0) {
+  const runSegments = collectRestorableRunSegments(dto);
+  if (runSegments.length === 0) {
     return false;
   }
   // AG-UI may replay RUN_STARTED before REST hydrate finishes, leaving a running
   // shell with empty toolCalls and bogus runHistory boundaries.
-  if (state.toolCalls.length === 0) {
+  if (dto.toolCalls.length > 0 && state.toolCalls.length === 0) {
     return true;
   }
   if (state.toolCalls.length < dto.toolCalls.length) {
@@ -150,7 +257,12 @@ export function shouldHydrateLiveRunFromConversation(
   if (dto.toolCalls.some((toolCall) => !liveToolIds.has(toolCall.toolCallId))) {
     return true;
   }
-  return false;
+  const latest = runSegments.at(-1);
+  if (!latest) {
+    return false;
+  }
+  const expectedStatus = hydratedSegmentStatus(latest);
+  return state.runId !== latest.runId || state.runStatus !== expectedStatus;
 }
 
 /** Latest user utterance in a persisted conversation (for console overview). */
@@ -206,9 +318,22 @@ type RestoredToolCall = {
   function: { name: string; arguments: string };
 };
 
+const ORPHANED_RUN_ASSISTANT_PLACEHOLDER =
+  "Previous request failed before the assistant produced a response.";
+
 const COLLABORATION_TOOL_NAMES = new Set<CollaborationToolName>([
   "ask_user",
   "submit_plan",
+]);
+
+const RUN_SCOPED_RESTORABLE_CUSTOM_EVENTS = new Set([
+  "context.compiled",
+  "context.prompt-verified",
+  "goal.updated",
+  "run.config.resolved",
+  "skill.selection",
+  "token_usage",
+  "token_usage.correlation",
 ]);
 
 type ChoiceOption = { label: string; value: string; description?: string };
@@ -444,6 +569,52 @@ function insertSyntheticToolParentMessages(
     ...placeholders,
     ...messages.slice(firstAssistantIndex),
   ];
+}
+
+function createRunFacts(dto: SessionConversationDto): {
+  assistantRunIds: Set<string>;
+  pendingRunIds: Set<string>;
+  toolRunIds: Set<string>;
+} {
+  return {
+    assistantRunIds: new Set(
+      dto.messages
+        .filter((message) => message.role === "assistant")
+        .map((message) => message.runId),
+    ),
+    pendingRunIds: new Set(
+      (dto.pendingInteractions ?? []).map((interaction) => interaction.runId),
+    ),
+    toolRunIds: new Set(dto.toolCalls.map((toolCall) => toolCall.runId)),
+  };
+}
+
+function shouldInsertOrphanedRunPlaceholder(
+  entry: ConversationMessageDto,
+  sortedEntries: ConversationMessageDto[],
+  index: number,
+  facts: ReturnType<typeof createRunFacts>,
+): boolean {
+  if (entry.role !== "user" || !entry.runId) {
+    return false;
+  }
+  if (
+    facts.assistantRunIds.has(entry.runId) ||
+    facts.toolRunIds.has(entry.runId) ||
+    facts.pendingRunIds.has(entry.runId)
+  ) {
+    return false;
+  }
+  const nextEntry = sortedEntries[index + 1];
+  return !nextEntry || nextEntry.runId !== entry.runId || nextEntry.role === "user";
+}
+
+function orphanedRunAssistantPlaceholder(runId: string): Message {
+  return {
+    id: `orphan-run:${runId}:assistant-placeholder`,
+    role: "assistant",
+    content: ORPHANED_RUN_ASSISTANT_PLACEHOLDER,
+  };
 }
 
 function findAssistantMessageIdForToolCall(
@@ -719,9 +890,10 @@ export function conversationToAgentMessages(
 ): Message[] {
   const sorted = [...dto.messages].sort((a, b) => a.position - b.position);
   const assistantIdsToRestore = assistantMessageIdsToRestore(sorted, dto.toolCalls);
+  const runFacts = createRunFacts(dto);
   const messages: Message[] = [];
 
-  for (const entry of sorted) {
+  for (const [index, entry] of sorted.entries()) {
     if (entry.role !== "user" && entry.role !== "assistant") {
       continue;
     }
@@ -736,6 +908,9 @@ export function conversationToAgentMessages(
         role: "user",
         content,
       });
+      if (shouldInsertOrphanedRunPlaceholder(entry, sorted, index, runFacts)) {
+        messages.push(orphanedRunAssistantPlaceholder(entry.runId));
+      }
       continue;
     }
     if (!content && !assistantIdsToRestore.has(id)) {
@@ -834,54 +1009,71 @@ function serializeToolCallResult(toolCall: ConversationToolCallDto): string | un
   return undefined;
 }
 
-function runOrderFromUserMessages(messages: ConversationMessageDto[]): string[] {
-  const order: string[] = [];
-  const seen = new Set<string>();
-  const sorted = [...messages].sort((left, right) => left.position - right.position);
-  for (const message of sorted) {
-    if (message.role !== "user" || !message.runId || seen.has(message.runId)) {
+type RestorableRunSegment = {
+  runId: string;
+  order: number;
+  hasUser: boolean;
+  hasAssistant: boolean;
+  tools: ConversationToolCallDto[];
+};
+
+function collectRestorableRunSegments(dto: SessionConversationDto): RestorableRunSegment[] {
+  const byRunId = new Map<string, RestorableRunSegment>();
+  const sortedMessages = [...dto.messages].sort((left, right) => left.position - right.position);
+
+  for (const message of sortedMessages) {
+    if (!message.runId) {
       continue;
     }
-    seen.add(message.runId);
-    order.push(message.runId);
+    const existing = byRunId.get(message.runId) ?? {
+      runId: message.runId,
+      order: message.position,
+      hasUser: false,
+      hasAssistant: false,
+      tools: [],
+    };
+    existing.order = Math.min(existing.order, message.position);
+    if (message.role === "user" && message.contentText.trim()) {
+      existing.hasUser = true;
+    }
+    if (message.role === "assistant") {
+      existing.hasAssistant = true;
+    }
+    byRunId.set(message.runId, existing);
   }
-  return order;
+
+  for (const toolCall of dto.toolCalls) {
+    const order = toolCallSortKey(toolCall);
+    const existing = byRunId.get(toolCall.runId) ?? {
+      runId: toolCall.runId,
+      order,
+      hasUser: false,
+      hasAssistant: false,
+      tools: [],
+    };
+    if (!existing.hasUser && !existing.hasAssistant) {
+      existing.order = Math.min(existing.order, order);
+    }
+    existing.tools.push(toolCall);
+    byRunId.set(toolCall.runId, existing);
+  }
+
+  return [...byRunId.values()]
+    .filter((segment) => segment.hasUser || segment.hasAssistant || segment.tools.length > 0)
+    .sort((left, right) => left.order - right.order)
+    .map((segment) => ({
+      ...segment,
+      tools: [...segment.tools].sort(
+        (left, right) => toolCallSortKey(left) - toolCallSortKey(right),
+      ),
+    }));
 }
 
-function groupToolCallsByRun(
-  toolCalls: ConversationToolCallDto[],
-  messages: ConversationMessageDto[],
-): ConversationToolCallDto[][] {
-  const groups = new Map<string, ConversationToolCallDto[]>();
-
-  for (const toolCall of toolCalls) {
-    const runId = toolCall.runId || "default";
-    const bucket = groups.get(runId) ?? [];
-    bucket.push(toolCall);
-    groups.set(runId, bucket);
+function hydratedSegmentStatus(segment: RestorableRunSegment): LiveRun["runStatus"] {
+  if (segment.tools.length > 0) {
+    return isPendingCollaborationRunEnd(segment.tools) ? "suspended" : "completed";
   }
-
-  const userRunOrder = runOrderFromUserMessages(messages);
-  const orderedRunIds = [
-    ...userRunOrder.filter((runId) => groups.has(runId)),
-    ...[...groups.keys()]
-      .filter((runId) => !userRunOrder.includes(runId))
-      .sort((left, right) => {
-        const leftKey = Math.min(
-          ...(groups.get(left) ?? []).map((toolCall) => toolCallSortKey(toolCall)),
-        );
-        const rightKey = Math.min(
-          ...(groups.get(right) ?? []).map((toolCall) => toolCallSortKey(toolCall)),
-        );
-        return leftKey - rightKey;
-      }),
-  ];
-
-  return orderedRunIds.map((runId) =>
-    [...(groups.get(runId) ?? [])].sort(
-      (left, right) => toolCallSortKey(left) - toolCallSortKey(right),
-    ),
-  );
+  return segment.hasUser && !segment.hasAssistant ? "failed" : "completed";
 }
 
 function isSubmitPlanApprovalResult(result: string): boolean {
@@ -1042,6 +1234,19 @@ function finalizeHydratedRunSegment(
   return reduceLiveRunEvent(state, { type: "RUN_FINISHED" });
 }
 
+function finalizeMessageOnlyHydratedRunSegment(
+  state: LiveRun,
+  segment: RestorableRunSegment,
+): LiveRun {
+  if (segment.hasUser && !segment.hasAssistant) {
+    return reduceLiveRunEvent(state, {
+      type: "RUN_ERROR",
+      message: ORPHANED_RUN_ASSISTANT_PLACEHOLDER,
+    });
+  }
+  return reduceLiveRunEvent(state, { type: "RUN_FINISHED" });
+}
+
 function startNextHydratedRunGroup(state: LiveRun, runId?: string): LiveRun {
   if (state.runStatus === "suspended") {
     const archived: LiveRun = {
@@ -1090,24 +1295,23 @@ export function hydrateLiveRunFromConversation(
     return state;
   }
 
-  const sorted = [...dto.toolCalls].sort(
-    (left, right) => toolCallSortKey(left) - toolCallSortKey(right),
-  );
-  const runGroups = groupToolCallsByRun(sorted, dto.messages);
+  const runSegments = collectRestorableRunSegments(dto);
 
   let next = createInitialLiveRun();
-  for (const [index, tools] of runGroups.entries()) {
-    const runId = tools[0]?.runId;
+  for (const [index, segment] of runSegments.entries()) {
     next =
       index === 0
-        ? reduceLiveRunEvent(next, { type: "RUN_STARTED", ...(runId ? { runId } : {}) })
-        : startNextHydratedRunGroup(next, runId);
+        ? reduceLiveRunEvent(next, { type: "RUN_STARTED", runId: segment.runId })
+        : startNextHydratedRunGroup(next, segment.runId);
 
-    for (const toolCall of tools) {
+    for (const toolCall of segment.tools) {
       next = applyConversationToolCall(next, toolCall);
     }
 
-    next = finalizeHydratedRunSegment(next, tools);
+    next =
+      segment.tools.length > 0
+        ? finalizeHydratedRunSegment(next, segment.tools)
+        : finalizeMessageOnlyHydratedRunSegment(next, segment);
   }
 
   next = reconcileLiveRunArtifacts(mergePreservedLiveRunSessionData(state, next));

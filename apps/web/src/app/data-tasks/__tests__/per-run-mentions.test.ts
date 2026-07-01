@@ -2,6 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
   buildMentionResources,
   buildRunConfig,
+  buildRunForwardedProps,
+  buildAgentRunStatePatch,
+  mergeRunForwardedPropsWithCommand,
   countPerRunMentions,
   createChatSession,
   emptyPerRunSelection,
@@ -67,6 +70,64 @@ describe("per-run mention selection", () => {
     expect(db?.backendSupported).toBe(true);
     expect(kb?.backendSupported).toBe(true);
     expect(resources.some((r) => r.kind === "llm")).toBe(false);
+  });
+});
+
+describe("buildRunForwardedProps", () => {
+  it("wraps datasourceId and run_config for CopilotKit forwardedProps", () => {
+    const runConfig = buildRunConfig(store, {
+      activeLlmId: "llm-1",
+      defaultDatasourceId: "db-default",
+      session,
+    });
+    expect(buildRunForwardedProps("db-default", runConfig)).toEqual({
+      datasourceId: "db-default",
+      run_config: runConfig,
+    });
+  });
+
+  it("merges resume command without dropping run_config", () => {
+    const base = buildRunForwardedProps("db-default", {
+      activeLlmProfileId: "llm-2",
+      activeDatasourceId: "db-default",
+      enabledDatasourceIds: ["db-default"],
+      enabledKnowledgeIds: [],
+      enabledMcpServerIds: [],
+      enabledSkillIds: [],
+      mentioned: emptyPerRunSelection(),
+      fileIds: [],
+      pinnedPaths: [],
+    });
+    expect(
+      mergeRunForwardedPropsWithCommand(base, { resume: { action: "approved" } }),
+    ).toEqual({
+      ...base,
+      command: { resume: { action: "approved" } },
+    });
+  });
+
+  it("patches agent state with latest run_config", () => {
+    const forwarded = buildRunForwardedProps("db-default", {
+      activeLlmProfileId: "llm-2",
+      activeDatasourceId: "db-default",
+      enabledDatasourceIds: ["db-default"],
+      enabledKnowledgeIds: [],
+      enabledMcpServerIds: [],
+      enabledSkillIds: [],
+      mentioned: emptyPerRunSelection(),
+      fileIds: [],
+      pinnedPaths: [],
+    });
+    expect(
+      buildAgentRunStatePatch(forwarded, {
+        run_config: { activeLlmProfileId: "llm-1" },
+        messages: [],
+      }),
+    ).toMatchObject({
+      messages: [],
+      datasourceId: "db-default",
+      run_config: forwarded.run_config,
+    });
   });
 });
 

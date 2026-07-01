@@ -5,6 +5,7 @@ import {
   conversationToAgentMessages,
   hydrateLiveRunFromConversation,
   hydratePendingInteractionLiveRun,
+  hydrateSessionUsageFromConversation,
   isIgnorableConversationRestoreError,
   agentMessagesMatchConversation,
   latestUserQuestionFromConversation,
@@ -94,6 +95,59 @@ describe("conversationToAgentMessages", () => {
     };
 
     expect(conversationToAgentMessages(dto)[0]?.id).toBe("persisted-user-1");
+  });
+
+  it("inserts an assistant failure placeholder after user-only failed runs", () => {
+    const dto: SessionConversationDto = {
+      sessionId: "thread-1",
+      messages: [
+        {
+          id: "m-user-failed",
+          runId: "run-bad-model",
+          role: "user",
+          source: "client",
+          messageId: "msg-user-failed",
+          contentText: "用错误模型分析订单",
+          position: 1,
+          createdAt: "2026-06-25T10:00:01Z",
+        },
+        {
+          id: "m-user-next",
+          runId: "run-good-model",
+          role: "user",
+          source: "client",
+          messageId: "msg-user-next",
+          contentText: "换成正确模型继续",
+          position: 2,
+          createdAt: "2026-06-25T10:00:02Z",
+        },
+      ],
+      runEventRefs: [],
+      toolCalls: [],
+    };
+
+    expect(conversationToAgentMessages(dto)).toEqual([
+      {
+        id: "msg-user-failed",
+        role: "user",
+        content: "用错误模型分析订单",
+      },
+      {
+        id: "orphan-run:run-bad-model:assistant-placeholder",
+        role: "assistant",
+        content: "Previous request failed before the assistant produced a response.",
+      },
+      {
+        id: "msg-user-next",
+        role: "user",
+        content: "换成正确模型继续",
+      },
+      {
+        id: "orphan-run:run-good-model:assistant-placeholder",
+        role: "assistant",
+        content: "Previous request failed before the assistant produced a response.",
+      },
+    ]);
   });
 
   it("skips empty content and unknown roles", () => {
@@ -814,6 +868,52 @@ describe("shouldRestoreConversationMessages", () => {
       }),
     ).toBe(true);
   });
+
+  it("does not overwrite a local trailing user message that has not been persisted yet", () => {
+    const dto: SessionConversationDto = {
+      sessionId: "thread-1",
+      messages: [
+        {
+          id: "m1",
+          runId: "run-1",
+          role: "user",
+          source: "client",
+          messageId: "msg-user-1",
+          contentText: "先查 orders 表",
+          position: 1,
+          createdAt: "2026-06-25T10:00:01Z",
+        },
+        {
+          id: "m2",
+          runId: "run-1",
+          role: "assistant",
+          source: "agent",
+          messageId: "msg-assistant-1",
+          contentText: "orders 表可以查询。",
+          position: 2,
+          createdAt: "2026-06-25T10:00:02Z",
+        },
+      ],
+      runEventRefs: [],
+      toolCalls: [],
+    };
+
+    expect(
+      shouldRestoreConversationMessages({
+        conversationMemoryEnabled: true,
+        isRunning: false,
+        agentMessages: [
+          ...conversationToAgentMessages(dto),
+          {
+            id: "local-user-message-bad-model",
+            role: "user",
+            content: "这条错误模型请求还没有写入服务端",
+          },
+        ],
+        dto,
+      }),
+    ).toBe(false);
+  });
 });
 
 describe("shouldHydrateLiveRunFromConversation", () => {
@@ -957,6 +1057,92 @@ describe("shouldHydrateLiveRunFromConversation", () => {
     expect(shouldHydrateLiveRunFromConversation(run, dto)).toBe(true);
     run = hydrateLiveRunFromConversation(run, dto);
     expect(run.toolCalls).toHaveLength(2);
+  });
+
+  it("hydrates user-only message runs as failed segments", () => {
+    const dto: SessionConversationDto = {
+      sessionId: "thread-1",
+      messages: [
+        {
+          id: "m-user-failed",
+          runId: "run-bad-model",
+          role: "user",
+          source: "client",
+          messageId: "msg-user-failed",
+          contentText: "用错误模型分析订单",
+          position: 1,
+          createdAt: "2026-06-25T10:00:01Z",
+        },
+      ],
+      runEventRefs: [],
+      toolCalls: [],
+    };
+
+    const run = hydrateLiveRunFromConversation(createInitialLiveRun(), dto);
+
+    expect(run.runStatus).toBe("failed");
+    expect(run.errorMessage).toBe("Previous request failed before the assistant produced a response.");
+
+    const nextRun = reduceLiveRunEvent(run, {
+      type: "RUN_STARTED",
+      runId: "run-good-model",
+    });
+    expect(nextRun.runStatus).toBe("running");
+    expect(nextRun.errorMessage).toBeUndefined();
+  });
+
+  it("does not attach stale run-scoped diagnostics to the restored current run", () => {
+    const dto: SessionConversationDto = {
+      sessionId: "thread-1",
+      messages: [
+        {
+          id: "m-user-failed",
+          runId: "run-bad-model",
+          role: "user",
+          source: "client",
+          messageId: "msg-user-failed",
+          contentText: "用错误模型分析订单",
+          position: 1,
+          createdAt: "2026-06-25T10:00:01Z",
+        },
+        {
+          id: "m-user-good",
+          runId: "run-good-model",
+          role: "user",
+          source: "client",
+          messageId: "msg-user-good",
+          contentText: "换成正确模型继续",
+          position: 2,
+          createdAt: "2026-06-25T10:00:02Z",
+        },
+        {
+          id: "m-assistant-good",
+          runId: "run-good-model",
+          role: "assistant",
+          source: "agent",
+          messageId: "msg-assistant-good",
+          contentText: "已恢复，可以继续分析。",
+          position: 3,
+          createdAt: "2026-06-25T10:00:03Z",
+        },
+      ],
+      runEventRefs: [],
+      toolCalls: [],
+      restorableCustomEvents: [
+        {
+          runId: "run-bad-model",
+          seq: 1,
+          name: "run.config.resolved",
+          value: { activeLlmProfileId: "bad-model" },
+        },
+      ],
+    };
+
+    const run = hydrateLiveRunFromConversation(createInitialLiveRun(), dto);
+
+    expect(run.runId).toBe("run-good-model");
+    expect(run.runStatus).toBe("completed");
+    expect(run.resolvedRunConfig).toBeUndefined();
   });
 });
 
@@ -1334,5 +1520,74 @@ describe("replayRestorableCustomEvents", () => {
     const run = replayRestorableCustomEvents(createInitialLiveRun(), dto);
     expect(run.audits).toHaveLength(1);
     expect(run.tokenUsageEvents).toHaveLength(1);
+  });
+});
+
+describe("hydrateSessionUsageFromConversation", () => {
+  it("rebuilds cross-run token totals from restorable token usage events", () => {
+    const dto: SessionConversationDto = {
+      sessionId: "thread-1",
+      messages: [
+        {
+          id: "m-user-1",
+          runId: "run-1",
+          role: "user",
+          source: "client",
+          contentText: "first",
+          position: 1,
+          createdAt: "2026-06-25T10:00:01Z",
+        },
+        {
+          id: "m-assistant-1",
+          runId: "run-1",
+          role: "assistant",
+          source: "agent",
+          contentText: "done",
+          position: 2,
+          createdAt: "2026-06-25T10:00:02Z",
+        },
+        {
+          id: "m-user-2",
+          runId: "run-2",
+          role: "user",
+          source: "client",
+          contentText: "second",
+          position: 3,
+          createdAt: "2026-06-25T10:00:03Z",
+        },
+        {
+          id: "m-assistant-2",
+          runId: "run-2",
+          role: "assistant",
+          source: "agent",
+          contentText: "done again",
+          position: 4,
+          createdAt: "2026-06-25T10:00:04Z",
+        },
+      ],
+      runEventRefs: [],
+      toolCalls: [],
+      restorableCustomEvents: [
+        {
+          runId: "run-1",
+          seq: 1,
+          name: "token_usage",
+          value: { input_tokens: 100, output_tokens: 20, model: "model-a" },
+        },
+        {
+          runId: "run-2",
+          seq: 2,
+          name: "token_usage",
+          value: { input_tokens: 300, output_tokens: 40, model: "model-b" },
+        },
+      ],
+    };
+
+    const usage = hydrateSessionUsageFromConversation(dto);
+    expect(usage.runCount).toBe(2);
+    expect(usage.completedRuns).toBe(2);
+    expect(usage.tokens.inputTokens).toBe(400);
+    expect(usage.tokens.outputTokens).toBe(60);
+    expect(usage.models).toEqual(["model-a", "model-b"]);
   });
 });

@@ -10,6 +10,7 @@ import {
   deriveSegmentRunUsage,
   formatSandboxOutputText,
   mergeArtifactDetail,
+  resolveTokenUsageForToolCallIds,
   resolveSandboxOutputsForToolCall,
   resolveTokenUsageForEvent,
   resolveWorkspaceMetadataForToolCall,
@@ -984,6 +985,35 @@ describe("live run state reducer", () => {
     expect(run.toolCalls).toHaveLength(2);
   });
 
+  it("clears stale run diagnostics when a new run starts after failure", () => {
+    let run = createInitialLiveRun();
+    run = reduceLiveRunEvent(run, { type: "RUN_STARTED" });
+    run = reduceLiveRunEvent(run, {
+      type: "CUSTOM",
+      name: "run.config.resolved",
+      value: {
+        activeDatasourceId: "orders-db",
+        activeLlmProfileId: "bad-model",
+      },
+    });
+    run = reduceLiveRunEvent(run, {
+      type: "CUSTOM",
+      name: "skill.selection",
+      value: { mode: "auto", selected: [{ id: "skill-sql" }], audit: [] },
+    });
+    run = reduceLiveRunEvent(run, {
+      type: "RUN_ERROR",
+      message: "PROVIDER_CONFIG_MISSING:bad-model",
+    });
+
+    run = reduceLiveRunEvent(run, { type: "RUN_STARTED" });
+
+    expect(run.runStatus).toBe("running");
+    expect(run.resolvedRunConfig).toBeUndefined();
+    expect(run.skillSelection).toBeUndefined();
+    expect(run.errorMessage).toBeUndefined();
+  });
+
   it("ignores duplicate RUN_STARTED while the run is already running", () => {
     let run = createInitialLiveRun();
     run = reduceLiveRunEvent(run, { type: "RUN_STARTED", runId: "run-1" });
@@ -1309,6 +1339,59 @@ describe("live run state reducer", () => {
     });
   });
 
+  it("aggregates unique token usage records for multi-tool groups", () => {
+    let run = createInitialLiveRun();
+    run = reduceLiveRunEvent(run, { type: "RUN_STARTED" });
+    run = reduceLiveRunEvent(run, {
+      type: "TOOL_CALL_START",
+      toolCallId: "tool-a",
+      toolCallName: "inspect_schema",
+    });
+    run = reduceLiveRunEvent(run, {
+      type: "TOOL_CALL_START",
+      toolCallId: "tool-b",
+      toolCallName: "run_sql_readonly",
+    });
+    run = reduceLiveRunEvent(run, {
+      type: "CUSTOM",
+      name: "token_usage",
+      value: {
+        tool_call_id: "tool-a",
+        input_tokens: 100,
+        output_tokens: 20,
+        model: "qwen-plus",
+      },
+    });
+    run = reduceLiveRunEvent(run, {
+      type: "CUSTOM",
+      name: "token_usage",
+      value: {
+        tool_call_id: "tool-a",
+        input_tokens: 100,
+        output_tokens: 20,
+        model: "qwen-plus",
+      },
+    });
+    run = reduceLiveRunEvent(run, {
+      type: "CUSTOM",
+      name: "token_usage",
+      value: {
+        tool_call_id: "tool-b",
+        input_tokens: 300,
+        output_tokens: 40,
+        model: "qwen-plus",
+      },
+    });
+
+    const usage = resolveTokenUsageForToolCallIds(run, ["tool-a", "tool-b"]);
+    expect(usage).toMatchObject({
+      reported: true,
+      inputTokens: 400,
+      outputTokens: 60,
+      models: ["qwen-plus"],
+    });
+  });
+
   it("resets token usage when a new run starts in the same thread", () => {
     let run = createInitialLiveRun();
     run = reduceLiveRunEvent(run, { type: "RUN_STARTED" });
@@ -1613,6 +1696,37 @@ describe("live run state reducer", () => {
 
     expect(run.runStatus).toBe("suspended");
     expect(run.runFinishedAt).toBeTypeOf("number");
+  });
+
+  it("ignores stale RUN_ERROR after a completed run", () => {
+    let run = reduceLiveRunEvent(createInitialLiveRun(), { type: "RUN_STARTED", runId: "run-1" });
+    run = reduceLiveRunEvent(run, { type: "RUN_FINISHED" });
+    expect(run.runStatus).toBe("completed");
+    expect(run.errorMessage).toBeUndefined();
+
+    run = reduceLiveRunEvent(run, {
+      type: "RUN_ERROR",
+      runId: "run-0",
+      message: "PROVIDER_CONFIG_MISSING:bad-model",
+    });
+
+    expect(run.runStatus).toBe("completed");
+    expect(run.errorMessage).toBeUndefined();
+  });
+
+  it("clears errorMessage when a run completes successfully", () => {
+    let run = reduceLiveRunEvent(createInitialLiveRun(), { type: "RUN_STARTED" });
+    run = reduceLiveRunEvent(run, {
+      type: "RUN_ERROR",
+      message: "PROVIDER_CONFIG_MISSING:bad-model",
+    });
+    expect(run.errorMessage).toBeDefined();
+
+    run = reduceLiveRunEvent(run, { type: "RUN_STARTED" });
+    run = reduceLiveRunEvent(run, { type: "RUN_FINISHED" });
+
+    expect(run.runStatus).toBe("completed");
+    expect(run.errorMessage).toBeUndefined();
   });
 
   it("names collaboration tools from interaction.requested", () => {

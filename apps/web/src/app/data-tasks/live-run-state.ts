@@ -346,7 +346,7 @@ export function deriveLiveSessionView(
   session: SessionUsageStats,
   liveRun: LiveRun,
 ): SessionUsageStats & { includesInProgressRun: boolean } {
-  if (liveRun.runStatus !== "running") {
+  if (liveRun.runStatus !== "running" && liveRun.runStatus !== "suspended") {
     return { ...session, includesInProgressRun: false };
   }
 
@@ -370,6 +370,13 @@ export function reduceLiveRunEvent(state: LiveRun, event: AgUiLikeEvent): LiveRu
     case "RUN_STARTED":
       const runId = eventRunId(event) ?? state.runId;
       if (state.runStatus === "running") {
+        if (runId && state.runId && runId !== state.runId) {
+          return {
+            ...state,
+            runId,
+            errorMessage: undefined,
+          };
+        }
         return {
           ...state,
           ...(runId ? { runId } : {}),
@@ -395,6 +402,9 @@ export function reduceLiveRunEvent(state: LiveRun, event: AgUiLikeEvent): LiveRu
           plan: defaultPlan,
           tokenUsage: undefined,
           tokenUsageEvents: [],
+          resolvedRunConfig: undefined,
+          skillSelection: undefined,
+          goal: undefined,
         };
       }
       return {
@@ -425,6 +435,7 @@ export function reduceLiveRunEvent(state: LiveRun, event: AgUiLikeEvent): LiveRu
         ...state,
         runStatus: "completed",
         runFinishedAt: Date.now(),
+        errorMessage: undefined,
         plan: state.plan.map((task) =>
           task.status === "running" || task.id === "final"
             ? { ...task, status: "completed" }
@@ -433,6 +444,9 @@ export function reduceLiveRunEvent(state: LiveRun, event: AgUiLikeEvent): LiveRu
         toolCalls: finalizeRunningToolCalls(state.toolCalls, "success"),
       };
     case "RUN_ERROR":
+      if (shouldIgnoreStaleRunError(state, event)) {
+        return state;
+      }
       return {
         ...state,
         runStatus: "failed",
@@ -470,6 +484,26 @@ function shouldIgnoreStaleRunStatusSnapshot(
     return false;
   }
   return incoming === "idle" || incoming === "running" || incoming === "suspended";
+}
+
+function shouldIgnoreStaleRunError(state: LiveRun, event: AgUiLikeEvent): boolean {
+  if (state.runStatus === "completed" || state.runStatus === "canceled") {
+    return true;
+  }
+  const incomingRunId = eventRunId(event);
+  if (
+    incomingRunId &&
+    state.runId &&
+    incomingRunId !== state.runId &&
+    (state.runStatus === "running" || state.runStatus === "failed")
+  ) {
+    return true;
+  }
+  return false;
+}
+
+export function shouldIgnoreIncomingRunError(state: LiveRun): boolean {
+  return state.runStatus === "completed" || state.runStatus === "canceled";
 }
 
 function reduceStateSnapshot(state: LiveRun, event: AgUiLikeEvent): LiveRun {
@@ -2028,6 +2062,81 @@ export type StepTokenUsageSnapshot = TokenUsageStats & {
   approximate?: boolean;
 };
 
+function tokenUsageRecordKey(record: LiveTokenUsageRecord): string {
+  return [
+    record.toolCallId ?? "",
+    record.stepId ?? "",
+    record.stepNumber ?? "",
+    record.model ?? "",
+    record.inputTokens,
+    record.outputTokens,
+    record.costUsd ?? "",
+  ].join("|");
+}
+
+function aggregateTokenUsageRecords(
+  records: LiveTokenUsageRecord[],
+  input: { approximate?: boolean } = {},
+): StepTokenUsageSnapshot {
+  const seen = new Set<string>();
+  const uniqueRecords: LiveTokenUsageRecord[] = [];
+  for (const record of records) {
+    const key = tokenUsageRecordKey(record);
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    uniqueRecords.push(record);
+  }
+
+  const tokens = uniqueRecords.reduce(
+    (current, record) => mergeTokenUsageStats(current, record),
+    emptyTokenUsageStats(),
+  );
+  return {
+    ...tokens,
+    reported:
+      tokens.inputTokens > 0 ||
+      tokens.outputTokens > 0 ||
+      (tokens.costUsd ?? 0) > 0,
+    models: uniqueModels(uniqueRecords),
+    approximate: input.approximate || undefined,
+  };
+}
+
+export function resolveTokenUsageForToolCallIds(
+  liveRun: LiveRun,
+  toolCallIds: string[],
+): StepTokenUsageSnapshot {
+  const toolCallIdSet = new Set(toolCallIds);
+  const stepIds = new Set(
+    liveRun.toolCalls
+      .filter((call) => toolCallIdSet.has(call.id) && call.stepId)
+      .map((call) => call.stepId as string),
+  );
+  const exactMatches = liveRun.tokenUsageEvents.filter(
+    (record) =>
+      (record.toolCallId && toolCallIdSet.has(record.toolCallId)) ||
+      (record.stepId && stepIds.has(record.stepId)),
+  );
+  if (exactMatches.length > 0) {
+    return aggregateTokenUsageRecords(exactMatches);
+  }
+
+  const toolIndices = toolCallIds
+    .map((id) => liveRun.toolCalls.findIndex((call) => call.id === id))
+    .filter((index) => index >= 0);
+  const maxStepNumber =
+    toolIndices.length > 0 ? Math.max(...toolIndices) + 1 : undefined;
+  const fallbackMatches =
+    maxStepNumber !== undefined
+      ? liveRun.tokenUsageEvents.filter((record) => record.stepNumber === maxStepNumber)
+      : [];
+  return aggregateTokenUsageRecords(fallbackMatches, {
+    approximate: fallbackMatches.length > 0,
+  });
+}
+
 export function resolveTokenUsageForEvent(
   liveRun: LiveRun,
   event: TimelineEvent | null | undefined,
@@ -2067,19 +2176,7 @@ export function resolveTokenUsageForEvent(
         );
   const approximate = exactMatches.length === 0 && matches.length > 0;
 
-  const tokens = matches.reduce(
-    (current, record) => mergeTokenUsageStats(current, record),
-    emptyTokenUsageStats(),
-  );
-  return {
-    ...tokens,
-    reported:
-      tokens.inputTokens > 0 ||
-      tokens.outputTokens > 0 ||
-      (tokens.costUsd ?? 0) > 0,
-    models: uniqueModels(matches),
-    approximate: approximate || undefined,
-  };
+  return aggregateTokenUsageRecords(matches, { approximate });
 }
 
 function activityStatusFromValue(value: unknown): TimelineEvent["activityStatus"] | undefined {

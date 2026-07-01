@@ -20,7 +20,9 @@ import {
   canResumeCollaborationInterrupt,
   findPendingCollaborationToolCall,
 } from "../../collaboration-recap";
+import { buildAgentRunStatePatch, mergeRunForwardedPropsWithCommand } from "../../data-task-state";
 import { useLiveRun } from "../../use-data-agent-run";
+import { useDataTaskChatInputBindings } from "./DataTaskChatInputBindingsContext";
 import {
   clearPendingCollaborationInterrupt,
   setPendingCollaborationInterrupt,
@@ -386,6 +388,7 @@ export function CollaborationInterruptHandler({
 }) {
   const { copilotkit } = useCopilotKit();
   const { agent } = useAgent({ agentId });
+  const { getRunForwardedProps } = useDataTaskChatInputBindings();
   const { liveRun } = useLiveRun();
   const collaborationResponses = useThreadCollaborationResponsesForChat(threadId);
   const [pendingEvent, setPendingEvent] = useState<PendingInterruptEvent | null>(null);
@@ -457,14 +460,17 @@ export function CollaborationInterruptHandler({
       submittingRef.current = true;
       clearPendingCollaborationInterrupt(threadId, "live");
       setPendingEvent(null);
+      const forwardedProps = mergeRunForwardedPropsWithCommand(
+        getRunForwardedProps(),
+        {
+          resume: response,
+          interruptEvent: pendingEventRef.current?.value,
+        },
+      );
+      agent.setState(buildAgentRunStatePatch(forwardedProps, agent.state));
       void copilotkit.runAgent({
         agent,
-        forwardedProps: {
-          command: {
-            resume: response,
-            interruptEvent: pendingEventRef.current?.value,
-          },
-        },
+        forwardedProps,
       });
     };
 
@@ -494,6 +500,7 @@ export function CollaborationInterruptHandler({
     agentId,
     collaborationResponses,
     copilotkit,
+    getRunForwardedProps,
     liveRun,
     pendingEvent,
     threadId,

@@ -21,6 +21,7 @@ import {
   createInitialSessionUsage,
   deriveSegmentRunUsage,
   reduceLiveRunEvent,
+  shouldIgnoreIncomingRunError,
   type LiveRun,
   type LiveRunStatus,
   type SessionUsageStats,
@@ -305,6 +306,9 @@ export function LiveRunEventSubscriber({
           return;
         }
         setLiveRun((current) => {
+          if (shouldIgnoreIncomingRunError(current)) {
+            return current;
+          }
           const next = reduceLiveRunEvent(current, {
             type: "RUN_ERROR",
             message: error.message,
@@ -345,6 +349,9 @@ export function LiveRunEventSubscriber({
     const onError = (event: Event) => {
       const detail = (event as CustomEvent<{ message?: string }>).detail;
       setLiveRun((current) => {
+        if (shouldIgnoreIncomingRunError(current)) {
+          return current;
+        }
         const next = reduceLiveRunEvent(current, {
           type: "RUN_ERROR",
           message: detail?.message,

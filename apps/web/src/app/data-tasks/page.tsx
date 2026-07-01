@@ -17,12 +17,14 @@ import {
   useFrontendTool,
   useRenderTool,
 } from "@copilotkit/react-core/v2";
-import { Children, cloneElement, isValidElement, useCallback, createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { Children, cloneElement, isValidElement, useCallback, createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ComponentProps, ComponentType, MouseEvent, PointerEvent as ReactPointerEvent, ReactNode } from "react";
 import { z } from "zod";
 import {
   buildMentionResources,
   buildRunConfig,
+  buildRunForwardedProps,
+  buildAgentRunStatePatch,
   createChatSession,
   createWorkspaceConfigItem,
   defaultSettingsForKind,
@@ -317,13 +319,35 @@ function StableDataTaskChatInput({
   const handleSubmitMessage = (value: string) => {
     bindings.onUserMessageSubmitted(value);
     const ready = attachmentsApi.consumeAttachments();
-    if (ready.length > 0 && agent) {
-      const content = buildMessageContent(value, ready);
-      agent.addMessage({ id: crypto.randomUUID(), role: "user", content });
-      void copilotkit.runAgent({ agent });
+    const forwardedProps = bindings.getRunForwardedProps();
+
+    const submitRun = () => {
+      if (!agent) return;
+      agent.setState(buildAgentRunStatePatch(forwardedProps, agent.state));
+      void copilotkit.runAgent({ agent, forwardedProps }).catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error);
+        if (typeof window !== "undefined") {
+          window.dispatchEvent(
+            new CustomEvent("dataagent-run-error", {
+              detail: { message },
+            }),
+          );
+        }
+      });
+    };
+
+    if (agent) {
+      if (ready.length > 0) {
+        const content = buildMessageContent(value, ready);
+        agent.addMessage({ id: crypto.randomUUID(), role: "user", content });
+      } else {
+        agent.addMessage({ id: crypto.randomUUID(), role: "user", content: value });
+      }
+      submitRun();
     } else {
       inputProps.onSubmitMessage?.(value);
     }
+
     bindings.onClearPerRunMentions();
     bindings.onClearPerRunFileMentions();
     requestAnimationFrame(scheduleChatTextareaResize);
@@ -424,12 +448,17 @@ function sanitizeWorkspaceConfig(
 }
 
 export default function DataTasksPage() {
+  const [copilotProperties, setCopilotProperties] = useState<Record<string, unknown>>(
+    {},
+  );
+
   return (
     <CopilotKit
       runtimeUrl={runtimeUrl}
       agent={agentId}
       useSingleEndpoint
       showDevConsole={false}
+      properties={copilotProperties}
       onError={(event) => {
         const message =
           event instanceof Error
@@ -454,14 +483,18 @@ export default function DataTasksPage() {
     >
       <CollaborationResponsesProvider>
         <LiveRunProvider>
-          <DataTaskWorkspace />
+          <DataTaskWorkspace onCopilotPropertiesChange={setCopilotProperties} />
         </LiveRunProvider>
       </CollaborationResponsesProvider>
     </CopilotKit>
   );
 }
 
-function DataTaskWorkspace() {
+function DataTaskWorkspace({
+  onCopilotPropertiesChange,
+}: {
+  onCopilotPropertiesChange: (properties: Record<string, unknown>) => void;
+}) {
   const {
     workspaceConfig,
     runDefaults,
@@ -1044,28 +1077,80 @@ function DataTaskWorkspace() {
   const visibleArtifacts = liveRun.artifacts;
   const visibleTimelineEvents = liveRun.events;
 
+  const runConfigPayload = useMemo(
+    () =>
+      buildRunConfig(workspaceConfig, {
+        activeLlmId,
+        defaultDatasourceId: runDefaults?.activeDatasourceId ?? defaultDatasourceId,
+        session: activeSession,
+        perRunSelection,
+        perRunFiles,
+      }),
+    [
+      activeLlmId,
+      activeSession,
+      defaultDatasourceId,
+      perRunFiles,
+      perRunSelection,
+      runDefaults?.activeDatasourceId,
+      workspaceConfig,
+    ],
+  );
+
+  const runForwardedProps = useMemo(
+    () => buildRunForwardedProps(activeDatasourceId, runConfigPayload),
+    [activeDatasourceId, runConfigPayload],
+  );
+
+  const runConfigInputsRef = useRef({
+    workspaceConfig,
+    activeLlmId,
+    activeSession,
+    perRunSelection,
+    perRunFiles,
+    activeDatasourceId,
+    defaultDatasourceId,
+    runDefaultsActiveDatasourceId: runDefaults?.activeDatasourceId,
+  });
+  runConfigInputsRef.current = {
+    workspaceConfig,
+    activeLlmId,
+    activeSession,
+    perRunSelection,
+    perRunFiles,
+    activeDatasourceId,
+    defaultDatasourceId,
+    runDefaultsActiveDatasourceId: runDefaults?.activeDatasourceId,
+  };
+
+  const getRunForwardedProps = useCallback(() => {
+    const inputs = runConfigInputsRef.current;
+    const runConfig = buildRunConfig(inputs.workspaceConfig, {
+      activeLlmId: inputs.activeLlmId,
+      defaultDatasourceId:
+        inputs.runDefaultsActiveDatasourceId ?? inputs.defaultDatasourceId,
+      session: inputs.activeSession,
+      perRunSelection: inputs.perRunSelection,
+      perRunFiles: inputs.perRunFiles,
+    });
+    return buildRunForwardedProps(inputs.activeDatasourceId, runConfig);
+  }, []);
+
+  useLayoutEffect(() => {
+    onCopilotPropertiesChange(runForwardedProps);
+  }, [onCopilotPropertiesChange, runForwardedProps]);
+
   // Kept for CopilotKit forwardedProps compatibility; backend also consumes
   // `run_config` via effectiveRunConfig merge.
   useAgentContext({
     description: "datasource_id",
-    value: resolveActiveDatasourceId(
-      workspaceConfig,
-      activeSession,
-      perRunSelection,
-      runDefaults?.activeDatasourceId ?? defaultDatasourceId,
-    ),
+    value: activeDatasourceId,
   });
   // Forward-compatible single run config (config-management-api.md §5).
   // Backend merges this with workspace defaults into effectiveRunConfig.
   useAgentContext({
     description: "run_config",
-    value: buildRunConfig(workspaceConfig, {
-      activeLlmId,
-      defaultDatasourceId: runDefaults?.activeDatasourceId ?? defaultDatasourceId,
-      session: activeSession,
-      perRunSelection,
-      perRunFiles,
-    }),
+    value: runConfigPayload,
   });
   // General workspace state for debugging / richer context (secrets stripped).
   useAgentContext({
@@ -1102,6 +1187,7 @@ function DataTaskWorkspace() {
       liveRunRunId: liveRun.runId ?? null,
       onCancelRun: cancelCurrentRun,
       cancelRunBusy: runCancelBusy,
+      getRunForwardedProps,
     }),
     [
       activeLlmId,
@@ -1129,6 +1215,7 @@ function DataTaskWorkspace() {
       liveRun.runId,
       liveRun.runStatus,
       runCancelBusy,
+      getRunForwardedProps,
     ],
   );
 

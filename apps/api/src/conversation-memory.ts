@@ -252,11 +252,9 @@ export const buildConversationMemoryMessagesWithReport = (
   });
   const currentUserMessageId = lastUserMessage(input.runInput)?.id ?? `${input.runId}:user`;
   const messages: Message[] = selected.summary ? [summaryToMessage(selected.summary, policy.maxMessageChars)] : [];
-  messages.push(...selected.history.map((record) => ({
-    id: `memory:${record.id}`,
-    role: record.role,
-    content: boundText(record.content_text, policy.maxMessageChars)
-  })));
+  messages.push(
+    ...normalizeHistoryMessagePairs(selected.history, policy.maxMessageChars)
+  );
 
   messages.push({
     id: currentUserMessageId,
@@ -488,6 +486,50 @@ const generateSummaryText = async (input: {
     sourceMessages: input.sourceMessages,
     userId: input.userId
   });
+};
+
+/**
+ * Normalises orphaned user messages in conversation history into valid
+ * user/assistant pairs by injecting a synthetic assistant error reply.
+ *
+ * An orphaned user message is a user-role record that is NOT followed by an
+ * assistant reply – either it sits at the tail of the history or it is
+ * directly followed by another user message.  This happens when a run fails
+ * before the agent produces any output: `persistCurrentUserMessage` has
+ * already written the record but no corresponding assistant record is stored.
+ *
+ * Simply discarding these records loses conversation context.  Instead we
+ * inject a placeholder assistant message so the LLM:
+ *   1. Sees the full history of what the user asked.
+ *   2. Understands that the previous attempt failed to produce a response.
+ *   3. Receives a strictly alternating user/assistant sequence, which all
+ *      major providers (Anthropic, DashScope, …) require.
+ */
+const ORPHANED_USER_MESSAGE_PLACEHOLDER =
+  "Previous request failed before the assistant produced a response.";
+
+const normalizeHistoryMessagePairs = (
+  records: ConversationMessageRecord[],
+  maxMessageChars: number
+): Message[] => {
+  const result: Message[] = [];
+  for (let i = 0; i < records.length; i++) {
+    const cur = records[i]!;
+    const next = records[i + 1] as ConversationMessageRecord | undefined;
+    result.push({
+      id: `memory:${cur.id}`,
+      role: cur.role,
+      content: boundText(cur.content_text, maxMessageChars)
+    });
+    if (cur.role === "user" && (!next || next.role === "user")) {
+      result.push({
+        id: `memory:${cur.id}:error-placeholder`,
+        role: "assistant",
+        content: ORPHANED_USER_MESSAGE_PLACEHOLDER
+      });
+    }
+  }
+  return result;
 };
 
 const selectBudgetedHistory = (input: {

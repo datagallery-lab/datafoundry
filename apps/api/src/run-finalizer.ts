@@ -194,7 +194,7 @@ export const createRunStatusDelta = (
 ): BaseEvent => ({
   type: EventType.STATE_DELTA,
   delta: [
-    { op: "replace", path: "/runStatus", value: status },
+    { op: "add", path: "/runStatus", value: status },
     ...(errorMessage ? [{ op: "add", path: "/errorMessage", value: errorMessage }] : [])
   ],
   timestamp: Date.now()

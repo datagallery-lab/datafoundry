@@ -15,5 +15,10 @@ export function formatRunErrorMessage(message?: string): string {
   if (trimmed.startsWith("RUN_SUBSCRIBER_CLOSED")) {
     return "Run stopped because the connection closed. Retry the query or refresh the page.";
   }
+  const providerConfigMatch = /^PROVIDER_CONFIG_MISSING:(.+)$/u.exec(trimmed);
+  if (providerConfigMatch) {
+    const profile = providerConfigMatch[1]?.trim() || "the selected model profile";
+    return `Model provider configuration is missing for "${profile}". Check the model profile API key, base URL, and model name.`;
+  }
   return trimmed;
 }

@@ -8,6 +8,12 @@ describe("formatRunErrorMessage", () => {
     expect(formatRunErrorMessage("RUN_TIMEOUT:60000")).toContain("Timeout (ms)");
   });
 
+  it("explains missing model provider configuration", () => {
+    expect(formatRunErrorMessage("PROVIDER_CONFIG_MISSING:bad-model")).toBe(
+      'Model provider configuration is missing for "bad-model". Check the model profile API key, base URL, and model name.',
+    );
+  });
+
   it("passes through unknown messages", () => {
     expect(formatRunErrorMessage("Something broke")).toBe("Something broke");
   });
