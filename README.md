@@ -54,20 +54,23 @@ datasource credentials. 🛡️
 
 ## 🎬 GUI And TUI Preview
 
-The GUI capture is still pending. The TUI recording below shows the current terminal workflow.
+### GUI Preview
 
-<table>
-  <tr>
-    <td><img src="docs/assets/readme/gui-slot.png" alt="GUI screenshot placeholder" width="100%"></td>
-  </tr>
-  <tr>
-    <td>
-      <a href="docs/assets/readme/tui-demo.mp4">
-        <img src="docs/assets/readme/tui-demo.gif" alt="DataFoundry TUI demo" width="100%">
-      </a>
-    </td>
-  </tr>
-</table>
+The GUI capture is still pending.
+
+<p align="center">
+  <img src="docs/assets/readme/gui-slot.png" alt="GUI screenshot placeholder" width="100%">
+</p>
+
+### TUI Preview
+
+The recording below shows the current terminal workflow backed by the same runtime.
+
+<p align="center">
+  <a href="docs/assets/readme/tui-demo.mp4">
+    <img src="docs/assets/readme/tui-demo.gif" alt="DataFoundry TUI demo" width="100%">
+  </a>
+</p>
 
 ## ⚡ Quick Start
 
