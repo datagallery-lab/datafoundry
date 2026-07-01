@@ -13,6 +13,7 @@ storage/
 .cache/
 **/.cache/
 .codegraph/
+.cursor/
 .env
 .env.*
 !.env.example
