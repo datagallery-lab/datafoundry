@@ -262,13 +262,13 @@ const queryTrinoCompatible = async (
 };
 
 const trinoCompatibleHeaders = (config: Record<string, unknown>, prefix: "X-Presto" | "X-Trino"): HeadersInit => {
-  const username = stringConfig(config, "username", "data-agent");
+  const username = stringConfig(config, "username", "data-foundry");
   const password = optionalStringConfig(config, "password");
   return {
     "Accept": "application/json",
     "Content-Type": "text/plain; charset=utf-8",
     [`${prefix}-User`]: username,
-    [`${prefix}-Source`]: stringConfig(config, "source", "open-data-agent"),
+    [`${prefix}-Source`]: stringConfig(config, "source", "open-data-foundry"),
     [`${prefix}-Catalog`]: stringConfig(config, "catalog"),
     [`${prefix}-Schema`]: stringConfig(config, "schema", "default"),
     ...(password ? { "Authorization": `Basic ${Buffer.from(`${username}:${password}`).toString("base64")}` } : {})

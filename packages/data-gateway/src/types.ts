@@ -1,5 +1,5 @@
-import type { CreateArtifactInput } from "@open-data-agent/artifacts";
-import type { ArtifactSummary, DataSourceSummary } from "@open-data-agent/contracts";
+import type { CreateArtifactInput } from "@datafoundry/artifacts";
+import type { ArtifactSummary, DataSourceSummary } from "@datafoundry/contracts";
 
 export type DataSourceType =
   | "duckdb"

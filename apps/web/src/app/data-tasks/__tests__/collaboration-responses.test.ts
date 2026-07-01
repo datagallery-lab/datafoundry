@@ -7,7 +7,7 @@ vi.mock("@copilotkit/react-core/v2", () => ({
       createElement("span", null, content),
   },
   useAgent: () => ({ agent: { messages: [], threadId: "t" } }),
-  useCopilotChatConfiguration: () => ({ threadId: "t", agentId: "dataAgent" }),
+  useCopilotChatConfiguration: () => ({ threadId: "t", agentId: "dataFoundry" }),
   useCopilotKit: () => ({
     copilotkit: {
       renderCustomMessages: [],

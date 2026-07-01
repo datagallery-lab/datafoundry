@@ -46,7 +46,7 @@ npm run docs:preview
 
 推送到 `main` 后，`.github/workflows/docs.yml` 会把站点发布到 GitHub Pages：
 
-`https://datagallery-lab.github.io/dataagent/`
+`https://datagallery-lab.github.io/DataFoundry/`
 
 私有仓库需要先启用 GitHub Pages（Settings → Pages → Source 选 **GitHub Actions**），并确认当前 GitHub 计划允许私有仓使用 Pages；站点是否对外公开可在 Pages 设置里单独控制。
 

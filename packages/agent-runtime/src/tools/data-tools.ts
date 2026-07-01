@@ -1,5 +1,5 @@
 import { createTool } from "@mastra/core/tools";
-import type { DataGateway, SchemaSummary, SqlExecutionResult } from "@open-data-agent/data-gateway";
+import type { DataGateway, SchemaSummary, SqlExecutionResult } from "@datafoundry/data-gateway";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 
@@ -86,7 +86,7 @@ export type ToolRegistry = {
   };
 };
 
-type CreateDataAgentToolRegistryInput = {
+type CreateDataFoundryToolRegistryInput = {
   abortSignal?: AbortSignal | undefined;
   dataGateway: DataGateway;
   emitter: AgUiEventEmitter;
@@ -95,7 +95,7 @@ type CreateDataAgentToolRegistryInput = {
 };
 
 /** Create the run-local data tool registry and concurrency-safe execution state. */
-export const createDataAgentToolRegistry = (input: CreateDataAgentToolRegistryInput): ToolRegistry => {
+export const createDataFoundryToolRegistry = (input: CreateDataFoundryToolRegistryInput): ToolRegistry => {
   const state = {
     artifact_ids: [] as string[],
     schema_capabilities: new Map<string, SchemaCapability>(),
@@ -372,7 +372,7 @@ const createMastraDataTools = (executors: DataToolExecutors): ToolRegistry["mast
 });
 
 const emitSqlReferences = (
-  input: CreateDataAgentToolRegistryInput,
+  input: CreateDataFoundryToolRegistryInput,
   datasourceId: string,
   result: SqlExecutionResult
 ): void => {
@@ -389,7 +389,7 @@ const emitSqlReferences = (
 };
 
 const emitFailedStep = (
-  input: CreateDataAgentToolRegistryInput,
+  input: CreateDataFoundryToolRegistryInput,
   stepId: string,
   toolName: string,
   title: string,

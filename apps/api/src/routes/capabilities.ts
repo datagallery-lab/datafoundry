@@ -1,4 +1,4 @@
-import { createErrorResult, createSuccessResult } from "@open-data-agent/contracts";
+import { createErrorResult, createSuccessResult } from "@datafoundry/contracts";
 import type { ConfigApiResponse } from "./types.js";
 
 const CAPABILITIES = {

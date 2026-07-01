@@ -6,8 +6,8 @@ import { join } from "node:path";
 import { MastraAgent } from "@ag-ui/mastra";
 import { EventType } from "@ag-ui/client";
 import {
-  createDataAgent,
-  createDataAgentRunContext,
+  createDataFoundry,
+  createDataFoundryRunContext,
   createModelProviderFromEnv,
   createTaskStateRuntime,
 } from "../packages/agent-runtime/dist/index.js";
@@ -91,7 +91,7 @@ store.runs.create({
   datasource_id,
 });
 
-const runContext = createDataAgentRunContext({
+const runContext = createDataFoundryRunContext({
   user_id,
   session_id,
   run_id,
@@ -136,7 +136,7 @@ const record = (event) => {
 const taskStateRuntime = await createTaskStateRuntime(taskDbPath);
 
 try {
-  const { agent, destroyWorkspace, governedMessages } = await createDataAgent({
+  const { agent, destroyWorkspace, governedMessages } = await createDataFoundry({
     dataGateway: gateway,
     knowledgeService,
     emitter: { emit: record },

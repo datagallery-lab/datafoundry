@@ -158,7 +158,7 @@ import {
   LiveRunEventSubscriber,
   LiveRunProvider,
   useLiveRun,
-} from "./use-data-agent-run";
+} from "./use-data-foundry-run";
 import type { LiveRun } from "./live-run-state";
 import {
   buildProcessToolGroups,
@@ -239,7 +239,7 @@ import { getBackendCapabilities, isResourcePanelSupported } from "../../lib/conf
 
 export const dynamic = "force-dynamic";
 
-const agentId = "dataAgent";
+const agentId = "dataFoundry";
 const defaultDatasourceId = "api-duckdb-demo";
 const runtimeUrl =
   process.env.NEXT_PUBLIC_AGENT_RUNTIME_URL ??
@@ -328,7 +328,7 @@ function StableDataTaskChatInput({
         const message = error instanceof Error ? error.message : String(error);
         if (typeof window !== "undefined") {
           window.dispatchEvent(
-            new CustomEvent("dataagent-run-error", {
+            new CustomEvent("datafoundry-run-error", {
               detail: { message },
             }),
           );
@@ -475,7 +475,7 @@ export default function DataTasksPage() {
         }
         console.error("[data-tasks]", event);
         window.dispatchEvent(
-          new CustomEvent("dataagent-run-error", {
+          new CustomEvent("datafoundry-run-error", {
             detail: { message },
           }),
         );
@@ -1838,7 +1838,7 @@ function ToolResultMissingCard({ name }: { name: string }) {
          tool observation has not reached the frontend thread. If the right-side Trace already has SQL audit or step
          status, this usually means the AG-UI{" "}
         <code className="text-[11px]">TOOL_CALL_RESULT</code>{" "}
-         terminal event is missing. Refresh and retry, or inspect the dataAgent runtime bridge.
+         terminal event is missing. Refresh and retry, or inspect the dataFoundry runtime bridge.
       </p>
     </div>
   );
@@ -5334,7 +5334,7 @@ function McpConfigProtocolHint() {
 function LlmConfigProtocolHint({ builtin }: { builtin: boolean }) {
   return (
     <div className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2.5 text-xs leading-5 text-blue-900">
-      <p className="font-medium">AG-UI / dataAgent alignment notes</p>
+      <p className="font-medium">AG-UI / dataFoundry alignment notes</p>
       <ul className="mt-1 list-inside list-disc space-y-0.5 text-blue-800/90">
         <li>
           Server env: <code className="text-[11px]">LLM_PROVIDER</code>、

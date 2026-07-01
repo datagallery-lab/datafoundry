@@ -28,7 +28,7 @@ import { clearPendingCollaborationInterrupt } from "./pending-collaboration-inte
 import {
   useConversationRestoreGate,
   useLiveRunSetters,
-} from "../../use-data-agent-run";
+} from "../../use-data-foundry-run";
 
 export function SessionConversationRestore({
   agentId,

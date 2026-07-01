@@ -1,4 +1,4 @@
-import type { SchemaSummary, SqlExecutionResult } from "@open-data-agent/data-gateway";
+import type { SchemaSummary, SqlExecutionResult } from "@datafoundry/data-gateway";
 
 import type { ArtifactRef, AuditRef, ContextTruncation } from "../inventory/context-package.js";
 import {

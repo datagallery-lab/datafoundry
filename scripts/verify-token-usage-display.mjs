@@ -21,7 +21,7 @@ const response = await fetch(`${API_BASE}/api/copilotkit`, {
   },
   body: JSON.stringify({
     method: "agent/run",
-    params: { agentId: "dataAgent" },
+    params: { agentId: "dataFoundry" },
     body: {
       threadId,
       runId,

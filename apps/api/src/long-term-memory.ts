@@ -3,7 +3,7 @@ import {
   type LongTermMemoryRecord,
   type LongTermMemoryRepository,
   type LongTermMemoryScope
-} from "@open-data-agent/metadata";
+} from "@datafoundry/metadata";
 import { createHash } from "node:crypto";
 
 const DEFAULT_MAX_CANDIDATES = 8;

@@ -1,20 +1,19 @@
 import { defineConfig } from "vitepress";
 
 export default defineConfig({
-  title: "Open Data Agent",
+  title: "DataFoundry",
   description: "面向数据分析场景的 AI 工作台文档",
   lang: "zh-CN",
-  base: "/dataagent/",
+  base: "/DataFoundry/",
   srcDir: ".",
   srcExclude: ["README.md", "assets/**"],
   cleanUrls: false,
   themeConfig: {
-    logo: "/assets/readme/hero.svg",
-    siteTitle: "Open Data Agent",
+    siteTitle: "DataFoundry",
     nav: [
       { text: "产品概览", link: "/zh/overview" },
       { text: "快速开始", link: "/zh/quick-start" },
-      { text: "GitHub", link: "https://github.com/datagallery-lab/dataagent" }
+      { text: "GitHub", link: "https://github.com/datagallery-lab/DataFoundry" }
     ],
     sidebar: [
       {
@@ -51,7 +50,7 @@ export default defineConfig({
         ]
       }
     ],
-    socialLinks: [{ icon: "github", link: "https://github.com/datagallery-lab/dataagent" }],
+    socialLinks: [{ icon: "github", link: "https://github.com/datagallery-lab/DataFoundry" }],
     search: {
       provider: "local"
     },

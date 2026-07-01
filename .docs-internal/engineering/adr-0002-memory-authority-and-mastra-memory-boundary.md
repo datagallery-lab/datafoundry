@@ -18,7 +18,7 @@ These mechanisms overlap. Without a clear authority model, the same fact can ent
 paths, for example through a metadata summary, Mastra WorkingMemory, long-term memory, and future observational memory.
 This would waste context budget, create inconsistent priority, and make audit/replay unclear.
 
-The project also has a stricter requirement than a generic chatbot memory layer: data-agent context must be scoped,
+The project also has a stricter requirement than a generic chatbot memory layer: data-foundry context must be scoped,
 auditable, and governed before it reaches the model. In particular, datasource-scoped memory must not leak across
 datasources, fresh SQL/tool evidence must outrank stale memory, and prompt-visible context must be explainable through
 `ContextPackage` / `ContextPromptView`.
@@ -47,9 +47,9 @@ not treat `metadata.conversation_summaries` and Mastra WorkingMemory as two comp
 
 ### 2. Long-Term Memory
 
-`metadata.long_term_memories` remains the authoritative long-term memory store for this data-agent system.
+`metadata.long_term_memories` remains the authoritative long-term memory store for this data-foundry system.
 
-Long-term memory records must preserve data-agent-specific governance fields:
+Long-term memory records must preserve data-foundry-specific governance fields:
 
 - `scope`: `user` / `session` / `datasource`;
 - `kind`: preference, constraint, dataset fact, analysis finding, decision, session state;
@@ -86,7 +86,7 @@ Mastra OM / Semantic Recall
 
 ### 4. Prompt Injection Ownership
 
-The model-visible prompt must be decided by the data-agent context compiler:
+The model-visible prompt must be decided by the data-foundry context compiler:
 
 ```text
 logical sources
@@ -143,7 +143,7 @@ Positive:
 
 - prompt-visible memory has a single governance path;
 - compact memory cannot silently duplicate through metadata and Mastra WorkingMemory;
-- Mastra-native features can still be used without surrendering data-agent audit boundaries;
+- Mastra-native features can still be used without surrendering data-foundry audit boundaries;
 - future Semantic Recall / OM can be evaluated safely in shadow mode.
 
 Negative:

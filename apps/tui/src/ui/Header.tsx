@@ -63,7 +63,7 @@ export const SessionBanner: React.FC<SessionBannerProps> = ({
     <Box flexDirection="column" borderStyle="round" borderColor="cyan" paddingX={1} paddingY={0}>
       <Box>
         <Text bold color="cyan">
-          DataAgent TUI
+          DataFoundry TUI
         </Text>
         {threadId && (
           <Text dimColor>
@@ -145,7 +145,7 @@ export const Header: React.FC<HeaderProps> = ({
     <Box flexDirection="column" flexShrink={0} paddingX={1} marginBottom={1}>
       <Box>
         <Text bold color="cyan">
-          DataAgent TUI
+          DataFoundry TUI
         </Text>
         {threadId && (
           <Text dimColor>

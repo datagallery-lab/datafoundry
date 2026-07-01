@@ -3,13 +3,13 @@ import {
   createModelProviderFromEnv,
   createModelProviderFromProfile,
   type ModelContextProfile
-} from "@open-data-agent/agent-runtime";
-import type { MetadataStore } from "@open-data-agent/metadata";
+} from "@datafoundry/agent-runtime";
+import type { MetadataStore } from "@datafoundry/metadata";
 import {
   selectSkillsForRun,
   type SkillRecord,
   type SkillSelectionResult
-} from "@open-data-agent/skills";
+} from "@datafoundry/skills";
 
 import type { PolicyMcpClientConfig } from "./policy-mcp-middleware.js";
 

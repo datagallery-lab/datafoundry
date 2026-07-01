@@ -15,7 +15,7 @@ export function WorkspaceFrame({
       <Box flexDirection="column" minHeight={rows}>
         <Box paddingX={1} flexDirection="column">
           <Text color="yellow" bold>Terminal too small</Text>
-          <Text color="gray">Resize to at least 80x20 for the DataAgent TUI.</Text>
+          <Text color="gray">Resize to at least 80x20 for the DataFoundry TUI.</Text>
         </Box>
       </Box>
     );

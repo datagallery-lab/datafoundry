@@ -5,7 +5,7 @@ const apiPort = process.env.API_PORT ?? "8798";
 const apiBaseUrl = `http://127.0.0.1:${apiPort}`;
 const metadataDbPath = process.env.METADATA_DB_PATH ?? `storage/metadata/copilotkit-smoke-${Date.now()}.sqlite`;
 
-const child = spawn("npm", ["--workspace", "@open-data-agent/api", "run", "dev"], {
+const child = spawn("npm", ["--workspace", "@datafoundry/api", "run", "dev"], {
   env: {
     ...process.env,
     API_HOST: "127.0.0.1",

@@ -527,7 +527,7 @@ export const exitCommand: Command = {
   execute: async () => {
     return {
       success: true,
-      message: 'Exiting DataAgent TUI.',
+      message: 'Exiting DataFoundry TUI.',
       data: { action: 'exit_application' },
     };
   },

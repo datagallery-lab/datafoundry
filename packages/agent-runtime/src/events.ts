@@ -1,5 +1,5 @@
 import { EventType, type BaseEvent } from "@ag-ui/core";
-import type { ArtifactSummary } from "@open-data-agent/contracts";
+import type { ArtifactSummary } from "@datafoundry/contracts";
 
 import type { AgentRunContext } from "./types.js";
 

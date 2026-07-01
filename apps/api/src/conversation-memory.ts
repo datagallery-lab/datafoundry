@@ -1,11 +1,11 @@
 import { EventType, type BaseEvent, type Message, type RunAgentInput } from "@ag-ui/client";
-import { ContextTokenCounter, type ConversationMemoryBridge } from "@open-data-agent/agent-runtime";
+import { ContextTokenCounter, type ConversationMemoryBridge } from "@datafoundry/agent-runtime";
 import {
   type ConversationMessageRecord,
   type ConversationMessageRepository,
   type ConversationSummaryRecord,
   type ConversationSummaryRepository
-} from "@open-data-agent/metadata";
+} from "@datafoundry/metadata";
 import { createHash } from "node:crypto";
 
 const DEFAULT_HISTORY_LIMIT = 24;

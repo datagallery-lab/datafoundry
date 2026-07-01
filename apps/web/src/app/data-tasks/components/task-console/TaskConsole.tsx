@@ -534,7 +534,7 @@ function ConclusionZone({
         <div className={sectionLabelClass}>Current question</div>
         <p className="mt-1 text-sm leading-6 text-foreground">
           {currentQuestion ?? (
-            <span className="text-muted-light">Send a question to start dataAgent.</span>
+            <span className="text-muted-light">Send a question to start dataFoundry.</span>
           )}
         </p>
       </div>

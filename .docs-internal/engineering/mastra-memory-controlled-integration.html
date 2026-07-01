@@ -276,11 +276,11 @@
           <article class="card lavender">
             <span class="badge">CTX</span>
             <h3>Budgeted Messages</h3>
-            <p>当前默认：`unsummarized recent messages + current user` 进入 DataAgent；compact summary 交给 Mastra Memory。</p>
+            <p>当前默认：`unsummarized recent messages + current user` 进入 DataFoundry；compact summary 交给 Mastra Memory。</p>
           </article>
           <article class="card mint">
             <span class="badge">MAS</span>
-            <h3>Mastra DataAgent</h3>
+            <h3>Mastra DataFoundry</h3>
             <p>`@ag-ui/mastra` 传入 `memory={thread, resource}`，但 Memory 配置为受控模式。</p>
           </article>
           <article class="card pink">
@@ -324,7 +324,7 @@
     </section>
 
     <section class="footer-grid" aria-label="Trigger summary">
-      <div class="note"><strong>注入触发：</strong>非 resume 新 run claim 成功后，`createDataAgent` 前构造入口 messages。</div>
+      <div class="note"><strong>注入触发：</strong>非 resume 新 run claim 成功后，`createDataFoundry` 前构造入口 messages。</div>
       <div class="note"><strong>摘要触发：</strong>`RUN_FINISHED` 后 flush assistant 文本；未摘要消息达到阈值才生成。</div>
       <div class="note"><strong>Memory 触发：</strong>summary commit 后 mirror；新 run 前 backfill；随后由 Mastra input processor 注入。</div>
     </section>

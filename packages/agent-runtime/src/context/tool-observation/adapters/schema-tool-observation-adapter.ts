@@ -1,4 +1,4 @@
-import type { SchemaSummary } from "@open-data-agent/data-gateway";
+import type { SchemaSummary } from "@datafoundry/data-gateway";
 
 import type { ContextBudget } from "../../inventory/context-budget.js";
 import type { ContextItem } from "../../inventory/context-item.js";

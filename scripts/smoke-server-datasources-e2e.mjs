@@ -8,7 +8,7 @@ import { createTaskStateRuntime } from "../packages/agent-runtime/dist/index.js"
 import { LocalDataGateway } from "../packages/data-gateway/dist/index.js";
 import { createMetadataStore } from "../packages/metadata/dist/index.js";
 
-const root = mkdtempSync(join(tmpdir(), "open-data-agent-server-datasources-e2e-"));
+const root = mkdtempSync(join(tmpdir(), "open-data-foundry-server-datasources-e2e-"));
 process.env.STORAGE_ROOT_DIR = root;
 process.env.MASTRA_STORAGE_PATH = join(root, "mastra.sqlite");
 process.env.EMBEDDING_API_KEY = "";

@@ -3,7 +3,7 @@ import {
   createSuccessResult,
   type ApiResult,
   type AppErrorCode
-} from "@open-data-agent/contracts";
+} from "@datafoundry/contracts";
 import {
   createModelProviderFromEnv,
   createModelProviderFromProfile,
@@ -11,13 +11,13 @@ import {
   resolveSessionWorkspaceDir,
   resolveWorkspaceDir,
   STATIC_AGENT_TOOL_NAMES
-} from "@open-data-agent/agent-runtime";
-import { fileAssetRefDto, type FileAssetService, mimeTypeForFilename, safeFilename } from "@open-data-agent/files";
+} from "@datafoundry/agent-runtime";
+import { fileAssetRefDto, type FileAssetService, mimeTypeForFilename, safeFilename } from "@datafoundry/files";
 import {
   buildSkillResourcePayload,
   parseSkillPackage,
   selectSkillsForRun
-} from "@open-data-agent/skills";
+} from "@datafoundry/skills";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
@@ -38,7 +38,7 @@ import {
   type QueryHistoryRecord,
   type RunEventRecord,
   type SessionRecord
-} from "@open-data-agent/metadata";
+} from "@datafoundry/metadata";
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import type { IncomingMessage } from "node:http";
@@ -2664,7 +2664,7 @@ const listMcpTools = async (
   const token = stringValue(secret.token) ?? stringValue(secret.apiKey);
   const headers = token ? { Authorization: `Bearer ${token}` } : undefined;
   const requestOptions = headers ? { requestInit: { headers } } : undefined;
-  const client = new Client({ name: "open-data-agent-config", version: "0.1.0" });
+  const client = new Client({ name: "open-data-foundry-config", version: "0.1.0" });
   try {
     const clientTransport = transport === "stdio"
       ? new StdioClientTransport({

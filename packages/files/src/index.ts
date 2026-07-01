@@ -3,7 +3,7 @@ import type {
   FileAssetRefRecord,
   FileAssetRefSource,
   MetadataStore
-} from "@open-data-agent/metadata";
+} from "@datafoundry/metadata";
 import { createHash, randomUUID } from "node:crypto";
 import { copyFileSync, linkSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve, sep } from "node:path";

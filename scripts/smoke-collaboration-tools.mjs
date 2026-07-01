@@ -4,7 +4,7 @@ import {
   ToolObservationDispatcher,
   createCustomEvent,
   createToolObservationBoundary,
-  createDataAgentRunContext
+  createDataFoundryRunContext
 } from "../packages/agent-runtime/dist/testing.js";
 import {
   extractInteractionResume,
@@ -29,7 +29,7 @@ try {
     user_input: "ask me",
     status: "running"
   });
-  const runContext = createDataAgentRunContext({
+  const runContext = createDataFoundryRunContext({
     user_id: userId,
     session_id: sessionId,
     run_id: runId,

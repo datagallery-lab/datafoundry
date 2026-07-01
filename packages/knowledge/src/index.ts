@@ -1,4 +1,4 @@
-import type { MetadataStore } from "@open-data-agent/metadata";
+import type { MetadataStore } from "@datafoundry/metadata";
 import {
   OpenAICompatibleEmbeddingService,
   type EmbeddingService

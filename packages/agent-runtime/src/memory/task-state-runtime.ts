@@ -30,7 +30,7 @@ export const createAgentMemoryRuntime = async (
   mkdirSync(dirname(absolutePath), { recursive: true });
 
   const storage = new LibSQLStore({
-    id: "data-agent-task-state",
+    id: "data-foundry-task-state",
     url: `file:${absolutePath}`
   });
   await storage.init();

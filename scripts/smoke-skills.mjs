@@ -16,7 +16,7 @@ import {
 } from "../packages/agent-runtime/dist/testing.js";
 import { createMetadataStore } from "../packages/metadata/dist/index.js";
 
-const root = mkdtempSync(join(tmpdir(), "open-data-agent-skills-smoke-"));
+const root = mkdtempSync(join(tmpdir(), "open-data-foundry-skills-smoke-"));
 const metadataStore = createMetadataStore({ database_path: join(root, "metadata.sqlite") });
 const fileAssetService = new LocalFileAssetService(metadataStore, { storageRoot: join(root, "files") });
 

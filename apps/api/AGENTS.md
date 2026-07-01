@@ -1,6 +1,6 @@
 # apps/api — Agent constraints
 
-Backend Agent Runtime for the dataagent monorepo.
+Backend Agent Runtime for the datafoundry monorepo.
 
 ## External surface
 
@@ -20,8 +20,8 @@ Do **not** add REST CRUD here unless documented in
 
 ## Architecture
 
-- CopilotKit `@copilotkit/runtime` hosts `DataAgentAgUiAgent` (`AbstractAgent`).
-- Agent orchestration: `@ag-ui/mastra` → `@open-data-agent/agent-runtime` → typed tools → Data Gateway.
+- CopilotKit `@copilotkit/runtime` hosts `DataFoundryAgUiAgent` (`AbstractAgent`).
+- Agent orchestration: `@ag-ui/mastra` → `@datafoundry/agent-runtime` → typed tools → Data Gateway.
 - Data Gateway and Metadata are **internal**; not exposed to the frontend directly.
 
 ## Docs (read in order)
@@ -34,7 +34,7 @@ Do **not** add REST CRUD here unless documented in
 
 ## Code conventions
 
-- `DataAgentAgUiAgent` must implement `clone()` and copy `input` deps (CopilotKit clones per run).
+- `DataFoundryAgUiAgent` must implement `clone()` and copy `input` deps (CopilotKit clones per run).
 - AG-UI events persisted via `RunEventWriter`; same stream returned to the client.
 - Env loaded from repository root `.env` (`LLM_API_KEY` required for live runs).
 

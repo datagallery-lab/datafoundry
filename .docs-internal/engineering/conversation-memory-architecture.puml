@@ -11,7 +11,7 @@ skinparam componentStyle rectangle
 actor "CopilotKit / AG-UI\nClient" as Client
 
 package "apps/api" #E0F2FE {
-  component "DataAgentAgUiAgent" as Api
+  component "DataFoundryAgUiAgent" as Api
   component "ConversationMemory\nService" as MemoryService
   component "Window Policy\nToken + Char Budget" as WindowPolicy
   component "ConversationMemory\nEventObserver" as Observer
@@ -27,10 +27,10 @@ package "packages/metadata" #ECFDF5 {
 }
 
 package "packages/agent-runtime" #FEF3C7 {
-  component "createDataAgent" as Factory
+  component "createDataFoundry" as Factory
   component "MastraContextBudgetProcessor" as Budget
   component "MastraTaskStateContextProcessor" as TaskState
-  component "Mastra DataAgent\nReAct + tools" as Agent
+  component "Mastra DataFoundry\nReAct + tools" as Agent
 }
 
 package "Mastra / AG-UI" #FCE7F3 {

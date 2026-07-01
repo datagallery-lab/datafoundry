@@ -10,19 +10,19 @@ import {
   parseAgentMemoryMode,
   type AgentMemoryMode,
   type TaskStateRuntime
-} from "@open-data-agent/agent-runtime";
-import { LocalArtifactService } from "@open-data-agent/artifacts";
-import { type MeResponse, createEnvConfig, createErrorResult, createSuccessResult } from "@open-data-agent/contracts";
-import { LocalDataGateway, createDemoDuckDbConfig } from "@open-data-agent/data-gateway";
-import { LocalFileAssetService } from "@open-data-agent/files";
-import { LocalKnowledgeService } from "@open-data-agent/knowledge";
+} from "@datafoundry/agent-runtime";
+import { LocalArtifactService } from "@datafoundry/artifacts";
+import { type MeResponse, createEnvConfig, createErrorResult, createSuccessResult } from "@datafoundry/contracts";
+import { LocalDataGateway, createDemoDuckDbConfig } from "@datafoundry/data-gateway";
+import { LocalFileAssetService } from "@datafoundry/files";
+import { LocalKnowledgeService } from "@datafoundry/knowledge";
 import {
   RunEventWriter,
   createMetadataStore,
   type UserRecord,
   type MetadataStore
-} from "@open-data-agent/metadata";
-import { buildSkillResourcePayload, parseSkillPackage } from "@open-data-agent/skills";
+} from "@datafoundry/metadata";
+import { buildSkillResourcePayload, parseSkillPackage } from "@datafoundry/skills";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { createServer as createHttpServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
@@ -115,7 +115,7 @@ const persistEarlyFailedUserMessage = (input: {
     });
   } catch (error) {
     // Keep the transport error visible even if best-effort history persistence fails.
-    console.warn("[data-agent] failed to persist early failed user message", error);
+    console.warn("[data-foundry] failed to persist early failed user message", error);
   }
 };
 
@@ -300,7 +300,7 @@ const handleCopilotKitRequest = async ({
 }: HandleCopilotKitRequestInput): Promise<void> => {
   const runtime = new CopilotRuntime({
     agents: {
-      dataAgent: new DataAgentAgUiAgent({
+      dataFoundry: new DataFoundryAgUiAgent({
         dataGateway,
         artifactService,
         fileAssetService,
@@ -333,7 +333,7 @@ const handleCopilotKitRequest = async ({
   }
 };
 
-type DataAgentAgUiAgentInput = {
+type DataFoundryAgUiAgentInput = {
   artifactService: LocalArtifactService;
   conversationMemoryMode: AgentMemoryMode;
   dataGateway: LocalDataGateway;
@@ -349,19 +349,19 @@ type DataAgentAgUiAgentInput = {
   workspaceRoot: string;
 };
 
-class DataAgentAgUiAgent extends AbstractAgent {
-  private input: DataAgentAgUiAgentInput;
+class DataFoundryAgUiAgent extends AbstractAgent {
+  private input: DataFoundryAgUiAgentInput;
 
-  constructor(input: DataAgentAgUiAgentInput) {
+  constructor(input: DataFoundryAgUiAgentInput) {
     super({
-      agentId: "dataAgent",
+      agentId: "dataFoundry",
       description: "Read-only data analysis agent backed by Mastra and Data Gateway."
     });
     this.input = input;
   }
 
-  clone(): DataAgentAgUiAgent {
-    const cloned = super.clone() as DataAgentAgUiAgent;
+  clone(): DataFoundryAgUiAgent {
+    const cloned = super.clone() as DataFoundryAgUiAgent;
     cloned.input = this.input;
     return cloned;
   }

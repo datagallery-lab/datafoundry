@@ -15,7 +15,7 @@ import { createTaskStateRuntime } from "../packages/agent-runtime/dist/index.js"
 import { LocalDataGateway } from "../packages/data-gateway/dist/index.js";
 import { RunEventWriter, createMetadataStore } from "../packages/metadata/dist/index.js";
 
-const root = mkdtempSync(join(tmpdir(), "open-data-agent-config-smoke-"));
+const root = mkdtempSync(join(tmpdir(), "open-data-foundry-config-smoke-"));
 const datasourcePath = join(root, "source.sqlite");
 const source = new DatabaseSync(datasourcePath);
 source.exec(`

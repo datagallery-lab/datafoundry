@@ -154,7 +154,7 @@
 <text x="279.775" y="138" text-anchor="middle" dy="0.35em" font-size="13" font-weight="500" fill="var(--_text)">&quot;Tool Raw Results&lt;br/&gt;schema / sql / files / MCP&quot;</text>
 <text x="739.2249999999999" y="688" text-anchor="middle" dy="0.35em" font-size="13" font-weight="500" fill="var(--_text)">&quot;index.ts&lt;br/&gt;public app API&quot;</text>
 <text x="1223.7" y="748" text-anchor="middle" dy="0.35em" font-size="13" font-weight="500" fill="var(--_text)">&quot;testing.ts&lt;br/&gt;smoke-only internal seams&quot;</text>
-<text x="1223.7" y="688" text-anchor="middle" dy="0.35em" font-size="13" font-weight="500" fill="var(--_text)">&quot;createDataAgent&lt;br/&gt;tool + context boundary assembly&quot;</text>
+<text x="1223.7" y="688" text-anchor="middle" dy="0.35em" font-size="13" font-weight="500" fill="var(--_text)">&quot;createDataFoundry&lt;br/&gt;tool + context boundary assembly&quot;</text>
 <text x="1836.875" y="318" text-anchor="middle" dy="0.35em" font-size="13" font-weight="500" fill="var(--_text)">&quot;RuntimeContextSourceRegistry&lt;br/&gt;run-scoped sources&quot;</text>
 <text x="1836.875" y="158" text-anchor="middle" dy="0.35em" font-size="13" font-weight="500" fill="var(--_text)">&quot;ToolObservationAdapterRegistry&lt;br/&gt;tool-result source subdomain&quot;</text>
 <text x="1836.875" y="558" text-anchor="middle" dy="0.35em" font-size="13" font-weight="500" fill="var(--_text)">&quot;MastraConversationContextAdapter&quot;</text>

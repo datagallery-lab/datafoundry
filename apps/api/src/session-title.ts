@@ -1,6 +1,6 @@
 import { Agent } from "@mastra/core/agent";
-import { createCustomEvent } from "@open-data-agent/agent-runtime";
-import type { MetadataStore, SessionRecord } from "@open-data-agent/metadata";
+import { createCustomEvent } from "@datafoundry/agent-runtime";
+import type { MetadataStore, SessionRecord } from "@datafoundry/metadata";
 import type { BaseEvent } from "@ag-ui/client";
 
 const TITLE_TIMEOUT_MS = 5000;

@@ -2,7 +2,7 @@
 
 这篇文档面向准备接入数据源的用户。读完后，你可以在 Web 或 REST API 中注册、测试和选择数据源，并理解 TUI 如何使用已配置的数据源。
 
-Open Data Agent 通过 Data Gateway 管理数据源。数据源可以在 Web 工作台或 REST API 中注册和测试；TUI 可以列出并选择已配置的数据源。真正的数据分析仍由 Agent 通过受控工具执行。
+DataFoundry 通过 Data Gateway 管理数据源。数据源可以在 Web 工作台或 REST API 中注册和测试；TUI 可以列出并选择已配置的数据源。真正的数据分析仍由 Agent 通过受控工具执行。
 
 ## 核心原则
 

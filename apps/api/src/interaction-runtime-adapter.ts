@@ -1,7 +1,7 @@
 import type { BaseEvent, RunAgentInput } from "@ag-ui/client";
 import { EventType } from "@ag-ui/core";
-import { createCustomEvent } from "@open-data-agent/agent-runtime";
-import type { MetadataStore } from "@open-data-agent/metadata";
+import { createCustomEvent } from "@datafoundry/agent-runtime";
+import type { MetadataStore } from "@datafoundry/metadata";
 import { createHash, randomUUID } from "node:crypto";
 
 export type InteractionInterrupt = {

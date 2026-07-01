@@ -1,4 +1,4 @@
-import { createEnvConfig } from "@open-data-agent/contracts";
+import { createEnvConfig } from "@datafoundry/contracts";
 
 export type ApiConfig = {
   host: string;

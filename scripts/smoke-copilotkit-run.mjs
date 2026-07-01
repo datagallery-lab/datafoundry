@@ -7,7 +7,7 @@ import { DatabaseSync } from "node:sqlite";
 
 import { EventType } from "@ag-ui/core";
 
-const root = mkdtempSync(join(tmpdir(), "open-data-agent-copilotkit-run-"));
+const root = mkdtempSync(join(tmpdir(), "open-data-foundry-copilotkit-run-"));
 const metadataPath = join(root, "metadata.sqlite");
 const mastraStoragePath = join(root, "mastra.sqlite");
 const workspaceRoot = join(root, "workspaces");
@@ -333,7 +333,7 @@ try {
   const store = createMetadataStore({ database_path: metadataPath });
   try {
     const persisted = store.runEvents.listByRun({ user_id: "dev-user", run_id: runId });
-    assert(persisted.length > 0, "DataAgentAgUiAgent.run should persist AG-UI events");
+    assert(persisted.length > 0, "DataFoundryAgUiAgent.run should persist AG-UI events");
     const persistedEvents = persisted.map((item) => JSON.parse(item.payload_json));
     assert.equal(persistedEvents[persistedEvents.length - 1]?.type, EventType.RUN_FINISHED);
     assertRunStatusCompletedBeforeFinish(persistedEvents);
@@ -454,7 +454,7 @@ async function runCopilotKitAgent(baseUrl, input) {
     },
     body: JSON.stringify({
       method: "agent/run",
-      params: { agentId: "dataAgent" },
+      params: { agentId: "dataFoundry" },
       body: input
     })
   }));
@@ -469,7 +469,7 @@ async function connectCopilotKitAgent(baseUrl, threadId) {
     },
     body: JSON.stringify({
       method: "agent/connect",
-      params: { agentId: "dataAgent" },
+      params: { agentId: "dataFoundry" },
       body: {
         threadId,
         runId: `connect-${threadId}`,

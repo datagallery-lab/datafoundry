@@ -1,5 +1,5 @@
 {
-  "name": "@open-data-agent/web",
+  "name": "@datafoundry/web",
   "version": "0.1.0",
   "private": true,
   "scripts": {

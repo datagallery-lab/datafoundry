@@ -87,7 +87,7 @@ RunAgentInput
   -> persist current user message
   -> load conversation_messages by user_id + session_id
   -> build messages = recent persisted history + current user message
-  -> createDataAgent(messages)
+  -> createDataFoundry(messages)
   -> @ag-ui/mastra
 ```
 
@@ -163,7 +163,7 @@ Mastra Memory 已完成受控接入 Phase 1-3：
 长期记忆第一阶段已经接入为独立受控来源：
 
 - `metadata.long_term_memories` 保存跨窗口可复用的长期事实，当前支持 `user`、`session`、`datasource` 三种 scope。
-- API 在新 run 创建 DataAgent 前，用当前 user input、session 和 datasource 做本地相关性检索，最多取 6 条。
+- API 在新 run 创建 DataFoundry 前，用当前 user input、session 和 datasource 做本地相关性检索，最多取 6 条。
 - `LongTermMemoryContextSource` 通过 Mastra `MastraContextRuntimeSourceProcessor` 把检索结果写入 `ContextRunState` inventory，
   再由 `ContextStepPlanner` / `ContextPromptMaterializer` 生成 `context:long-term-memory` prompt view message。
 - 长期记忆以 `sourceType=long-term-memory`、`trust=memory`、`retention=supporting` 进入 ContextPackage，因此和普通历史一样接受 token budget、source policy 和 provider prompt guard 治理。

@@ -12,7 +12,7 @@ import {
   taskWriteTool,
 } from "@mastra/core/harness";
 import {
-  createDataAgent,
+  createDataFoundry,
   createTaskStateRuntime,
 } from "../../packages/agent-runtime/dist/index.js";
 
@@ -228,9 +228,9 @@ try {
     });
   }
 
-  // --- createDataAgent registration ---
+  // --- createDataFoundry registration ---
   {
-    const configured = await createDataAgent({
+    const configured = await createDataFoundry({
       dataGateway: {},
       emitter: { emit: () => undefined },
       messages: [],

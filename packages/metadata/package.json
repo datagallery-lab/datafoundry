@@ -1,5 +1,5 @@
 {
-  "name": "@open-data-agent/metadata",
+  "name": "@datafoundry/metadata",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -11,6 +11,6 @@
   },
   "dependencies": {
     "@ag-ui/core": "^0.0.57",
-    "@open-data-agent/contracts": "0.1.0"
+    "@datafoundry/contracts": "0.1.0"
   }
 }

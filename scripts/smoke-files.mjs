@@ -8,7 +8,7 @@ import { fileAssetRefDto, LocalFileAssetService } from "../packages/files/dist/i
 import { LocalKnowledgeService } from "../packages/knowledge/dist/index.js";
 import { createMetadataStore } from "../packages/metadata/dist/index.js";
 
-const root = mkdtempSync(join(tmpdir(), "open-data-agent-files-smoke-"));
+const root = mkdtempSync(join(tmpdir(), "open-data-foundry-files-smoke-"));
 const store = createMetadataStore({
   database_path: join(root, "metadata.sqlite")
 });

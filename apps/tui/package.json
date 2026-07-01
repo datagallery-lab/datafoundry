@@ -1,13 +1,13 @@
 {
-  "name": "@dataagent/tui",
+  "name": "@datafoundry/tui",
   "version": "0.0.1",
-  "description": "Terminal UI for DataAgent - CopilotKit protocol client",
+  "description": "Terminal UI for DataFoundry - CopilotKit protocol client",
   "private": true,
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "bin": {
-    "dataagent-tui": "./dist/index.js"
+    "datafoundry-tui": "./dist/index.js"
   },
   "scripts": {
     "build": "tsc",
@@ -16,7 +16,7 @@
     "clean": "rm -rf dist"
   },
   "keywords": [
-    "dataagent",
+    "datafoundry",
     "tui",
     "copilotkit",
     "terminal",

@@ -41,7 +41,7 @@ export type RunWorkspace = {
 
 /** Resolve the application-level workspace root. */
 export const resolveWorkspaceRoot = (injectedRoot?: string): string =>
-  path.resolve(injectedRoot ?? process.env.WORKSPACE_ROOT ?? path.join(os.tmpdir(), "open-data-agent-workspace"));
+  path.resolve(injectedRoot ?? process.env.WORKSPACE_ROOT ?? path.join(os.tmpdir(), "open-data-foundry-workspace"));
 
 /**
  * Resolve the persistent, cross-session workspace directory for {user_id, workspace_id}.

@@ -1,5 +1,5 @@
 import type { BaseEvent, RunAgentInput } from "@ag-ui/client";
-import { type MetadataStore, type RunEventWriter } from "@open-data-agent/metadata";
+import { type MetadataStore, type RunEventWriter } from "@datafoundry/metadata";
 
 import type { InteractionResume } from "./interaction-runtime-adapter.js";
 import {

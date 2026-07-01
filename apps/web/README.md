@@ -1,6 +1,6 @@
-# Data Task UI (`@open-data-agent/web`)
+# Data Task UI (`@datafoundry/web`)
 
-Next.js data-task workspace in the dataagent monorepo.
+Next.js data-task workspace in the datafoundry monorepo.
 
 - **User guide:** [Web 工作台指南](../../docs/zh/guides/web-workbench.md)
 - **Quick start:** [快速开始](../../docs/zh/quick-start.md)

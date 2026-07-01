@@ -32,13 +32,13 @@ POST /api/copilotkit
 当前唯一后端 agent：
 
 ```text
-dataAgent
+dataFoundry
 ```
 
 推荐 GUI 使用 CopilotKit runtime：
 
 ```tsx
-<CopilotKit runtimeUrl="http://127.0.0.1:8787/api/copilotkit" agent="dataAgent">
+<CopilotKit runtimeUrl="http://127.0.0.1:8787/api/copilotkit" agent="dataFoundry">
   <CopilotChat />
 </CopilotKit>
 ```
@@ -434,7 +434,7 @@ Access-Control-Allow-Headers: Content-Type, Authorization, Idempotency-Key, If-M
 GUI：
 
 - 优先使用 CopilotKit 官方 runtime 接入方式。
-- 选择 agent：`dataAgent`。
+- 选择 agent：`dataFoundry`。
 - run 选择通过 `forwardedProps.run_config` 传；legacy `forwardedProps.datasourceId` 只作兼容。
 - 工作区配置通过 `/api/v1/workspace-config` 和对应资源 CRUD 读写。
 - 渲染 `TEXT_MESSAGE_CHUNK` 为主回答。

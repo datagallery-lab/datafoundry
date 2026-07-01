@@ -361,9 +361,9 @@ export function LiveRunEventSubscriber({
       });
     };
 
-    window.addEventListener("dataagent-run-error", onError);
+    window.addEventListener("datafoundry-run-error", onError);
     return () => {
-      window.removeEventListener("dataagent-run-error", onError);
+      window.removeEventListener("datafoundry-run-error", onError);
     };
   }, [setLiveRun, syncRunningThreadStatus, threadId]);
 

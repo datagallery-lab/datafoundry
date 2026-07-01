@@ -10,15 +10,15 @@ import {
 import { Mastra } from "@mastra/core/mastra";
 import { createSkillTools, createWorkspaceTools } from "@mastra/core/workspace";
 import type { Message } from "@ag-ui/core";
-import type { ArtifactService } from "@open-data-agent/artifacts";
-import type { DataGateway } from "@open-data-agent/data-gateway";
-import { type FileAssetService, fileAssetRefDto, mimeTypeForFilename } from "@open-data-agent/files";
-import type { KnowledgeService } from "@open-data-agent/knowledge";
+import type { ArtifactService } from "@datafoundry/artifacts";
+import type { DataGateway } from "@datafoundry/data-gateway";
+import { type FileAssetService, fileAssetRefDto, mimeTypeForFilename } from "@datafoundry/files";
+import type { KnowledgeService } from "@datafoundry/knowledge";
 import {
   materializeSkillPackages,
   type SkillRecord,
   type SkillSelectionResult
-} from "@open-data-agent/skills";
+} from "@datafoundry/skills";
 import { copyFileSync, linkSync, mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, dirname, join, resolve, sep } from "node:path";
 import {
@@ -26,7 +26,7 @@ import {
   createModelProviderFromConfig,
   type ChatProviderConfig,
   type ModelProvider
-} from "@open-data-agent/providers";
+} from "@datafoundry/providers";
 
 import { AGENT_MAX_STEPS, SQL_MAX_EXECUTION_COUNT } from "./runtime-limits.js";
 import { SQL_MAX_SQL_CHARS } from "./context/inventory/context-limits.js";
@@ -48,7 +48,7 @@ import {
   type TaskStateRuntime
 } from "./memory/task-state-runtime.js";
 import { GoalRuntimeAdapter, type GoalRequest } from "./memory/goal-runtime-adapter.js";
-import { createDataAgentToolRegistry } from "./tools/data-tools.js";
+import { createDataFoundryToolRegistry } from "./tools/data-tools.js";
 import { GovernedToolFactory } from "./tools/governed-tool-factory.js";
 import { createRunWorkspace, resolveWorkspaceDir } from "./tools/workspace-factory.js";
 import { wrapWorkspaceToolsWithArtifactRecording } from "./tools/workspace-artifact-recorder.js";
@@ -123,7 +123,7 @@ export {
 } from "./tools/workspace-factory.js";
 export { resolvePythonRuntime } from "./tools/python-runtime.js";
 export { projectWorkspaceObservation } from "./context/tool-observation/adapters/workspace-tool-observation-adapters.js";
-export { createDataAgentToolRegistry, type ToolRegistry } from "./tools/data-tools.js";
+export { createDataFoundryToolRegistry, type ToolRegistry } from "./tools/data-tools.js";
 export { GoalRuntimeAdapter, type GoalRequest, type GoalSnapshot } from "./memory/goal-runtime-adapter.js";
 export { type ModelContextProfile } from "./context/policy/model-context-profile.js";
 export {
@@ -148,7 +148,7 @@ export type AgentLongTermMemoryRecord = {
   source_run_id?: string;
 };
 
-export type CreateDataAgentInput = {
+export type CreateDataFoundryInput = {
   abortSignal?: AbortSignal | undefined;
   artifactService?: ArtifactService;
   dataGateway: DataGateway;
@@ -192,8 +192,8 @@ export type WorkspaceAttachment = {
   source_path: string;
 };
 
-export const createDataAgent = async (
-  input: CreateDataAgentInput
+export const createDataFoundry = async (
+  input: CreateDataFoundryInput
 ): Promise<{
   agent: Agent;
   governedMessages: Message[];
@@ -229,7 +229,7 @@ export const createDataAgent = async (
       })
     : [];
   // 绑定到本次 session 的工作区：LocalFilesystem + LocalSandbox（macOS seatbelt / Linux bubblewrap 隔离）。
-  // createDataAgent 每次 run 都调用，直接闭包捕获 runContext，不依赖下游 requestContext 注入。
+  // createDataFoundry 每次 run 都调用，直接闭包捕获 runContext，不依赖下游 requestContext 注入。
   const runWorkspace = createRunWorkspace({
     runContext: input.runContext,
     ...(materializedSkills.length > 0 ? { skillPaths: materializedSkills.map((skill) => skill.path) } : {}),
@@ -240,7 +240,7 @@ export const createDataAgent = async (
   const governedMessages = normalizeIngressMessages(input.messages);
 
   const tokenUsageCorrelation = createTokenUsageCorrelationStore();
-  const registry = createDataAgentToolRegistry({
+  const registry = createDataFoundryToolRegistry({
     ...(input.abortSignal ? { abortSignal: input.abortSignal } : {}),
     dataGateway: input.dataGateway,
     emitter: input.emitter,
@@ -388,8 +388,8 @@ export const createDataAgent = async (
   const selectedTools = selectToolsByPolicy(availableTools, input.skillSelection);
   const tools = governedToolFactory.governTools(selectedTools);
   const agent = new Agent({
-    id: "data-agent",
-    name: "Data Agent",
+    id: "data-foundry",
+    name: "DataFoundry",
     instructions: buildAgentInstructions({
       runContext: input.runContext,
       commandExecutionEnabled: runWorkspace.commandExecutionEnabled,
@@ -425,7 +425,7 @@ export const createDataAgent = async (
   );
   const mastra = input.taskStateRuntime
     ? new Mastra({
-        agents: { dataAgent: agentForAgUi },
+        agents: { dataFoundry: agentForAgUi },
         storage: input.taskStateRuntime.storage
       })
     : undefined;
@@ -457,7 +457,7 @@ export const createDataAgent = async (
   };
 };
 
-export const createDataAgentRunContext = (input: AgentRunContextInput): AgentRunContext => {
+export const createDataFoundryRunContext = (input: AgentRunContextInput): AgentRunContext => {
   if (!input.selected_datasource_id) {
     throw new Error("DATASOURCE_REQUIRED");
   }

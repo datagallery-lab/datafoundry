@@ -1,12 +1,12 @@
 # apps/tui — Agent constraints
 
-Terminal UI (`@dataagent/tui`) for the dataagent monorepo.
+Terminal UI (`@datafoundry/tui`) for the datafoundry monorepo.
 
 ## Runtime boundary
 
 - Connects to backend via CopilotKit single-route `/api/copilotkit`.
 - Reuses Web data-task reducers through symlinks under `src/state/`.
-- Default agent: `dataAgent`.
+- Default agent: `dataFoundry`.
 
 ## Docs (read in order)
 

@@ -1,6 +1,6 @@
 import type { RunAgentInput } from "@ag-ui/client";
-import type { ConfigResourceKind, MetadataStore } from "@open-data-agent/metadata";
-import type { SkillMode, SkillPolicyConfig } from "@open-data-agent/skills";
+import type { ConfigResourceKind, MetadataStore } from "@datafoundry/metadata";
+import type { SkillMode, SkillPolicyConfig } from "@datafoundry/skills";
 
 export type RunConfigDefaults = {
   activeDatasourceId?: string;

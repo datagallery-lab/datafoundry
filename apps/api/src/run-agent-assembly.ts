@@ -1,20 +1,20 @@
 import { MastraAgent } from "@ag-ui/mastra";
 import type { RunAgentInput } from "@ag-ui/client";
-import type { ArtifactService } from "@open-data-agent/artifacts";
+import type { ArtifactService } from "@datafoundry/artifacts";
 import {
-  createDataAgent,
-  createDataAgentRunContext,
+  createDataFoundry,
+  createDataFoundryRunContext,
   type AgentRunContext,
   type AgUiEventEmitter,
   type GoalRuntimeAdapter,
   type TaskStateRuntime,
   type WorkspaceAttachment
-} from "@open-data-agent/agent-runtime";
-import type { DataGateway } from "@open-data-agent/data-gateway";
-import type { FileAssetService } from "@open-data-agent/files";
-import type { KnowledgeService } from "@open-data-agent/knowledge";
-import type { LongTermMemoryRecord } from "@open-data-agent/metadata";
-import type { SkillRecord, SkillSelectionResult } from "@open-data-agent/skills";
+} from "@datafoundry/agent-runtime";
+import type { DataGateway } from "@datafoundry/data-gateway";
+import type { FileAssetService } from "@datafoundry/files";
+import type { KnowledgeService } from "@datafoundry/knowledge";
+import type { LongTermMemoryRecord } from "@datafoundry/metadata";
+import type { SkillRecord, SkillSelectionResult } from "@datafoundry/skills";
 
 import type { InteractionResume } from "./interaction-runtime-adapter.js";
 import { PolicyMcpMiddleware } from "./policy-mcp-middleware.js";
@@ -74,7 +74,7 @@ type CreateRunAgentAssemblyInput = {
 
 /** Create the canonical agent run context used by Mastra tools, projections, and metadata. */
 export const createRunAgentContext = (input: CreateRunAgentContextInput): AgentRunContext =>
-  createDataAgentRunContext({
+  createDataFoundryRunContext({
     user_id: input.userId,
     workspace_id: input.workspaceId,
     session_id: input.sessionId,
@@ -122,7 +122,7 @@ export const createRunAgentAssembly = async (
     isolation,
     workspaceDir,
     sessionDir
-  } = await createDataAgent({
+  } = await createDataFoundry({
     ...(input.abortSignal ? { abortSignal: input.abortSignal } : {}),
     artifactService: input.artifactService,
     dataGateway: input.dataGateway,

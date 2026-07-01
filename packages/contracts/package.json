@@ -1,5 +1,5 @@
 {
-  "name": "@open-data-agent/contracts",
+  "name": "@datafoundry/contracts",
   "version": "0.1.0",
   "private": true,
   "type": "module",

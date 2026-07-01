@@ -5,9 +5,9 @@
 > **Maintenance:** When changing `TaskConsole`, layout/responsive behavior, config
 > REST integration, or design tokens, update this document in the same change.
 
-This page (`/data-tasks`) is a **data-agent workbench** built on CopilotKit v2
+This page (`/data-tasks`) is a **data-foundry workbench** built on CopilotKit v2
 (`@copilotkit/react-core/v2`). It is a **real frontend**: it talks to the live
-`dataAgent` backend over the CopilotKit / AG-UI protocol and renders only what
+`dataFoundry` backend over the CopilotKit / AG-UI protocol and renders only what
 the backend actually streams. There is no mock scenario or scripted demo.
 
 The backend protocol surface is the source of truth for what is renderable; see
@@ -323,17 +323,17 @@ The chat input supports file attachments via CopilotKit v2 `useAttachments`, wir
 
 ```mermaid
 flowchart LR
-  chat[CopilotChat threadId] --> rt["/api/copilotkit (dataAgent)"]
+  chat[CopilotChat threadId] --> rt["/api/copilotkit (dataFoundry)"]
   rt --> events[AG-UI event stream]
-  events --> hook[useDataAgentRun]
+  events --> hook[useDataFoundryRun]
   hook --> reducer[reduceLiveRunEvent]
   reducer --> live[LiveRun state]
   live --> console[TaskConsole / TraceOverlay]
 ```
 
 - The `CopilotKit` provider points at `NEXT_PUBLIC_AGENT_RUNTIME_URL`
-  (default `http://127.0.0.1:8787/api/copilotkit`) with `agentId="dataAgent"`.
-- [use-data-agent-run.tsx](../../apps/web/src/app/data-tasks/use-data-agent-run.tsx) subscribes to the agent and
+  (default `http://127.0.0.1:8787/api/copilotkit`) with `agentId="dataFoundry"`.
+- [use-data-foundry-run.tsx](../../apps/web/src/app/data-tasks/use-data-foundry-run.tsx) subscribes to the agent and
   reduces the AG-UI stream into a `LiveRun` via
   [live-run-state.ts](../../apps/web/src/app/data-tasks/live-run-state.ts).
 - Events consumed: `RUN_STARTED/FINISHED/ERROR`, `STATE_SNAPSHOT/DELTA`,
@@ -374,7 +374,7 @@ Sessions are therefore managed entirely on the client:
   persisted in `localStorage` (`data-tasks:sessions:v1`).
 - `useAgent` / `CopilotChat` cache a per-`(agentId, threadId)` agent clone, so
   switching `threadId` gives each session isolated messages and run state.
-- `useDataAgentRun` resets its `LiveRun` whenever `threadId` changes.
+- `useDataFoundryRun` resets its `LiveRun` whenever `threadId` changes.
 - New session = push a new `threadId`; switching = change the active id.
 - The collapsed left pane is labeled as a workspace quick rail, not a second
   session list. Session rows keep the chat-type icon on the left; pinned state
@@ -412,7 +412,7 @@ tab clears the selection. Artifact clicks stay on **产出** and expand in-place
 
 - **Overview tab** —
   - `ConclusionZone`: current question (the latest user message via
-    `useDataAgentRun().latestQuestion`), error state when present, and
+    `useDataFoundryRun().latestQuestion`), error state when present, and
     **tool-agnostic** KPI cards: 步骤数 / 成功率 / 产出 / Token·成本. Runtime
     status and duration live only in the console header so the Overview does not
     repeat chrome-level state. The Token/成本 KPI is only lit when the backend

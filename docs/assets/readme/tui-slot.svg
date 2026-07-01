@@ -24,7 +24,7 @@
   <circle cx="128" cy="105" r="8" fill="#F87171"/>
   <circle cx="154" cy="105" r="8" fill="#FBBF24"/>
   <circle cx="180" cy="105" r="8" fill="#34D399"/>
-  <text x="130" y="180" class="line">$ dataagent --resume latest</text>
+  <text x="130" y="180" class="line">$ datafoundry --resume latest</text>
   <text x="130" y="220" class="line">agent: inspecting schema...</text>
   <text x="130" y="260" class="line">tool: run_sql_readonly completed</text>
   <text x="130" y="300" class="line">artifact: table-result.csv ready</text>

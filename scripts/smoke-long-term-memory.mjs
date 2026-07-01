@@ -4,7 +4,7 @@ import {
   ContextRunState,
   LongTermMemoryContextSource,
   RuntimeContextSourceRegistry,
-  createDataAgent
+  createDataFoundry
 } from "../packages/agent-runtime/dist/testing.js";
 import {
   DeterministicLongTermMemoryExtractor,
@@ -127,7 +127,7 @@ try {
     throw new Error("Expected planner to materialize long-term memory from runtime source inventory");
   }
 
-  const configuredAgent = await createDataAgent({
+  const configuredAgent = await createDataFoundry({
     dataGateway: {},
     emitter: { emit: () => undefined },
     longTermMemory: { records: memories },
@@ -151,10 +151,10 @@ try {
   });
   const processorIds = (await configuredAgent.agent.listConfiguredInputProcessors()).map((processor) => processor.id);
   if (!processorIds.includes("context-runtime-source")) {
-    throw new Error(`Expected DataAgent to include runtime source processor, got ${processorIds.join(",")}`);
+    throw new Error(`Expected DataFoundry to include runtime source processor, got ${processorIds.join(",")}`);
   }
   if (processorIds.includes("long-term-memory-context")) {
-    throw new Error(`Expected DataAgent to stop using synthetic long-term memory processor, got ${processorIds.join(",")}`);
+    throw new Error(`Expected DataFoundry to stop using synthetic long-term memory processor, got ${processorIds.join(",")}`);
   }
   await configuredAgent.destroyWorkspace();
 

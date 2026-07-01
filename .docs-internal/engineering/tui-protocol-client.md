@@ -10,7 +10,7 @@ The backend endpoint is configured with `useSingleEndpoint`, so the client posts
 ```ts
 {
   method: "agent/run",
-  params: { agentId: "dataAgent" },
+  params: { agentId: "dataFoundry" },
   body: {
     threadId,
     runId,
@@ -30,7 +30,7 @@ The backend endpoint is configured with `useSingleEndpoint`, so the client posts
 ```ts
 const client = new CopilotKitClient({
   runtimeUrl: "http://localhost:3000/api/copilotkit",
-  agent: "dataAgent"
+  agent: "dataFoundry"
 });
 
 for await (const event of client.runAgent({

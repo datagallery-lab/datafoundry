@@ -1,5 +1,5 @@
 @startuml
-title Data Agent - Current Runtime
+title DataFoundry - Current Runtime
 
 left to right direction
 skinparam componentStyle rectangle
@@ -20,14 +20,14 @@ package "API Surface :8787" #D8EAF1 {
   component "/api/v1/*\nConfig REST" as ConfigRest #FFFFFF
   component "ConfigApiRequest\nresources / jobs / artifacts" as ConfigApi #FFFFFF
   component "POST /api/copilotkit" as Endpoint #FFFFFF
-  component "DataAgentAgUiAgent" as Bridge #FFFFFF
+  component "DataFoundryAgUiAgent" as Bridge #FFFFFF
   component "Run Identity\nfingerprint / claim / replay" as Identity #F7C9B6
   component "TaskPlanProjector\ndynamic PLAN snapshot" as Plan #F7C9B6
 }
 
 package "Mastra Agent Runtime" #DCE8C9 {
   component "@ag-ui/mastra\nMastraAgent" as AgUiMastra
-  component "Mastra DataAgent\nReAct + tool calling" as Agent
+  component "Mastra DataFoundry\nReAct + tool calling" as Agent
   component "@ag-ui/mcp-middleware\nenabled MCP servers" as McpMiddleware
   component "MastraContextBudgetProcessor\nevery ReAct step" as ContextProcessor #F9D65C
   component "MastraTaskStateContextProcessor\nthread task snapshot" as TaskProcessor #F9D65C
@@ -70,7 +70,7 @@ ConfigApi --> Secrets
 ConfigApi --> Gateway : datasource test / introspect
 ConfigApi --> Knowledge : KB upload / search / reindex
 ConfigApi --> Artifacts : detail / preview / download
-Endpoint --> Bridge : route dataAgent
+Endpoint --> Bridge : route dataFoundry
 Bridge --> Identity : threadId / runId / parentRunId
 Identity --> Metadata : find or atomic claim
 Identity --> Events : terminal duplicate replay

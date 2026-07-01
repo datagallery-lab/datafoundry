@@ -18,7 +18,7 @@ REST 配置并交给 agent 使用。
   -> POST /api/v1/datasources/:id/introspect
   -> GET /api/v1/datasources/:id/schema  # 给前端 schema browser 使用
   -> POST /api/copilotkit                # run_config / forwardedProps 选择 datasource
-     -> Mastra DataAgent
+     -> Mastra DataFoundry
      -> inspect_schema / run_sql_readonly
      -> Data Gateway SQL guard / audit / artifact
 ```

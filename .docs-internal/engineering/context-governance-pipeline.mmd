@@ -17,7 +17,7 @@ flowchart LR
   subgraph API["agent-runtime Package Boundary"]
     PUBLIC["index.ts<br/>public app API"]
     TESTING["testing.ts<br/>smoke-only internal seams"]
-    AGENT["createDataAgent<br/>tool + context boundary assembly"]
+    AGENT["createDataFoundry<br/>tool + context boundary assembly"]
   end
 
   subgraph SOURCE["1. Source Layer<br/>runtime sources + tool observation subdomain"]

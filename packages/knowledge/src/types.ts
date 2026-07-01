@@ -1,4 +1,4 @@
-import type { Citation } from "@open-data-agent/contracts";
+import type { Citation } from "@datafoundry/contracts";
 
 export type KnowledgeCollection = {
   id: string;

@@ -20,7 +20,7 @@ import {
   ToolObservationDispatcher,
   WorkingMemoryProjectionContextSource,
   createDefaultRuntimeContextSourceRegistry,
-  createDataAgent,
+  createDataFoundry,
   createContextItem,
   createContextSourceMetadata,
   contextItemDedupeKeys,
@@ -1067,7 +1067,7 @@ if (typeof verifiedValue.total_tokens !== "number") {
   throw new Error("context.prompt-verified must expose top-level total_tokens (R-017)");
 }
 
-const configuredAgent = await createDataAgent({
+const configuredAgent = await createDataFoundry({
   dataGateway: {},
   emitter: { emit: () => undefined },
   modelProvider: {

@@ -1,5 +1,5 @@
 import type { BaseEvent, EventType } from "@ag-ui/core";
-import type { ArtifactSummary, ArtifactType, RunEventEnvelope } from "@open-data-agent/contracts";
+import type { ArtifactSummary, ArtifactType, RunEventEnvelope } from "@datafoundry/contracts";
 import { createHash } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";

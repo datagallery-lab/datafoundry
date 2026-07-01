@@ -121,7 +121,7 @@ async function runAgent(body) {
     headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
     body: JSON.stringify({
       method: "agent/run",
-      params: { agentId: "dataAgent" },
+      params: { agentId: "dataFoundry" },
       body: {
         tools: [],
         context: [{ description: "datasource_id", value: "api-duckdb-demo" }],

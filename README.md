@@ -1,7 +1,7 @@
-<h1 align="center">DataAgent 🚀</h1>
+<h1 align="center">DataFoundry 🚀</h1>
 
 <p align="center">
-  A TypeScript data-agent runtime and workbench for safe, auditable analysis over databases, files, knowledge, and generated artifacts.
+  A TypeScript data-foundry runtime and workbench for safe, auditable analysis over databases, files, knowledge, and generated artifacts.
 </p>
 
 <p align="center">
@@ -20,12 +20,12 @@
   <a href="#-license"><strong>License</strong></a>
 </p>
 
-## ✨ Why DataAgent
+## ✨ Why DataFoundry
 
 Modern data agents need more than a chat model. They need selected context, datasource boundaries, SQL policy,
 auditable events, durable outputs, and a frontend protocol that can replay the whole run.
 
-DataAgent puts those pieces behind one runtime:
+DataFoundry puts those pieces behind one runtime:
 
 - 🔎 **Schema-first analysis** — the agent inspects datasource structure before it can run read-only SQL.
 - 🧠 **Governed context** — conversation history, memory, tool results, files, and knowledge sources are compiled under one budget.
@@ -35,17 +35,17 @@ DataAgent puts those pieces behind one runtime:
 
 ## 🗄️ Bring Your Data Stack
 
-DataAgent is built around a Data Gateway adapter boundary. The current runtime already recognizes local files,
+DataFoundry is built around a Data Gateway adapter boundary. The current runtime already recognizes local files,
 embedded databases, cloud warehouses, lakehouse engines, operational databases, and search / NoSQL systems.
 
 <p align="center">
-  <img src="docs/assets/readme/database-wall.png" alt="Supported DataAgent datasource adapters" width="100%">
+  <img src="docs/assets/readme/database-wall.png" alt="Supported DataFoundry datasource adapters" width="100%">
 </p>
 
 ## 🧭 How It Works
 
 <p align="center">
-  <img src="docs/assets/readme/runtime-flow.png" alt="DataAgent runtime flow" width="100%">
+  <img src="docs/assets/readme/runtime-flow.png" alt="DataFoundry runtime flow" width="100%">
 </p>
 
 The frontend talks to a single backend runtime. The backend owns identity, run replay, context assembly, memory,
@@ -123,7 +123,7 @@ Use targeted smoke checks for the package you touch. `package.json` lists the fu
 
 ## 🤝 Contributing
 
-DataAgent is moving quickly, so small, well-scoped contributions are easiest to review.
+DataFoundry is moving quickly, so small, well-scoped contributions are easiest to review.
 
 1. Open an issue or discussion for behavioral changes, protocol changes, datasource adapters, and agent-policy changes.
 2. Keep pull requests focused on one runtime boundary or feature area.
@@ -143,7 +143,7 @@ DataAgent is moving quickly, so small, well-scoped contributions are easiest to 
     <td><strong>Multimodal knowledge fabric</strong><br/>Unify tables, documents, notebooks, charts, images, logs, and generated files into one governed context and retrieval fabric.</td>
   </tr>
   <tr>
-    <td><strong>Agent app platform</strong><br/>Expose DataAgent as a platform for domain-specific analytical agents, reusable workflows, custom tools, and shareable agent apps.</td>
+    <td><strong>Agent app platform</strong><br/>Expose DataFoundry as a platform for domain-specific analytical agents, reusable workflows, custom tools, and shareable agent apps.</td>
     <td><strong>Enterprise control plane</strong><br/>Add multi-tenant governance for identity, RBAC, approvals, audit export, policy-as-code, cost limits, and deployment operations.</td>
   </tr>
 </table>
@@ -167,7 +167,7 @@ DataAgent is moving quickly, so small, well-scoped contributions are easiest to 
 
 ## 🧪 Status
 
-DataAgent is under active development. Current code, public docs, and passing smoke checks are the source of truth.
+DataFoundry is under active development. Current code, public docs, and passing smoke checks are the source of truth.
 
 ## 📄 License
 

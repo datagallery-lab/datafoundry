@@ -1,7 +1,7 @@
 ---
 layout: home
 hero:
-  name: Open Data Agent
+  name: DataFoundry
   text: 中文文档
   tagline: 面向数据分析场景的 AI 工作台
   actions:

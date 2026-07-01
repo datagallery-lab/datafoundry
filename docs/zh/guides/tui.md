@@ -25,7 +25,7 @@ npm run start:tui -- --runtime-url http://127.0.0.1:8787/api/copilotkit
 指定默认数据源和 Agent 名称：
 
 ```bash
-npm run start:tui -- --datasource-id api-duckdb-demo --agent dataAgent
+npm run start:tui -- --datasource-id api-duckdb-demo --agent dataFoundry
 ```
 
 恢复最近的服务端会话：

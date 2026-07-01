@@ -1,7 +1,7 @@
-import { LocalArtifactService, type CreateArtifactInput } from "@open-data-agent/artifacts";
-import type { ArtifactSummary, DataSourceSummary } from "@open-data-agent/contracts";
-import type { DataSourceRecord, MetadataStore } from "@open-data-agent/metadata";
-import type { FileAssetService } from "@open-data-agent/files";
+import { LocalArtifactService, type CreateArtifactInput } from "@datafoundry/artifacts";
+import type { ArtifactSummary, DataSourceSummary } from "@datafoundry/contracts";
+import type { DataSourceRecord, MetadataStore } from "@datafoundry/metadata";
+import type { FileAssetService } from "@datafoundry/files";
 import {
   AccessAdapter,
   OracleAdapter,

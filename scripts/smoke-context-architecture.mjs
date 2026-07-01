@@ -438,19 +438,19 @@ function assertSourcePromptMaterializationPolicyIsExplicit() {
 function assertRuntimeSourceBoundaryStaysInSourceLayer() {
   const agentPath = path.join(repoRoot, "packages/agent-runtime/src/index.ts");
   const agentSource = readFileSync(agentPath, "utf8");
-  const createDataAgentBody = agentSource.slice(agentSource.indexOf("export const createDataAgent"));
+  const createDataFoundryBody = agentSource.slice(agentSource.indexOf("export const createDataFoundry"));
   const boundaryPath = path.join(contextRoot, "source/runtime-context-source-boundary.ts");
   const boundarySource = readFileSync(boundaryPath, "utf8");
   const processorBoundaryPath = path.join(contextRoot, "protocol/mastra/mastra-context-processor-boundary.ts");
   const processorBoundarySource = readFileSync(processorBoundaryPath, "utf8");
 
   if (
-    /new\s+RuntimeContextSourceRegistry\(/.test(createDataAgentBody) ||
-    /new\s+LongTermMemoryContextSource\(/.test(createDataAgentBody) ||
-    /new\s+WorkingMemoryProjectionContextSource\(/.test(createDataAgentBody) ||
-    /runtimeSourceRegistry\.register/.test(createDataAgentBody)
+    /new\s+RuntimeContextSourceRegistry\(/.test(createDataFoundryBody) ||
+    /new\s+LongTermMemoryContextSource\(/.test(createDataFoundryBody) ||
+    /new\s+WorkingMemoryProjectionContextSource\(/.test(createDataFoundryBody) ||
+    /runtimeSourceRegistry\.register/.test(createDataFoundryBody)
   ) {
-    failures.push("createDataAgent must delegate runtime source registry assembly to the source layer");
+    failures.push("createDataFoundry must delegate runtime source registry assembly to the source layer");
   }
 
   if (!/createDefaultRuntimeContextSourceRegistry/.test(processorBoundarySource)) {
@@ -474,17 +474,17 @@ function assertRuntimeSourceBoundaryStaysInSourceLayer() {
     failures.push("Mastra context processor boundary must pass additional runtime sources through source boundary");
   }
 
-  const createDataAgentInputBlock = agentSource.slice(
-    agentSource.indexOf("export type CreateDataAgentInput"),
-    agentSource.indexOf("export const createDataAgent")
+  const createDataFoundryInputBlock = agentSource.slice(
+    agentSource.indexOf("export type CreateDataFoundryInput"),
+    agentSource.indexOf("export const createDataFoundry")
   );
 
-  if (/additionalRuntimeSources\?:/.test(createDataAgentInputBlock)) {
-    failures.push("createDataAgent public input must not expose runtime source internals");
+  if (/additionalRuntimeSources\?:/.test(createDataFoundryInputBlock)) {
+    failures.push("createDataFoundry public input must not expose runtime source internals");
   }
 
-  if (/additionalToolAdapters\?:|ToolObservationAdapter/.test(createDataAgentInputBlock)) {
-    failures.push("createDataAgent public input must not expose tool-observation adapter internals");
+  if (/additionalToolAdapters\?:|ToolObservationAdapter/.test(createDataFoundryInputBlock)) {
+    failures.push("createDataFoundry public input must not expose tool-observation adapter internals");
   }
 
   if (
@@ -532,7 +532,7 @@ function assertGenericContextPolicyStaysToolAgnostic() {
   const filePath = path.join(contextRoot, "policy/context-policy.ts");
   const source = readFileSync(filePath, "utf8");
   const forbiddenPatterns = [
-    { name: "data gateway dependency", pattern: /@open-data-agent\/data-gateway/ },
+    { name: "data gateway dependency", pattern: /@datafoundry\/data-gateway/ },
     { name: "schema projection policy", pattern: /applySchemaContextPolicy|projectSchemaToolObservation/ },
     { name: "SQL projection policy", pattern: /applySqlModelContextPolicy|projectSqlToolObservation/ },
     { name: "tool observation projection policy", pattern: /ToolObservationProjectionPolicy/ },
@@ -570,7 +570,7 @@ function assertToolObservationBudgetProfilesStayInToolLayer() {
   const profileSource = readFileSync(profilePath, "utf8");
 
   if (/sourceLimitProfiles:\s*\{/.test(agentSource)) {
-    failures.push("createDataAgent must not inline tool observation source limit profiles");
+    failures.push("createDataFoundry must not inline tool observation source limit profiles");
   }
 
   if (
@@ -587,15 +587,15 @@ function assertDefaultToolObservationAdaptersStayInToolLayer() {
   const agentSource = readFileSync(agentPath, "utf8");
   const defaultAdaptersPath = path.join(contextRoot, "tool-observation/default-tool-observation-adapters.ts");
   const defaultAdaptersSource = readFileSync(defaultAdaptersPath, "utf8");
-  const createDataAgentBody = agentSource.slice(agentSource.indexOf("export const createDataAgent"));
+  const createDataFoundryBody = agentSource.slice(agentSource.indexOf("export const createDataFoundry"));
 
   if (
-    /new\s+\w+ToolObservationAdapter\(/.test(createDataAgentBody) ||
-    /toolObservationRegistry\.register\(new\s+/.test(createDataAgentBody) ||
-    /registerDefaultToolObservationAdapters/.test(createDataAgentBody) ||
-    !/createToolObservationBoundary/.test(createDataAgentBody)
+    /new\s+\w+ToolObservationAdapter\(/.test(createDataFoundryBody) ||
+    /toolObservationRegistry\.register\(new\s+/.test(createDataFoundryBody) ||
+    /registerDefaultToolObservationAdapters/.test(createDataFoundryBody) ||
+    !/createToolObservationBoundary/.test(createDataFoundryBody)
   ) {
-    failures.push("createDataAgent must delegate tool observation boundary assembly");
+    failures.push("createDataFoundry must delegate tool observation boundary assembly");
   }
 
   if (
@@ -630,7 +630,7 @@ function assertToolObservationBoundaryDoesNotLeakInternals() {
 function assertMastraContextProcessorAssemblyStaysInBoundary() {
   const agentPath = path.join(repoRoot, "packages/agent-runtime/src/index.ts");
   const agentSource = readFileSync(agentPath, "utf8");
-  const createDataAgentBody = agentSource.slice(agentSource.indexOf("export const createDataAgent"));
+  const createDataFoundryBody = agentSource.slice(agentSource.indexOf("export const createDataFoundry"));
   const processorBoundaryPath = path.join(contextRoot, "protocol/mastra/mastra-context-processor-boundary.ts");
   const processorBoundarySource = readFileSync(processorBoundaryPath, "utf8");
   const forbiddenInAgent = [
@@ -658,13 +658,13 @@ function assertMastraContextProcessorAssemblyStaysInBoundary() {
     "createDefaultContextSourcePolicy"
   ];
 
-  if (!/createMastraContextProcessorBoundary\(/.test(createDataAgentBody)) {
-    failures.push("createDataAgent must delegate Mastra context processor assembly to the protocol boundary");
+  if (!/createMastraContextProcessorBoundary\(/.test(createDataFoundryBody)) {
+    failures.push("createDataFoundry must delegate Mastra context processor assembly to the protocol boundary");
   }
 
   for (const rule of forbiddenInAgent) {
-    if (rule.pattern.test(createDataAgentBody)) {
-      failures.push(`createDataAgent must not assemble ${rule.name} directly`);
+    if (rule.pattern.test(createDataFoundryBody)) {
+      failures.push(`createDataFoundry must not assemble ${rule.name} directly`);
     }
   }
 
@@ -986,9 +986,9 @@ function assertMastraConversationSourceMessageClassificationIsCentralized() {
 }
 
 function assertCurrentContextDiagramShowsProtocolBoundaries() {
-  const diagramPath = path.join(repoRoot, "docs/engineering/agent-context-architecture.html");
+  const diagramPath = path.join(repoRoot, ".docs-internal/engineering/agent-context-architecture.html");
   const source = readFileSync(diagramPath, "utf8");
-  const pipelinePath = path.join(repoRoot, "docs/engineering/context-governance-pipeline.mmd");
+  const pipelinePath = path.join(repoRoot, ".docs-internal/engineering/context-governance-pipeline.mmd");
   const pipelineSource = readFileSync(pipelinePath, "utf8");
   const requiredPatterns = [
     { name: "five layer model", pattern: /Source.*Inventory.*Policy.*Projection.*Protocol/s },

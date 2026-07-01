@@ -6,9 +6,9 @@ import type {
   ChartPreviewSeries,
   ChartPreviewType,
   Citation
-} from "@open-data-agent/contracts";
-import { type FileAssetService, fileAssetRefDto, mimeTypeForFilename } from "@open-data-agent/files";
-import { artifactRecordToSummary, type MetadataStore } from "@open-data-agent/metadata";
+} from "@datafoundry/contracts";
+import { type FileAssetService, fileAssetRefDto, mimeTypeForFilename } from "@datafoundry/files";
+import { artifactRecordToSummary, type MetadataStore } from "@datafoundry/metadata";
 import { randomUUID } from "node:crypto";
 import { basename } from "node:path";
 

@@ -1,12 +1,12 @@
 export {
   CONVERSATION_WORKING_MEMORY_CONFIG,
   createAgentMemoryRuntime,
-  createDataAgent,
-  createDataAgentRunContext,
+  createDataFoundry,
+  createDataFoundryRunContext,
   createCustomEvent,
   normalizeIngressMessages
 } from "./index.js";
-export { createDataAgentToolRegistry } from "./tools/data-tools.js";
+export { createDataFoundryToolRegistry } from "./tools/data-tools.js";
 export { GovernedToolFactory } from "./tools/governed-tool-factory.js";
 
 export { createContextItem, hashContextContent } from "./context/inventory/context-item.js";

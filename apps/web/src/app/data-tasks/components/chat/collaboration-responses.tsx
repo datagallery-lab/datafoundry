@@ -298,7 +298,7 @@ export function CollaborationResponseBridge() {
     copilotkit.setRenderCustomMessages([
       ...existing,
       {
-        agentId: "dataAgent",
+        agentId: "dataFoundry",
         render: CollaborationAfterMessageRenderer,
       },
     ]);

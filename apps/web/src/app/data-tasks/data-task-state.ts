@@ -1042,7 +1042,7 @@ export const MCP_AUTH_TYPE_OPTIONS = [
   { value: "custom-header", label: "Custom header (pending backend)" },
 ] as const;
 
-/** Aligns with dataAgent `LLM_PROVIDER` env and Mastra router provider ids. */
+/** Aligns with dataFoundry `LLM_PROVIDER` env and Mastra router provider ids. */
 export const LLM_PROVIDER_OPTIONS = [
   { value: "openai-compatible", label: "OpenAI compatible (LLM_PROVIDER=openai-compatible)" },
   { value: "bailian", label: "Bailian DashScope (bailian)" },
@@ -1973,7 +1973,7 @@ export function defaultWorkspaceConfig(): WorkspaceConfigStore {
       {
         id: "server-default",
         name: "Server default",
-        description: "Uses LLM_PROVIDER / LLM_BASE_URL / LLM_MODEL from the dataAgent server .env",
+        description: "Uses LLM_PROVIDER / LLM_BASE_URL / LLM_MODEL from the dataFoundry server .env",
         enabled: true,
         builtin: true,
         settings: {

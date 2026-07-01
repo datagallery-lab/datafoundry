@@ -1,5 +1,5 @@
 {
-  "name": "@open-data-agent/providers",
+  "name": "@datafoundry/providers",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -11,6 +11,6 @@
   },
   "dependencies": {
     "@ai-sdk/openai": "^3.0.73",
-    "@open-data-agent/contracts": "0.1.0"
+    "@datafoundry/contracts": "0.1.0"
   }
 }

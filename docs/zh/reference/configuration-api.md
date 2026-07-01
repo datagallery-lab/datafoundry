@@ -10,7 +10,7 @@ http://127.0.0.1:8787
 
 ## 设计边界
 
-DataAgent 把资源管理和 Agent run 分开：
+DataFoundry 把资源管理和 Agent run 分开：
 
 | 类型 | 入口 | 用途 |
 | --- | --- | --- |

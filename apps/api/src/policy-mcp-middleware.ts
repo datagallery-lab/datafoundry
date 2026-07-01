@@ -280,7 +280,7 @@ export class PolicyMcpMiddleware extends Middleware {
   }
 
   private async connect(serverConfig: PolicyMcpClientConfig): Promise<Client> {
-    const client = new Client({ name: "open-data-agent-mcp-policy", version: "0.1.0" });
+    const client = new Client({ name: "open-data-foundry-mcp-policy", version: "0.1.0" });
     const transport = createTransport(serverConfig);
     await client.connect(transport);
     return client;

@@ -1,5 +1,5 @@
-import type { FileAssetService } from "@open-data-agent/files";
-import type { ConfigResourceRecord, MetadataStore } from "@open-data-agent/metadata";
+import type { FileAssetService } from "@datafoundry/files";
+import type { ConfigResourceRecord, MetadataStore } from "@datafoundry/metadata";
 import { load as parseYaml } from "js-yaml";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { basename, dirname, extname, join, relative, resolve, sep } from "node:path";

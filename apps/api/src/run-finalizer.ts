@@ -1,9 +1,9 @@
 import { EventType, type BaseEvent } from "@ag-ui/client";
-import { createCustomEvent, type GoalRuntimeAdapter } from "@open-data-agent/agent-runtime";
-import type { FileAssetService } from "@open-data-agent/files";
+import { createCustomEvent, type GoalRuntimeAdapter } from "@datafoundry/agent-runtime";
+import type { FileAssetService } from "@datafoundry/files";
 import { readdirSync, statSync } from "node:fs";
 import { join, relative, sep } from "node:path";
-import type { MetadataStore } from "@open-data-agent/metadata";
+import type { MetadataStore } from "@datafoundry/metadata";
 
 export type RunStatus = "running" | "suspended" | "completed" | "failed" | "canceled";
 

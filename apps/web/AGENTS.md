@@ -1,12 +1,12 @@
 # apps/web — Agent constraints
 
-Next.js frontend (`@open-data-agent/web`) for the data-task workbench.
+Next.js frontend (`@datafoundry/web`) for the data-task workbench.
 
 ## Runtime boundary
 
 - Uses `@copilotkit/react-core/v2` only — **no** `@copilotkit/runtime` in this app.
 - Connects to backend via `NEXT_PUBLIC_AGENT_RUNTIME_URL` (default `http://127.0.0.1:8787/api/copilotkit`).
-- Agent name: `dataAgent`. Do not embed LLM keys in the browser for production paths.
+- Agent name: `dataFoundry`. Do not embed LLM keys in the browser for production paths.
 
 ## Page scope
 

@@ -8,7 +8,7 @@ import type { RunAgentInput } from "./types.js";
 async function exampleRunAgent() {
   const client = new CopilotKitClient({
     runtimeUrl: "http://127.0.0.1:8787/api/copilotkit",
-    agent: "dataAgent",
+    agent: "dataFoundry",
   });
 
   const input: RunAgentInput = {

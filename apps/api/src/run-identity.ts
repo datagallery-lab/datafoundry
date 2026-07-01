@@ -1,5 +1,5 @@
 import type { BaseEvent, RunAgentInput } from "@ag-ui/client";
-import { type MetadataStore, type RunEventWriter, type RunRecord } from "@open-data-agent/metadata";
+import { type MetadataStore, type RunEventWriter, type RunRecord } from "@datafoundry/metadata";
 import { createHash } from "node:crypto";
 
 export type ResolveExistingRunInput = {

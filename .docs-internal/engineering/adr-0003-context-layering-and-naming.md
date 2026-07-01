@@ -137,7 +137,7 @@ Current migration:
   register built-in runtime sources.
 - New run-scoped sources that are not yet built in should enter through `additionalSources` on the source-layer
   runtime registry boundary, then through `additionalRuntimeSources` on the Mastra processor boundary. They must not
-  require `createDataAgent()` to manually instantiate or register runtime sources.
+  require `createDataFoundry()` to manually instantiate or register runtime sources.
 - Runtime source processors replace the current inventory snapshot for their registered `sourceType`s on every step,
   including when a source returns no items. Runtime sources are therefore fresh step-scoped projections, not append-only
   history; durable history must enter through memory/metadata repositories or explicit tool-history reference records.
@@ -417,8 +417,8 @@ Current migration:
   for message-id based rules such as `memory-summary:*` and `context:long-term-memory`.
 - The Mastra processor boundary is also the only production path that connects the source-layer runtime registry
   boundary to Mastra processors. This keeps long-term memory and WorkingMemory projection registration out of
-  `createDataAgent()`.
-- `createDataAgent()` still creates the AG-UI event sink because AG-UI wrapping is a northbound protocol concern; the
+  `createDataFoundry()`.
+- `createDataFoundry()` still creates the AG-UI event sink because AG-UI wrapping is a northbound protocol concern; the
   Mastra processor boundary consumes only the protocol-neutral `ContextProtocolEventSink`.
 
 Abstract base/interface:

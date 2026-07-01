@@ -14,10 +14,10 @@ const args = process.argv.slice(2);
 
 if (args.includes("--help") || args.includes("-h")) {
   console.log(`
-DataAgent TUI - Terminal User Interface for DataAgent
+DataFoundry TUI - Terminal User Interface for DataFoundry
 
 Usage:
-  dataagent-tui [options]
+  datafoundry-tui [options]
 
 Options:
   --runtime-url <url>     CopilotKit runtime URL
@@ -25,18 +25,18 @@ Options:
   --datasource-id <id>    Datasource ID
                           (default: api-duckdb-demo)
   --agent <name>          Agent name
-                          (default: dataAgent)
+                          (default: dataFoundry)
   --resume [sessionId]    Resume the latest server session, or a specific session
   --demo                  Show mock messages and use a local mock stream
   --help, -h              Show this help message
 
 Examples:
-  dataagent-tui
-  dataagent-tui --runtime-url http://localhost:8787/api/copilotkit
-  dataagent-tui --datasource-id my-database
-  dataagent-tui --resume
-  dataagent-tui --resume thread-001
-  dataagent-tui --demo
+  datafoundry-tui
+  datafoundry-tui --runtime-url http://localhost:8787/api/copilotkit
+  datafoundry-tui --datasource-id my-database
+  datafoundry-tui --resume
+  datafoundry-tui --resume thread-001
+  datafoundry-tui --demo
 `);
   process.exit(0);
 }
@@ -82,7 +82,7 @@ const runtimeUrl = getArg(
   "http://127.0.0.1:8787/api/copilotkit"
 );
 const datasourceId = getArg("--datasource-id", "api-duckdb-demo");
-const agent = getArg("--agent", "dataAgent");
+const agent = getArg("--agent", "dataFoundry");
 const demoMode = args.includes("--demo");
 const initialResume = resolveResumeRequest();
 const configClient = demoMode

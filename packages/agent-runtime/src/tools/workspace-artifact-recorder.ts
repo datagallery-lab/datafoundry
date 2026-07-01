@@ -1,5 +1,5 @@
-import type { ArtifactSummary, ArtifactType } from "@open-data-agent/contracts";
-import type { CreateArtifactInput } from "@open-data-agent/artifacts";
+import type { ArtifactSummary, ArtifactType } from "@datafoundry/contracts";
+import type { CreateArtifactInput } from "@datafoundry/artifacts";
 import fs from "node:fs";
 import path from "node:path";
 

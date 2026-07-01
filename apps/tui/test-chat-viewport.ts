@@ -116,12 +116,12 @@ const startupLines = buildChatLines({
     connectionStatus: 'connected',
     runStatus: 'idle',
     modelName: 'test-model',
-    directory: '/tmp/dataagent',
+    directory: '/tmp/datafoundry',
   },
 });
 const startupTexts = startupLines.map(visualLineText);
 check(startupLines[0]?.key === 'startup:border:top', 'startup transcript begins with the banner border');
-check(startupTexts.some((line) => line.includes('DataAgent')), 'startup banner includes the DataAgent wordmark');
+check(startupTexts.some((line) => line.includes('DataFoundry')), 'startup banner includes the DataFoundry wordmark');
 check(
   startupTexts.every((line) => textWidth(line) <= chatContentWidth(80)),
   'startup banner rows fit within chat content width',

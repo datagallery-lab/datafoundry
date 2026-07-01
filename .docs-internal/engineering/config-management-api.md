@@ -414,7 +414,7 @@ MCP middleware 不能成为模型上下文和安全策略的旁路：
 3. 根据已缓存 manifest 为每个解析后的 MCP tool 注册独立 `ToolObservationAdapter`；可以共享
    参数化 `McpToolObservationAdapter` 类，但 registry 中仍是一工具一 adapter 实例。
 4. middleware 挂在 run 内创建的 `MastraAgent` 上，而不是包裹最外层
-   `DataAgentAgUiAgent`。这样它生成的 continuation 不会重复进入 run claim，所有标准
+   `DataFoundryAgUiAgent`。这样它生成的 continuation 不会重复进入 run claim，所有标准
    `TOOL_CALL_RESULT` 也继续经过现有 `emit -> RunEventWriter -> subscriber` 北向链路。
 5. middleware 把 MCP observation 追加到下一轮 messages 后，现有 Mastra
    `MastraContextBudgetProcessor.processInputStep` 和 `MastraToolObservationRouter` 在每一步将结果路由到
@@ -619,7 +619,7 @@ GET 响应：五类数组（结构同各资源列表，**不含明文凭据**）
     "enabledKnowledgeIds": [],
     "enabledMcpServerIds": ["notion"],
     "activeLlmProfileId": "qwen-plus-default",
-    "activeSkillId": "data-agent-default"
+    "activeSkillId": "data-foundry-default"
   }
 }
 ```
@@ -639,7 +639,7 @@ GET 响应：五类数组（结构同各资源列表，**不含明文凭据**）
         "enabledDatasourceIds": ["sales-prod-readonly"],
         "enabledKnowledgeIds": [],
         "enabledMcpServerIds": ["notion"],
-        "enabledSkillIds": ["data-agent-default", "schema-explore"],
+        "enabledSkillIds": ["data-foundry-default", "schema-explore"],
         "fileIds": ["file-ref-1"],
         "activeDatasourceId": "sales-prod-readonly",
         "activeLlmProfileId": "qwen-plus-default",

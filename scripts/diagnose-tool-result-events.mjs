@@ -8,8 +8,8 @@ import { MastraAgent } from "@ag-ui/mastra";
 import { EventType } from "@ag-ui/client";
 import { ToolCallResultBridge } from "../apps/api/dist/tool-call-result-bridge.js";
 import {
-  createDataAgent,
-  createDataAgentRunContext,
+  createDataFoundry,
+  createDataFoundryRunContext,
 } from "../packages/agent-runtime/dist/index.js";
 import { LocalDataGateway } from "../packages/data-gateway/dist/index.js";
 import { createMetadataStore } from "../packages/metadata/dist/index.js";
@@ -33,7 +33,7 @@ try {
 
 const modelProvider = createModelProviderFromEnv(process.env);
 if (modelProvider.kind === "mock") {
-  console.error("LLM_API_KEY missing — set it in dataagent/.env to run this diagnostic.");
+  console.error("LLM_API_KEY missing — set it in datafoundry/.env to run this diagnostic.");
   process.exit(1);
 }
 
@@ -69,7 +69,7 @@ store.runs.create({
   datasource_id,
 });
 
-const runContext = createDataAgentRunContext({
+const runContext = createDataFoundryRunContext({
   user_id,
   session_id,
   run_id,
@@ -143,7 +143,7 @@ const deliverEvent = (event, source = "stream") => {
   }
 };
 
-const { agent } = createDataAgent({
+const { agent } = createDataFoundry({
   dataGateway: gateway,
   emitter: {
     emit: (event) => deliverEvent(event, "activity"),

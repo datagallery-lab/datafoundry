@@ -1,6 +1,6 @@
 # 快速开始
 
-这篇文档面向第一次试用 DataAgent 的用户。读完后，你可以启动 Web 工作台，配置模型服务，用内置 DuckDB demo 数据源跑通一次数据分析任务。
+这篇文档面向第一次试用 DataFoundry 的用户。读完后，你可以启动 Web 工作台，配置模型服务，用内置 DuckDB demo 数据源跑通一次数据分析任务。
 
 首次体验不需要准备数据库。你只需要 Node.js、npm 和一个兼容 OpenAI `/chat/completions` 接口的模型 API Key。
 

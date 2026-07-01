@@ -4,12 +4,12 @@ import {
   createMastraConversationMemoryBridge,
   type AgentMemoryMode,
   type TaskStateRuntime
-} from "@open-data-agent/agent-runtime";
+} from "@datafoundry/agent-runtime";
 import {
   type ConversationMessageRecord,
   type LongTermMemoryRecord,
   type MetadataStore
-} from "@open-data-agent/metadata";
+} from "@datafoundry/metadata";
 
 import {
   ConversationMemoryService,

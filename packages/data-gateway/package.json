@@ -1,5 +1,5 @@
 {
-  "name": "@open-data-agent/data-gateway",
+  "name": "@datafoundry/data-gateway",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -12,9 +12,9 @@
   "dependencies": {
     "@elastic/elasticsearch": "^9.4.2",
     "@google-cloud/bigquery": "^8.3.1",
-    "@open-data-agent/artifacts": "0.1.0",
-    "@open-data-agent/contracts": "0.1.0",
-    "@open-data-agent/metadata": "0.1.0",
+    "@datafoundry/artifacts": "0.1.0",
+    "@datafoundry/contracts": "0.1.0",
+    "@datafoundry/metadata": "0.1.0",
     "@opensearch-project/opensearch": "^3.6.0",
     "duckdb": "^1.4.4",
     "hive-driver": "^1.0.1",

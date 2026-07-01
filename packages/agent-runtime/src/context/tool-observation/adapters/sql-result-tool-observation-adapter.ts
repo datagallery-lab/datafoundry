@@ -1,4 +1,4 @@
-import type { SqlExecutionResult } from "@open-data-agent/data-gateway";
+import type { SqlExecutionResult } from "@datafoundry/data-gateway";
 
 import type { ContextBudget } from "../../inventory/context-budget.js";
 import type { ContextItem } from "../../inventory/context-item.js";
