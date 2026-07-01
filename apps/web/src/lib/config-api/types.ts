@@ -196,6 +196,10 @@ export type SkillDto = {
   description?: string;
   allowedTools?: string[];
   version?: string;
+  packageFileRefId?: string;
+  packageFileName?: string;
+  packageFormat?: "skill-md" | "zip";
+  packageSource?: string;
   manifest?: Record<string, unknown>;
   defaultDbIds?: string[];
   defaultKbIds?: string[];

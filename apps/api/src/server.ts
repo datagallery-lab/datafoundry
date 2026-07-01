@@ -22,9 +22,12 @@ import {
   type UserRecord,
   type MetadataStore
 } from "@open-data-agent/metadata";
-import { randomUUID } from "node:crypto";
+import { buildSkillResourcePayload, parseSkillPackage } from "@open-data-agent/skills";
+import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { createServer as createHttpServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { Observable } from "rxjs";
 
 import { handleConfigApiRequest } from "./config-api.js";
@@ -50,6 +53,8 @@ const DEV_USER: MeResponse = {
 
 const COPILOTKIT_PATH = "/api/copilotkit";
 const DEFAULT_WORKSPACE_ID = "default";
+const SERVER_DIR = dirname(fileURLToPath(import.meta.url));
+const BUILTIN_SKILL_ROOT = join(SERVER_DIR, "../../../packages/skills/builtin");
 
 const emitEarlyRunFailure = (
   subscriber: { complete(): void; next(event: BaseEvent): void },
@@ -166,7 +171,7 @@ export const createServer = async (options: CreateServerOptions = {}): Promise<S
   const runCancelRegistry = new RunCancelRegistry();
   ensureDevUser(metadataStore);
   ensureDemoDataSource(metadataStore, DEV_USER.id, "api-duckdb-demo");
-  ensureBuiltinConfigResources(metadataStore, DEV_USER.id, DEFAULT_WORKSPACE_ID);
+  await ensureBuiltinConfigResources(fileAssetService, metadataStore, DEV_USER.id, DEFAULT_WORKSPACE_ID);
 
   const server = createHttpServer(async (request, response) => {
     try {
@@ -186,7 +191,7 @@ export const createServer = async (options: CreateServerOptions = {}): Promise<S
       if (authContext.user.id === DEV_USER.id) {
         ensureDemoDataSource(metadataStore, authContext.user.id, "api-duckdb-demo");
       }
-      ensureBuiltinConfigResources(metadataStore, authContext.user.id, authContext.workspaceId);
+      await ensureBuiltinConfigResources(fileAssetService, metadataStore, authContext.user.id, authContext.workspaceId);
 
       const configResponse = await handleConfigApiRequest(request, requestUrl.pathname, {
         dataGateway,
@@ -915,34 +920,16 @@ const ensureDemoDataSource = (metadataStore: MetadataStore, userId: string, data
   }
 };
 
-const BUILTIN_SKILLS = [
-  {
-    id: "data-agent-default",
-    name: "通用数据分析",
-    description: "默认 ReAct 数据问答与探索",
-    instructions: "Use the standard data analysis workflow and choose the smallest sufficient set of tools."
-  },
-  {
-    id: "schema-explore",
-    name: "Schema 探索",
-    description: "优先检查表结构与字段含义",
-    instructions: "Prioritize schema inspection and explain table and column semantics before querying data."
-  },
-  {
-    id: "sql-analysis",
-    name: "SQL 分析",
-    description: "聚焦只读查询与指标计算",
-    instructions: "Prioritize reproducible read-only SQL analysis and report the executed SQL with results."
-  },
-  {
-    id: "report-draft",
-    name: "报告草稿",
-    description: "偏向结论整理与报告产出",
-    instructions: "Organize verified findings into a concise report with evidence and artifact references."
-  }
+const BUILTIN_SKILL_SOURCES = [
+  { id: "data-analysis", path: join(BUILTIN_SKILL_ROOT, "data-analysis", "SKILL.md") }
 ] as const;
 
-const ensureBuiltinConfigResources = (metadataStore: MetadataStore, userId: string, workspaceId: string): void => {
+const ensureBuiltinConfigResources = async (
+  fileAssetService: LocalFileAssetService,
+  metadataStore: MetadataStore,
+  userId: string,
+  workspaceId: string
+): Promise<void> => {
   const common = { workspace_id: workspaceId, user_id: userId };
   if (!metadataStore.configResources.find({ ...common, kind: "model-profile", id: "server-default" })) {
     metadataStore.configResources.upsert({
@@ -956,25 +943,52 @@ const ensureBuiltinConfigResources = (metadataStore: MetadataStore, userId: stri
       status: "connected"
     });
   }
-  BUILTIN_SKILLS.forEach((skill) => {
-    if (metadataStore.configResources.find({ ...common, kind: "skill", id: skill.id })) {
-      return;
+  for (const source of BUILTIN_SKILL_SOURCES) {
+    const content = readFileSync(source.path);
+    const contentSha256 = createHash("sha256").update(content).digest("hex");
+    const current = metadataStore.configResources.find({ ...common, kind: "skill", id: source.id });
+    const currentPackageRefId = stringRecordValue(current?.payload, "packageFileRefId");
+    const currentContentSha256 = stringRecordValue(current?.payload, "builtinContentSha256");
+    if (currentPackageRefId && currentContentSha256 === contentSha256 && current?.status === "valid") {
+      continue;
     }
+    const parsed = await parseSkillPackage({
+      content,
+      filename: "SKILL.md",
+      mimeType: "text/markdown"
+    });
+    const packageRef = fileAssetService.createRef({
+      user_id: userId,
+      workspace_id: workspaceId,
+      filename: "SKILL.md",
+      content,
+      declared_mime_type: "text/markdown",
+      source: "upload",
+      metadata: { builtin: true, kind: "skill-package", skill: parsed.name, version: parsed.version }
+    });
     metadataStore.configResources.upsert({
       ...common,
       kind: "skill",
-      id: skill.id,
-      name: skill.name,
-      description: skill.description,
+      id: source.id,
+      name: parsed.name,
+      description: parsed.description,
       payload: {
-        instructions: skill.instructions,
-        packageFormat: "builtin",
-        packageFileName: "SKILL.md",
-        version: "1.0.0"
+        ...buildSkillResourcePayload({
+          fields: { packageSource: `builtin://${source.id}` },
+          packageFileRefId: packageRef.ref.id,
+          parsed
+        }),
+        builtinContentSha256: contentSha256,
+        builtinSource: `builtin://${source.id}`
       },
       builtin: true,
       default_enabled: false,
       status: "valid"
     });
-  });
+  }
+};
+
+const stringRecordValue = (record: Record<string, unknown> | undefined, key: string): string | undefined => {
+  const value = record?.[key];
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
 };

@@ -629,7 +629,7 @@ export function skillSettingsFromPackage(
 export function builtinSkillSettings(skillId: string): Record<string, string> {
   return {
     packageFileName: "SKILL.md",
-    packageFormat: "builtin",
+    packageFormat: "skill-md",
     packageVersion: "1.0.0",
     packageSource: `builtin://${skillId}`,
     allowedTools: "",
@@ -655,7 +655,7 @@ export function normalizeSkillSettings(
 }
 
 export function isSkillSettingsValid(settings: Record<string, string>): boolean {
-  if (settings.packageFormat === "builtin") return true;
+  if (settings.packageSource?.startsWith("builtin://")) return true;
   return (settings.packageContent ?? "").trim().length > 0;
 }
 
@@ -663,24 +663,9 @@ export const SKILL_PACKAGE_LOCAL_ONLY_KEYS = ["packageContent"] as const;
 
 export const DATA_SKILLS: DataSkill[] = [
   {
-    id: "data-agent-default",
-    name: "General data analysis",
-    description: "Default ReAct data Q&A and exploration",
-  },
-  {
-    id: "schema-explore",
-    name: "Schema exploration",
-    description: "Prioritize table structure and field meaning",
-  },
-  {
-    id: "sql-analysis",
-    name: "SQL analysis",
-    description: "Focus on read-only queries and metric calculations",
-  },
-  {
-    id: "report-draft",
-    name: "Report draft",
-    description: "Focus on conclusions and report outputs",
+    id: "data-analysis",
+    name: "Data analysis",
+    description: "Answer data questions from metric lookups to full reports",
   },
 ];
 

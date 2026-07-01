@@ -148,7 +148,7 @@ Usage:
 
 Examples:
   /skill list
-  /skill switch data-agent-default
+  /skill switch data-analysis
 `.trim(),
 
     mcp: `
