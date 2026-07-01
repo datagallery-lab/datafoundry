@@ -214,6 +214,10 @@ export function modelProfileDtoToItem(dto: ModelProfileDto): WorkspaceConfigItem
 
 export function skillDtoToItem(dto: SkillDto): WorkspaceConfigItem {
   const manifest = dto.manifest ?? {};
+  const manifestFileName = Array.isArray(manifest.files) && manifest.files[0] ? manifest.files[0] : undefined;
+  const packageFileName = (dto.packageFileName ?? asString(manifestFileName)) || "SKILL.md";
+  const packageSource = dto.packageSource ?? (dto.builtin ? `builtin://${dto.id}` : "server");
+  const hasPackageContent = Boolean(dto.packageFileRefId) || packageSource.startsWith("builtin://");
   return {
     id: dto.id,
     name: dto.name,
@@ -225,17 +229,14 @@ export function skillDtoToItem(dto: SkillDto): WorkspaceConfigItem {
     revision: dto.revision,
     status: mapResourceStatus(dto.validationStatus),
     settings: {
-      packageFormat: dto.builtin ? "builtin" : "server",
-      packageFileName: asString(
-        Array.isArray(manifest.files) && manifest.files[0]
-          ? manifest.files[0]
-          : "SKILL.md",
-      ),
+      packageFormat: dto.packageFormat ?? "skill-md",
+      packageFileName,
+      packageSource,
       packageContent: "",
       allowedTools: (dto.allowedTools ?? []).join(", "),
       packageVersion: dto.version ?? "",
       validationStatus: dto.validationStatus ?? "untested",
-      hasPackageContent: dto.builtin ? "true" : "false",
+      hasPackageContent: hasPackageContent ? "true" : "false",
       defaultDbIds: (dto.defaultDbIds ?? []).join(", "),
       defaultKbIds: (dto.defaultKbIds ?? []).join(", "),
       defaultMcpIds: (dto.defaultMcpIds ?? []).join(", "),

@@ -181,8 +181,9 @@ const ModelTestResultSchema = z.object({
 
 const SkillSchema = CommonFieldsSchema.extend({
   version: z.string().optional(),
-  packageFormat: z.enum(["skill-md", "zip", "builtin"]),
+  packageFormat: z.enum(["skill-md", "zip"]),
   packageFileName: z.string().optional(),
+  packageSource: z.string().optional(),
   allowedTools: z.array(z.string()).optional(),
   manifest: z
     .object({

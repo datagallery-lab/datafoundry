@@ -4820,7 +4820,9 @@ function ConfigItemDetailView({
   const isBuiltinSkill = panel === "skill" && !!item.builtin;
   const hasUploadedSkillPackage =
     panel === "skill" &&
-    (settings.packageFormat === "builtin" || settings.packageContent.trim().length > 0);
+    (settings.packageSource?.startsWith("builtin://") ||
+      settings.hasPackageContent === "true" ||
+      settings.packageContent.trim().length > 0);
 
   const configKindLabel =
     panel === "db"

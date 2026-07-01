@@ -42,7 +42,10 @@ allowed-tools: inspect_schema, run_sql_readonly
   });
 
   it("treats builtin skills as valid without local package content", () => {
-    expect(isSkillSettingsValid(builtinSkillSettings("data-agent-default"))).toBe(
+    const settings = builtinSkillSettings("data-analysis");
+    expect(settings.packageFormat).toBe("skill-md");
+    expect(settings.packageSource).toBe("builtin://data-analysis");
+    expect(isSkillSettingsValid(settings)).toBe(
       true,
     );
   });

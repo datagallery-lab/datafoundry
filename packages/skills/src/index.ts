@@ -192,6 +192,7 @@ export const buildSkillResourcePayload = (input: {
   const scope = parseScope(fields.scope, false);
   const extraTags = stringList(fields.tags);
   const modelProfileId = stringValue(fields.modelProfileId ?? fields.model_profile_id);
+  const packageSource = stringValue(fields.packageSource ?? fields.package_source);
   return {
     allowedTools: input.parsed.allowedTools,
     defaultDbIds: stringList(fields.defaultDbIds ?? fields.default_db_ids),
@@ -206,6 +207,7 @@ export const buildSkillResourcePayload = (input: {
     packageFileRefId: input.packageFileRefId,
     packageFiles: input.parsed.manifest.files,
     packageFormat: input.parsed.packageFormat,
+    ...(packageSource ? { packageSource } : {}),
     scope,
     tags: unique([...input.parsed.tags, ...extraTags]),
     userInvocable: input.parsed.userInvocable,
@@ -277,15 +279,15 @@ export const materializeSkillPackages = async (input: MaterializeSkillPackagesIn
     if (!skill.packageFileRefId) {
       throw new Error(`SKILL_PACKAGE_FILE_REF_REQUIRED:${skill.id}`);
     }
+    const skillDirName = safePathSegment(skill.name || skill.id);
+    const skillDir = resolve(skillsRoot, skillDirName);
+    assertChildPath(skillsRoot, skillDir);
+    mkdirSync(skillDir, { recursive: true });
     const packageFile = input.fileAssetService.readRef({
       id: skill.packageFileRefId,
       user_id: input.userId,
       workspace_id: workspaceId
     });
-    const skillDirName = safePathSegment(skill.name || skill.id);
-    const skillDir = resolve(skillsRoot, skillDirName);
-    assertChildPath(skillsRoot, skillDir);
-    mkdirSync(skillDir, { recursive: true });
     if (skill.packageFormat === "skill-md") {
       writeFileSync(resolve(skillDir, "SKILL.md"), packageFile.body);
     } else {
@@ -339,9 +341,6 @@ const scoreSkill = (
   const reasons: string[] = [];
   let score = 0;
   const policy = input.runConfig.skillPolicy;
-  if (skill.builtin || skill.scope === "builtin") {
-    return { rejected: true, reasons: ["builtin:not-supported"], score, skill };
-  }
   if (!skill.packageFileRefId) {
     return { rejected: true, reasons: ["package:missing-file-ref"], score, skill };
   }
@@ -530,7 +529,8 @@ const parseScope = (value: unknown, builtin: boolean): SkillRecord["scope"] => {
 };
 
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null;
-const stringValue = (value: unknown): string | undefined => typeof value === "string" && value.trim() ? value.trim() : undefined;
+const stringValue = (value: unknown): string | undefined =>
+  typeof value === "string" && value.trim() ? value.trim() : undefined;
 const booleanValue = (value: unknown, fallback: boolean): boolean => typeof value === "boolean" ? value : fallback;
 const stringList = (value: unknown): string[] => {
   if (Array.isArray(value)) {

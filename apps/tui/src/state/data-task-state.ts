@@ -369,7 +369,7 @@ export function skillSettingsFromPackage(
 export function builtinSkillSettings(skillId: string): Record<string, string> {
   return {
     packageFileName: "SKILL.md",
-    packageFormat: "builtin",
+    packageFormat: "skill-md",
     packageVersion: "1.0.0",
     packageSource: `builtin://${skillId}`,
     allowedTools: "",
@@ -391,7 +391,7 @@ export function normalizeSkillSettings(
 }
 
 export function isSkillSettingsValid(settings: Record<string, string>): boolean {
-  if (settings.packageFormat === "builtin") return true;
+  if (settings.packageSource?.startsWith("builtin://")) return true;
   return (settings.packageContent ?? "").trim().length > 0;
 }
 
@@ -399,24 +399,9 @@ export const SKILL_PACKAGE_LOCAL_ONLY_KEYS = ["packageContent"] as const;
 
 export const DATA_SKILLS: DataSkill[] = [
   {
-    id: "data-agent-default",
-    name: "通用数据分析",
-    description: "默认 ReAct 数据问答与探索",
-  },
-  {
-    id: "schema-explore",
-    name: "Schema 探索",
-    description: "优先检查表结构与字段含义",
-  },
-  {
-    id: "sql-analysis",
-    name: "SQL 分析",
-    description: "聚焦只读查询与指标计算",
-  },
-  {
-    id: "report-draft",
-    name: "报告草稿",
-    description: "偏向结论整理与报告产出",
+    id: "data-analysis",
+    name: "数据分析",
+    description: "回答指标查询、深度分析和报告类数据问题",
   },
 ];
 
