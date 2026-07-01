@@ -1,7 +1,13 @@
 import os from "node:os";
 import path from "node:path";
 
-import { LocalFilesystem, LocalSandbox, WORKSPACE_TOOLS, Workspace } from "@mastra/core/workspace";
+import {
+  LocalFilesystem,
+  LocalSandbox,
+  LocalSkillSource,
+  WORKSPACE_TOOLS,
+  Workspace
+} from "@mastra/core/workspace";
 
 import type { AgentRunContext } from "../types.js";
 import {
@@ -34,6 +40,11 @@ export type RunWorkspace = {
    * basePath — new files default here and are session-private across runs in the same session.
    */
   sessionDir: string;
+  /**
+   * Shared skill package cache directory for {user_id, workspace_id}. This lives outside
+   * the frontend-visible workspace root so SKILL.md packages do not appear as user files.
+   */
+  skillCacheDir: string;
   workspace: Workspace;
   /** Close the Mastra workspace without deleting session or workspace files. */
   destroy(): Promise<void>;
@@ -42,6 +53,12 @@ export type RunWorkspace = {
 /** Resolve the application-level workspace root. */
 export const resolveWorkspaceRoot = (injectedRoot?: string): string =>
   path.resolve(injectedRoot ?? process.env.WORKSPACE_ROOT ?? path.join(os.tmpdir(), "open-data-foundry-workspace"));
+
+/** Resolve the root that stores materialized skill packages outside the visible workspace tree. */
+export const resolveSkillCacheRoot = (injectedWorkspaceRoot?: string): string => {
+  const workspaceRoot = resolveWorkspaceRoot(injectedWorkspaceRoot);
+  return path.resolve(process.env.SKILL_CACHE_ROOT ?? path.join(path.dirname(workspaceRoot), "skill-cache"));
+};
 
 /**
  * Resolve the persistent, cross-session workspace directory for {user_id, workspace_id}.
@@ -87,10 +104,27 @@ export const resolveSessionWorkspaceDir = (input: WorkspaceFactoryInput): string
   return sessionDir;
 };
 
+/** Resolve the shared materialized skill package cache for {user_id, workspace_id}. */
+export const resolveSkillCacheDir = (input: WorkspaceFactoryInput): string => {
+  const root = resolveSkillCacheRoot(input.workspaceRoot);
+  const segments = [
+    safePathSegment(input.runContext.user_id, "user_id"),
+    safePathSegment(input.runContext.workspace_id ?? "default", "workspace_id")
+  ];
+  const skillCacheDir = path.resolve(root, ...segments);
+
+  if (!skillCacheDir.startsWith(`${root}${path.sep}`)) {
+    throw new Error("SKILL_CACHE_PATH_ESCAPE");
+  }
+
+  return skillCacheDir;
+};
+
 /** Create a workspace bound to one trusted session identity. */
 export const createRunWorkspace = (input: WorkspaceFactoryInput): RunWorkspace => {
   const runDir = resolveWorkspaceDir(input);
   const sessionDir = resolveSessionWorkspaceDir(input);
+  const skillCacheDir = resolveSkillCacheDir(input);
   const detection = LocalSandbox.detectIsolation();
   const commandExecutionEnabled = detection.available && process.env.WORKSPACE_COMMAND_ENABLED !== "false";
   const pythonRuntime = resolvePythonRuntime();
@@ -125,7 +159,13 @@ export const createRunWorkspace = (input: WorkspaceFactoryInput): RunWorkspace =
     // would also make it writable); cross-session reads go through the read-only tools.
     filesystem: new LocalFilesystem({ basePath: sessionDir, contained: true }),
     ...(sandbox ? { sandbox } : {}),
-    ...(input.skillPaths?.length ? { bm25: true, skills: input.skillPaths } : {}),
+    ...(input.skillPaths?.length
+      ? {
+          bm25: { tokenize: { tokenizer: tokenizeSkillSearchText } },
+          skillSource: new LocalSkillSource({ basePath: skillCacheDir }),
+          skills: input.skillPaths
+        }
+      : {}),
     tools: {
       enabled: false,
       [WORKSPACE_TOOLS.FILESYSTEM.READ_FILE]: { enabled: true, name: "read_file", maxOutputTokens },
@@ -155,6 +195,7 @@ export const createRunWorkspace = (input: WorkspaceFactoryInput): RunWorkspace =
     pythonRuntime,
     runDir,
     sessionDir,
+    skillCacheDir,
     workspace,
     // Session directories are long-lived working copies for the same session. Durable
     // storage and dedupe still live in FileAsset; this only closes Mastra workspace state.
@@ -176,4 +217,22 @@ const safePathSegment = (value: string, field: string): string => {
 const readPositiveInteger = (value: string | undefined, fallback: number): number => {
   const parsed = Number.parseInt(value ?? "", 10);
   return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+};
+
+const tokenizeSkillSearchText = (text: string): string[] => {
+  const normalized = text.toLowerCase().replace(/[^\p{L}\p{N}_]+/gu, " ");
+  const tokens: string[] = [];
+  normalized.match(/[\p{L}\p{N}_]+/gu)?.forEach((part) => {
+    if (/[\u4e00-\u9fff]/u.test(part)) {
+      tokens.push(part);
+      for (let index = 0; index < part.length - 1; index += 1) {
+        tokens.push(part.slice(index, index + 2));
+      }
+      return;
+    }
+    if (part.length >= 2) {
+      tokens.push(part);
+    }
+  });
+  return [...new Set(tokens)];
 };

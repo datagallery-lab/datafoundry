@@ -50,7 +50,11 @@ import {
 import { GoalRuntimeAdapter, type GoalRequest } from "./memory/goal-runtime-adapter.js";
 import { createDataFoundryToolRegistry } from "./tools/data-tools.js";
 import { GovernedToolFactory } from "./tools/governed-tool-factory.js";
-import { createRunWorkspace, resolveWorkspaceDir } from "./tools/workspace-factory.js";
+import {
+  createRunWorkspace,
+  resolveSkillCacheDir,
+  resolveWorkspaceDir
+} from "./tools/workspace-factory.js";
 import { wrapWorkspaceToolsWithArtifactRecording } from "./tools/workspace-artifact-recorder.js";
 import { createMastraStreamNormalizerHooks } from "./stream/mastra-stream-hooks.js";
 import { createTokenUsageCorrelationStore } from "./stream/token-usage-correlation.js";
@@ -117,6 +121,8 @@ export {
 } from "./stream/token-usage-correlation.js";
 export {
   resolveRunWorkspaceDir,
+  resolveSkillCacheDir,
+  resolveSkillCacheRoot,
   resolveSessionWorkspaceDir,
   resolveWorkspaceDir,
   resolveWorkspaceRoot
@@ -219,20 +225,25 @@ export const createDataFoundry = async (
     runContext: input.runContext,
     workspaceRoot: input.workspaceRoot
   });
-  const materializedSkills = input.selectedSkills?.length
-    ? await materializeSkillPackages({
-        fileAssetService: requireFileAssetService(input.fileAssetService),
-        runDir,
-        skills: input.selectedSkills,
-        userId: input.runContext.user_id,
-        workspaceId: input.runContext.workspace_id ?? "default"
-      })
-    : [];
+  const skillCacheDir = resolveSkillCacheDir({
+    runContext: input.runContext,
+    workspaceRoot: input.workspaceRoot
+  });
+  if (input.selectedSkills?.length) {
+    await materializeSkillPackages({
+      fileAssetService: requireFileAssetService(input.fileAssetService),
+      runDir: skillCacheDir,
+      skills: input.selectedSkills,
+      userId: input.runContext.user_id,
+      workspaceId: input.runContext.workspace_id ?? "default"
+    });
+  }
+  mkdirSync(join(skillCacheDir, "skills"), { recursive: true });
   // 绑定到本次 session 的工作区：LocalFilesystem + LocalSandbox（macOS seatbelt / Linux bubblewrap 隔离）。
   // createDataFoundry 每次 run 都调用，直接闭包捕获 runContext，不依赖下游 requestContext 注入。
   const runWorkspace = createRunWorkspace({
     runContext: input.runContext,
-    ...(materializedSkills.length > 0 ? { skillPaths: materializedSkills.map((skill) => skill.path) } : {}),
+    skillPaths: ["skills"],
     workspaceRoot: input.workspaceRoot
   });
   const workspaceAttachments = materializeWorkspaceAttachments(runWorkspace.runDir, input.workspaceAttachments ?? []);
@@ -627,11 +638,19 @@ const buildAgentInstructions = (input: AgentInstructionsInput): string => {
         + "Use submit_plan when explicit user approval is required before implementation; both tools suspend the run."
     );
   }
-  if (input.selectedSkills.length > 0 && skillTools.length > 0) {
+  if (skillTools.length > 0) {
+    const selectedSkillHint = input.selectedSkills.length > 0
+      ? ` Prioritize the selected skills listed in the prompt: ${
+          input.selectedSkills.map((skill) => skill.name).join(", ")
+        }.`
+      : "";
     policies.push(
-      "Use skills as task guidance, not as executable tools. When the task matches an available skill, call "
+      "Use skills as task guidance, not as executable tools. skill_search may search the full shared skill cache; "
+        + "a search result does not by itself mean the skill was selected for this run."
+        + selectedSkillHint
+        + " When the task matches an available skill, call "
         + "skill_search or skill to load its instructions, then use normal approved tools to act. "
-        + "Use skill_read for references, scripts, or assets that belong to a selected skill. "
+        + "Use skill_read for references, scripts, or assets that belong to a relevant loaded skill. "
         + "Scripts from skills may be executed only through approved workspace tools such as execute_command."
     );
   }
@@ -699,7 +718,7 @@ Datasources available this run: [${(context.enabled_datasource_ids ?? []).join("
 Default datasource: "${context.selected_datasource_id}".
 You may query any datasource in the list above by passing its id to a data tool's datasource_id argument.
 Never reference a datasource id outside this list; the tool rejects it with DATASOURCE_NOT_SELECTED.
-Available skills this run:
+Selected skills to prioritize this run:
 ${selectedSkillSummary}
 
 Tool groups:

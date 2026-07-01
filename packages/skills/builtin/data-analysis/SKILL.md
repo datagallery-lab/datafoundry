@@ -7,6 +7,9 @@ tags:
   - analysis
   - sql
   - report
+  - 数据分析
+  - 查数
+  - 指标
 allowed-tools:
   - list_data_sources
   - inspect_schema
@@ -23,6 +26,8 @@ user-invocable: true
 
 Use this skill for natural-language data questions, including metric lookups, trend investigations, segment
 comparisons, anomaly checks, quality reviews, and short reports.
+
+Chinese search aliases: 数据分析, 查数, 指标查询, 报表, SQL 分析, 趋势分析, 维度, 度量, 异常检查, 数据质量.
 
 This workflow is adapted for this workbench from public data-analysis skill patterns:
 

@@ -1,7 +1,7 @@
 import type { FileAssetService } from "@datafoundry/files";
 import type { ConfigResourceRecord, MetadataStore } from "@datafoundry/metadata";
 import { load as parseYaml } from "js-yaml";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { basename, dirname, extname, join, relative, resolve, sep } from "node:path";
 import yauzl, { type Entry, type ZipFile } from "yauzl";
 
@@ -282,6 +282,7 @@ export const materializeSkillPackages = async (input: MaterializeSkillPackagesIn
     const skillDirName = safePathSegment(skill.name || skill.id);
     const skillDir = resolve(skillsRoot, skillDirName);
     assertChildPath(skillsRoot, skillDir);
+    rmSync(skillDir, { force: true, recursive: true });
     mkdirSync(skillDir, { recursive: true });
     const packageFile = input.fileAssetService.readRef({
       id: skill.packageFileRefId,

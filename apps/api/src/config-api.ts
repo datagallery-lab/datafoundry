@@ -8,6 +8,7 @@ import {
   createModelProviderFromEnv,
   createModelProviderFromProfile,
   probeModelProvider,
+  resolveSkillCacheDir,
   resolveSessionWorkspaceDir,
   resolveWorkspaceDir,
   STATIC_AGENT_TOOL_NAMES
@@ -15,6 +16,7 @@ import {
 import { fileAssetRefDto, type FileAssetService, mimeTypeForFilename, safeFilename } from "@datafoundry/files";
 import {
   buildSkillResourcePayload,
+  materializeSkillPackages,
   parseSkillPackage,
   selectSkillsForRun
 } from "@datafoundry/skills";
@@ -2409,6 +2411,34 @@ const skillUploadBody = async (
     source: "upload",
     metadata: { kind: "skill-package", skill: parsed.name, version: parsed.version }
   });
+  await materializeSkillPackages({
+    fileAssetService: context.fileAssetService,
+    runDir: resolveConfigSkillCacheDir(context),
+    skills: [{
+      allowedTools: parsed.allowedTools,
+      builtin: false,
+      defaultDbIds: [],
+      defaultEnabled: true,
+      defaultKbIds: [],
+      defaultMcpIds: [],
+      deniedTools: parsed.deniedTools,
+      description: parsed.description,
+      id: slugify(parsed.name),
+      name: parsed.name,
+      packageEntry: parsed.manifest.entry,
+      packageFileRefId: packageRef.ref.id,
+      packageFiles: parsed.manifest.files,
+      packageFormat: parsed.packageFormat,
+      revision: 1,
+      scope: "workspace",
+      status: "valid",
+      tags: parsed.tags,
+      userInvocable: parsed.userInvocable,
+      version: parsed.version
+    }],
+    userId: context.userId,
+    workspaceId: context.workspaceId
+  });
   return {
     ...upload.fields,
     ...buildSkillResourcePayload({
@@ -2420,6 +2450,24 @@ const skillUploadBody = async (
     name: parsed.name,
     status: "valid"
   };
+};
+
+const resolveConfigSkillCacheDir = (context: Required<ConfigApiContext>): string => {
+  const workspaceRoot = process.env.WORKSPACE_ROOT ?? join(process.env.STORAGE_ROOT_DIR ?? "storage", "workspaces");
+  return resolveSkillCacheDir({
+    runContext: {
+      user_id: context.userId,
+      workspace_id: context.workspaceId,
+      session_id: "skill-cache",
+      run_id: "skill-cache",
+      selected_datasource_id: "",
+      enabled_datasource_ids: [],
+      user_input: "",
+      chat_mode: "config",
+      model_name: "skill-cache"
+    },
+    workspaceRoot
+  });
 };
 
 const handleSkillSelectionPreview = async (

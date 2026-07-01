@@ -8,6 +8,7 @@ import {
   createTaskStateRuntime,
   createCustomEvent,
   parseAgentMemoryMode,
+  resolveSkillCacheDir,
   type AgentMemoryMode,
   type TaskStateRuntime
 } from "@datafoundry/agent-runtime";
@@ -22,7 +23,12 @@ import {
   type UserRecord,
   type MetadataStore
 } from "@datafoundry/metadata";
-import { buildSkillResourcePayload, parseSkillPackage } from "@datafoundry/skills";
+import {
+  buildSkillResourcePayload,
+  configResourceToSkillRecord,
+  materializeSkillPackages,
+  parseSkillPackage
+} from "@datafoundry/skills";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { createServer as createHttpServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
@@ -55,6 +61,7 @@ const COPILOTKIT_PATH = "/api/copilotkit";
 const DEFAULT_WORKSPACE_ID = "default";
 const SERVER_DIR = dirname(fileURLToPath(import.meta.url));
 const BUILTIN_SKILL_ROOT = join(SERVER_DIR, "../../../packages/skills/builtin");
+const skillCacheSignatures = new Map<string, string>();
 
 const emitEarlyRunFailure = (
   subscriber: { complete(): void; next(event: BaseEvent): void },
@@ -986,6 +993,53 @@ const ensureBuiltinConfigResources = async (
       status: "valid"
     });
   }
+  await materializeConfiguredSkillCache(fileAssetService, metadataStore, userId, workspaceId);
+};
+
+const materializeConfiguredSkillCache = async (
+  fileAssetService: LocalFileAssetService,
+  metadataStore: MetadataStore,
+  userId: string,
+  workspaceId: string
+): Promise<void> => {
+  const skills = metadataStore.configResources.list({
+    workspace_id: workspaceId,
+    user_id: userId,
+    kind: "skill"
+  }).map(configResourceToSkillRecord)
+    .filter((skill) => skill.status === "valid" && Boolean(skill.packageFileRefId));
+  const signature = skills.map((skill) => `${skill.id}:${skill.revision}:${skill.packageFileRefId}`).sort().join("|");
+  const cacheKey = `${userId}:${workspaceId}`;
+  if (skillCacheSignatures.get(cacheKey) === signature) {
+    return;
+  }
+  if (skills.length === 0) {
+    skillCacheSignatures.set(cacheKey, signature);
+    return;
+  }
+  const workspaceRoot = process.env.WORKSPACE_ROOT ?? join(process.env.STORAGE_ROOT_DIR ?? "storage", "workspaces");
+  const skillCacheDir = resolveSkillCacheDir({
+    runContext: {
+      user_id: userId,
+      workspace_id: workspaceId,
+      session_id: "skill-cache",
+      run_id: "skill-cache",
+      selected_datasource_id: "",
+      enabled_datasource_ids: [],
+      user_input: "",
+      chat_mode: "server",
+      model_name: "skill-cache"
+    },
+    workspaceRoot
+  });
+  await materializeSkillPackages({
+    fileAssetService,
+    runDir: skillCacheDir,
+    skills,
+    userId,
+    workspaceId
+  });
+  skillCacheSignatures.set(cacheKey, signature);
 };
 
 const stringRecordValue = (record: Record<string, unknown> | undefined, key: string): string | undefined => {
