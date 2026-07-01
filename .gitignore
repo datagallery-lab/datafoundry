@@ -1,3 +1,5 @@
+.venv/
+venv/
 node_modules/
 **/node_modules/
 dist/
@@ -15,5 +17,6 @@ storage/
 .env.*
 !.env.example
 *.tsbuildinfo
-package-lock.json.win.bak
-package-lock.json.*.bak
+docs/.vitepress/dist/
+docs/.vitepress/cache/
+docs/public/assets/

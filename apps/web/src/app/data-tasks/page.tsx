@@ -710,6 +710,9 @@ function DataTaskWorkspace({
       .then((response) => {
         if (cancelled) return;
         if (response.sessions.length === 0) {
+          const first = createChatSession();
+          setSessions([first]);
+          setActiveSessionId(first.id);
           setSessionSyncError(null);
           return;
         }

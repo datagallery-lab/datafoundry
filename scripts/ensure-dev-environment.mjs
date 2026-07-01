@@ -70,3 +70,11 @@ if (process.env.SKIP_DEV_BUILD === "1") {
 
 console.log("[dev-env] building workspace packages (tsc -b)…");
 run("npm run build");
+
+const venvPython = join(root, ".venv", "bin", "python");
+if (!existsSync(venvPython)) {
+  warn(
+    "Python venv missing at .venv — DataAgent execute_command will not have numpy/pandas/sklearn. " +
+      "Run: uv venv .venv --seed && uv pip install -r requirements.txt --python .venv/bin/python",
+  );
+}

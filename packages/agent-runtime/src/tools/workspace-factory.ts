@@ -4,6 +4,12 @@ import path from "node:path";
 import { LocalFilesystem, LocalSandbox, WORKSPACE_TOOLS, Workspace } from "@mastra/core/workspace";
 
 import type { AgentRunContext } from "../types.js";
+import {
+  buildPythonSandboxEnv,
+  resolvePythonRuntime,
+  resolvePythonSandboxReadPaths,
+  type PythonRuntimeConfig
+} from "./python-runtime.js";
 
 export type WorkspaceFactoryInput = {
   runContext: AgentRunContext;
@@ -14,6 +20,8 @@ export type WorkspaceFactoryInput = {
 export type RunWorkspace = {
   commandExecutionEnabled: boolean;
   isolation: "bwrap" | "none" | "seatbelt";
+  /** Python venv wired into execute_command when available. */
+  pythonRuntime?: PythonRuntimeConfig | undefined;
   /**
    * Persistent, cross-session workspace directory (the read-only asset area).
    * Owned by {user_id, workspace_id}; survives session destruction. Agent reads it via
@@ -85,6 +93,8 @@ export const createRunWorkspace = (input: WorkspaceFactoryInput): RunWorkspace =
   const sessionDir = resolveSessionWorkspaceDir(input);
   const detection = LocalSandbox.detectIsolation();
   const commandExecutionEnabled = detection.available && process.env.WORKSPACE_COMMAND_ENABLED !== "false";
+  const pythonRuntime = resolvePythonRuntime();
+  const pythonReadPaths = pythonRuntime ? resolvePythonSandboxReadPaths(pythonRuntime) : [];
   const sandbox = commandExecutionEnabled
     ? new LocalSandbox({
         // execute_command runs with cwd at the per-session directory: command outputs
@@ -96,9 +106,11 @@ export const createRunWorkspace = (input: WorkspaceFactoryInput): RunWorkspace =
         workingDirectory: sessionDir,
         isolation: detection.backend,
         timeout: readPositiveInteger(process.env.WORKSPACE_COMMAND_TIMEOUT_MS, 30000),
+        ...(pythonRuntime ? { env: buildPythonSandboxEnv(pythonRuntime) } : {}),
         nativeSandbox: {
           allowNetwork: false,
           allowSystemBinaries: true,
+          ...(pythonReadPaths.length > 0 ? { readOnlyPaths: pythonReadPaths } : {}),
           readWritePaths: [sessionDir]
         }
       })
@@ -140,6 +152,7 @@ export const createRunWorkspace = (input: WorkspaceFactoryInput): RunWorkspace =
   return {
     commandExecutionEnabled,
     isolation: commandExecutionEnabled ? detection.backend : "none",
+    pythonRuntime,
     runDir,
     sessionDir,
     workspace,

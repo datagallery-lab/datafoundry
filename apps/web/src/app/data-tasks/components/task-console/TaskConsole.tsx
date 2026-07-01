@@ -509,6 +509,10 @@ function ConclusionZone({
       ? `${Math.round((runUsage.toolCalls.success / runUsage.toolCalls.total) * 100)}%`
       : "—";
 
+  const sessionView = useMemo(
+    () => deriveLiveSessionView(sessionUsage, liveRun),
+    [liveRun, sessionUsage],
+  );
   const tokenReported = sessionView.tokenUsageReported;
   const displayTokens = sessionView.tokens;
   const displayModels = sessionView.models;

@@ -31,6 +31,9 @@
     "smoke:api-context": "npm run build && node scripts/smoke-copilotkit-context.mjs",
     "smoke:context-architecture": "node scripts/smoke-context-architecture.mjs",
     "smoke:context-compilation": "npm run build && node scripts/smoke-context-compilation.mjs",
+    "docs:dev": "node scripts/prepare-docs-public.mjs && vitepress dev docs",
+    "docs:build": "node scripts/prepare-docs-public.mjs && vitepress build docs",
+    "docs:preview": "vitepress preview docs",
     "smoke:docs": "node scripts/smoke-doc-links.mjs",
     "smoke:conversation-memory": "npm run build && node scripts/smoke-conversation-memory.mjs",
     "smoke:knowledge-policy": "npm run build && node scripts/smoke-knowledge-retrieval-policy.mjs",
@@ -63,6 +66,7 @@
     "@types/pg": "^8.20.0",
     "@types/yauzl": "^3.4.0",
     "typescript": "^5.8.0",
+    "vitepress": "^1.6.4",
     "write-excel-file": "^4.1.1"
   },
   "dependencies": {

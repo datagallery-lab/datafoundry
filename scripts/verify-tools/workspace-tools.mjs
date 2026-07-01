@@ -127,7 +127,8 @@ try {
       workspaceRoot: workspaceRootAbs,
       runDir: runWorkspace.runDir,
       isolation: runWorkspace.isolation,
-      commandExecutionEnabled: runWorkspace.commandExecutionEnabled
+      commandExecutionEnabled: runWorkspace.commandExecutionEnabled,
+      pythonRuntime: runWorkspace.pythonRuntime?.venvRoot ?? null
     })
   );
 
@@ -302,6 +303,24 @@ try {
         ...r,
         notes: `isolation=${runWorkspace.isolation}`
       });
+
+      if (runWorkspace.pythonRuntime) {
+        const py = await runTool(
+          tools.execute_command,
+          "execute_command",
+          {
+            command:
+              "python3.12 -c \"import numpy, pandas, matplotlib, sklearn; print('ml-ok', numpy.__version__)\""
+          },
+          execCtx,
+          customChunks
+        );
+        results.push({
+          tool: "execute_command (python ml)",
+          ...py,
+          notes: `venv=${runWorkspace.pythonRuntime.venvRoot}`
+        });
+      }
     } else {
       results.push({
         tool: "execute_command",

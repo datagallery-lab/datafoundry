@@ -34,3 +34,19 @@
 - 不保留来源敏感叙述。
 - 修改文档后运行 `npm run smoke:docs`。
 
+## 本地预览与 GitHub Pages
+
+本地预览：
+
+```bash
+npm run docs:dev
+npm run docs:build
+npm run docs:preview
+```
+
+推送到 `main` 后，`.github/workflows/docs.yml` 会把站点发布到 GitHub Pages：
+
+`https://datagallery-lab.github.io/dataagent/`
+
+私有仓库需要先启用 GitHub Pages（Settings → Pages → Source 选 **GitHub Actions**），并确认当前 GitHub 计划允许私有仓使用 Pages；站点是否对外公开可在 Pages 设置里单独控制。
+

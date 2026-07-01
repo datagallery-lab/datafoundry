@@ -121,6 +121,7 @@ export {
   resolveWorkspaceDir,
   resolveWorkspaceRoot
 } from "./tools/workspace-factory.js";
+export { resolvePythonRuntime } from "./tools/python-runtime.js";
 export { projectWorkspaceObservation } from "./context/tool-observation/adapters/workspace-tool-observation-adapters.js";
 export { createDataAgentToolRegistry, type ToolRegistry } from "./tools/data-tools.js";
 export { GoalRuntimeAdapter, type GoalRequest, type GoalSnapshot } from "./memory/goal-runtime-adapter.js";
@@ -393,6 +394,7 @@ export const createDataAgent = async (
       runContext: input.runContext,
       commandExecutionEnabled: runWorkspace.commandExecutionEnabled,
       collaborationToolsEnabled: Boolean(input.taskStateRuntime),
+      pythonRuntimeAvailable: Boolean(runWorkspace.pythonRuntime),
       selectedSkills: input.selectedSkills ?? [],
       taskToolsEnabled: Boolean(input.taskStateRuntime),
       toolNames: Object.keys(selectedTools),
@@ -497,6 +499,8 @@ type AgentInstructionsInput = {
   /** execute_command 工具是否启用（由沙箱隔离可用性与 env 决定）。 */
   commandExecutionEnabled: boolean;
   collaborationToolsEnabled: boolean;
+  /** execute_command 是否已接入项目 Python venv（numpy/pandas/matplotlib/sklearn）。 */
+  pythonRuntimeAvailable: boolean;
   selectedSkills: SkillRecord[];
   /** builtin task_* 工具是否启用（取决于是否注入 taskStateRuntime）。 */
   taskToolsEnabled: boolean;
@@ -547,8 +551,13 @@ const buildAgentInstructions = (input: AgentInstructionsInput): string => {
     toolGroups.push(`Workspace tools (session-isolated directory): ${workspaceTools.join(", ")}. `
       + "Files you write stay within this session's workspace and can be reused by later runs in the same session. "
       + (enabled("execute_command")
-        ? "execute_command runs in a sandbox without network access. Use it only for local transforms, charts, "
-          + "or exports; never use it to access external services."
+        ? (input.pythonRuntimeAvailable
+          ? "execute_command runs in a sandbox without network access. Use `python3.12 script.py` for local analysis; "
+            + "numpy, pandas, matplotlib, and scikit-learn are available from the project venv. Write scripts with write_file first, "
+            + "save charts with plt.savefig(), and persist outputs as workspace files. "
+            + "Do not use execute_command for external services or direct database access."
+          : "execute_command runs in a sandbox without network access. Use it only for local transforms, charts, "
+            + "or exports; never use it to access external services.")
         : "execute_command is disabled this run; rely on the available data and file tools only."));
   }
   if (input.workspaceAttachments.length > 0) {
@@ -660,6 +669,14 @@ const buildAgentInstructions = (input: AgentInstructionsInput): string => {
         + "Call promote_workspace_file only to lift a session workspace file into a cross-session reusable asset "
         + "(files in the same session are already retained across runs; do not promote merely to reuse within this session)."
     );
+    if (input.pythonRuntimeAvailable) {
+      policies.push(
+        "For Python analysis, prefer write_file to create a .py script, then execute_command with `python3.12 <script>`. "
+          + "Use pandas for tabular work, matplotlib with plt.savefig() for charts (no GUI display), and scikit-learn "
+          + "for modeling. Export CSV/JSON/PNG artifacts to the session workspace and publish_artifact when the user "
+          + "should download results."
+      );
+    }
   }
   policies.push(
     "Report failures honestly. If schema inspection, SQL execution, a file write, or a command fails, explain the "
