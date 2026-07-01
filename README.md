@@ -62,8 +62,9 @@ The GUI capture is still pending. The TUI recording below shows the current term
   </tr>
   <tr>
     <td>
-      <video src="docs/assets/readme/tui-demo.mov" controls muted width="100%" title="DataFoundry TUI demo"></video>
-      <p><a href="docs/assets/readme/tui-demo.mov">Open the TUI demo video</a></p>
+      <a href="docs/assets/readme/tui-demo.mp4">
+        <img src="docs/assets/readme/tui-demo.gif" alt="DataFoundry TUI demo" width="100%">
+      </a>
     </td>
   </tr>
 </table>
