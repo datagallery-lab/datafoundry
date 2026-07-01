@@ -92,7 +92,8 @@ const DatasourceSchema = CommonFieldsSchema.extend({
     "greenplum",
   ]),
   mode: z.enum(["readonly"]).default("readonly"),
-  connection: DatasourceConnectionSchema,
+  connection: DatasourceConnectionSchema.optional(),
+  config: z.record(z.string(), z.unknown()).optional(),
   introspection: z
     .object({
       cache: z.boolean(),
