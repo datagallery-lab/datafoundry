@@ -27,8 +27,32 @@ function eq<T>(actual: T, expected: T): boolean {
 }
 
 function visualLineText(line: { node: unknown }): string {
-  const props = (line.node as { props?: { segments?: Array<{ text?: unknown }> } }).props;
-  return (props?.segments ?? []).map((segment) => String(segment.text ?? '')).join('');
+  return reactNodeText(line.node);
+}
+
+function reactNodeText(node: unknown): string {
+  if (node === null || node === undefined || typeof node === 'boolean') {
+    return '';
+  }
+  if (typeof node === 'string' || typeof node === 'number') {
+    return String(node);
+  }
+  if (Array.isArray(node)) {
+    return node.map(reactNodeText).join('');
+  }
+  if (typeof node === 'object') {
+    const props = (node as {
+      props?: {
+        children?: unknown;
+        segments?: Array<{ text?: unknown }>;
+      };
+    }).props;
+    if (props?.segments) {
+      return props.segments.map((segment) => String(segment.text ?? '')).join('');
+    }
+    return reactNodeText(props?.children);
+  }
+  return '';
 }
 
 function textMessage(id: string, content: string): DisplayMessage {
@@ -81,6 +105,27 @@ check(textWidth(truncateToWidth('中文测试内容很长', 5)) <= 5, 'truncate 
 check(chatContentWidth(120) === 116, 'content width is columns - 4');
 check(chatViewportRows(40, { commandNotice: false, activeTab: 'chat' }) === 36, 'chat viewport for 40 rows is 36');
 check(chatViewportRows(40, { commandNotice: true, activeTab: 'chat' }) === 35, 'chat viewport with notice is 35');
+
+// --- startup banner ---
+const startupLines = buildChatLines({
+  messages: [],
+  artifacts: [],
+  columns: 80,
+  startup: {
+    threadId: '12345678-abcd',
+    connectionStatus: 'connected',
+    runStatus: 'idle',
+    modelName: 'test-model',
+    directory: '/tmp/dataagent',
+  },
+});
+const startupTexts = startupLines.map(visualLineText);
+check(startupLines[0]?.key === 'startup:border:top', 'startup transcript begins with the banner border');
+check(startupTexts.some((line) => line.includes('DataAgent')), 'startup banner includes the DataAgent wordmark');
+check(
+  startupTexts.every((line) => textWidth(line) <= chatContentWidth(80)),
+  'startup banner rows fit within chat content width',
+);
 
 // --- exact line counts ---
 const columns = 120;

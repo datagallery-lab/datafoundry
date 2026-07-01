@@ -60,6 +60,18 @@ const INDENT_WIDTH = 2;
 const MAX_ELEMENT_LINES = 1000;
 const MAX_TABLE_ROWS = 12;
 const MIN_TABLE_CELL_WIDTH = 3;
+const STARTUP_BANNER_ART = [
+  ' ____        _        _                    _   ',
+  '|  _ \\  __ _| |_ __ _| |    __ _  ___ _ __ | |_ ',
+  '| | | |/ _` | __/ _` | |   / _` |/ _ \\ `_ \\| __|',
+  '| |_| | (_| | || (_| | |__| (_| |  __/ | | | |_ ',
+  '|____/ \\__,_|\\__\\__,_|_____\\__, |\\___|_| |_|\\__|',
+  '                               |___/              ',
+];
+const STARTUP_BANNER_ART_WIDTH = Math.max(
+  ...STARTUP_BANNER_ART.map((line) => textWidth(line)),
+);
+const STARTUP_BANNER_MAX_WIDTH = 72;
 
 /** Total display-column budget for a single chat row (mirrors the old estimate). */
 export function chatContentWidth(columns: number): number {
@@ -661,38 +673,69 @@ function pushStartupLines(
 ): void {
   const conn = connectionDisplay(startup.connectionStatus);
   const run = runDisplay(startup.runStatus);
-  const session = startup.threadId ? `  session: ${startup.threadId.slice(0, 8)}` : '';
+  const bannerWidth = Math.max(20, Math.min(contentWidth, STARTUP_BANNER_MAX_WIDTH));
+  const border = `+${'-'.repeat(Math.max(0, bannerWidth - 2))}+`;
+  const session = startup.threadId ? startup.threadId.slice(0, 8) : 'new';
+  const statusText = `${conn.icon} ${conn.text} | ${run.icon} ${run.text}`;
+  const showArt = bannerWidth >= STARTUP_BANNER_ART_WIDTH + 4;
+
+  push('startup:border:top', <Text key="startup:border:top" color="cyan">{border}</Text>);
+  push('startup:title', (
+    <Text key="startup:title" bold color="cyan">
+      {bannerContent('DataAgent', bannerWidth)}
+    </Text>
+  ));
+
+  if (showArt) {
+    STARTUP_BANNER_ART.forEach((line, index) => {
+      const key = `startup:art:${index}`;
+      push(
+        key,
+        <Text key={key} color="cyan">
+          {bannerContent(padToWidth(line.trimEnd(), STARTUP_BANNER_ART_WIDTH), bannerWidth)}
+        </Text>,
+      );
+    });
+  }
 
   push(
-    'startup:title',
-    <Text key="startup:title">
-      <Text bold color="cyan">DataAgent TUI</Text>
-      {session ? <Text dimColor>{truncateToWidth(session, Math.max(0, contentWidth - 13))}</Text> : null}
-    </Text>,
-  );
-  push(
-    'startup:model',
-    <Text key="startup:model">
-      <Text dimColor>model:     </Text>
-      <Text>{truncateToWidth(startup.modelName, Math.max(0, contentWidth - 11))}</Text>
+    'startup:session',
+    <Text key="startup:session" dimColor>
+      {bannerContent(`session ${session} | model ${startup.modelName}`, bannerWidth)}
     </Text>,
   );
   push(
     'startup:dir',
-    <Text key="startup:dir">
-      <Text dimColor>directory: </Text>
-      <Text>{truncateToWidth(startup.directory, Math.max(0, contentWidth - 11))}</Text>
+    <Text key="startup:dir" dimColor>
+      {bannerContent(`cwd ${startup.directory}`, bannerWidth)}
     </Text>,
   );
   push(
     'startup:status',
     <Text key="startup:status">
-      <Text color={conn.color}>{conn.icon} {conn.text}</Text>
-      <Text dimColor> | </Text>
-      <Text color={run.color}>{run.icon} {run.text}</Text>
+      {bannerContent(statusText, bannerWidth)}
     </Text>,
   );
+  push('startup:border:bottom', <Text key="startup:border:bottom" color="cyan">{border}</Text>);
   push('startup:after', blankNode('startup:after'));
+}
+
+function bannerContent(text: string, width: number): string {
+  const innerWidth = Math.max(0, width - 4);
+  return `| ${centerToWidth(text, innerWidth)} |`;
+}
+
+function centerToWidth(text: string, width: number): string {
+  const fitted = truncateToWidth(text, width);
+  const remaining = Math.max(0, width - textWidth(fitted));
+  const left = Math.floor(remaining / 2);
+  const right = remaining - left;
+  return `${' '.repeat(left)}${fitted}${' '.repeat(right)}`;
+}
+
+function padToWidth(text: string, width: number): string {
+  const fitted = truncateToWidth(text, width);
+  return `${fitted}${' '.repeat(Math.max(0, width - textWidth(fitted)))}`;
 }
 
 function blankNode(key: string): React.ReactNode {
