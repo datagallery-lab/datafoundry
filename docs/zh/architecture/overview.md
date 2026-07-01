@@ -13,7 +13,7 @@ Web 工作台 / TUI / 其他客户端
   -> Metadata 与审计存储
 ```
 
-精选架构图可参考仓库首页使用的运行流程图：[`docs/assets/readme/runtime-flow.svg`](../../assets/readme/runtime-flow.svg)。
+精选架构图可参考仓库首页使用的运行流程图：[`docs/assets/readme/runtime-flow.png`](../../assets/readme/runtime-flow.png)。
 
 ## 主要模块
 
