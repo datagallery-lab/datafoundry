@@ -1,9 +1,48 @@
 {
-  "name": "datafoundry-workbench",
+  "name": "datafoundry",
   "version": "0.1.0",
-  "private": true,
+  "description": "Open-source enterprise Data Agent workbench for trustworthy, auditable data analysis.",
   "license": "Apache-2.0",
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/datagallery-lab/datafoundry.git"
+  },
+  "homepage": "https://github.com/datagallery-lab/datafoundry#readme",
+  "bugs": {
+    "url": "https://github.com/datagallery-lab/datafoundry/issues"
+  },
+  "keywords": [
+    "data-agent",
+    "data-analysis",
+    "semantic-layer",
+    "nl2sql",
+    "agent-workbench",
+    "enterprise-ai",
+    "mcp",
+    "ag-ui",
+    "mastra",
+    "copilotkit"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    ".env.example",
+    "CONTRIBUTING.md",
+    "LICENSE",
+    "README.md",
+    "README_zh.md",
+    "apps",
+    "docs",
+    "mkdocs.yml",
+    "packages",
+    "requirements-docs.txt",
+    "requirements.txt",
+    "scripts",
+    "tsconfig.base.json",
+    "tsconfig.build.json"
+  ],
   "engines": {
     "node": ">=22"
   },
