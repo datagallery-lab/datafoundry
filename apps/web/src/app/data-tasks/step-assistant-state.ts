@@ -58,6 +58,13 @@ export function hasLaterAssistantMessage(
   return messages.slice(index + 1).some((item) => item.role === "assistant");
 }
 
+export function shouldHideProcessStepForTimelineCollapse(input: {
+  isProcessStep: boolean;
+  timelineCollapsed: boolean;
+}): boolean {
+  return input.isProcessStep && input.timelineCollapsed;
+}
+
 function getRunMessageBounds(
   messages: MessageLike[],
   messageIndex: number,
@@ -183,6 +190,34 @@ function liveRunCandidateRange(
   return { start: liveToolIndex, end: sliceEnd };
 }
 
+export function resolveAssistantLiveToolCalls(input: {
+  message: MessageLike;
+  messages: MessageLike[];
+  liveRun: LiveRun | null;
+}): LiveRun["toolCalls"] {
+  const { message, messages, liveRun } = input;
+  if (!liveRun) return [];
+
+  const toolCalls = Array.isArray(message.toolCalls) ? message.toolCalls : [];
+  if (toolCalls.length > 0) {
+    const liveById = new Map(liveRun.toolCalls.map((call) => [call.id, call]));
+    return toolCalls
+      .map((call) => {
+        const id = toolCallRecord(call).id;
+        return id ? liveById.get(id) : undefined;
+      })
+      .filter((call): call is LiveRun["toolCalls"][number] => Boolean(call));
+  }
+
+  if (!isLastAssistantMessageInRun(message.id, messages)) return [];
+
+  const range = liveRunCandidateRange(message, messages, liveRun);
+  if (!range) return [];
+  return liveRun.toolCalls
+    .slice(range.start, range.end)
+    .filter((call) => call.status === "running");
+}
+
 function liveRunCollaborationCandidate(
   message: MessageLike,
   messages: MessageLike[],
@@ -223,8 +258,12 @@ export function resolveStepAssistantFlags(input: {
   const { message, messages, content, isRunning, liveRunStatus, liveRun, collaborationResponses } =
     input;
   const toolCalls = Array.isArray(message.toolCalls) ? message.toolCalls : [];
-  const hasToolCalls = toolCalls.length > 0;
-  const rawToolNames = toolCalls.map((call) => toolCallRecord(call).function?.name ?? "");
+  const liveToolCalls = resolveAssistantLiveToolCalls({ message, messages, liveRun });
+  const hasToolCalls = toolCalls.length > 0 || liveToolCalls.length > 0;
+  const rawToolNames =
+    toolCalls.length > 0
+      ? toolCalls.map((call) => toolCallRecord(call).function?.name ?? "")
+      : liveToolCalls.map((call) => call.name);
   const hasNamedToolCalls = rawToolNames.some((name) => name.trim().length > 0);
   const isLastInThread = messages[messages.length - 1]?.id === message.id;
   const isLastAssistantInRun = isLastAssistantMessageInRun(message.id, messages);

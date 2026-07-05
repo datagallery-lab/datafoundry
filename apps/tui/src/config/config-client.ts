@@ -355,6 +355,18 @@ const ConversationRunEventRefSchema = z.object({
   lastSeq: z.number().optional(),
 });
 
+const ConversationCheckpointSchema = z.object({
+  runId: z.string(),
+  status: z.enum(["queued", "running", "suspended", "completed", "failed", "canceled"]),
+  messageStartPosition: z.number().optional(),
+  messageEndPosition: z.number().optional(),
+  firstEventSeq: z.number().optional(),
+  lastEventSeq: z.number().optional(),
+  startedAt: z.string(),
+  finishedAt: z.string().optional(),
+  errorMessage: z.string().optional(),
+});
+
 const ConversationToolCallSchema = z.object({
   runId: z.string(),
   id: z.string().optional(),
@@ -380,6 +392,7 @@ const SessionConversationSchema = z.object({
   messages: z.array(ConversationMessageSchema),
   summary: ConversationSummarySchema.optional(),
   runEventRefs: z.array(ConversationRunEventRefSchema),
+  checkpoints: z.array(ConversationCheckpointSchema).optional(),
   toolCalls: z.array(ConversationToolCallSchema),
 });
 
@@ -420,6 +433,7 @@ export type SessionListResponse = z.infer<typeof SessionListResponseSchema>;
 export type ConversationMessage = z.infer<typeof ConversationMessageSchema>;
 export type ConversationSummary = z.infer<typeof ConversationSummarySchema>;
 export type ConversationRunEventRef = z.infer<typeof ConversationRunEventRefSchema>;
+export type ConversationCheckpoint = z.infer<typeof ConversationCheckpointSchema>;
 export type ConversationToolCall = z.infer<typeof ConversationToolCallSchema>;
 export type SessionConversation = z.infer<typeof SessionConversationSchema>;
 export type SessionTitle = z.infer<typeof SessionTitleSchema>;

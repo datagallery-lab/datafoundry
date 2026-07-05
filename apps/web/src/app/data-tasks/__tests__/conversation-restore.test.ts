@@ -97,6 +97,62 @@ describe("conversationToAgentMessages", () => {
     expect(conversationToAgentMessages(dto)[0]?.id).toBe("persisted-user-1");
   });
 
+  it("restores canceled runs with persisted assistant drafts", () => {
+    const dto: SessionConversationDto = {
+      sessionId: "thread-1",
+      messages: [
+        {
+          id: "run-canceled:user",
+          runId: "run-canceled",
+          role: "user",
+          source: "client",
+          messageId: "frontend-user-canceled",
+          contentText: "Stop after first observation",
+          position: 1,
+          createdAt: "2026-06-25T10:00:01Z",
+        },
+        {
+          id: "run-canceled:assistant:partial",
+          runId: "run-canceled",
+          role: "assistant",
+          source: "agent",
+          messageId: "assistant-partial",
+          contentText: "I inspected the first table before cancellation.",
+          position: 2,
+          createdAt: "2026-06-25T10:00:02Z",
+        },
+      ],
+      runEventRefs: [{ runId: "run-canceled", eventCount: 2, firstSeq: 1, lastSeq: 2 }],
+      checkpoints: [
+        {
+          runId: "run-canceled",
+          status: "canceled",
+          messageStartPosition: 1,
+          messageEndPosition: 2,
+          firstEventSeq: 1,
+          lastEventSeq: 2,
+          startedAt: "2026-06-25T10:00:00Z",
+          finishedAt: "2026-06-25T10:00:03Z",
+          errorMessage: "user-requested",
+        },
+      ],
+      toolCalls: [],
+    };
+
+    expect(conversationToAgentMessages(dto)).toEqual([
+      {
+        id: "frontend-user-canceled",
+        role: "user",
+        content: "Stop after first observation",
+      },
+      {
+        id: "assistant-partial",
+        role: "assistant",
+        content: "I inspected the first table before cancellation.",
+      },
+    ]);
+  });
+
   it("inserts an assistant failure placeholder after user-only failed runs", () => {
     const dto: SessionConversationDto = {
       sessionId: "thread-1",

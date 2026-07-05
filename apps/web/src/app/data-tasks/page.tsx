@@ -6,7 +6,6 @@ import {
   CopilotChatConfigurationProvider,
   CopilotChatInput,
   CopilotChatReasoningMessage,
-  CopilotChatToolCallsView,
   CopilotChatUserMessage,
   CopilotKit,
   useAgent,
@@ -126,7 +125,10 @@ import { DatasourceTypeGallery } from "./components/DatasourceTypeGallery";
 import { DatasourceTypeIcon } from "./components/DatasourceTypeIcon";
 import { DataTaskChatInput } from "./components/chat/DataTaskChatInput";
 import { QuickStartGuide } from "./components/guide/QuickStartGuide";
-import { createChatStopHandler } from "./components/chat/chat-stop-handler";
+import {
+  createChatStopHandler,
+  performChatRunCancellation,
+} from "./components/chat/chat-stop-handler";
 import {
   CHAT_ATTACHMENT_ACCEPT,
   CHAT_ATTACHMENT_MAX_BYTES,
@@ -134,6 +136,17 @@ import {
   createChatOnUpload,
   readFileAsBase64,
 } from "./components/chat/chat-attachments";
+import {
+  createQueuedChatPrompt,
+  deleteQueuedChatPrompt,
+  editQueuedChatPrompt,
+  markQueuedChatPromptInterrupting,
+  queuedPromptToRunInput,
+  resolveQueuedSubmitMode,
+  shouldShowRunningStopControl,
+  takeNextQueuedChatPrompt,
+  type QueuedChatPrompt,
+} from "./components/chat/queued-chat-runs";
 import { scheduleChatTextareaResize } from "./components/chat/use-chat-textarea-autoresize";
 import {
   DataTaskChatInputBindingsProvider,
@@ -225,8 +238,10 @@ import {
   useAgentMessageRenderSnapshot,
 } from "./agent-message-render-sync";
 import {
+  resolveAssistantLiveToolCalls,
   resolveAssistantToolStepNumber,
   resolveStepAssistantFlags,
+  shouldHideProcessStepForTimelineCollapse,
 } from "./step-assistant-state";
 import { btnSecondaryClass, panelTitleClass, sectionLabelClass } from "./ui-tokens";
 import {
@@ -286,6 +301,10 @@ function StableDataTaskChatInput({
   const bindings = useDataTaskChatInputBindings();
   const { agent } = useAgent({ agentId: bindings.agentId });
   const { copilotkit } = useCopilotKit();
+  const [queuedPrompts, setQueuedPrompts] = useState<QueuedChatPrompt[]>([]);
+  const [draftText, setDraftText] = useState("");
+  const awaitingQueuedRunCompletionRef = useRef(false);
+  const queuedRunSawActiveRef = useRef(false);
 
   const capabilities = useCallback(
     () => {
@@ -324,34 +343,65 @@ function StableDataTaskChatInput({
     },
   });
 
-  const handleSubmitMessage = (value: string) => {
-    bindings.onUserMessageSubmitted(value);
-    const ready = attachmentsApi.consumeAttachments();
-    const forwardedProps = bindings.getRunForwardedProps();
+  const reportRunError = useCallback((error: unknown) => {
+    awaitingQueuedRunCompletionRef.current = false;
+    queuedRunSawActiveRef.current = false;
+    const message = error instanceof Error ? error.message : String(error);
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(
+        new CustomEvent("datafoundry-run-error", {
+          detail: { message },
+        }),
+      );
+    }
+  }, []);
 
-    const submitRun = () => {
+  const dispatchRun = useCallback(
+    ({
+      text,
+      attachments,
+      forwardedProps,
+    }: {
+      text: string;
+      attachments: ReturnType<typeof attachmentsApi.consumeAttachments>;
+      forwardedProps: ReturnType<typeof bindings.getRunForwardedProps>;
+    }) => {
       if (!agent) return;
+      bindings.onUserMessageSubmitted(text);
       agent.setState(buildAgentRunStatePatch(forwardedProps, agent.state));
-      void copilotkit.runAgent({ agent, forwardedProps }).catch((error: unknown) => {
-        const message = error instanceof Error ? error.message : String(error);
-        if (typeof window !== "undefined") {
-          window.dispatchEvent(
-            new CustomEvent("datafoundry-run-error", {
-              detail: { message },
-            }),
-          );
-        }
-      });
-    };
-
-    if (agent) {
-      if (ready.length > 0) {
-        const content = buildMessageContent(value, ready);
+      if (attachments.length > 0) {
+        const content = buildMessageContent(text, attachments);
         agent.addMessage({ id: crypto.randomUUID(), role: "user", content });
       } else {
-        agent.addMessage({ id: crypto.randomUUID(), role: "user", content: value });
+        agent.addMessage({ id: crypto.randomUUID(), role: "user", content: text });
       }
-      submitRun();
+      void copilotkit.runAgent({ agent, forwardedProps }).catch(reportRunError);
+    },
+    [agent, bindings, copilotkit, reportRunError],
+  );
+
+  const handleSubmitMessage = (value: string) => {
+    const ready = attachmentsApi.consumeAttachments();
+    const forwardedProps = bindings.getRunForwardedProps();
+    if (agent) {
+      const submitMode = resolveQueuedSubmitMode({
+        agentIsRunning: Boolean(agent.isRunning),
+        liveRunStatus: bindings.liveRunStatus,
+      });
+      if (submitMode === "queue") {
+        setQueuedPrompts((current) => [
+          ...current,
+          createQueuedChatPrompt({
+            id: crypto.randomUUID(),
+            text: value,
+            attachments: ready,
+            forwardedProps,
+            createdAt: Date.now(),
+          }),
+        ]);
+      } else {
+        dispatchRun({ text: value, attachments: ready, forwardedProps });
+      }
     } else {
       inputProps.onSubmitMessage?.(value);
     }
@@ -360,6 +410,13 @@ function StableDataTaskChatInput({
     bindings.onClearPerRunFileMentions();
     requestAnimationFrame(scheduleChatTextareaResize);
   };
+  const handleInputChange = useCallback(
+    (value: string) => {
+      setDraftText(value);
+      inputProps.onChange?.(value);
+    },
+    [inputProps],
+  );
   const handleStop = useMemo(
     () =>
       createChatStopHandler({
@@ -368,13 +425,83 @@ function StableDataTaskChatInput({
       }),
     [bindings.onCancelRun, inputProps.onStop],
   );
+
+  useEffect(() => {
+    setQueuedPrompts([]);
+    awaitingQueuedRunCompletionRef.current = false;
+    queuedRunSawActiveRef.current = false;
+  }, [bindings.activeThreadId]);
+
+  useEffect(() => {
+    if (!agent || queuedPrompts.length === 0) {
+      return;
+    }
+    const activeRun =
+      Boolean(agent.isRunning) ||
+      bindings.liveRunStatus === "running" ||
+      bindings.liveRunStatus === "suspended";
+    if (awaitingQueuedRunCompletionRef.current) {
+      if (activeRun) {
+        queuedRunSawActiveRef.current = true;
+        return;
+      }
+      if (!queuedRunSawActiveRef.current) {
+        return;
+      }
+      awaitingQueuedRunCompletionRef.current = false;
+      queuedRunSawActiveRef.current = false;
+    }
+    if (activeRun) {
+      return;
+    }
+
+    const next = takeNextQueuedChatPrompt(queuedPrompts);
+    if (!next.prompt) return;
+    awaitingQueuedRunCompletionRef.current = true;
+    queuedRunSawActiveRef.current = false;
+    setQueuedPrompts(next.queue);
+    const runInput = queuedPromptToRunInput(next.prompt);
+    dispatchRun(runInput);
+  }, [agent, bindings.liveRunStatus, dispatchRun, queuedPrompts]);
+
+  const handleEditQueuedPrompt = useCallback((id: string, text: string) => {
+    setQueuedPrompts((current) => editQueuedChatPrompt(current, id, text));
+  }, []);
+
+  const handleDeleteQueuedPrompt = useCallback((id: string) => {
+    setQueuedPrompts((current) => deleteQueuedChatPrompt(current, id));
+  }, []);
+
+  const handleSendQueuedPromptNow = useCallback(
+    (id: string) => {
+      setQueuedPrompts((current) => markQueuedChatPromptInterrupting(current, id));
+      void performChatRunCancellation({
+        onCancelRun: bindings.onCancelRun,
+        onStopFrontend: inputProps.onStop,
+      });
+    },
+    [bindings.onCancelRun, inputProps.onStop],
+  );
+
+  const showStopControl = shouldShowRunningStopControl({
+    agentIsRunning: Boolean(agent?.isRunning),
+    liveRunStatus: bindings.liveRunStatus,
+    draftText,
+  });
+
   return (
     <DataTaskChatInput
       {...inputProps}
       {...bindings}
       attachmentsApi={attachmentsApi}
+      onChange={handleInputChange}
       onSubmitMessage={handleSubmitMessage}
       onStop={handleStop}
+      isRunning={showStopControl}
+      queuedPrompts={queuedPrompts}
+      onEditQueuedPrompt={handleEditQueuedPrompt}
+      onDeleteQueuedPrompt={handleDeleteQueuedPrompt}
+      onSendQueuedPromptNow={handleSendQueuedPromptNow}
       showDisclaimer={false}
     />
   );
@@ -2453,7 +2580,6 @@ function StepAssistantMessage({
 
   const content = resolveToolStepThoughtContent(message, allMessages);
   const {
-    hasToolCalls,
     isWaitingForUser,
     isCollaborationStep,
     isCollaborationComplete,
@@ -2522,17 +2648,32 @@ function StepAssistantMessage({
           };
         })
       : toolCalls;
+  const liveToolCallEntries =
+    correctedToolCalls.length === 0
+      ? resolveAssistantLiveToolCalls({
+          message,
+          messages: allMessages,
+          liveRun,
+        }).map((call) => ({
+          id: call.id,
+          type: "function" as const,
+          function: {
+            name: call.name,
+            arguments: "{}",
+          },
+        }))
+      : [];
   const effectiveToolCalls =
     isCollaborationComplete && linkedToolCallEntry.length > 0
       ? linkedToolCallEntry
       : correctedToolCalls.length > 0
         ? correctedToolCalls
-        : linkedToolCallEntry;
+        : linkedToolCallEntry.length > 0
+          ? linkedToolCallEntry
+          : liveToolCallEntries;
   const displayHasToolCalls = effectiveToolCalls.length > 0;
-  const displayMessage =
-    effectiveToolCalls === toolCalls
-      ? message
-      : ({ ...message, toolCalls: effectiveToolCalls } as typeof message);
+  const hasLiveToolCallsForCurrentMessage =
+    toolCalls.length === 0 && liveToolCallEntries.length > 0;
   const currentMessageIndex = allMessages.findIndex((item) => item.id === message.id);
   const lastUserIndex =
     currentMessageIndex >= 0
@@ -2570,6 +2711,7 @@ function StepAssistantMessage({
       messageTextContent((item as { content?: unknown }).content),
     );
     if (hasTools) return true;
+    if (item.id === message.id && hasLiveToolCallsForCurrentMessage) return true;
     // The run's trailing content-only assistant message is the final answer; it
     // renders as a separate Answer (isProcessStep excludes isFinalAnswer), so it
     // must not inflate the "Work process N steps" count.
@@ -2599,6 +2741,11 @@ function StepAssistantMessage({
   const isFirstProcessStep =
     isProcessStep && processMessagesInRun[0]?.id === message.id;
   const processStepCount = processMessagesInRun.length;
+  const hideProcessStepForTimelineCollapse =
+    shouldHideProcessStepForTimelineCollapse({
+      isProcessStep,
+      timelineCollapsed: processTimelineCollapse.collapsed,
+    });
 
   const stepNumber = resolveAssistantToolStepNumber({
     message,
@@ -2629,7 +2776,7 @@ function StepAssistantMessage({
     return null;
   }
 
-  if (!content && !hasToolCalls && !isWaitingForUser && !hostsPendingSlot) {
+  if (!content && !displayHasToolCalls && !isWaitingForUser && !hostsPendingSlot) {
     if (isActive) {
       return <ChatAssistantLoadingRow />;
     }
@@ -2776,6 +2923,25 @@ function StepAssistantMessage({
         ) : null}
       </div>
     );
+  }
+
+  if (hideProcessStepForTimelineCollapse) {
+    return isFirstProcessStep ? (
+      <div className="copilotKitMessage copilotKitAssistantMessage mb-1 mt-4 flex items-center gap-2 px-1 text-xs text-muted-light">
+        <button
+          type="button"
+          onClick={processTimelineCollapse.toggle}
+          className="inline-flex cursor-pointer items-center gap-1.5 rounded-md px-1.5 py-1 font-medium transition-colors duration-150 hover:bg-surface-subtle hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/20"
+          aria-expanded={false}
+        >
+          <span>Work process</span>
+          <span className="tabular">
+            {processStepCount} step{processStepCount === 1 ? "" : "s"}
+          </span>
+          <StepChevron expanded={false} />
+        </button>
+      </div>
+    ) : null;
   }
 
   return (
@@ -2978,8 +3144,14 @@ function StepAssistantMessage({
                 busy={isActive}
                 onHeaderClick={openStepDetails}
               >
-                <div className="grid gap-1">
-                  <CopilotChatToolCallsView message={displayMessage} messages={messages} />
+                <div className="flex min-w-0 flex-wrap gap-1.5">
+                  {toolSummaries.map((chip) => (
+                    <ToolSummaryChip
+                      key={chip.id}
+                      chip={chip}
+                      onSelectToolAction={selectToolAction}
+                    />
+                  ))}
                 </div>
               </StepSubPanel>
             </>
@@ -3000,8 +3172,14 @@ function StepAssistantMessage({
               busy={isActive}
               onHeaderClick={openStepDetails}
             >
-              <div className="grid gap-1">
-                <CopilotChatToolCallsView message={displayMessage} messages={messages} />
+              <div className="flex min-w-0 flex-wrap gap-1.5">
+                {toolSummaries.map((chip) => (
+                  <ToolSummaryChip
+                    key={chip.id}
+                    chip={chip}
+                    onSelectToolAction={selectToolAction}
+                  />
+                ))}
               </div>
             </StepSubPanel>
           ) : null}
@@ -3135,7 +3313,7 @@ function ToolSummaryChip({
     chip.status === "failed"
       ? "bg-step-error"
       : chip.status === "running"
-        ? "bg-primary-light"
+        ? "bg-step-warning"
         : "bg-step-success";
   const content = (
     <>

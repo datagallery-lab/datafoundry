@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 import {
   findLinkedCollaborationResponse,
   hasLaterAssistantMessage,
+  resolveAssistantLiveToolCalls,
   resolveAssistantToolStepNumber,
   resolveStepAssistantFlags,
+  shouldHideProcessStepForTimelineCollapse,
 } from "../step-assistant-state";
 import type { CollaborationResponseRecord } from "../components/chat/collaboration-responses";
 import { createInitialLiveRun } from "../live-run-state";
@@ -37,6 +39,32 @@ describe("findLinkedCollaborationResponse", () => {
     expect(findLinkedCollaborationResponse(messages[0], messages, [baseResponse])).toEqual(
       baseResponse,
     );
+  });
+});
+
+describe("shouldHideProcessStepForTimelineCollapse", () => {
+  it("hides process steps when the work process timeline is collapsed", () => {
+    expect(
+      shouldHideProcessStepForTimelineCollapse({
+        isProcessStep: true,
+        timelineCollapsed: true,
+      }),
+    ).toBe(true);
+  });
+
+  it("does not hide answers or expanded process steps", () => {
+    expect(
+      shouldHideProcessStepForTimelineCollapse({
+        isProcessStep: false,
+        timelineCollapsed: true,
+      }),
+    ).toBe(false);
+    expect(
+      shouldHideProcessStepForTimelineCollapse({
+        isProcessStep: true,
+        timelineCollapsed: false,
+      }),
+    ).toBe(false);
   });
 });
 
@@ -565,5 +593,40 @@ describe("resolveAssistantToolStepNumber", () => {
         collaborationResponses: [],
       }),
     ).toBe(1);
+  });
+});
+
+describe("resolveAssistantLiveToolCalls", () => {
+  it("maps a streaming thinking-only assistant message to its live running tool call", () => {
+    const messages = [
+      { id: "user-1", role: "user", content: "查一下订单表" },
+      { id: "assistant-thinking", role: "assistant", content: "我先检查 schema。" },
+    ];
+    const liveRun = {
+      ...createInitialLiveRun(),
+      toolCalls: [
+        {
+          id: "tc-schema",
+          name: "inspect_schema",
+          status: "running" as const,
+          startedAtMs: 10,
+        },
+      ],
+    };
+
+    expect(
+      resolveAssistantLiveToolCalls({
+        message: messages[1],
+        messages,
+        liveRun,
+      }),
+    ).toEqual([
+      {
+        id: "tc-schema",
+        name: "inspect_schema",
+        status: "running",
+        startedAtMs: 10,
+      },
+    ]);
   });
 });

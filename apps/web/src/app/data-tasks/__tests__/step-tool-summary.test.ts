@@ -54,6 +54,22 @@ describe("step-tool-summary", () => {
     expect(stepElapsedLabel({ status: "success" })).toBe("—");
   });
 
+  it("keeps running tools labeled as Running in collapsed summaries", () => {
+    const summary = buildCollapsedStepSummary({
+      thinking: "I will inspect the schema first.",
+      tools: [
+        {
+          id: "tc-schema",
+          label: "Inspect Schema",
+          status: "running",
+          durationLabel: stepElapsedLabel({ status: "running", startedAtMs: 10 }),
+        },
+      ],
+    });
+
+    expect(summary.toolSummary).toBe("Inspect Schema Running");
+  });
+
   it("truncates thinking preview to two compact lines", () => {
     expect(truncateThinkingPreview("第一行\n第二行\n第三行", 20)).toBe("第一行 第二行…");
   });

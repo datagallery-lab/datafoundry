@@ -29,6 +29,7 @@ import { useChatTextareaAutoresize, scheduleChatTextareaResize } from "./use-cha
 import { resolveChatInputWidth } from "../../chat-input-layout";
 import { useDataTaskChatInputBindings } from "./DataTaskChatInputBindingsContext";
 import type { ChatSession, WorkspaceConfigStore } from "../../data-task-state";
+import type { QueuedChatPrompt } from "./queued-chat-runs";
 
 type DataTaskChatInputProps = CopilotChatInputProps & {
   llmOptions: WorkspaceConfigItem[];
@@ -50,6 +51,10 @@ type DataTaskChatInputProps = CopilotChatInputProps & {
   sessionStartedHints?: SessionStartedHints;
   onToggleSessionResource: (kind: PerRunMentionKind, id: string) => void;
   attachmentsApi: UseAttachmentsReturn;
+  queuedPrompts?: QueuedChatPrompt[];
+  onEditQueuedPrompt?: (id: string, text: string) => void;
+  onDeleteQueuedPrompt?: (id: string) => void;
+  onSendQueuedPromptNow?: (id: string) => void;
 };
 
 export function DataTaskChatInput({
@@ -72,6 +77,10 @@ export function DataTaskChatInput({
   sessionStartedHints,
   onToggleSessionResource,
   attachmentsApi,
+  queuedPrompts = [],
+  onEditQueuedPrompt,
+  onDeleteQueuedPrompt,
+  onSendQueuedPromptNow,
   textArea,
   onChange,
   ...props
@@ -124,6 +133,10 @@ export function DataTaskChatInput({
           sessionStartedHints={sessionStartedHints}
           onToggleSessionResource={onToggleSessionResource}
           attachmentsApi={attachmentsApi}
+          queuedPrompts={queuedPrompts}
+          onEditQueuedPrompt={onEditQueuedPrompt}
+          onDeleteQueuedPrompt={onDeleteQueuedPrompt}
+          onSendQueuedPromptNow={onSendQueuedPromptNow}
         />
       )}
     </CopilotChatInput>
@@ -163,6 +176,10 @@ function DataTaskChatInputLayout({
   sessionStartedHints,
   onToggleSessionResource,
   attachmentsApi,
+  queuedPrompts,
+  onEditQueuedPrompt,
+  onDeleteQueuedPrompt,
+  onSendQueuedPromptNow,
 }: {
   textArea: ReactNode;
   sendButton: ReactNode;
@@ -197,6 +214,10 @@ function DataTaskChatInputLayout({
   sessionStartedHints?: SessionStartedHints;
   onToggleSessionResource: (kind: PerRunMentionKind, id: string) => void;
   attachmentsApi: UseAttachmentsReturn;
+  queuedPrompts: QueuedChatPrompt[];
+  onEditQueuedPrompt?: (id: string, text: string) => void;
+  onDeleteQueuedPrompt?: (id: string) => void;
+  onSendQueuedPromptNow?: (id: string) => void;
 }) {
   const { chatColumnWidth, draftPromptRequest } = useDataTaskChatInputBindings();
   const chatInputWidth = resolveChatInputWidth(chatColumnWidth);
@@ -290,6 +311,12 @@ function DataTaskChatInputLayout({
         className="mx-auto w-full"
         style={{ width: chatInputWidth, maxWidth: "100%" }}
       >
+        <QueuedPromptStrip
+          prompts={queuedPrompts}
+          onEdit={onEditQueuedPrompt}
+          onDelete={onDeleteQueuedPrompt}
+          onSendNow={onSendQueuedPromptNow}
+        />
         <div
           data-guide-id="chat-input"
           data-testid="copilot-chat-input"
@@ -395,6 +422,138 @@ function DataTaskChatInputLayout({
         </div>
       </div>
       {showDisclaimer ? disclaimer : null}
+    </div>
+  );
+}
+
+function QueuedPromptStrip({
+  prompts,
+  onEdit,
+  onDelete,
+  onSendNow,
+}: {
+  prompts: QueuedChatPrompt[];
+  onEdit?: (id: string, text: string) => void;
+  onDelete?: (id: string) => void;
+  onSendNow?: (id: string) => void;
+}) {
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [draft, setDraft] = useState("");
+
+  if (prompts.length === 0) {
+    return null;
+  }
+
+  return (
+    <div className="pointer-events-auto mb-2 grid gap-1 px-0.5">
+      {prompts.map((prompt, index) => {
+        const isEditing = editingId === prompt.id;
+        const isInterrupting = prompt.status === "interrupting";
+        return (
+          <div
+            key={prompt.id}
+            className={[
+              "flex min-w-0 items-center gap-2 rounded-lg border px-2 py-1.5 text-xs",
+              isInterrupting
+                ? "border-primary/40 bg-primary-light/10 text-primary"
+                : "border-border bg-surface-subtle text-muted",
+            ].join(" ")}
+          >
+            <span className="grid h-5 min-w-5 place-items-center rounded-md bg-surface text-[11px] font-semibold text-muted-light">
+              {index + 1}
+            </span>
+            {isEditing ? (
+              <input
+                value={draft}
+                autoFocus
+                onChange={(event) => setDraft(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    const next = draft.trim();
+                    if (next) {
+                      onEdit?.(prompt.id, next);
+                      setEditingId(null);
+                    }
+                  } else if (event.key === "Escape") {
+                    setEditingId(null);
+                  }
+                }}
+                className="min-w-0 flex-1 rounded-md border border-border bg-surface px-2 py-1 text-xs text-foreground outline-none focus:border-primary"
+              />
+            ) : (
+              <span className="min-w-0 flex-1 truncate text-foreground">
+                {prompt.text}
+              </span>
+            )}
+            {prompt.attachments.length > 0 ? (
+              <span className="shrink-0 rounded bg-surface px-1.5 py-0.5 text-[11px] text-muted-light">
+                +{prompt.attachments.length}
+              </span>
+            ) : null}
+            {isEditing ? (
+              <>
+                <button
+                  type="button"
+                  title="Save queued prompt"
+                  aria-label="Save queued prompt"
+                  onClick={() => {
+                    const next = draft.trim();
+                    if (!next) return;
+                    onEdit?.(prompt.id, next);
+                    setEditingId(null);
+                  }}
+                  className="grid h-6 w-6 shrink-0 cursor-pointer place-items-center rounded-md text-muted transition-colors hover:bg-surface hover:text-primary"
+                >
+                  <CheckIcon />
+                </button>
+                <button
+                  type="button"
+                  title="Cancel editing"
+                  aria-label="Cancel editing"
+                  onClick={() => setEditingId(null)}
+                  className="grid h-6 w-6 shrink-0 cursor-pointer place-items-center rounded-md text-muted transition-colors hover:bg-surface hover:text-foreground"
+                >
+                  <XIcon />
+                </button>
+              </>
+            ) : (
+              <>
+                <button
+                  type="button"
+                  title="Edit queued prompt"
+                  aria-label="Edit queued prompt"
+                  onClick={() => {
+                    setEditingId(prompt.id);
+                    setDraft(prompt.text);
+                  }}
+                  className="grid h-6 w-6 shrink-0 cursor-pointer place-items-center rounded-md text-muted transition-colors hover:bg-surface hover:text-foreground"
+                >
+                  <PencilIcon />
+                </button>
+                <button
+                  type="button"
+                  title="Send now"
+                  aria-label="Send queued prompt now"
+                  disabled={isInterrupting}
+                  onClick={() => onSendNow?.(prompt.id)}
+                  className="grid h-6 w-6 shrink-0 cursor-pointer place-items-center rounded-md text-muted transition-colors hover:bg-surface hover:text-primary disabled:cursor-default disabled:opacity-50"
+                >
+                  <BoltIcon />
+                </button>
+                <button
+                  type="button"
+                  title="Delete queued prompt"
+                  aria-label="Delete queued prompt"
+                  onClick={() => onDelete?.(prompt.id)}
+                  className="grid h-6 w-6 shrink-0 cursor-pointer place-items-center rounded-md text-muted transition-colors hover:bg-surface hover:text-rose-600"
+                >
+                  <TrashIcon />
+                </button>
+              </>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -623,6 +782,73 @@ function CheckIcon() {
       aria-hidden
     >
       <path d="m5 10 3 3 7-7" />
+    </svg>
+  );
+}
+
+function XIcon() {
+  return (
+    <svg
+      viewBox="0 0 20 20"
+      className="h-4 w-4"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2}
+      strokeLinecap="round"
+      aria-hidden
+    >
+      <path d="M5.5 5.5 14.5 14.5M14.5 5.5 5.5 14.5" />
+    </svg>
+  );
+}
+
+function PencilIcon() {
+  return (
+    <svg
+      viewBox="0 0 20 20"
+      className="h-4 w-4"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.7}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <path d="M12.8 4.7 15.3 7.2M5 15l2.6-.5 7.2-7.2a1.7 1.7 0 0 0-2.4-2.4L5.2 12.1 5 15Z" />
+    </svg>
+  );
+}
+
+function BoltIcon() {
+  return (
+    <svg
+      viewBox="0 0 20 20"
+      className="h-4 w-4"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.7}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <path d="M11 2.8 5.8 10.6h3.8L9 17.2l5.2-7.8h-3.8L11 2.8Z" />
+    </svg>
+  );
+}
+
+function TrashIcon() {
+  return (
+    <svg
+      viewBox="0 0 20 20"
+      className="h-4 w-4"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.7}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <path d="M4.5 6h11M8 6V4.5h4V6M6 6l.6 9.5h6.8L14 6" />
     </svg>
   );
 }

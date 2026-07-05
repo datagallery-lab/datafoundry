@@ -78,6 +78,75 @@ try {
   if (assistantRecords.length !== 1) {
     throw new Error(`Expected one assistant message, got ${assistantRecords.length}`);
   }
+
+  store.runEvents.append({
+    user_id: userId,
+    session_id: sessionId,
+    run_id: firstRunId,
+    event: {
+      type: EventType.TOOL_CALL_START,
+      toolCallId: "inspect-schema-call",
+      toolCallName: "Inspect data source schema",
+      parentMessageId: "assistant-message-1",
+      args: { datasourceId: "orders-demo" }
+    }
+  });
+  store.runEvents.append({
+    user_id: userId,
+    session_id: sessionId,
+    run_id: firstRunId,
+    event: {
+      type: EventType.TOOL_CALL_RESULT,
+      toolCallId: "inspect-schema-call",
+      toolCallName: "Inspect data source schema",
+      messageId: "inspect-schema-result",
+      content: {
+        tables: [
+          { name: "orders", columns: ["order_id", "gmv", "refund_rate", "gross_margin_rate"] }
+        ]
+      }
+    }
+  });
+  store.runEvents.append({
+    user_id: userId,
+    session_id: sessionId,
+    run_id: firstRunId,
+    event: {
+      type: EventType.TOOL_CALL_START,
+      toolCallId: "missing-result-call",
+      toolCallName: "Preview table",
+      parentMessageId: "assistant-message-1"
+    }
+  });
+  const checkpointService = new ConversationMemoryService({
+    repository: store.conversationMessages,
+    runEvents: store.runEvents,
+    sessionId,
+    userId
+  });
+  const resumeAfterCanceledRun = checkpointService.buildRunMessages({
+    currentUserText: "继续，不要重复查看结构",
+    runId: "conversation-memory-run-after-cancel",
+    runInput: {
+      threadId: sessionId,
+      runId: "conversation-memory-run-after-cancel",
+      messages: [{ id: "user-after-cancel", role: "user", content: "继续，不要重复查看结构" }],
+      tools: [],
+      context: []
+    }
+  }).messages;
+  const restoredToolCheckpoint = resumeAfterCanceledRun.find((message) =>
+    String(message.content).includes("<tool_checkpoint")
+  );
+  if (!restoredToolCheckpoint) {
+    throw new Error("Expected next-run memory to include completed tool checkpoints from prior run events");
+  }
+  if (!String(restoredToolCheckpoint.content).includes("gross_margin_rate")) {
+    throw new Error("Expected restored tool checkpoint to include prior schema result");
+  }
+  if (resumeAfterCanceledRun.some((message) => String(message.content).includes("missing-result-call"))) {
+    throw new Error("Expected incomplete tool calls to stay out of restored tool checkpoints");
+  }
   const firstSummaryText = [
     "用户在分析 orders 表。",
     "已确认 orders 表可按 category 汇总，并计划继续分析 GMV。"
