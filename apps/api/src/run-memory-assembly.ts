@@ -57,6 +57,7 @@ export const createRunMemoryAssembly = async (
         memory: input.taskStateRuntime.memory
       }),
     repository: input.metadataStore.conversationMessages,
+    runEvents: input.metadataStore.runEvents,
     sessionId: input.sessionId,
     summarizer: createMastraConversationSummarizer({
       model: input.model,

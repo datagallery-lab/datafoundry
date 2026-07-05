@@ -112,7 +112,7 @@ curl http://127.0.0.1:8787/api/v1/capabilities
 | PATCH | `/api/v1/sessions/:sessionId` | Update session title. |
 | GET | `/api/v1/sessions/:sessionId/conversation` | Read authoritative server conversation history. Supports `limit`. |
 
-Session APIs restore history for Web/TUI, display titles, and read tool-call pairings.
+Session APIs restore history for Web/TUI, display titles, and read tool-call pairings. The `conversation` response includes `messages`, `runEventRefs`, `toolCalls`, and may include `checkpoints`. Each checkpoint is derived from existing run, message, and run-event records and includes `runId`, `status`, message position bounds, event seq bounds, start/finish times, and optional error text; it marks the recoverable history boundary for one run.
 
 ## Workspace configuration
 

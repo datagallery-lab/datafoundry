@@ -329,6 +329,24 @@ try {
   assert.equal(conversation.body.data.summary.summaryText, "User asked to inspect orders.");
   assert.equal(conversation.body.data.runEventRefs[0].eventCount, 3);
   assert.deepEqual(
+    pick(conversation.body.data.checkpoints[0], [
+      "runId",
+      "status",
+      "messageStartPosition",
+      "messageEndPosition",
+      "firstEventSeq",
+      "lastEventSeq"
+    ]),
+    {
+      runId: conversationRunId,
+      status: "completed",
+      messageStartPosition: 1,
+      messageEndPosition: 2,
+      firstEventSeq: 1,
+      lastEventSeq: 3
+    }
+  );
+  assert.deepEqual(
     pick(conversation.body.data.toolCalls[0], [
       "runId",
       "toolCallId",

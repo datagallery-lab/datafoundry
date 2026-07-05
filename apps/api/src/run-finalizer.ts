@@ -54,6 +54,7 @@ export class RunFinalizer {
   }
 
   async cancelRun(input: { reason?: string | undefined; terminalEvent: BaseEvent }): Promise<void> {
+    this.input.flushDraftsMemory?.();
     await this.syncSessionOutputs().catch(() => undefined);
     this.input.metadataStore.runs.updateStatus({
       user_id: this.input.userId,
@@ -92,6 +93,7 @@ export class RunFinalizer {
   }
 
   fail(input: { errorMessage: string; terminalEvent: BaseEvent }): void {
+    this.input.flushDraftsMemory?.();
     this.input.metadataStore.runs.updateStatus({
       user_id: this.input.userId,
       run_id: this.input.runId,

@@ -286,6 +286,18 @@ export type ConversationRunEventRefDto = {
   lastSeq?: number;
 };
 
+export type ConversationCheckpointDto = {
+  runId: string;
+  status: "queued" | "running" | "suspended" | "completed" | "failed" | "canceled";
+  messageStartPosition?: number;
+  messageEndPosition?: number;
+  firstEventSeq?: number;
+  lastEventSeq?: number;
+  startedAt: string;
+  finishedAt?: string;
+  errorMessage?: string;
+};
+
 export type ConversationToolCallDto = {
   runId: string;
   id?: string;
@@ -328,6 +340,7 @@ export type SessionConversationDto = {
   messages: ConversationMessageDto[];
   summary?: ConversationSummaryDto;
   runEventRefs: ConversationRunEventRefDto[];
+  checkpoints?: ConversationCheckpointDto[];
   toolCalls: ConversationToolCallDto[];
   pendingInteractions?: PendingInteractionDto[];
   restorableCustomEvents?: RestorableCustomEventDto[];

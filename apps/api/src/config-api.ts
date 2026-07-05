@@ -38,6 +38,7 @@ import {
   type JobRecord,
   type MetadataStore,
   type QueryHistoryRecord,
+  type RunRecord,
   type RunEventRecord,
   type SessionRecord,
   type UserRecord
@@ -385,6 +386,12 @@ const handleSessionRequest = async (
     runId,
     events: context.metadataStore.runEvents.listByRun({ user_id: context.userId, run_id: runId })
   }));
+  const checkpoints = runCheckpointDtos({
+    context,
+    messages,
+    runEventGroups,
+    runIds
+  });
   const pendingInteractions = context.metadataStore.interactions.listPendingBySession({
     user_id: context.userId,
     session_id: sessionId
@@ -398,6 +405,7 @@ const handleSessionRequest = async (
     messages: messages.map(conversationMessageDto),
     ...(latestSummary ? { summary: conversationSummaryDto(latestSummary) } : {}),
     runEventRefs: runEventGroups.map(({ runId, events }) => runEventRefDto(runId, events)),
+    ...(checkpoints.length > 0 ? { checkpoints } : {}),
     toolCalls: runEventGroups.flatMap(({ runId, events }) => toolCallPairDtos(runId, events)),
     pendingInteractions: pendingInteractions.map(pendingInteractionDto),
     restorableCustomEvents: runEventGroups.flatMap(({ runId, events }) =>
@@ -1675,6 +1683,56 @@ const runEventRefDto = (runId: string, events: RunEventRecord[]): Record<string,
   ...(events[0] ? { firstSeq: events[0].seq } : {}),
   ...(events.at(-1) ? { lastSeq: events.at(-1)?.seq } : {})
 });
+
+const runCheckpointDtos = (input: {
+  context: Required<ConfigApiContext>;
+  messages: ConversationMessageRecord[];
+  runEventGroups: Array<{ events: RunEventRecord[]; runId: string }>;
+  runIds: string[];
+}): Record<string, unknown>[] => {
+  const eventsByRun = new Map(input.runEventGroups.map((group) => [group.runId, group.events]));
+  return input.runIds.flatMap((runId) => {
+    const run = input.context.metadataStore.runs.find({
+      user_id: input.context.userId,
+      run_id: runId
+    });
+    if (!run) {
+      return [];
+    }
+    return [
+      runCheckpointDto({
+        events: eventsByRun.get(runId) ?? [],
+        messages: input.messages.filter((message) => message.run_id === runId),
+        run
+      })
+    ];
+  });
+};
+
+const runCheckpointDto = (input: {
+  events: RunEventRecord[];
+  messages: ConversationMessageRecord[];
+  run: RunRecord;
+}): Record<string, unknown> => {
+  const positions = input.messages.map((message) => message.position);
+  const firstEvent = input.events[0];
+  const lastEvent = input.events.at(-1);
+  return {
+    runId: input.run.id,
+    status: input.run.status,
+    ...(positions.length > 0
+      ? {
+          messageStartPosition: Math.min(...positions),
+          messageEndPosition: Math.max(...positions)
+        }
+      : {}),
+    ...(firstEvent ? { firstEventSeq: firstEvent.seq } : {}),
+    ...(lastEvent ? { lastEventSeq: lastEvent.seq } : {}),
+    startedAt: input.run.started_at,
+    ...(input.run.finished_at ? { finishedAt: input.run.finished_at } : {}),
+    ...(input.run.error_message ? { errorMessage: input.run.error_message } : {})
+  };
+};
 
 const RESTORABLE_CUSTOM_EVENT_NAMES = new Set([
   "token_usage",

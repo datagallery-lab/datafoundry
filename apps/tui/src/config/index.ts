@@ -24,6 +24,7 @@ export type {
   ConversationMessage,
   ConversationSummary,
   ConversationRunEventRef,
+  ConversationCheckpoint,
   ConversationToolCall,
   SessionConversation,
   SessionTitle,

@@ -112,7 +112,7 @@ curl http://127.0.0.1:8787/api/v1/capabilities
 | PATCH | `/api/v1/sessions/:sessionId` | 更新会话标题。 |
 | GET | `/api/v1/sessions/:sessionId/conversation` | 读取服务端权威对话历史。支持 `limit`。 |
 
-会话接口用于 Web/TUI 恢复历史、显示标题和读取 tool-call 配对。
+会话接口用于 Web/TUI 恢复历史、显示标题和读取 tool-call 配对。`conversation` 响应包含 `messages`、`runEventRefs`、`toolCalls`，并可包含 `checkpoints`。每个 checkpoint 从现有 run、message 和 run event 派生，包含 `runId`、`status`、消息位置范围、事件 seq 范围、开始/结束时间和可选错误信息；它表示一轮 run 的可恢复历史边界。
 
 ## 工作区配置
 

@@ -345,6 +345,17 @@ describe("config api adapter", () => {
         sessionId: "thread-1",
         messages: [{ id: "run-1:user", runId: "run-1", role: "user", source: "client", contentText: "hi", position: 1, createdAt: "now" }],
         runEventRefs: [{ runId: "run-1", eventCount: 3 }],
+        checkpoints: [{
+          runId: "run-1",
+          status: "canceled",
+          messageStartPosition: 1,
+          messageEndPosition: 2,
+          firstEventSeq: 1,
+          lastEventSeq: 3,
+          startedAt: "now",
+          finishedAt: "later",
+          errorMessage: "user-requested",
+        }],
         toolCalls: [{ runId: "run-1", toolCallId: "call-1", status: "completed", toolName: "inspect_schema" }],
       },
     }), { headers: { "Content-Type": "application/json" }, status: 200 }));
@@ -358,6 +369,8 @@ describe("config api adapter", () => {
     );
     expect(conversation.sessionId).toBe("thread-1");
     expect(conversation.messages[0]?.contentText).toBe("hi");
+    expect(conversation.checkpoints?.[0]?.status).toBe("canceled");
+    expect(conversation.checkpoints?.[0]?.messageEndPosition).toBe(2);
     expect(conversation.toolCalls[0]?.toolName).toBe("inspect_schema");
   });
 
