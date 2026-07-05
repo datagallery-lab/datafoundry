@@ -199,9 +199,16 @@ Join the DataFoundry community to discuss the product, roadmap, and real-world a
   </tr>
 </table>
 
-## 🙏 Built With
+## 🙏 Acknowledgements
 
-DataFoundry stands on the shoulders of these excellent open-source projects: [Mastra](https://github.com/mastra-ai/mastra) (agent runtime), [AG-UI](https://github.com/ag-ui-protocol/ag-ui) (event stream protocol), [CopilotKit](https://github.com/CopilotKit/CopilotKit) (agent UX), [Ink](https://github.com/vadimdemedes/ink) (terminal UI), and [MCP](https://modelcontextprotocol.io) (tool ecosystem).
+DataFoundry is inspired by and built with ideas from excellent open-source projects and communities:
+
+- Thanks to the [LINUX DO](https://linux.do/) community for their support and discussions.
+- [Mastra](https://github.com/mastra-ai/mastra) for agent runtime patterns.
+- [AG-UI](https://github.com/ag-ui-protocol/ag-ui) for event stream protocol design.
+- [CopilotKit](https://github.com/CopilotKit/CopilotKit) for agent-native UX patterns.
+- [Ink](https://github.com/vadimdemedes/ink) for terminal UI foundations.
+- [MCP](https://modelcontextprotocol.io) for the tool ecosystem and integration model.
 
 ## ⭐ Star History
 

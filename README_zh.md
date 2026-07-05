@@ -199,9 +199,16 @@ DataFoundry 迭代很快，小而聚焦的 PR 最容易被合入：
   </tr>
 </table>
 
-## 🙏 构建于
+## 🙏 致谢
 
-DataFoundry 站在这些优秀开源项目的肩膀上：[Mastra](https://github.com/mastra-ai/mastra)（Agent 运行时）、[AG-UI](https://github.com/ag-ui-protocol/ag-ui)（事件流协议）、[CopilotKit](https://github.com/CopilotKit/CopilotKit)（Agent UX）、[Ink](https://github.com/vadimdemedes/ink)（终端 UI）、[MCP](https://modelcontextprotocol.io)（工具生态）。
+DataFoundry 借鉴并受益于这些优秀的开源项目与社区：
+
+- 感谢 [LINUX DO](https://linux.do/) 社区的支持与讨论。
+- [Mastra](https://github.com/mastra-ai/mastra)：Agent 运行时模式。
+- [AG-UI](https://github.com/ag-ui-protocol/ag-ui)：事件流协议设计。
+- [CopilotKit](https://github.com/CopilotKit/CopilotKit)：Agent 原生交互体验。
+- [Ink](https://github.com/vadimdemedes/ink)：终端 UI 基础能力。
+- [MCP](https://modelcontextprotocol.io)：工具生态与集成模型。
 
 ## ⭐ Star History
 
