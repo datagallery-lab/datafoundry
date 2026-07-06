@@ -47,6 +47,7 @@ import {
 import {
   type TaskStateRuntime
 } from "./memory/task-state-runtime.js";
+import type { RuntimeContextSource } from "./context/source/runtime-context-source.js";
 import { GoalRuntimeAdapter, type GoalRequest } from "./memory/goal-runtime-adapter.js";
 import { createDataFoundryToolRegistry } from "./tools/data-tools.js";
 import { GovernedToolFactory } from "./tools/governed-tool-factory.js";
@@ -134,6 +135,15 @@ export { projectWorkspaceObservation } from "./context/tool-observation/adapters
 export { shouldReuseRecordedFileArtifactForPublish } from "./tools/artifact-publish-policy.js";
 export { createDataFoundryToolRegistry, type ToolRegistry } from "./tools/data-tools.js";
 export { GoalRuntimeAdapter, type GoalRequest, type GoalSnapshot } from "./memory/goal-runtime-adapter.js";
+export { createContextItem, hashContextContent } from "./context/inventory/context-item.js";
+export type {
+  ContextItem,
+  ContextItemVisibility,
+  ContextRetention,
+  ContextTrust
+} from "./context/inventory/context-item.js";
+export { createContextSourceMetadata } from "./context/inventory/context-source-metadata.js";
+export type { RuntimeContextSource } from "./context/source/runtime-context-source.js";
 export { type ModelContextProfile } from "./context/policy/model-context-profile.js";
 export {
   CONVERSATION_WORKING_MEMORY_CONFIG,
@@ -174,6 +184,7 @@ export type CreateDataFoundryInput = {
     records: AgentLongTermMemoryRecord[];
     maxChars?: number;
   };
+  additionalRuntimeSources?: RuntimeContextSource[];
   messages: Message[];
   modelSettings?: {
     frequencyPenalty?: number;
@@ -285,6 +296,7 @@ export const createDataFoundry = async (
       : {}),
     dispatcher,
     eventSink: contextEventSink,
+    ...(input.additionalRuntimeSources?.length ? { additionalRuntimeSources: input.additionalRuntimeSources } : {}),
     ...(input.longTermMemory ? { longTermMemory: input.longTermMemory } : {}),
     modelName: input.runContext.model_name,
     runScope: {
@@ -617,6 +629,17 @@ const buildAgentInstructions = (input: AgentInstructionsInput): string => {
     toolGroups.push(
       `Pinned workspace files to read/reference this run: ${pinnedPaths.join(", ")}. These already exist in the `
         + "session workspace — read them with read_file; do not re-create or copy them into input/."
+    );
+  }
+  const evidenceRefs = context.evidence_refs;
+  if (evidenceRefs && evidenceRefs.length > 0) {
+    const labels = evidenceRefs
+      .map((ref) => `${ref.kind}:${ref.label}`)
+      .slice(0, 12)
+      .join("; ");
+    toolGroups.push(
+      `User-selected evidence focus this run: ${labels}. Treat these references as the primary context for the `
+        + "follow-up question. You may run new data tools when needed; make new queries and outputs visible in steps."
     );
   }
   const taskTools = ["task_write", "task_update", "task_complete", "task_check"].filter(enabled);

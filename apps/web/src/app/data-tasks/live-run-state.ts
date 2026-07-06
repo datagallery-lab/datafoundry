@@ -1,4 +1,9 @@
 import type {
+  EvidenceRef,
+  EvidenceResolutionDiagnostics,
+  EvidenceResolutionIssue,
+} from "@datafoundry/contracts";
+import type {
   ArtifactDetail,
   DataArtifact,
   DataStepKind,
@@ -135,6 +140,8 @@ export type LiveResolvedRunConfig = {
   enabledSkillIds?: string[];
   selectedSkills?: Array<{ id: string; name?: string }>;
   fileIds?: string[];
+  evidenceRefs?: EvidenceRef[];
+  evidenceResolution?: EvidenceResolutionDiagnostics;
   raw: unknown;
 };
 
@@ -1094,6 +1101,10 @@ function parseResolvedRunConfig(value: unknown): LiveResolvedRunConfig {
     "selected_skill_ids",
   ]);
   const fileIds = firstStringArray(record, ["fileIds", "file_ids"]);
+  const evidenceRefs = parseEvidenceRefs(record?.evidenceRefs ?? record?.evidence_refs);
+  const evidenceResolution = parseEvidenceResolution(
+    record?.evidenceResolution ?? record?.evidence_resolution,
+  );
   const selectedSkills = parseSelectedSkills(record?.selectedSkills);
   const resolvedSelectedSkills =
     selectedSkills.length > 0
@@ -1108,9 +1119,38 @@ function parseResolvedRunConfig(value: unknown): LiveResolvedRunConfig {
     ...(enabledMcpServerIds.length > 0 ? { enabledMcpServerIds } : {}),
     ...(enabledSkillIds.length > 0 ? { enabledSkillIds } : {}),
     ...(fileIds.length > 0 ? { fileIds } : {}),
+    ...(evidenceRefs.length > 0 ? { evidenceRefs } : {}),
+    ...(evidenceResolution ? { evidenceResolution } : {}),
     ...(resolvedSelectedSkills.length > 0 ? { selectedSkills: resolvedSelectedSkills } : {}),
     raw: value,
   };
+}
+
+function parseEvidenceRefs(value: unknown): EvidenceRef[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((item): item is EvidenceRef => {
+    const record = recordValue(item);
+    return Boolean(
+      record &&
+        typeof record.id === "string" &&
+        typeof record.kind === "string" &&
+        typeof record.label === "string" &&
+        typeof record.sessionId === "string",
+    );
+  });
+}
+
+function parseEvidenceResolution(value: unknown): EvidenceResolutionDiagnostics | undefined {
+  const record = recordValue(value);
+  if (!record) return undefined;
+  const accepted = firstStringArray(record, ["accepted"]);
+  const dropped = Array.isArray(record.dropped)
+    ? record.dropped.filter((item): item is EvidenceResolutionIssue => {
+        const issue = recordValue(item);
+        return Boolean(issue && typeof issue.id === "string" && typeof issue.reason === "string");
+      })
+    : [];
+  return { accepted, dropped };
 }
 
 function firstString(

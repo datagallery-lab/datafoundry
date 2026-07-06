@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
+import type { EvidenceRef } from "@datafoundry/contracts";
 import {
   Bar,
   BarChart,
@@ -67,6 +68,7 @@ import {
 import { ToolFormattedResult, ToolFailureResult } from "../../tool-result-format";
 import { parseSqlToolResult, sqlFromToolPayload } from "../../tool-result-normalize";
 import { toolResultLooksLikeError } from "../../tool-call-display";
+import type { EvidenceCard } from "../../evidence";
 import {
   btnGhostClass,
   btnSecondaryClass,
@@ -87,6 +89,7 @@ type ConsoleTab = "overview" | "trace" | "outputs" | "detail";
 
 type TaskConsoleProps = {
   artifacts: DataArtifact[];
+  evidenceCards: EvidenceCard[];
   liveRun: LiveRun;
   toolGroups: ProcessToolGroup[];
   sessionUsage: SessionUsageStats;
@@ -99,12 +102,15 @@ type TaskConsoleProps = {
   onClearSelection: () => void;
   onClose?: () => void;
   onMentionArtifact?: (artifact: DataArtifact) => void;
+  onToggleEvidenceRef?: (ref: EvidenceRef) => void;
+  onClearEvidenceRefs?: () => void;
   onOpenTrace: () => void;
   onPromoteArtifact?: (artifact: DataArtifact) => Promise<void> | void;
   onArtifactExportJob?: (job: JobDto) => void;
   onSelectEvent: (eventId: string) => void;
   onSelectToolGroup: (groupId: string) => void;
   promotedArtifactIds?: ReadonlySet<string>;
+  selectedEvidenceRefs?: EvidenceRef[];
 };
 
 function runStatusLabel(status: LiveRun["runStatus"]): string {
@@ -157,6 +163,7 @@ function stepDurationLabel(call?: LiveToolCallRecord): string {
 
 export function TaskConsole({
   artifacts,
+  evidenceCards,
   liveRun,
   toolGroups,
   sessionUsage,
@@ -168,12 +175,15 @@ export function TaskConsole({
   onClearSelection,
   onClose,
   onMentionArtifact,
+  onToggleEvidenceRef,
+  onClearEvidenceRefs,
   onOpenTrace,
   onPromoteArtifact,
   onArtifactExportJob,
   onSelectEvent,
   onSelectToolGroup,
   promotedArtifactIds,
+  selectedEvidenceRefs = [],
 }: TaskConsoleProps) {
   const [activeTab, setActiveTab] = useState<ConsoleTab>("overview");
   const [outputsExpandedId, setOutputsExpandedId] = useState<string | null>(null);
@@ -335,10 +345,14 @@ export function TaskConsole({
         {activeTab === "trace" ? (
           <EvidenceZone
             artifacts={artifacts}
+            evidenceCards={evidenceCards}
             liveRun={liveRun}
+            onClearEvidenceRefs={onClearEvidenceRefs}
             onOpenTrace={onOpenTrace}
             onSelectArtifact={viewArtifactInOutputs}
             onSelectEvent={onSelectEvent}
+            onToggleEvidenceRef={onToggleEvidenceRef}
+            selectedEvidenceRefs={selectedEvidenceRefs}
           />
         ) : null}
 
@@ -842,23 +856,129 @@ function StepStatusDot({
   );
 }
 
+function EvidenceReferencePanel({
+  cards,
+  onClear,
+  onToggle,
+  selectedRefs,
+}: {
+  cards: EvidenceCard[];
+  onClear?: () => void;
+  onToggle?: (ref: EvidenceRef) => void;
+  selectedRefs: EvidenceRef[];
+}) {
+  const selectedIds = useMemo(() => new Set(selectedRefs.map((ref) => ref.id)), [selectedRefs]);
+  const selectedCount = selectedRefs.length;
+
+  return (
+    <ConsoleSection
+      title="Evidence"
+      badge={
+        selectedCount > 0 ? (
+          <button type="button" onClick={onClear} className={btnSecondaryClass}>
+            Clear {selectedCount}
+          </button>
+        ) : null
+      }
+    >
+      {cards.length === 0 ? (
+        <EmptyState
+          title="No evidence yet"
+          description="Tables, SQL, files, schema, previews, and knowledge snippets appear here after a run."
+        />
+      ) : (
+        <div className="grid min-w-0 gap-2">
+          {cards.map((card) => {
+            const selected = selectedIds.has(card.ref.id);
+            return (
+              <div
+                key={card.ref.id}
+                className={[
+                  "min-w-0 max-w-full overflow-hidden rounded-lg border px-2.5 py-2 transition-colors",
+                  selected ? "border-primary-light/50 bg-primary-light/10" : "border-border bg-surface-subtle",
+                ].join(" ")}
+              >
+                <div className="flex min-w-0 items-start gap-2">
+                  <input
+                    type="checkbox"
+                    checked={selected}
+                    onChange={() => onToggle?.(card.ref)}
+                    className="mt-1 h-3.5 w-3.5 cursor-pointer accent-primary"
+                    aria-label={`Select ${card.title}`}
+                  />
+                  <div className="min-w-0 flex-1">
+                    <div className="flex min-w-0 items-center gap-1.5">
+                      <span className="min-w-0 truncate text-xs font-semibold text-foreground">
+                        {card.title}
+                      </span>
+                      <span className="shrink-0 rounded bg-surface px-1 text-[10px] text-muted-light">
+                        {card.origin}
+                      </span>
+                    </div>
+                    {card.subtitle ? (
+                      <p className="mt-1 line-clamp-2 break-words text-[11px] leading-4 text-muted">
+                        {card.subtitle}
+                      </p>
+                    ) : null}
+                    {card.preview ? (
+                      <p className="mt-1 line-clamp-2 break-all font-mono text-[10px] leading-4 text-muted-light">
+                        {card.preview}
+                      </p>
+                    ) : null}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => onToggle?.(card.ref)}
+                    className={selected ? btnSecondaryClass : btnGhostClass}
+                  >
+                    {selected ? "Remove" : "Ask"}
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+          {selectedCount > 0 ? (
+            <p className="text-[11px] leading-4 text-muted-light">
+              Selected evidence will appear as chips in the input and focus the next run.
+            </p>
+          ) : null}
+        </div>
+      )}
+    </ConsoleSection>
+  );
+}
+
 // Section 3: Data trail, an inline trace that can expand full-screen.
 function EvidenceZone({
   artifacts,
+  evidenceCards,
   liveRun,
+  onClearEvidenceRefs,
   onOpenTrace,
   onSelectArtifact,
   onSelectEvent,
+  onToggleEvidenceRef,
+  selectedEvidenceRefs,
 }: {
   artifacts: DataArtifact[];
+  evidenceCards: EvidenceCard[];
   liveRun: LiveRun;
+  onClearEvidenceRefs?: () => void;
   onOpenTrace: () => void;
   onSelectArtifact: (artifactId: string) => void;
   onSelectEvent: (eventId: string) => void;
+  onToggleEvidenceRef?: (ref: EvidenceRef) => void;
+  selectedEvidenceRefs: EvidenceRef[];
 }) {
   return (
     <div className="grid gap-4">
       <RunConfigurationPanel liveRun={liveRun} />
+      <EvidenceReferencePanel
+        cards={evidenceCards}
+        onClear={onClearEvidenceRefs}
+        onToggle={onToggleEvidenceRef}
+        selectedRefs={selectedEvidenceRefs}
+      />
       <ConsoleSection
         title="Data trail"
         badge={

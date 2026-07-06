@@ -1,4 +1,5 @@
 import { type BaseEvent, type RunAgentInput } from "@ag-ui/client";
+import type { EvidenceRef } from "@datafoundry/contracts";
 import {
   createCustomEvent,
   createMastraConversationMemoryBridge,
@@ -46,6 +47,7 @@ type CreateRunMemoryAssemblyInput = {
   taskStateRuntime: TaskStateRuntime;
   userId: string;
   userInput: string;
+  evidenceRefs?: EvidenceRef[];
 };
 
 /** Assemble prompt memory, long-term recall, event observation, and completed-run memory flushing. */
@@ -106,6 +108,7 @@ export const createRunMemoryAssembly = async (
   if (!input.isResume) {
     currentUserRecord = conversationMemory.persistCurrentUserMessage({
       currentUserText: input.userInput,
+      evidenceRefs: input.evidenceRefs ?? [],
       runId: input.runId,
       runInput: input.runInput
     });

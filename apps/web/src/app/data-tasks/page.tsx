@@ -16,6 +16,7 @@ import {
   useFrontendTool,
   useRenderTool,
 } from "@copilotkit/react-core/v2";
+import type { EvidenceRef } from "@datafoundry/contracts";
 import { Children, cloneElement, isValidElement, useCallback, createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ComponentProps, ComponentType, MouseEvent, PointerEvent as ReactPointerEvent, ReactNode } from "react";
 import { z } from "zod";
@@ -115,6 +116,11 @@ import type {
   WorkspaceConfigKind,
   WorkspaceConfigStore,
 } from "./data-task-state";
+import {
+  buildEvidenceCardsFromLiveRun,
+  removeEvidenceRef,
+  toggleEvidenceRef,
+} from "./evidence";
 import { TaskConsole } from "./components/task-console/TaskConsole";
 import { TaskConsoleDrawer } from "./components/task-console/TaskConsoleDrawer";
 import { TraceOverlay } from "./components/task-console/TraceOverlay";
@@ -418,6 +424,7 @@ function StableDataTaskChatInput({
 
     bindings.onClearPerRunMentions();
     bindings.onClearPerRunFileMentions();
+    bindings.onClearEvidenceRefs();
     requestAnimationFrame(scheduleChatTextareaResize);
   };
   const handleInputChange = useCallback(
@@ -712,6 +719,7 @@ function DataTaskWorkspace({
   const [perRunFiles, setPerRunFiles] = useState<PerRunFileSelection>(
     emptyPerRunFileSelection,
   );
+  const [selectedEvidenceRefs, setSelectedEvidenceRefs] = useState<EvidenceRef[]>([]);
   const [draftPromptRequest, setDraftPromptRequest] = useState<{
     id: number;
     text: string;
@@ -751,6 +759,15 @@ function DataTaskWorkspace({
     () => setPerRunFiles(emptyPerRunFileSelection()),
     [],
   );
+  const toggleSelectedEvidenceRef = useCallback((ref: EvidenceRef) => {
+    setSelectedEvidenceRefs((current) => toggleEvidenceRef(current, ref));
+  }, []);
+  const removeSelectedEvidenceRef = useCallback((id: string) => {
+    setSelectedEvidenceRefs((current) => removeEvidenceRef(current, id));
+  }, []);
+  const clearSelectedEvidenceRefs = useCallback(() => {
+    setSelectedEvidenceRefs([]);
+  }, []);
 
   const {
     width: rightPanelWidth,
@@ -1298,6 +1315,10 @@ function DataTaskWorkspace({
 
   const visibleArtifacts = liveRun.artifacts;
   const visibleTimelineEvents = liveRun.events;
+  const evidenceCards = useMemo(
+    () => buildEvidenceCardsFromLiveRun(liveRun, activeSession?.id),
+    [activeSession?.id, liveRun],
+  );
 
   const runConfigPayload = useMemo(
     () =>
@@ -1307,6 +1328,7 @@ function DataTaskWorkspace({
         session: activeSession,
         perRunSelection,
         perRunFiles,
+        evidenceRefs: selectedEvidenceRefs,
       }),
     [
       activeLlmId,
@@ -1315,6 +1337,7 @@ function DataTaskWorkspace({
       perRunFiles,
       perRunSelection,
       runDefaults?.activeDatasourceId,
+      selectedEvidenceRefs,
       workspaceConfig,
     ],
   );
@@ -1330,6 +1353,7 @@ function DataTaskWorkspace({
     activeSession,
     perRunSelection,
     perRunFiles,
+    selectedEvidenceRefs,
     activeDatasourceId,
     defaultDatasourceId,
     runDefaultsActiveDatasourceId: runDefaults?.activeDatasourceId,
@@ -1340,6 +1364,7 @@ function DataTaskWorkspace({
     activeSession,
     perRunSelection,
     perRunFiles,
+    selectedEvidenceRefs,
     activeDatasourceId,
     defaultDatasourceId,
     runDefaultsActiveDatasourceId: runDefaults?.activeDatasourceId,
@@ -1354,6 +1379,7 @@ function DataTaskWorkspace({
       session: inputs.activeSession,
       perRunSelection: inputs.perRunSelection,
       perRunFiles: inputs.perRunFiles,
+      evidenceRefs: inputs.selectedEvidenceRefs,
     });
     return buildRunForwardedProps(inputs.activeDatasourceId, runConfig);
   }, []);
@@ -1396,6 +1422,9 @@ function DataTaskWorkspace({
       onTogglePerRunFileMention: togglePerRunFileMentionItem,
       onRemovePerRunFileMention: removePerRunFileMentionItem,
       onClearPerRunFileMentions: clearPerRunFileMentions,
+      selectedEvidenceRefs,
+      onRemoveEvidenceRef: removeSelectedEvidenceRef,
+      onClearEvidenceRefs: clearSelectedEvidenceRefs,
       workspaceConfig,
       activeSession,
       sessionStartedHints,
@@ -1436,6 +1465,9 @@ function DataTaskWorkspace({
       togglePerRunFileMentionItem,
       removePerRunFileMentionItem,
       clearPerRunFileMentions,
+      selectedEvidenceRefs,
+      removeSelectedEvidenceRef,
+      clearSelectedEvidenceRefs,
       toggleSessionResourceItem,
       sessionStartedHints,
       workspaceConfig,
@@ -1725,6 +1757,7 @@ function DataTaskWorkspace({
           <TaskConsole
             key={`task-console-dock-${activeThreadId ?? activeSession?.id ?? "no-session"}`}
             artifacts={visibleArtifacts}
+            evidenceCards={evidenceCards}
             liveRun={liveRun}
             toolGroups={toolGroups}
             sessionUsage={sessionUsage}
@@ -1736,6 +1769,8 @@ function DataTaskWorkspace({
             onClearSelection={() => setSelection(null)}
             onClose={closeTaskConsole}
             onMentionArtifact={mentionArtifactFile}
+            onToggleEvidenceRef={toggleSelectedEvidenceRef}
+            onClearEvidenceRefs={clearSelectedEvidenceRefs}
             onOpenTrace={() => setIsTraceOpen(true)}
             onPromoteArtifact={promoteArtifactToWorkspace}
             onArtifactExportJob={setActiveJob}
@@ -1746,6 +1781,7 @@ function DataTaskWorkspace({
               setSelection({ type: "toolGroup", id: groupId })
             }
             promotedArtifactIds={promotedArtifactIds}
+            selectedEvidenceRefs={selectedEvidenceRefs}
           />
         </div>
       ) : null}
@@ -1755,6 +1791,7 @@ function DataTaskWorkspace({
       <TaskConsoleDrawer
         key={`task-console-drawer-${activeThreadId ?? activeSession?.id ?? "no-session"}`}
         artifacts={visibleArtifacts}
+        evidenceCards={evidenceCards}
         liveRun={liveRun}
         toolGroups={toolGroups}
         sessionUsage={sessionUsage}
@@ -1765,6 +1802,8 @@ function DataTaskWorkspace({
         onArtifactFocusHandled={() => setArtifactFocusId(null)}
         onClearSelection={() => setSelection(null)}
         onMentionArtifact={mentionArtifactFile}
+        onToggleEvidenceRef={toggleSelectedEvidenceRef}
+        onClearEvidenceRefs={clearSelectedEvidenceRefs}
         isOpen={!sidePanelOpen && !canDockRightPanel && isConsoleDrawerOpen}
         onClose={() => setIsConsoleDrawerOpen(false)}
         onOpenTrace={() => setIsTraceOpen(true)}
@@ -1777,6 +1816,7 @@ function DataTaskWorkspace({
           setSelection({ type: "toolGroup", id: groupId })
         }
         promotedArtifactIds={promotedArtifactIds}
+        selectedEvidenceRefs={selectedEvidenceRefs}
       />
 
       <TraceOverlay

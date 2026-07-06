@@ -7,6 +7,7 @@ import {
   type AgentRunContext,
   type AgUiEventEmitter,
   type GoalRuntimeAdapter,
+  type RuntimeContextSource,
   type TaskStateRuntime,
   type WorkspaceAttachment
 } from "@datafoundry/agent-runtime";
@@ -53,6 +54,7 @@ type CreateRunAgentAssemblyInput = {
   dataGateway: DataGateway;
   effectiveRunConfig: EffectiveRunConfig;
   emitter: AgUiEventEmitter;
+  evidenceRuntimeSources?: RuntimeContextSource[] | undefined;
   fileAssetService: FileAssetService;
   goal?: EffectiveRunConfig["goal"] | undefined;
   interactionResume?: InteractionResume | undefined;
@@ -106,6 +108,9 @@ export const createRunAgentContext = (input: CreateRunAgentContextInput): AgentR
     ...((input.effectiveRunConfig.pinnedPaths?.length ?? 0) > 0
       ? { pinned_paths: input.effectiveRunConfig.pinnedPaths }
       : {}),
+    ...(input.effectiveRunConfig.evidenceRefs.length > 0
+      ? { evidence_refs: input.effectiveRunConfig.evidenceRefs }
+      : {}),
     model_name: input.modelProvider.model_name
   });
 
@@ -134,6 +139,9 @@ export const createRunAgentAssembly = async (
     ...(input.modelContextProfile ? { modelContextProfile: input.modelContextProfile } : {}),
     modelProvider: input.modelProvider,
     ...(input.modelSettings ? { modelSettings: input.modelSettings } : {}),
+    ...(input.evidenceRuntimeSources?.length
+      ? { additionalRuntimeSources: input.evidenceRuntimeSources }
+      : {}),
     ...(input.longTermMemories.length > 0 ? { longTermMemory: { records: input.longTermMemories } } : {}),
     runContext: input.runContext,
     selectedSkills: input.selectedSkills,

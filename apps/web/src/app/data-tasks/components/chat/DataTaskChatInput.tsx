@@ -5,6 +5,7 @@ import {
   type CopilotChatInputProps,
   type UseAttachmentsReturn,
 } from "@copilotkit/react-core/v2";
+import type { EvidenceRef } from "@datafoundry/contracts";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import type {
@@ -27,6 +28,7 @@ import { buildChatAddActions, type ChatAddAction } from "./chat-add-actions";
 import { SessionConfigBar } from "./SessionConfigBar";
 import { useChatTextareaAutoresize, scheduleChatTextareaResize } from "./use-chat-textarea-autoresize";
 import { resolveChatInputWidth } from "../../chat-input-layout";
+import { evidenceChipLabel } from "../../evidence";
 import { useDataTaskChatInputBindings } from "./DataTaskChatInputBindingsContext";
 import type { ChatSession, WorkspaceConfigStore } from "../../data-task-state";
 import type { QueuedChatPrompt } from "./queued-chat-runs";
@@ -46,6 +48,9 @@ type DataTaskChatInputProps = CopilotChatInputProps & {
   onTogglePerRunFileMention: (resource: FileMentionResource) => void;
   onRemovePerRunFileMention: (resource: FileMentionResource) => void;
   onClearPerRunFileMentions: () => void;
+  selectedEvidenceRefs: EvidenceRef[];
+  onRemoveEvidenceRef: (id: string) => void;
+  onClearEvidenceRefs: () => void;
   workspaceConfig: WorkspaceConfigStore;
   activeSession: ChatSession | null;
   sessionStartedHints?: SessionStartedHints;
@@ -72,6 +77,9 @@ export function DataTaskChatInput({
   onTogglePerRunFileMention,
   onRemovePerRunFileMention,
   onClearPerRunFileMentions,
+  selectedEvidenceRefs,
+  onRemoveEvidenceRef,
+  onClearEvidenceRefs,
   workspaceConfig,
   activeSession,
   sessionStartedHints,
@@ -128,6 +136,9 @@ export function DataTaskChatInput({
           onTogglePerRunFileMention={onTogglePerRunFileMention}
           onRemovePerRunFileMention={onRemovePerRunFileMention}
           onClearPerRunFileMentions={onClearPerRunFileMentions}
+          selectedEvidenceRefs={selectedEvidenceRefs}
+          onRemoveEvidenceRef={onRemoveEvidenceRef}
+          onClearEvidenceRefs={onClearEvidenceRefs}
           workspaceConfig={workspaceConfig}
           activeSession={activeSession}
           sessionStartedHints={sessionStartedHints}
@@ -171,6 +182,9 @@ function DataTaskChatInputLayout({
   onTogglePerRunFileMention,
   onRemovePerRunFileMention,
   onClearPerRunFileMentions,
+  selectedEvidenceRefs,
+  onRemoveEvidenceRef,
+  onClearEvidenceRefs,
   workspaceConfig,
   activeSession,
   sessionStartedHints,
@@ -209,6 +223,9 @@ function DataTaskChatInputLayout({
   onTogglePerRunFileMention: (resource: FileMentionResource) => void;
   onRemovePerRunFileMention: (resource: FileMentionResource) => void;
   onClearPerRunFileMentions: () => void;
+  selectedEvidenceRefs: EvidenceRef[];
+  onRemoveEvidenceRef: (id: string) => void;
+  onClearEvidenceRefs: () => void;
   workspaceConfig: WorkspaceConfigStore;
   activeSession: ChatSession | null;
   sessionStartedHints?: SessionStartedHints;
@@ -357,6 +374,11 @@ function DataTaskChatInputLayout({
                     onRemoveFile={onRemovePerRunFileMention}
                     onClear={onClearPerRunMentions}
                     onClearFiles={onClearPerRunFileMentions}
+                  />
+                  <EvidenceChips
+                    refs={selectedEvidenceRefs}
+                    onRemove={onRemoveEvidenceRef}
+                    onClear={onClearEvidenceRefs}
                   />
                   <div
                     className={[
@@ -554,6 +576,50 @@ function QueuedPromptStrip({
           </div>
         );
       })}
+    </div>
+  );
+}
+
+function EvidenceChips({
+  refs,
+  onRemove,
+  onClear,
+}: {
+  refs: EvidenceRef[];
+  onRemove: (id: string) => void;
+  onClear: () => void;
+}) {
+  if (refs.length === 0) {
+    return null;
+  }
+  return (
+    <div className="flex min-w-0 flex-wrap items-center gap-1.5 py-1">
+      {refs.map((ref) => (
+        <span
+          key={ref.id}
+          className="inline-flex max-w-full items-center gap-1 rounded-md bg-primary-light/12 px-2 py-1 text-xs text-primary"
+        >
+          <span className="min-w-0 truncate">{evidenceChipLabel(ref)}</span>
+          <button
+            type="button"
+            aria-label={`Remove ${ref.label}`}
+            title="Remove evidence"
+            onClick={() => onRemove(ref.id)}
+            className="grid h-4 w-4 shrink-0 cursor-pointer place-items-center rounded text-primary/70 hover:bg-primary-light/20"
+          >
+            <XIcon />
+          </button>
+        </span>
+      ))}
+      {refs.length > 1 ? (
+        <button
+          type="button"
+          onClick={onClear}
+          className="cursor-pointer rounded-md px-1.5 py-1 text-[11px] font-medium text-muted hover:bg-surface-subtle"
+        >
+          Clear evidence
+        </button>
+      ) : null}
     </div>
   );
 }

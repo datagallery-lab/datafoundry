@@ -1,5 +1,6 @@
 import { EventType, type BaseEvent, type Message, type RunAgentInput } from "@ag-ui/client";
 import { ContextTokenCounter, type ConversationMemoryBridge } from "@datafoundry/agent-runtime";
+import type { EvidenceRef } from "@datafoundry/contracts";
 import {
   type ConversationMessageRecord,
   type ConversationMessageRepository,
@@ -104,6 +105,7 @@ type BuildConversationMessagesInput = {
 
 type PersistCurrentUserMessageInput = {
   currentUserText: string;
+  evidenceRefs?: EvidenceRef[];
   repository: ConversationMessageRepository;
   runId: string;
   runInput: RunAgentInput;
@@ -203,11 +205,13 @@ export class ConversationMemoryService {
 
   persistCurrentUserMessage(input: {
     currentUserText: string;
+    evidenceRefs?: EvidenceRef[];
     runId: string;
     runInput: RunAgentInput;
   }): ConversationMessageRecord {
     return persistCurrentUserMessage({
       currentUserText: input.currentUserText,
+      evidenceRefs: input.evidenceRefs ?? [],
       repository: this.input.repository,
       runId: input.runId,
       runInput: input.runInput,
@@ -307,7 +311,10 @@ export const persistCurrentUserMessage = (input: PersistCurrentUserMessageInput)
     role: "user",
     source: "client",
     content_text: input.currentUserText,
-    content: { text: input.currentUserText },
+    content: {
+      text: input.currentUserText,
+      ...((input.evidenceRefs?.length ?? 0) > 0 ? { evidenceRefs: input.evidenceRefs } : {})
+    },
     ...(message?.id ? { message_id: message.id } : {})
   });
 };

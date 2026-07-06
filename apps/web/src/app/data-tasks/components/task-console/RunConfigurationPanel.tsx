@@ -52,6 +52,13 @@ export function RunConfigurationPanel({ liveRun }: { liveRun: LiveRun }) {
               <ConfigLine label="KB" value={countList(config.enabledKnowledgeIds)} />
               <ConfigLine label="MCP" value={countList(config.enabledMcpServerIds)} />
               <ConfigLine label="Files" value={countList(config.fileIds)} />
+              <ConfigLine label="Evidence" value={countList(config.evidenceRefs)} />
+              {config.evidenceResolution ? (
+                <p className="text-[11px] leading-4 text-muted-light">
+                  Evidence accepted {config.evidenceResolution.accepted.length}; dropped{" "}
+                  {config.evidenceResolution.dropped.length}.
+                </p>
+              ) : null}
               {config.selectedSkills?.length ? (
                 <ChipRow
                   values={config.selectedSkills.map((skill) => skill.name ?? skill.id)}
@@ -174,7 +181,7 @@ function ChipRow({ values }: { values: string[] }) {
   );
 }
 
-function countList(values?: string[]): string {
+function countList(values?: readonly unknown[]): string {
   if (!values?.length) return "0 items";
   return `${values.length.toLocaleString()} items`;
 }

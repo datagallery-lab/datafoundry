@@ -1,3 +1,5 @@
+import type { EvidenceRef } from "@datafoundry/contracts";
+
 export type ApiErrorCode =
   | "BAD_REQUEST"
   | "CONFLICT"
@@ -266,6 +268,7 @@ export type ConversationMessageDto = {
   source: "agent" | "client";
   messageId?: string;
   contentText: string;
+  evidenceRefs?: EvidenceRef[];
   position: number;
   createdAt: string;
 };

@@ -26,6 +26,56 @@ export type Citation = {
   score?: number;
 };
 
+export type EvidenceKind =
+  | "table"
+  | "chart"
+  | "report"
+  | "file"
+  | "sql"
+  | "schema"
+  | "preview"
+  | "knowledge"
+  | "step";
+
+export type EvidenceRefSource = {
+  artifactId?: string;
+  toolCallId?: string;
+  eventId?: string;
+  auditLogId?: string;
+  fileId?: string;
+  datasourceId?: string;
+  tableName?: string;
+  documentId?: string;
+  chunkId?: string;
+};
+
+export type EvidenceRef = {
+  id: string;
+  kind: EvidenceKind;
+  label: string;
+  summary?: string;
+  sessionId: string;
+  runId?: string;
+  source: EvidenceRefSource;
+};
+
+export type EvidenceResolutionIssue = {
+  id: string;
+  reason:
+    | "invalid"
+    | "not_found"
+    | "session_mismatch"
+    | "run_mismatch"
+    | "unsupported"
+    | "resolution_failed";
+  message?: string;
+};
+
+export type EvidenceResolutionDiagnostics = {
+  accepted: string[];
+  dropped: EvidenceResolutionIssue[];
+};
+
 export type RunEventEnvelope = {
   type: EventType;
   run_id: string;

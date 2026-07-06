@@ -1,6 +1,7 @@
 "use client";
 
 import { createContext, useContext, type MutableRefObject, type ReactNode } from "react";
+import type { EvidenceRef } from "@datafoundry/contracts";
 import type {
   ChatSession,
   FileMentionResource,
@@ -35,6 +36,9 @@ export type DataTaskChatInputBindings = {
   onTogglePerRunFileMention: (resource: FileMentionResource) => void;
   onRemovePerRunFileMention: (resource: FileMentionResource) => void;
   onClearPerRunFileMentions: () => void;
+  selectedEvidenceRefs: EvidenceRef[];
+  onRemoveEvidenceRef: (id: string) => void;
+  onClearEvidenceRefs: () => void;
   workspaceConfig: WorkspaceConfigStore;
   activeSession: ChatSession | null;
   sessionStartedHints?: SessionStartedHints;

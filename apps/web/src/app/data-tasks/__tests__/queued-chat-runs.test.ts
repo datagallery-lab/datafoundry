@@ -32,6 +32,7 @@ const forwardedProps = (datasourceId: string): RunForwardedProps => ({
     mentioned: { db: [], kb: [], mcp: [], skill: [] },
     fileIds: [],
     pinnedPaths: [],
+    evidenceRefs: [],
   },
 });
 
