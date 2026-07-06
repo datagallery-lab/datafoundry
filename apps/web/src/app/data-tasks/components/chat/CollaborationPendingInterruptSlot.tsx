@@ -15,7 +15,7 @@ export function CollaborationPendingInterruptSlot({
   const chatConfig = useCopilotChatConfiguration();
   const threadId = chatConfig?.threadId;
   const { agent } = useAgent({ agentId: chatConfig?.agentId ?? "dataFoundry" });
-  const { liveRun } = useLiveRun();
+  const { liveRun } = useLiveRun(threadId);
   const pendingInterrupt = usePendingCollaborationInterrupt(threadId);
   const allMessages = agent.messages ?? [];
 

@@ -276,9 +276,81 @@ import {
 
 export const dynamic = "force-dynamic";
 
-const agentId = "dataFoundry";
+const runtimeAgentId = "dataFoundry";
+const sessionAgentIdPrefix = `${runtimeAgentId}:session:`;
 const defaultDatasourceId = "api-duckdb-demo";
 const runtimeUrl = getAgentRuntimeUrl();
+
+type CopilotSessionAgentRegistry = {
+  getAgent: (agentId: string) => ({ threadId?: string } & Record<string, unknown>) | undefined;
+  registerProxiedAgent: (params: { agentId: string; runtimeAgentId: string }) => unknown;
+};
+
+function dataTaskSessionAgentId(threadId: string): string {
+  return `${sessionAgentIdPrefix}${encodeURIComponent(threadId)}`;
+}
+
+function threadIdFromDataTaskSessionAgentId(agentId: unknown): string | null {
+  if (typeof agentId !== "string" || !agentId.startsWith(sessionAgentIdPrefix)) {
+    return null;
+  }
+  try {
+    return decodeURIComponent(agentId.slice(sessionAgentIdPrefix.length));
+  } catch {
+    return null;
+  }
+}
+
+function reportDataFoundryRunError(error: unknown, threadId?: string | null): void {
+  const message = error instanceof Error ? error.message : String(error);
+  if (typeof window === "undefined") {
+    return;
+  }
+  window.dispatchEvent(
+    new CustomEvent("datafoundry-run-error", {
+      detail: { message, threadId: threadId ?? null },
+    }),
+  );
+}
+
+function useSessionAgentRegistry(threadIds: readonly string[]): boolean {
+  const { copilotkit } = useCopilotKit();
+  const threadKey = threadIds.join("\n");
+  const [generation, setGeneration] = useState(0);
+
+  useLayoutEffect(() => {
+    const registry = copilotkit as unknown as CopilotSessionAgentRegistry;
+    let registered = false;
+    for (const threadId of threadIds) {
+      const localAgentId = dataTaskSessionAgentId(threadId);
+      const existing = registry.getAgent(localAgentId);
+      if (existing) {
+        existing.threadId = threadId;
+        continue;
+      }
+      try {
+        registry.registerProxiedAgent({ agentId: localAgentId, runtimeAgentId });
+        const agent = registry.getAgent(localAgentId);
+        if (agent) {
+          agent.threadId = threadId;
+        }
+        registered = true;
+      } catch (error) {
+        if (!registry.getAgent(localAgentId)) {
+          console.warn("[data-tasks] failed to register session agent", error);
+        }
+      }
+    }
+    if (registered) {
+      setGeneration((current) => current + 1);
+    }
+  }, [copilotkit, threadKey]);
+
+  return useMemo(() => {
+    const registry = copilotkit as unknown as CopilotSessionAgentRegistry;
+    return threadIds.every((threadId) => Boolean(registry.getAgent(dataTaskSessionAgentId(threadId))));
+  }, [copilotkit, generation, threadKey]);
+}
 
 export type TaskSelection =
   | { type: "artifact"; id: string }
@@ -358,15 +430,8 @@ function StableDataTaskChatInput({
   const reportRunError = useCallback((error: unknown) => {
     awaitingQueuedRunCompletionRef.current = false;
     queuedRunSawActiveRef.current = false;
-    const message = error instanceof Error ? error.message : String(error);
-    if (typeof window !== "undefined") {
-      window.dispatchEvent(
-        new CustomEvent("datafoundry-run-error", {
-          detail: { message },
-        }),
-      );
-    }
-  }, []);
+    reportDataFoundryRunError(error, bindings.activeThreadId);
+  }, [bindings.activeThreadId]);
 
   const dispatchRun = useCallback(
     ({
@@ -635,13 +700,14 @@ function DataTasksCopilotShell() {
     <CopilotKit
       key={scopeKey}
       runtimeUrl={runtimeUrl}
-      agent={agentId}
+      agent={runtimeAgentId}
       headers={() => authHeaders}
       useSingleEndpoint
       showDevConsole={false}
       enableInspector={false}
       properties={copilotProperties}
       onError={(event) => {
+        const contextAgentId = (event as { context?: { agentId?: unknown } }).context?.agentId;
         const message =
           event instanceof Error
             ? event.message
@@ -658,7 +724,10 @@ function DataTasksCopilotShell() {
         console.error("[data-tasks]", event);
         window.dispatchEvent(
           new CustomEvent("datafoundry-run-error", {
-            detail: { message },
+            detail: {
+              message,
+              threadId: threadIdFromDataTaskSessionAgentId(contextAgentId),
+            },
           }),
         );
       }}
@@ -1026,6 +1095,9 @@ function DataTaskWorkspace({
     sessions[0] ??
     null;
   const activeThreadId = activeSession?.threadId;
+  const activeAgentId = activeThreadId ? dataTaskSessionAgentId(activeThreadId) : runtimeAgentId;
+  const sessionThreadIds = useMemo(() => sessions.map((session) => session.threadId), [sessions]);
+  const sessionAgentsReady = useSessionAgentRegistry(sessionThreadIds);
   const activeDatasourceId = resolveActiveDatasourceId(
     workspaceConfig,
     activeSession,
@@ -1047,7 +1119,7 @@ function DataTaskWorkspace({
     [workspaceFileAssets],
   );
 
-  const { liveRun, sessionUsage, latestQuestion, runningThreadIds } = useLiveRun();
+  const { liveRun, sessionUsage, latestQuestion, runningThreadIds } = useLiveRun(activeThreadId);
   const agentRenderSnapshot = useAgentMessageRenderSnapshot();
   const sessionStartedHints = useMemo<SessionStartedHints>(
     () => ({
@@ -1454,7 +1526,7 @@ function DataTaskWorkspace({
       draftPromptRequest,
       onDraftPromptConsumed: consumeDraftPromptRequest,
       chatColumnWidth,
-      agentId,
+      agentId: activeAgentId,
       activeThreadId: activeThreadId ?? null,
       capabilitiesReady,
       onUserMessageSubmitted: applyFirstUserMessageTitle,
@@ -1468,6 +1540,7 @@ function DataTaskWorkspace({
     }),
     [
       activeLlmId,
+      activeAgentId,
       activeSession,
       activeThreadId,
       capabilitiesReady,
@@ -1524,7 +1597,6 @@ function DataTaskWorkspace({
     {
       name: "selectDataSession",
       description: "Switch the visible data task session in the UI.",
-      agentId,
       parameters: z.object({
         sessionId: z.string().describe("Session ID to activate"),
       }),
@@ -1732,11 +1804,14 @@ function DataTaskWorkspace({
       <div className="relative z-10 min-h-0 min-w-0 overflow-hidden">
       <ChatPane
         activeThreadId={activeThreadId}
+        sessionAgentsReady={sessionAgentsReady}
+        sessions={sessions}
         title={activeSession?.title ?? "Data Tasks"}
         workspaceConfig={workspaceConfig}
         activeSession={activeSession}
         liveRunStatus={liveRun.runStatus}
         liveRun={liveRun}
+        runningThreadIds={runningThreadIds}
         chatInput={chatInput}
         rightPanelOpen={isRightConsoleVisible}
         onOpenRightPanel={openTaskConsole}
@@ -1876,7 +1951,6 @@ function DataTaskToolRenderers({
         datasource_id: z.string().optional(),
         table_names: z.array(z.string()).optional(),
       }),
-      agentId,
       render: ({ name, parameters, result, status, toolCallId }) => (
         <SchemaToolCard
           toolCallId={toolCallId}
@@ -1898,7 +1972,6 @@ function DataTaskToolRenderers({
         sql: z.string().optional(),
         limit: z.number().optional(),
       }),
-      agentId,
       render: ({ name, parameters, result, status, toolCallId }) => (
         <SqlToolCard
           toolCallId={toolCallId}
@@ -1915,7 +1988,6 @@ function DataTaskToolRenderers({
 
   useRenderTool({
     name: "*",
-    agentId,
     render: ({ name, parameters, result, status, toolCallId }) => (
       <GenericToolCard
         toolCallId={toolCallId}
@@ -2530,7 +2602,7 @@ function StepReasoningMessage({
 }: ComponentProps<typeof CopilotChatReasoningMessage>) {
   useAgentMessageRenderGeneration();
   const chatConfig = useCopilotChatConfiguration();
-  const { agent } = useAgent({ agentId: chatConfig?.agentId ?? agentId });
+  const { agent } = useAgent({ agentId: chatConfig?.agentId ?? runtimeAgentId });
   const allMessages = mergeMessagesForStepContext(
     agent.messages ?? [],
     messages ?? [],
@@ -2551,7 +2623,7 @@ function StepReasoningMessage({
 /** Host pending HITL cards below the user turn when suspend lands before assistant bubble. */
 function StepUserMessage(props: CopilotChatUserMessageProps) {
   const chatConfig = useCopilotChatConfiguration();
-  const { agent } = useAgent({ agentId: chatConfig?.agentId ?? agentId });
+  const { agent } = useAgent({ agentId: chatConfig?.agentId ?? runtimeAgentId });
   const { copilotkit } = useCopilotKit();
   const bindings = useDataTaskChatInputBindings();
   const branchActions = useContext(ConversationBranchActionsContext);
@@ -2606,14 +2678,12 @@ function StepUserMessage(props: CopilotChatUserMessageProps) {
         agent.setState(buildAgentRunStatePatch(forwardedProps, agent.state));
         agent.addMessage({ id: crypto.randomUUID(), role: "user", content: text });
         void copilotkit.runAgent({ agent, forwardedProps }).catch((error) => {
-          const message = error instanceof Error ? error.message : String(error);
-          window.dispatchEvent(new CustomEvent("datafoundry-run-error", { detail: { message } }));
+          reportDataFoundryRunError(error, chatConfig?.threadId);
         });
       }
       setEditing(false);
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      window.dispatchEvent(new CustomEvent("datafoundry-run-error", { detail: { message } }));
+      reportDataFoundryRunError(error, chatConfig?.threadId);
     } finally {
       setBusy(false);
     }
@@ -2741,7 +2811,7 @@ function StepAssistantMessage({
 }: CopilotChatAssistantMessageProps) {
   useAgentMessageRenderGeneration();
   const chatConfig = useCopilotChatConfiguration();
-  const { agent } = useAgent({ agentId: chatConfig?.agentId ?? agentId });
+  const { agent } = useAgent({ agentId: chatConfig?.agentId ?? runtimeAgentId });
   const liveRunStatus = useContext(ChatRunStatusContext);
   const liveRun = useContext(ChatLiveRunContext);
   const processTimelineCollapse = useContext(ProcessTimelineCollapseContext);
@@ -6142,7 +6212,7 @@ function ProcessToolGroupSync({
   onToolGroupsChange: (groups: ProcessToolGroup[]) => void;
 }) {
   const chatConfig = useCopilotChatConfiguration();
-  const { agent } = useAgent({ agentId: chatConfig?.agentId ?? agentId });
+  const { agent } = useAgent({ agentId: chatConfig?.agentId ?? runtimeAgentId });
   const messages = agent.messages ?? [];
   const groups = useMemo(
     () => buildProcessToolGroups(messages, liveRun),
@@ -6164,7 +6234,7 @@ function ChatWelcomeOverlay({
   onUseExamplePrompt: (prompt: string) => void;
 }) {
   const chatConfig = useCopilotChatConfiguration();
-  const { agent } = useAgent({ agentId: chatConfig?.agentId ?? agentId });
+  const { agent } = useAgent({ agentId: chatConfig?.agentId ?? runtimeAgentId });
   const hasVisibleMessages = (agent.messages?.length ?? 0) > 0 || liveRunStatus !== "idle";
 
   if (hasVisibleMessages) return null;
@@ -6190,7 +6260,7 @@ function PendingBranchRunDispatcher({
   onUserMessageSubmitted: (text: string) => void;
 }) {
   const chatConfig = useCopilotChatConfiguration();
-  const { agent } = useAgent({ agentId: chatConfig?.agentId ?? agentId });
+  const { agent } = useAgent({ agentId: chatConfig?.agentId ?? runtimeAgentId });
   const { copilotkit } = useCopilotKit();
   const restoredConversation = useConversationBranchSnapshot(chatConfig?.threadId);
   const { isRestoringConversation } = useConversationRestoreGate();
@@ -6209,8 +6279,7 @@ function PendingBranchRunDispatcher({
       agent.addMessage({ id: crypto.randomUUID(), role: "user", content: pending.text });
       onDispatched();
       void copilotkit.runAgent({ agent, forwardedProps }).catch((error) => {
-        const message = error instanceof Error ? error.message : String(error);
-        window.dispatchEvent(new CustomEvent("datafoundry-run-error", { detail: { message } }));
+        reportDataFoundryRunError(error, chatConfig?.threadId);
       });
     }, 0);
     return () => window.clearTimeout(timeout);
@@ -6229,13 +6298,125 @@ function PendingBranchRunDispatcher({
   return null;
 }
 
+function HiddenSessionChatInput() {
+  return null;
+}
+
+function SessionChatRuntime({
+  threadId,
+  isActive,
+  chatInput: ChatInput,
+  capabilitiesReady,
+  pendingBranchRun,
+  onPendingBranchRunDispatched,
+  getRunForwardedProps,
+  onUserMessageSubmitted,
+  onToolGroupsChange,
+  onUseExamplePrompt,
+}: {
+  threadId: string;
+  isActive: boolean;
+  chatInput: ComponentType<ComponentProps<typeof DataTaskChatInput>>;
+  capabilitiesReady: boolean;
+  pendingBranchRun: PendingBranchRun | null;
+  onPendingBranchRunDispatched: () => void;
+  getRunForwardedProps: () => ReturnType<typeof buildRunForwardedProps>;
+  onUserMessageSubmitted: (text: string) => void;
+  onToolGroupsChange: (groups: ProcessToolGroup[]) => void;
+  onUseExamplePrompt: (prompt: string) => void;
+}) {
+  const agentId = dataTaskSessionAgentId(threadId);
+  const { liveRun } = useLiveRun(threadId);
+  const liveRunStatus = liveRun.runStatus;
+
+  return (
+    <ChatRunStatusContext.Provider value={liveRunStatus}>
+    <ChatLiveRunContext.Provider value={liveRun}>
+    <CopilotChatConfigurationProvider
+      agentId={agentId}
+      threadId={threadId}
+      hasExplicitThreadId
+    >
+      <LiveRunEventSubscriber agentId={agentId} threadId={threadId} />
+      <SessionConversationRestore
+        agentId={agentId}
+        capabilitiesReady={capabilitiesReady}
+      />
+      {isActive ? <SessionConversationScrollRestore agentId={agentId} /> : null}
+      {isActive ? (
+        <PendingBranchRunDispatcher
+          pending={pendingBranchRun}
+          getRunForwardedProps={getRunForwardedProps}
+          onDispatched={onPendingBranchRunDispatched}
+          onUserMessageSubmitted={onUserMessageSubmitted}
+        />
+      ) : null}
+      <SessionArtifactsRestore
+        capabilitiesReady={capabilitiesReady}
+        threadId={threadId}
+      />
+      {isActive ? (
+        <AgentMessageRenderSync agentId={agentId} runStatus={liveRunStatus} />
+      ) : null}
+      {isActive ? (
+        <ProcessToolGroupSync
+          liveRun={liveRun}
+          onToolGroupsChange={onToolGroupsChange}
+        />
+      ) : null}
+      <CollaborationInterruptHandler
+        key={`collaboration-interrupt-${threadId}`}
+        agentId={agentId}
+        threadId={threadId}
+      />
+      <RestoredInterruptHandler
+        key={`restored-${threadId}`}
+        agentId={agentId}
+        threadId={threadId}
+        capabilitiesReady={capabilitiesReady}
+      />
+      <div className="relative flex min-h-0 flex-1">
+        {isActive ? (
+          <ChatWelcomeOverlay
+            liveRunStatus={liveRunStatus}
+            onUseExamplePrompt={onUseExamplePrompt}
+          />
+        ) : null}
+        <CopilotChat
+          agentId={agentId}
+          threadId={threadId}
+          key={`copilot-chat-${threadId}`}
+          welcomeScreen={false}
+          autoScroll="pin-to-bottom"
+          intelligenceIndicator={{ className: "chat-intelligence-indicator" }}
+          messageView={{
+            userMessage: StepUserMessage as typeof CopilotChatUserMessage,
+            assistantMessage:
+              StepAssistantMessage as unknown as typeof CopilotChatAssistantMessage,
+            reasoningMessage:
+              StepReasoningMessage as unknown as typeof CopilotChatReasoningMessage,
+            cursor: { className: "chat-stream-cursor" },
+          }}
+          input={(isActive ? ChatInput : HiddenSessionChatInput) as typeof CopilotChatInput}
+          className={chatPaneClassName}
+        />
+      </div>
+    </CopilotChatConfigurationProvider>
+    </ChatLiveRunContext.Provider>
+    </ChatRunStatusContext.Provider>
+  );
+}
+
 function ChatPane({
   activeThreadId,
+  sessionAgentsReady,
+  sessions,
   title,
   workspaceConfig,
   activeSession,
   liveRunStatus,
   liveRun,
+  runningThreadIds,
   chatInput: ChatInput,
   rightPanelOpen,
   onOpenRightPanel,
@@ -6249,11 +6430,14 @@ function ChatPane({
   onUserMessageSubmitted,
 }: {
   activeThreadId?: string;
+  sessionAgentsReady: boolean;
+  sessions: ChatSession[];
   title: string;
   workspaceConfig: WorkspaceConfigStore;
   activeSession: ChatSession | null;
   liveRunStatus: LiveRun["runStatus"];
   liveRun: LiveRun;
+  runningThreadIds: ReadonlySet<string>;
   chatInput: ComponentType<ComponentProps<typeof DataTaskChatInput>>;
   rightPanelOpen: boolean;
   onOpenRightPanel: () => void;
@@ -6269,7 +6453,25 @@ function ChatPane({
   const { containerRef, chatColumnWidth } = useChatColumnWidth();
   const [processTimelineCollapsed, setProcessTimelineCollapsed] = useState(false);
   const [schemaPreviewDatasourceId, setSchemaPreviewDatasourceId] = useState<string | null>(null);
+  const [mountedThreadIds, setMountedThreadIds] = useState<string[]>([]);
   const schemaPreviewRootRef = useRef<HTMLDivElement>(null);
+  const sessionByThreadId = useMemo(
+    () => new Map(sessions.map((session) => [session.threadId, session])),
+    [sessions],
+  );
+  const chatThreadIds = useMemo(() => {
+    const next: string[] = [];
+    const add = (threadId: string | undefined) => {
+      if (!threadId || !sessionByThreadId.has(threadId) || next.includes(threadId)) {
+        return;
+      }
+      next.push(threadId);
+    };
+    mountedThreadIds.forEach(add);
+    runningThreadIds.forEach(add);
+    add(activeThreadId);
+    return next;
+  }, [activeThreadId, mountedThreadIds, runningThreadIds, sessionByThreadId]);
   const schemaPreviewDatasource = useMemo(
     () =>
       schemaPreviewDatasourceId
@@ -6290,6 +6492,19 @@ function ChatPane({
       onChatColumnWidthChange(chatColumnWidth);
     }
   }, [chatColumnWidth, onChatColumnWidthChange]);
+
+  useEffect(() => {
+    if (!activeThreadId) {
+      return;
+    }
+    setMountedThreadIds((current) =>
+      current.includes(activeThreadId) ? current : [...current, activeThreadId],
+    );
+  }, [activeThreadId]);
+
+  useEffect(() => {
+    setMountedThreadIds((current) => current.filter((threadId) => sessionByThreadId.has(threadId)));
+  }, [sessionByThreadId]);
 
   useEffect(() => {
     if (!schemaPreviewDatasourceId) return;
@@ -6346,70 +6561,36 @@ function ChatPane({
         ref={containerRef}
         className="flex min-h-0 flex-1 flex-col overflow-hidden"
       >
-        {activeThreadId ? (
-          <CopilotChatConfigurationProvider
-            agentId={agentId}
-            threadId={activeThreadId}
-            hasExplicitThreadId
-          >
-            <LiveRunEventSubscriber agentId={agentId} threadId={activeThreadId} />
-            <SessionConversationRestore
-              agentId={agentId}
-              capabilitiesReady={capabilitiesReady}
-            />
-            <SessionConversationScrollRestore agentId={agentId} />
-            <PendingBranchRunDispatcher
-              pending={pendingBranchRun}
-              getRunForwardedProps={getRunForwardedProps}
-              onDispatched={onPendingBranchRunDispatched}
-              onUserMessageSubmitted={onUserMessageSubmitted}
-            />
-            <SessionArtifactsRestore
-              capabilitiesReady={capabilitiesReady}
-              threadId={activeThreadId}
-            />
-            <AgentMessageRenderSync agentId={agentId} runStatus={liveRunStatus} />
-            <ProcessToolGroupSync
-              liveRun={liveRun}
-              onToolGroupsChange={onToolGroupsChange}
-            />
-            <CollaborationResponseBridge />
-            <CollaborationInterruptHandler
-              key={`collaboration-interrupt-${activeThreadId}`}
-              agentId={agentId}
-              threadId={activeThreadId}
-            />
-            <RestoredInterruptHandler
-              key={`restored-${activeThreadId}`}
-              agentId={agentId}
-              threadId={activeThreadId}
-              capabilitiesReady={capabilitiesReady}
-            />
-            <div className="relative flex min-h-0 flex-1">
-              <ChatWelcomeOverlay
-                liveRunStatus={liveRunStatus}
-                onUseExamplePrompt={onUseExamplePrompt}
-              />
-              <CopilotChat
-                agentId={agentId}
-                threadId={activeThreadId}
-                key={`copilot-chat-${activeThreadId}`}
-                welcomeScreen={false}
-                autoScroll="pin-to-bottom"
-                intelligenceIndicator={{ className: "chat-intelligence-indicator" }}
-                messageView={{
-                  userMessage: StepUserMessage as typeof CopilotChatUserMessage,
-                  assistantMessage:
-                    StepAssistantMessage as unknown as typeof CopilotChatAssistantMessage,
-                  reasoningMessage:
-                    StepReasoningMessage as unknown as typeof CopilotChatReasoningMessage,
-                  cursor: { className: "chat-stream-cursor" },
-                }}
-                input={ChatInput as typeof CopilotChatInput}
-                className={chatPaneClassName}
-              />
-            </div>
-          </CopilotChatConfigurationProvider>
+        <CollaborationResponseBridge />
+        {activeThreadId && sessionAgentsReady ? (
+          <div className="relative flex min-h-0 flex-1 overflow-hidden">
+            {chatThreadIds.map((threadId) => {
+              const isActive = threadId === activeThreadId;
+              return (
+                <div
+                  key={threadId}
+                  className={[
+                    "absolute inset-0 flex min-h-0 min-w-0 flex-col",
+                    isActive ? "z-10" : "pointer-events-none z-0 hidden",
+                  ].join(" ")}
+                  aria-hidden={!isActive}
+                >
+                  <SessionChatRuntime
+                    threadId={threadId}
+                    isActive={isActive}
+                    chatInput={ChatInput}
+                    capabilitiesReady={capabilitiesReady}
+                    pendingBranchRun={pendingBranchRun}
+                    onPendingBranchRunDispatched={onPendingBranchRunDispatched}
+                    getRunForwardedProps={getRunForwardedProps}
+                    onUserMessageSubmitted={onUserMessageSubmitted}
+                    onToolGroupsChange={onToolGroupsChange}
+                    onUseExamplePrompt={onUseExamplePrompt}
+                  />
+                </div>
+              );
+            })}
+          </div>
         ) : (
           <ChatInitializingState />
         )}

@@ -298,7 +298,6 @@ export function CollaborationResponseBridge() {
     copilotkit.setRenderCustomMessages([
       ...existing,
       {
-        agentId: "dataFoundry",
         render: CollaborationAfterMessageRenderer,
       },
     ]);

@@ -13,8 +13,8 @@ export function SessionArtifactsRestore({
   capabilitiesReady: boolean;
   threadId?: string | null;
 }) {
-  const { liveRun } = useLiveRun();
-  const { setLiveRun } = useLiveRunSetters();
+  const { liveRun } = useLiveRun(threadId);
+  const { setLiveRunForThread } = useLiveRunSetters();
   const requestIdRef = useRef(0);
   const toolCallCountRef = useRef(0);
 
@@ -34,7 +34,7 @@ export function SessionArtifactsRestore({
     void configApi.listSessionArtifacts(threadId)
       .then((response) => {
         if (cancelled || requestIdRef.current !== requestId) return;
-        setLiveRun((current) => {
+        setLiveRunForThread(threadId, (current) => {
           const base = { ...current, artifacts: [] as typeof current.artifacts };
           return reconcileLiveRunArtifacts(
             (response.artifacts ?? []).reduce(
@@ -63,7 +63,7 @@ export function SessionArtifactsRestore({
     return () => {
       cancelled = true;
     };
-  }, [capabilitiesReady, setLiveRun, threadId]);
+  }, [capabilitiesReady, setLiveRunForThread, threadId]);
 
   // Re-link artifacts when tool calls arrive after artifact list restore.
   useEffect(() => {
@@ -75,8 +75,8 @@ export function SessionArtifactsRestore({
       return;
     }
     toolCallCountRef.current = toolCallCount;
-    setLiveRun((current) => reconcileLiveRunArtifacts(current));
-  }, [capabilitiesReady, liveRun.toolCalls.length, setLiveRun, threadId]);
+    setLiveRunForThread(threadId, (current) => reconcileLiveRunArtifacts(current));
+  }, [capabilitiesReady, liveRun.toolCalls.length, setLiveRunForThread, threadId]);
 
   return null;
 }

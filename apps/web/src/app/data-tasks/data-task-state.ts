@@ -231,9 +231,8 @@ export function emptyStepPayload(kind: DataStepKind): DataStepPayload {
 }
 
 /**
- * Client-side chat session. The backend has no session list / persistence API,
- * only a per-run `threadId`. Each session here owns its own `threadId`, which
- * keeps CopilotKit's per-(agentId, threadId) agent clone isolated.
+ * Client-side chat session. Each session owns a `threadId`; the UI registers a
+ * session-local CopilotKit agent id for that thread and routes it to dataFoundry.
  */
 /** Per-session disabled resource ids (store "off" list; default = all enabled). */
 export type SessionDisabledMap = Record<

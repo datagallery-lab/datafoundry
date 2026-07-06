@@ -44,7 +44,11 @@ export function SessionConversationRestore({
   const chatConfig = useCopilotChatConfiguration();
   const threadId = chatConfig?.threadId;
   const { agent } = useAgent({ agentId });
-  const { setLiveRun, setLatestQuestion, setSessionUsage } = useLiveRunSetters();
+  const {
+    setLiveRunForThread,
+    setLatestQuestionForThread,
+    setSessionUsageForThread,
+  } = useLiveRunSetters();
   const { setIsRestoringConversation } = useConversationRestoreGate();
   const fetchGenerationRef = useRef(0);
   const prevThreadIdRef = useRef<string | undefined>(undefined);
@@ -121,10 +125,10 @@ export function SessionConversationRestore({
           pendingInteractionsFromConversation(threadId, conversation),
         );
 
-        setSessionUsage(hydrateSessionUsageFromConversation(conversation));
+        setSessionUsageForThread(threadId, hydrateSessionUsageFromConversation(conversation));
 
         const collaborationRecords = getCollaborationResponsesForThread(threadId);
-        setLiveRun((current) =>
+        setLiveRunForThread(threadId, (current) =>
           reconcileSuspendedLiveRunState(
             hydratePendingInteractionLiveRun(
               hydrateLiveRunFromConversation(current, conversation),
@@ -138,7 +142,7 @@ export function SessionConversationRestore({
 
         const question = latestUserQuestionFromConversation(conversation);
         if (question) {
-          setLatestQuestion(question);
+          setLatestQuestionForThread(threadId, question);
         }
       } catch (error) {
         if (isIgnorableConversationRestoreError(error)) {
@@ -162,9 +166,9 @@ export function SessionConversationRestore({
     agent.isRunning,
     capabilitiesReady,
     setIsRestoringConversation,
-    setLatestQuestion,
-    setLiveRun,
-    setSessionUsage,
+    setLatestQuestionForThread,
+    setLiveRunForThread,
+    setSessionUsageForThread,
     threadId,
   ]);
 
