@@ -210,16 +210,6 @@ DataFoundry 借鉴并受益于这些优秀的开源项目与社区：
 - [Ink](https://github.com/vadimdemedes/ink)：终端 UI 基础能力。
 - [MCP](https://modelcontextprotocol.io)：工具生态与集成模型。
 
-## ⭐ Star History
-
-如果这个项目对你有帮助，欢迎点一个 Star，这是对我们最直接的支持。
-
-<p align="center">
-  <a href="https://star-history.com/#datagallery-lab/datafoundry&Date">
-    <img src="https://api.star-history.com/svg?repos=datagallery-lab/datafoundry&type=Date" alt="Star History Chart" width="70%">
-  </a>
-</p>
-
 ## 📄 许可证
 
 Apache License 2.0，见 [LICENSE](LICENSE)。

@@ -210,16 +210,6 @@ DataFoundry is inspired by and built with ideas from excellent open-source proje
 - [Ink](https://github.com/vadimdemedes/ink) for terminal UI foundations.
 - [MCP](https://modelcontextprotocol.io) for the tool ecosystem and integration model.
 
-## ⭐ Star History
-
-If this project helps you, a star is the most direct way to support us.
-
-<p align="center">
-  <a href="https://star-history.com/#datagallery-lab/datafoundry&Date">
-    <img src="https://api.star-history.com/svg?repos=datagallery-lab/datafoundry&type=Date" alt="Star History Chart" width="70%">
-  </a>
-</p>
-
 ## 📄 License
 
 Apache License 2.0. See [LICENSE](LICENSE).
