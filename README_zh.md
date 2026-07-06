@@ -197,6 +197,10 @@ DataFoundry 迭代很快，小而聚焦的 PR 最容易被合入：
     <td align="center"><img src="docs/assets/readme/community-qq-qrcode.png" alt="DataFoundry QQ 交流群二维码" width="220"></td>
     <td align="center"><img src="docs/assets/readme/community-slack-qrcode.png" alt="DataFoundry Slack 社区二维码" width="300"></td>
   </tr>
+  <tr>
+    <td align="center"><strong>交流群号</strong><br><code>1048076064</code></td>
+    <td align="center"><a href="https://join.slack.com/t/datafoundry-7bb8405/shared_invite/zt-42qikc65e-DwA~8ltIri_WYWWpRMjCFQ"><strong>加入 Slack</strong></a></td>
+  </tr>
 </table>
 
 ## 🙏 致谢

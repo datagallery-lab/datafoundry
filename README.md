@@ -197,6 +197,10 @@ Join the DataFoundry community to discuss the product, roadmap, and real-world a
     <td align="center"><img src="docs/assets/readme/community-slack-qrcode.png" alt="DataFoundry Slack community QR code" width="300"></td>
     <td align="center"><img src="docs/assets/readme/community-qq-qrcode.png" alt="DataFoundry QQ group QR code" width="220"></td>
   </tr>
+  <tr>
+    <td align="center"><a href="https://join.slack.com/t/datafoundry-7bb8405/shared_invite/zt-42qikc65e-DwA~8ltIri_WYWWpRMjCFQ"><strong>Join Slack</strong></a></td>
+    <td align="center"><strong>Group ID</strong><br><code>1048076064</code></td>
+  </tr>
 </table>
 
 ## 🙏 Acknowledgements
