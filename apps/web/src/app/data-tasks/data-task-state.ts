@@ -4,6 +4,7 @@ import {
   LEFT_PANEL_DEFAULT_WIDTH,
   RIGHT_PANEL_DEFAULT_WIDTH,
 } from "./workspace-layout";
+import type { EvidenceRef } from "@datafoundry/contracts";
 
 export type ArtifactKind = "chart" | "csv" | "memo" | "dashboard" | "file";
 export type DataArtifactType = "dataset" | "chart" | "sql" | "report" | "file";
@@ -2463,6 +2464,7 @@ export type RunConfigPayload = {
   mentioned: PerRunSelection;
   fileIds: string[];
   pinnedPaths: string[];
+  evidenceRefs: EvidenceRef[];
 };
 
 export interface BuildRunConfigOptions {
@@ -2471,6 +2473,7 @@ export interface BuildRunConfigOptions {
   session?: ChatSession | null;
   perRunSelection?: PerRunSelection;
   perRunFiles?: PerRunFileSelection;
+  evidenceRefs?: EvidenceRef[];
   defaultSkillId?: string;
 }
 
@@ -2536,6 +2539,7 @@ export function buildRunConfig(
     mentioned,
     fileIds: uniqueStrings(fileSelection.fileIds),
     pinnedPaths: uniqueStrings(fileSelection.pinnedPaths),
+    evidenceRefs: uniqueEvidenceRefs(options.evidenceRefs ?? []),
   };
 }
 
@@ -2585,6 +2589,17 @@ export function buildAgentRunStatePatch(
 
 function uniqueStrings(values: readonly string[]): string[] {
   return [...new Set(values.filter(Boolean))];
+}
+
+function uniqueEvidenceRefs(values: readonly EvidenceRef[]): EvidenceRef[] {
+  const seen = new Set<string>();
+  const refs: EvidenceRef[] = [];
+  for (const value of values) {
+    if (!value.id || seen.has(value.id)) continue;
+    seen.add(value.id);
+    refs.push(value);
+  }
+  return refs;
 }
 
 /** Honors a per-run `@db` mention within the session-enabled db set. */

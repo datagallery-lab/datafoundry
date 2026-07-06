@@ -47,6 +47,10 @@ import {
   sendAuthError
 } from "./auth/routes.js";
 import { persistCurrentUserMessage } from "./conversation-memory.js";
+import {
+  createEvidenceRuntimeSource,
+  resolveEvidenceReferenceContext
+} from "./evidence-reference-context.js";
 import { createRunAgentAssembly, createRunAgentContext } from "./run-agent-assembly.js";
 import { resolveRunConfig } from "./run-config-resolver.js";
 import { resolveRunIdentity } from "./run-identity-orchestrator.js";
@@ -494,7 +498,8 @@ class DataFoundryAgUiAgent extends AbstractAgent {
           sessionId,
           taskStateRuntime: this.input.taskStateRuntime,
           userId: this.input.user.id,
-          userInput
+          userInput,
+          evidenceRefs: effectiveRunConfig.evidenceRefs
         });
         const {
           conversationMemoryObserver,
@@ -511,6 +516,14 @@ class DataFoundryAgUiAgent extends AbstractAgent {
           userInput,
           workspaceId: this.input.workspaceId
         });
+        const evidenceContext = resolveEvidenceReferenceContext({
+          evidenceRefs: effectiveRunConfig.evidenceRefs,
+          metadataStore: this.input.metadataStore,
+          sessionId,
+          userId: this.input.user.id,
+          workspaceId: this.input.workspaceId
+        });
+        const evidenceRuntimeSource = createEvidenceRuntimeSource(evidenceContext.items);
         const taskPlanProjector = new TaskPlanProjector(runContext);
         const toolCallResultBridge = new ToolCallResultBridge();
         const runAbortController = new AbortController();
@@ -538,6 +551,7 @@ class DataFoundryAgUiAgent extends AbstractAgent {
           dataGateway: this.input.dataGateway,
           artifactService: this.input.artifactService,
           effectiveRunConfig,
+          ...(evidenceRuntimeSource ? { evidenceRuntimeSources: [evidenceRuntimeSource] } : {}),
           fileAssetService: this.input.fileAssetService,
           emitter: { emit },
           ...(effectiveRunConfig.goal ? { goal: effectiveRunConfig.goal } : {}),
@@ -761,6 +775,12 @@ class DataFoundryAgUiAgent extends AbstractAgent {
                   : {}),
                 ...((effectiveRunConfig.pinnedPaths?.length ?? 0) > 0
                   ? { pinned_paths: effectiveRunConfig.pinnedPaths }
+                  : {}),
+                ...(effectiveRunConfig.evidenceRefs.length > 0
+                  ? {
+                      evidence_refs: effectiveRunConfig.evidenceRefs,
+                      evidence_resolution: evidenceContext.diagnostics
+                    }
                   : {}),
                 ...(effectiveRunConfig.disabledByPolicy && effectiveRunConfig.disabledByPolicy.length > 0
                   ? { disabled_by_policy: effectiveRunConfig.disabledByPolicy }

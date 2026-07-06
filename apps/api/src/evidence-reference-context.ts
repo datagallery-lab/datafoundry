@@ -1,0 +1,364 @@
+import type {
+  EvidenceRef,
+  EvidenceResolutionDiagnostics,
+  EvidenceResolutionIssue
+} from "@datafoundry/contracts";
+import {
+  createContextItem,
+  createContextSourceMetadata,
+  type ContextItem,
+  type RuntimeContextSource
+} from "@datafoundry/agent-runtime";
+import type {
+  MetadataStore,
+  RunEventRecord,
+  RunRecord,
+  SqlAuditLogRecord
+} from "@datafoundry/metadata";
+
+type ResolveEvidenceReferenceContextInput = {
+  evidenceRefs: EvidenceRef[];
+  metadataStore: MetadataStore;
+  sessionId: string;
+  userId: string;
+  workspaceId: string;
+  maxCharsPerEvidence?: number;
+};
+
+export type ResolvedEvidenceReferenceContext = {
+  diagnostics: EvidenceResolutionDiagnostics;
+  items: ContextItem[];
+};
+
+/** Resolves client EvidenceRef handles into server-authoritative ContextItems for prompt assembly. */
+export function resolveEvidenceReferenceContext(
+  input: ResolveEvidenceReferenceContextInput
+): ResolvedEvidenceReferenceContext {
+  const items: ContextItem[] = [];
+  const accepted: string[] = [];
+  const dropped: EvidenceResolutionIssue[] = [];
+  const seen = new Set<string>();
+
+  for (const ref of input.evidenceRefs) {
+    if (seen.has(ref.id)) continue;
+    seen.add(ref.id);
+    if (ref.sessionId !== input.sessionId) {
+      dropped.push({ id: ref.id, reason: "session_mismatch" });
+      continue;
+    }
+    const result = resolveEvidenceRef(input, ref);
+    if (result.issue) {
+      dropped.push(result.issue);
+      continue;
+    }
+    items.push(...result.items);
+    accepted.push(ref.id);
+  }
+
+  return { diagnostics: { accepted, dropped }, items };
+}
+
+/** Creates a runtime context source from already-resolved evidence ContextItems. */
+export function createEvidenceRuntimeSource(items: ContextItem[]): RuntimeContextSource | undefined {
+  if (items.length === 0) {
+    return undefined;
+  }
+  return {
+    sourceType: "evidence-focus",
+    collect: () => items
+  };
+}
+
+const resolveEvidenceRef = (
+  input: ResolveEvidenceReferenceContextInput,
+  ref: EvidenceRef
+): { items: ContextItem[]; issue?: never } | { items?: never; issue: EvidenceResolutionIssue } => {
+  try {
+    if (ref.source.artifactId) {
+      return { items: artifactEvidenceItems(input, ref, ref.source.artifactId) };
+    }
+    if (ref.source.auditLogId) {
+      return { items: sqlAuditEvidenceItems(input, ref, ref.source.auditLogId) };
+    }
+    if (ref.source.toolCallId || ref.runId) {
+      return { items: toolEventEvidenceItems(input, ref) };
+    }
+    return { issue: { id: ref.id, reason: "unsupported" } };
+  } catch (error) {
+    return {
+      issue: {
+        id: ref.id,
+        reason: issueReasonFromError(error),
+        message: error instanceof Error ? error.message : String(error)
+      }
+    };
+  }
+};
+
+const artifactEvidenceItems = (
+  input: ResolveEvidenceReferenceContextInput,
+  ref: EvidenceRef,
+  artifactId: string
+): ContextItem[] => {
+  const artifact = input.metadataStore.artifacts.get({ user_id: input.userId, artifact_id: artifactId });
+  assertSession(ref, artifact.session_id);
+  const preview = parseJsonValue(artifact.preview_json);
+  const metadata = parseJsonValue(artifact.metadata_json);
+  const content = evidenceText({
+    body: [
+      `artifact_id=${artifact.id}`,
+      `artifact_type=${artifact.type}`,
+      `artifact_name=${artifact.name}`,
+      artifact.file_asset_ref_id ? `file_id=${artifact.file_asset_ref_id}` : undefined,
+      preview !== undefined ? `preview=${boundJson(preview, input.maxCharsPerEvidence)}` : undefined,
+      metadata !== undefined ? `metadata=${boundJson(metadata, 1200)}` : undefined
+    ],
+    ref
+  });
+  return [
+    createEvidenceItem(input, ref, "model", content, "tool"),
+    createEvidenceItem(input, ref, "artifact-ref", { artifact_id: artifact.id, source: "evidence-focus" }, "tool")
+  ];
+};
+
+const sqlAuditEvidenceItems = (
+  input: ResolveEvidenceReferenceContextInput,
+  ref: EvidenceRef,
+  auditLogId: string
+): ContextItem[] => {
+  const audit = input.metadataStore.sqlAuditLogs.get({ user_id: input.userId, audit_log_id: auditLogId });
+  if (audit.run_id) {
+    const run = input.metadataStore.runs.get({ user_id: input.userId, run_id: audit.run_id });
+    assertSession(ref, run.session_id);
+  }
+  const content = evidenceText({
+    body: [
+      `audit_log_id=${audit.id}`,
+      `datasource_id=${audit.datasource_id}`,
+      `status=${audit.status}`,
+      audit.row_count !== undefined ? `row_count=${audit.row_count}` : undefined,
+      audit.elapsed_ms !== undefined ? `elapsed_ms=${audit.elapsed_ms}` : undefined,
+      audit.blocked_reason ? `blocked_reason=${audit.blocked_reason}` : undefined,
+      "sql:",
+      boundText(audit.sql_text, input.maxCharsPerEvidence ?? 6000)
+    ],
+    ref
+  });
+  return [
+    createEvidenceItem(input, ref, "model", content, "tool", audit.datasource_id),
+    createEvidenceItem(input, ref, "activity", sqlAuditActivity(audit), "tool", audit.datasource_id),
+    createEvidenceItem(input, ref, "audit-ref", { audit_log_id: audit.id, source: "evidence-focus" }, "tool")
+  ];
+};
+
+const toolEventEvidenceItems = (
+  input: ResolveEvidenceReferenceContextInput,
+  ref: EvidenceRef
+): ContextItem[] => {
+  const run = requireEvidenceRun(input, ref);
+  const events = input.metadataStore.runEvents.listByRun({ user_id: input.userId, run_id: run.id });
+  const event = findToolEvent(events, ref);
+  if (!event) {
+    throw new Error(`EVIDENCE_TOOL_EVENT_NOT_FOUND:${ref.id}`);
+  }
+  const content = evidenceText({
+    body: [
+      `run_id=${run.id}`,
+      event.toolName ? `tool_name=${event.toolName}` : undefined,
+      event.toolCallId ? `tool_call_id=${event.toolCallId}` : undefined,
+      event.args !== undefined ? `args=${boundJson(event.args, 1600)}` : undefined,
+      event.result !== undefined ? `result=${boundJson(event.result, input.maxCharsPerEvidence)}` : undefined
+    ],
+    ref
+  });
+  return [
+    createEvidenceItem(input, ref, "model", content, ref.kind === "knowledge" ? "knowledge" : "tool"),
+    createEvidenceItem(input, ref, "activity", toolEventActivity(event), "tool")
+  ];
+};
+
+const createEvidenceItem = (
+  input: ResolveEvidenceReferenceContextInput,
+  ref: EvidenceRef,
+  visibility: ContextItem["visibility"],
+  content: unknown,
+  trust: ContextItem["trust"],
+  datasourceId?: string
+): ContextItem => createContextItem({
+  id: `evidence:${ref.id}:${visibility}`,
+  sourceType: "evidence-focus",
+  sourceId: ref.id,
+  groupId: `evidence:${ref.id}`,
+  visibility,
+  trust,
+  retention: visibility === "model" ? "active" : "reference",
+  priority: visibility === "model" ? 70 : 65,
+  content,
+  metadata: createContextSourceMetadata({
+    dedupeKeys: evidenceDedupeKeys(ref),
+    exclusivityKey: `evidence:${ref.id}`,
+    overlapKeys: evidenceOverlapKeys(ref),
+    scope: {
+      ...(datasourceId ?? ref.source.datasourceId
+        ? { datasourceId: datasourceId ?? ref.source.datasourceId }
+        : {}),
+      sessionId: input.sessionId,
+      userId: input.userId
+    },
+    sourceKind: "evidence-focus",
+    sourceOwner: "user-selection"
+  }, {
+    atomic: false,
+    evidenceId: ref.id,
+    evidenceKind: ref.kind,
+    evidenceLabel: ref.label,
+    groupKind: "source"
+  })
+});
+
+const evidenceText = (input: { body: Array<string | undefined>; ref: EvidenceRef }): string => [
+  `<evidence_ref id="${escapeAttribute(input.ref.id)}" kind="${escapeAttribute(input.ref.kind)}"`,
+  ` label="${escapeAttribute(input.ref.label)}">`,
+  input.ref.summary ? `summary: ${escapeText(input.ref.summary)}` : undefined,
+  ...input.body.filter((line): line is string => Boolean(line)),
+  "</evidence_ref>"
+].filter((line): line is string => Boolean(line)).join("\n");
+
+const sqlAuditActivity = (audit: SqlAuditLogRecord): Record<string, unknown> => ({
+  audit_log_id: audit.id,
+  datasource_id: audit.datasource_id,
+  status: audit.status,
+  ...(audit.row_count !== undefined ? { row_count: audit.row_count } : {}),
+  ...(audit.elapsed_ms !== undefined ? { elapsed_ms: audit.elapsed_ms } : {})
+});
+
+const toolEventActivity = (event: ResolvedToolEvent): Record<string, unknown> => ({
+  ...(event.toolCallId ? { tool_call_id: event.toolCallId } : {}),
+  ...(event.toolName ? { tool_name: event.toolName } : {}),
+  ...(event.resultSeq !== undefined ? { result_seq: event.resultSeq } : {})
+});
+
+const requireEvidenceRun = (input: ResolveEvidenceReferenceContextInput, ref: EvidenceRef): RunRecord => {
+  const runId = ref.runId;
+  if (!runId) {
+    throw new Error(`EVIDENCE_RUN_REQUIRED:${ref.id}`);
+  }
+  const run = input.metadataStore.runs.get({ user_id: input.userId, run_id: runId });
+  assertSession(ref, run.session_id);
+  return run;
+};
+
+type ResolvedToolEvent = {
+  args?: unknown;
+  result?: unknown;
+  resultSeq?: number;
+  toolCallId?: string;
+  toolName?: string;
+};
+
+const findToolEvent = (events: RunEventRecord[], ref: EvidenceRef): ResolvedToolEvent | undefined => {
+  const toolCallId = ref.source.toolCallId;
+  let resolved: ResolvedToolEvent | undefined;
+  for (const eventRecord of events) {
+    const event = parseRecord(eventRecord.payload_json);
+    const eventToolCallId = stringValue(event.toolCallId);
+    if (toolCallId && eventToolCallId !== toolCallId) {
+      continue;
+    }
+    if (!toolCallId && ref.source.eventId && stringValue(event.id) !== ref.source.eventId) {
+      continue;
+    }
+    const toolName = stringValue(event.toolCallName);
+    if (event.type === "TOOL_CALL_START" || event.type === "TOOL_CALL_END") {
+      resolved = {
+        ...resolved,
+        ...(eventToolCallId ? { toolCallId: eventToolCallId } : {}),
+        ...(toolName ? { toolName } : {}),
+        ...(event.args !== undefined ? { args: event.args } : {}),
+        ...(event.input !== undefined && resolved?.args === undefined ? { args: event.input } : {})
+      };
+    }
+    if (event.type === "TOOL_CALL_RESULT") {
+      resolved = {
+        ...resolved,
+        ...(eventToolCallId ? { toolCallId: eventToolCallId } : {}),
+        ...(toolName ? { toolName } : {}),
+        result: event.content,
+        resultSeq: eventRecord.seq
+      };
+    }
+  }
+  return resolved;
+};
+
+const assertSession = (ref: EvidenceRef, sessionId: string): void => {
+  if (ref.sessionId !== sessionId) {
+    throw new Error(`EVIDENCE_SESSION_MISMATCH:${ref.id}`);
+  }
+};
+
+const issueReasonFromError = (error: unknown): EvidenceResolutionIssue["reason"] => {
+  const message = error instanceof Error ? error.message : String(error);
+  if (message.includes("SESSION_MISMATCH")) return "session_mismatch";
+  if (message.includes("not found") || message.includes("NOT_FOUND")) return "not_found";
+  if (message.includes("RUN_REQUIRED") || message.includes("UNSUPPORTED")) return "unsupported";
+  return "resolution_failed";
+};
+
+const evidenceDedupeKeys = (ref: EvidenceRef): string[] => [
+  `evidence:${ref.id}`,
+  ...(ref.source.artifactId ? [`artifact:${ref.source.artifactId}`] : []),
+  ...(ref.source.auditLogId ? [`audit:${ref.source.auditLogId}`] : []),
+  ...(ref.source.toolCallId ? [`tool-call:${ref.source.toolCallId}`] : [])
+];
+
+const evidenceOverlapKeys = (ref: EvidenceRef): string[] => [
+  `evidence:${ref.id}`,
+  ...(ref.source.artifactId ? [`artifact:${ref.source.artifactId}`] : []),
+  ...(ref.source.auditLogId ? [`audit:${ref.source.auditLogId}`] : [])
+];
+
+const parseRecord = (value: string): Record<string, unknown> => {
+  try {
+    const parsed: unknown = JSON.parse(value);
+    return isRecord(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+};
+
+const parseJsonValue = (value: string | undefined): unknown => {
+  if (value === undefined) {
+    return undefined;
+  }
+  try {
+    return JSON.parse(value) as unknown;
+  } catch {
+    return undefined;
+  }
+};
+
+const boundJson = (value: unknown, maxChars = 6000): string => boundText(safeJson(value), maxChars);
+
+const boundText = (value: string, maxChars: number): string =>
+  value.length <= maxChars ? value : `${value.slice(0, Math.max(0, maxChars - 80))}\n[truncated]`;
+
+const safeJson = (value: unknown): string => {
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+};
+
+const stringValue = (value: unknown): string | undefined =>
+  typeof value === "string" && value.trim().length > 0 ? value : undefined;
+
+const escapeAttribute = (value: string): string =>
+  value.replaceAll("&", "&amp;").replaceAll('"', "&quot;").replaceAll("<", "&lt;");
+
+const escapeText = (value: string): string =>
+  value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);

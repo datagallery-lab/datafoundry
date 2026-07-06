@@ -2,7 +2,9 @@ import {
   createErrorResult,
   createSuccessResult,
   type ApiResult,
-  type AppErrorCode
+  type AppErrorCode,
+  type EvidenceKind,
+  type EvidenceRef
 } from "@datafoundry/contracts";
 import {
   createModelProviderFromEnv,
@@ -1659,16 +1661,26 @@ const handleArtifactRequest = async (
   });
 };
 
-const conversationMessageDto = (message: ConversationMessageRecord, visiblePosition = message.position): Record<string, unknown> => ({
+const conversationMessageDto = (
+  message: ConversationMessageRecord,
+  visiblePosition = message.position
+): Record<string, unknown> => ({
   id: message.id,
   runId: message.run_id,
   role: message.role,
   source: message.source,
   ...(message.message_id ? { messageId: message.message_id } : {}),
   contentText: message.content_text,
+  ...conversationMessageEvidenceRefsDto(message),
   position: visiblePosition,
   createdAt: message.created_at
 });
+
+const conversationMessageEvidenceRefsDto = (message: ConversationMessageRecord): Record<string, unknown> => {
+  const content = parseRecord(message.content_json);
+  const refs = evidenceRefsFromUnknown(content.evidenceRefs ?? content.evidence_refs);
+  return refs.length > 0 ? { evidenceRefs: refs } : {};
+};
 
 const sessionListDto = (session: SessionRecord): Record<string, unknown> => ({
   id: session.id,
@@ -2801,6 +2813,33 @@ const clampInteger = (value: number, min: number, max: number, fallback: number)
   Number.isInteger(value) ? Math.min(max, Math.max(min, value)) : fallback;
 const stringArrayValue = (value: unknown): string[] =>
   Array.isArray(value) ? value.filter((item): item is string => typeof item === "string" && item.trim().length > 0) : [];
+const evidenceRefsFromUnknown = (value: unknown): EvidenceRef[] => {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.filter(isEvidenceRef);
+};
+const isEvidenceRef = (value: unknown): value is EvidenceRef => {
+  if (!isRecord(value) || !isRecord(value.source)) {
+    return false;
+  }
+  return (
+    typeof value.id === "string" &&
+    isEvidenceKind(value.kind) &&
+    typeof value.label === "string" &&
+    typeof value.sessionId === "string"
+  );
+};
+const isEvidenceKind = (value: unknown): value is EvidenceKind =>
+  value === "table" ||
+  value === "chart" ||
+  value === "report" ||
+  value === "file" ||
+  value === "sql" ||
+  value === "schema" ||
+  value === "preview" ||
+  value === "knowledge" ||
+  value === "step";
 const parseRecord = (value: string): Record<string, unknown> => {
   const parsed: unknown = JSON.parse(value);
   return isRecord(parsed) ? parsed : {};

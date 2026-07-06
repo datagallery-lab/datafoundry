@@ -97,6 +97,7 @@ describe("buildRunForwardedProps", () => {
       mentioned: emptyPerRunSelection(),
       fileIds: [],
       pinnedPaths: [],
+      evidenceRefs: [],
     });
     expect(
       mergeRunForwardedPropsWithCommand(base, { resume: { action: "approved" } }),
@@ -117,6 +118,7 @@ describe("buildRunForwardedProps", () => {
       mentioned: emptyPerRunSelection(),
       fileIds: [],
       pinnedPaths: [],
+      evidenceRefs: [],
     });
     expect(
       buildAgentRunStatePatch(forwarded, {
@@ -212,6 +214,25 @@ describe("buildRunConfig", () => {
 
     expect(config.fileIds).toEqual(["file-ref-1"]);
     expect(config.pinnedPaths).toEqual(["output/report.html"]);
+  });
+
+  it("carries deduped evidence refs as run focus", () => {
+    const evidenceRef = {
+      id: "artifact:orders",
+      kind: "table" as const,
+      label: "orders_by_region",
+      sessionId: "thread-1",
+      runId: "run-1",
+      source: { artifactId: "orders" },
+    };
+    const config = buildRunConfig(store, {
+      activeLlmId: "llm-1",
+      defaultDatasourceId: "db-default",
+      evidenceRefs: [evidenceRef, evidenceRef],
+      session,
+    });
+
+    expect(config.evidenceRefs).toEqual([evidenceRef]);
   });
 
   it("marks current-session artifact pins as backend supported", () => {

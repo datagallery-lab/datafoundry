@@ -1,14 +1,17 @@
 import { useEffect } from "react";
+import type { EvidenceRef } from "@datafoundry/contracts";
 import type { DataArtifact, TimelineEvent } from "../../data-task-state";
 import type { JobDto } from "../../../../lib/config-api";
 import type { LiveRun, SessionUsageStats } from "../../live-run-state";
 import type { ProcessToolGroup } from "../../process-tool-groups";
 import type { TaskSelection } from "../../page";
+import type { EvidenceCard } from "../../evidence";
 import { overlayBackdropClass, overlayPanelClass } from "../../ui-tokens";
 import { TaskConsole } from "./TaskConsole";
 
 type TaskConsoleDrawerProps = {
   artifacts: DataArtifact[];
+  evidenceCards: EvidenceCard[];
   liveRun: LiveRun;
   toolGroups: ProcessToolGroup[];
   sessionUsage: SessionUsageStats;
@@ -19,6 +22,8 @@ type TaskConsoleDrawerProps = {
   onArtifactFocusHandled?: () => void;
   onClearSelection: () => void;
   onMentionArtifact?: (artifact: DataArtifact) => void;
+  onToggleEvidenceRef?: (ref: EvidenceRef) => void;
+  onClearEvidenceRefs?: () => void;
   isOpen: boolean;
   onClose: () => void;
   onOpenTrace: () => void;
@@ -27,10 +32,12 @@ type TaskConsoleDrawerProps = {
   onSelectEvent: (eventId: string) => void;
   onSelectToolGroup: (groupId: string) => void;
   promotedArtifactIds?: ReadonlySet<string>;
+  selectedEvidenceRefs?: EvidenceRef[];
 };
 
 export function TaskConsoleDrawer({
   artifacts,
+  evidenceCards,
   liveRun,
   toolGroups,
   sessionUsage,
@@ -41,6 +48,8 @@ export function TaskConsoleDrawer({
   onArtifactFocusHandled,
   onClearSelection,
   onMentionArtifact,
+  onToggleEvidenceRef,
+  onClearEvidenceRefs,
   isOpen,
   onClose,
   onOpenTrace,
@@ -49,6 +58,7 @@ export function TaskConsoleDrawer({
   onSelectEvent,
   onSelectToolGroup,
   promotedArtifactIds,
+  selectedEvidenceRefs,
 }: TaskConsoleDrawerProps) {
   useEffect(() => {
     if (!isOpen) return;
@@ -72,6 +82,7 @@ export function TaskConsoleDrawer({
       <div className={`mx-auto h-full max-w-lg sm:max-w-xl ${overlayPanelClass}`}>
         <TaskConsole
           artifacts={artifacts}
+          evidenceCards={evidenceCards}
           liveRun={liveRun}
           toolGroups={toolGroups}
           sessionUsage={sessionUsage}
@@ -83,12 +94,15 @@ export function TaskConsoleDrawer({
           onClearSelection={onClearSelection}
           onClose={onClose}
           onMentionArtifact={onMentionArtifact}
+          onToggleEvidenceRef={onToggleEvidenceRef}
+          onClearEvidenceRefs={onClearEvidenceRefs}
           onOpenTrace={onOpenTrace}
           onPromoteArtifact={onPromoteArtifact}
           onArtifactExportJob={onArtifactExportJob}
           onSelectEvent={onSelectEvent}
           onSelectToolGroup={onSelectToolGroup}
           promotedArtifactIds={promotedArtifactIds}
+          selectedEvidenceRefs={selectedEvidenceRefs}
         />
       </div>
     </div>

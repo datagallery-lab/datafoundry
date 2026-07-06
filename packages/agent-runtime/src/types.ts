@@ -1,4 +1,5 @@
 import type { BaseEvent } from "@ag-ui/core";
+import type { EvidenceRef } from "@datafoundry/contracts";
 
 /** Per-run @ mention focus (R-019). Each kind lists focused IDs (subset of enabled*Ids). */
 export type PerRunMention = {
@@ -26,6 +27,8 @@ export type AgentRunContext = {
   mentioned?: PerRunMention;
   /** Per-run pinned session-relative paths (R-024). */
   pinned_paths?: string[];
+  /** User-selected evidence references for this run. Concrete content is resolved server-side. */
+  evidence_refs?: EvidenceRef[];
 };
 
 export type AgentRunContextInput = AgentRunContext;

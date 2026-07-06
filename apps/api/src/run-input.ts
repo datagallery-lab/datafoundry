@@ -1,4 +1,5 @@
 import type { RunAgentInput } from "@ag-ui/client";
+import type { EvidenceKind, EvidenceRef } from "@datafoundry/contracts";
 import type { ConfigResourceKind, MetadataStore } from "@datafoundry/metadata";
 import type { SkillMode, SkillPolicyConfig } from "@datafoundry/skills";
 
@@ -45,6 +46,8 @@ export type EffectiveRunConfig = {
   };
   /** Per-run pinned session-relative paths (R-024). Sanitized, escape-checked. */
   pinnedPaths?: string[];
+  /** User-selected evidence references for this run. Resolved server-side before prompt assembly. */
+  evidenceRefs: EvidenceRef[];
   /**
    * Resources silently dropped from `enabled*Ids` because `default_enabled=false` (R-020).
    * The run continues; this list is surfaced in `run.config.resolved` for diagnostics.
@@ -108,6 +111,7 @@ export const extractEffectiveRunConfig = (
   });
   // R-024: parse pinned session-relative paths. Drop anything that escapes or is unsafe.
   const pinnedPaths = pinnedPathsFromAliases(runConfig, ["pinnedPaths", "pinned_paths"]);
+  const evidenceRefs = evidenceRefsFromAliases(runConfig, ["evidenceRefs", "evidence_refs"]);
 
   if (!effectiveDatasourceIds.includes(activeDatasourceId)) {
     throw new Error("ACTIVE_DATASOURCE_NOT_ENABLED");
@@ -131,7 +135,8 @@ export const extractEffectiveRunConfig = (
     skillTags,
     ...(goal ? { goal } : {}),
     ...(mentioned ? { mentioned } : {}),
-    ...(pinnedPaths.length > 0 ? { pinnedPaths } : {})
+    ...(pinnedPaths.length > 0 ? { pinnedPaths } : {}),
+    evidenceRefs
   };
 };
 
@@ -251,7 +256,9 @@ const extractGoal = (runConfig: Record<string, unknown>): EffectiveRunConfig["go
 const extractSkillPolicy = (runConfig: Record<string, unknown>): SkillPolicyConfig => {
   const policy = recordFromUnknown(runConfig.skillPolicy ?? runConfig.skill_policy) ?? {};
   const maxSkills = integerInRange(policy.maxSkills ?? policy.max_skills, 1, 20) ?? 5;
-  const allowedToolNames = unique(stringArrayOptionFromAliases(policy, ["allowedToolNames", "allowed_tool_names"]) ?? []);
+  const allowedToolNames = unique(
+    stringArrayOptionFromAliases(policy, ["allowedToolNames", "allowed_tool_names"]) ?? []
+  );
   return {
     ...(allowedToolNames.length > 0 ? { allowedToolNames } : {}),
     deniedToolNames: unique(stringArrayOptionFromAliases(
@@ -470,3 +477,88 @@ const pinnedPathsFromAliases = (record: Record<string, unknown>, aliases: string
   }
   return unique(safe);
 };
+
+const EVIDENCE_REF_LIMIT = 20;
+
+const evidenceRefsFromAliases = (record: Record<string, unknown>, aliases: string[]): EvidenceRef[] => {
+  let raw: unknown;
+  for (const alias of aliases) {
+    if (alias in record) {
+      raw = record[alias];
+      break;
+    }
+  }
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  const refs: EvidenceRef[] = [];
+  const seen = new Set<string>();
+  for (const entry of raw) {
+    const ref = evidenceRefFromUnknown(entry);
+    if (!ref || seen.has(ref.id)) continue;
+    seen.add(ref.id);
+    refs.push(ref);
+    if (refs.length >= EVIDENCE_REF_LIMIT) break;
+  }
+  return refs;
+};
+
+const evidenceRefFromUnknown = (value: unknown): EvidenceRef | undefined => {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const id = stringFromRecord(value, "id");
+  const kindValue = stringFromRecord(value, "kind");
+  const label = stringFromRecord(value, "label");
+  const sessionId = stringFromAliases(value, ["sessionId", "session_id"]);
+  if (!id || !isEvidenceKind(kindValue) || !label || !sessionId) {
+    return undefined;
+  }
+  const summary = stringFromRecord(value, "summary");
+  const runId = stringFromAliases(value, ["runId", "run_id"]);
+  const source = evidenceRefSourceFromUnknown(value.source);
+  return {
+    id,
+    kind: kindValue,
+    label,
+    ...(summary ? { summary } : {}),
+    sessionId,
+    ...(runId ? { runId } : {}),
+    source
+  };
+};
+
+const evidenceRefSourceFromUnknown = (value: unknown): EvidenceRef["source"] => {
+  const source = isRecord(value) ? value : {};
+  return {
+    ...optionalStringField(source, "artifactId", "artifact_id"),
+    ...optionalStringField(source, "toolCallId", "tool_call_id"),
+    ...optionalStringField(source, "eventId", "event_id"),
+    ...optionalStringField(source, "auditLogId", "audit_log_id"),
+    ...optionalStringField(source, "fileId", "file_id"),
+    ...optionalStringField(source, "datasourceId", "datasource_id"),
+    ...optionalStringField(source, "tableName", "table_name"),
+    ...optionalStringField(source, "documentId", "document_id"),
+    ...optionalStringField(source, "chunkId", "chunk_id")
+  };
+};
+
+const optionalStringField = (
+  record: Record<string, unknown>,
+  camelKey: keyof EvidenceRef["source"],
+  snakeKey: string
+): Partial<EvidenceRef["source"]> => {
+  const value = stringFromAliases(record, [camelKey, snakeKey]);
+  return value ? { [camelKey]: value } : {};
+};
+
+const isEvidenceKind = (value: unknown): value is EvidenceKind =>
+  value === "table" ||
+  value === "chart" ||
+  value === "report" ||
+  value === "file" ||
+  value === "sql" ||
+  value === "schema" ||
+  value === "preview" ||
+  value === "knowledge" ||
+  value === "step";
