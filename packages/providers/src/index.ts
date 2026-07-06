@@ -19,11 +19,6 @@ export type EmbeddingProviderConfig = {
 
 export type ModelProvider =
   | {
-      kind: "mastra-router";
-      model_name: string;
-      model: unknown;
-    }
-  | {
       kind: "openai-compatible";
       model_name: string;
       model: unknown;
@@ -45,26 +40,15 @@ export const createModelProvider = (env: Record<string, string | undefined>): Mo
 
 /** Create one model provider from a persisted model-profile configuration. */
 export const createModelProviderFromConfig = (config: ChatProviderConfig): ModelProvider => {
-  const providerName = config.provider.toLowerCase();
+  const providerName = normalizeChatProviderName(config.provider);
+  if (!providerName) {
+    throw new Error(`PROVIDER_UNSUPPORTED:${config.provider}`);
+  }
 
   if (!config.api_key) {
     return {
       kind: "mock",
       model_name: config.model
-    };
-  }
-
-  if (!isOpenAiCompatibleProvider(providerName)) {
-    const modelId = normalizeMastraRouterModelId(providerName, config.model);
-
-    return {
-      kind: "mastra-router",
-      model_name: modelId,
-      model: {
-        id: modelId,
-        url: config.base_url,
-        apiKey: config.api_key
-      }
     };
   }
 
@@ -80,8 +64,16 @@ export const createModelProviderFromConfig = (config: ChatProviderConfig): Model
   };
 };
 
-const normalizeMastraRouterModelId = (provider: string, model: string): string =>
-  model.includes("/") ? model : `${provider}/${model}`;
+const normalizeChatProviderName = (provider: string): "openai-compatible" | undefined => {
+  const normalized = provider.trim().toLowerCase().replaceAll("_", "-");
+  if (
+    normalized === "openai-compatible"
+    || normalized === "bailian"
+    || normalized === "deepseek"
+    || normalized === "openai"
+  ) {
+    return "openai-compatible";
+  }
 
-const isOpenAiCompatibleProvider = (provider: string): boolean =>
-  provider === "openai-compatible" || provider === "openai_compatible" || provider === "bailian";
+  return undefined;
+};

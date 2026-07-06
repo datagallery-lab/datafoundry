@@ -307,7 +307,12 @@ export type EnvConfig = {
 export const ENV_VARIABLE_SPECS: EnvVariableSpec[] = [
   { name: "API_HOST", required: false, default_value: "127.0.0.1", description: "Agent runtime bind host." },
   { name: "API_PORT", required: false, default_value: "8787", description: "Agent runtime bind port." },
-  { name: "LLM_PROVIDER", required: false, default_value: "bailian", description: "Chat model provider." },
+  {
+    name: "LLM_PROVIDER",
+    required: false,
+    default_value: "openai-compatible",
+    description: "Chat model provider. Only OpenAI-compatible chat completions are supported."
+  },
   { name: "LLM_MODEL", required: false, default_value: "qwen-plus", description: "Chat model name." },
   { name: "LLM_BASE_URL", required: true, description: "OpenAI-compatible chat completions base URL." },
   {
@@ -348,7 +353,7 @@ export const createEnvConfig = (env: Record<string, string | undefined>): EnvCon
     port: Number.parseInt(env.API_PORT ?? "8787", 10)
   },
   llm: {
-    provider: env.LLM_PROVIDER ?? "bailian",
+    provider: env.LLM_PROVIDER ?? "openai-compatible",
     model: env.LLM_MODEL ?? "qwen-plus",
     base_url: env.LLM_BASE_URL ?? "https://dashscope.aliyuncs.com/compatible-mode/v1",
     ...(env.LLM_API_KEY ? { api_key: env.LLM_API_KEY } : {})

@@ -234,7 +234,7 @@ try {
       dataGateway: {},
       emitter: { emit: () => undefined },
       messages: [],
-      modelProvider: { kind: "mastra-router", model: "openai/smoke", model_name: "smoke" },
+      modelProvider: { kind: "openai-compatible", model: "openai/smoke", model_name: "smoke" },
       runContext: {
         user_id: resourceId,
         session_id: threadId,

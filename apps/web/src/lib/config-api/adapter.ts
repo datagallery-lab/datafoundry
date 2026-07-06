@@ -27,6 +27,19 @@ function pickString(record: Record<string, unknown>, ...keys: string[]): string 
   return "";
 }
 
+function normalizeLlmProvider(provider?: string): string {
+  const normalized = provider?.trim().toLowerCase().replaceAll("_", "-") ?? "";
+  if (
+    normalized === "bailian"
+    || normalized === "deepseek"
+    || normalized === "openai"
+    || normalized === "openai-compatible"
+  ) {
+    return "openai-compatible";
+  }
+  return normalized || "openai-compatible";
+}
+
 function pickBooleanString(record: Record<string, unknown>, key: string): string {
   const value = record[key];
   if (typeof value === "boolean") return value ? "true" : "false";
@@ -194,7 +207,7 @@ export function modelProfileDtoToItem(dto: ModelProfileDto): WorkspaceConfigItem
     revision: dto.revision,
     status: mapConnectionStatus(dto.connectionStatus),
     settings: {
-      provider: dto.provider ?? "openai-compatible",
+      provider: normalizeLlmProvider(dto.provider),
       baseUrl: dto.baseUrl ?? "",
       modelName: dto.modelName ?? "",
       apiKey: "",
@@ -468,7 +481,7 @@ export function itemToCreateBody(
       ]);
       return {
         ...base,
-        provider: settings.provider ?? "openai-compatible",
+        provider: normalizeLlmProvider(settings.provider),
         modelName: settings.modelName?.trim() ?? "",
         baseUrl: settings.baseUrl?.trim() ?? "",
         ...(parseNumber(settings.timeoutMs) !== undefined
@@ -646,7 +659,7 @@ export function itemToPatchBody(
       appendMcpStdioFields(body, settings);
       break;
     case "llm":
-      if (settings.provider?.trim()) body.provider = settings.provider.trim();
+      body.provider = normalizeLlmProvider(settings.provider);
       if (settings.modelName?.trim()) body.modelName = settings.modelName.trim();
       if (settings.baseUrl?.trim()) body.baseUrl = settings.baseUrl.trim();
       if (settings.fallbackProfileId?.trim()) {

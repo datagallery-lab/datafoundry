@@ -4,6 +4,7 @@ import {
   itemToCreateBody,
   itemToPatchBody,
   mcpServerDtoToItem,
+  modelProfileDtoToItem,
   workspaceConfigDtoToStore,
 } from "../../../lib/config-api/adapter";
 import {
@@ -160,6 +161,33 @@ describe("config api adapter", () => {
 
     expect(body.contextLength).toBe(128000);
     expect(body.reasoningModel).toBe(true);
+  });
+
+  it("normalizes legacy llm providers to openai-compatible", () => {
+    const item = modelProfileDtoToItem({
+      id: "deepseek",
+      name: "DeepSeek",
+      provider: "deepseek",
+      modelName: "deepseek-chat",
+    });
+    const createBody = itemToCreateBody("llm", {
+      id: "qwen",
+      name: "Qwen",
+      description: "",
+      enabled: true,
+      settings: { provider: "openai_compatible", modelName: "qwen-plus" },
+    });
+    const patchBody = itemToPatchBody("llm", {
+      id: "qwen",
+      name: "Qwen",
+      description: "",
+      enabled: true,
+      settings: { provider: "bailian" },
+    });
+
+    expect(item.settings?.provider).toBe("openai-compatible");
+    expect(createBody.provider).toBe("openai-compatible");
+    expect(patchBody.provider).toBe("openai-compatible");
   });
 
   it("maps workspace config dto to store buckets", () => {

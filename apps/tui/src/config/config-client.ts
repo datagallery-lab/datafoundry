@@ -146,14 +146,7 @@ const DatasourceSchemaResponseSchema = z.object({
 // ==================== Model Profile Schemas ====================
 
 const ModelProfileSchema = CommonFieldsSchema.extend({
-  provider: z.enum([
-    "openai-compatible",
-    "bailian",
-    "deepseek",
-    "openai",
-    "anthropic",
-    "google",
-  ]),
+  provider: z.string().default("openai-compatible"),
   baseUrl: z.string().optional(),
   modelName: z.string(),
   secretRef: z.string().optional(),

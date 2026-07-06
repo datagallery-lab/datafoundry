@@ -1058,15 +1058,23 @@ export const MCP_AUTH_TYPE_OPTIONS = [
   { value: "custom-header", label: "Custom header (pending backend)" },
 ] as const;
 
-/** Aligns with dataFoundry `LLM_PROVIDER` env and Mastra router provider ids. */
+/** Chat models use one OpenAI-compatible provider path; vendor choice lives in baseUrl/modelName. */
 export const LLM_PROVIDER_OPTIONS = [
   { value: "openai-compatible", label: "OpenAI compatible (LLM_PROVIDER=openai-compatible)" },
-  { value: "bailian", label: "Bailian DashScope (bailian)" },
-  { value: "deepseek", label: "DeepSeek (deepseek)" },
-  { value: "openai", label: "OpenAI (openai)" },
-  { value: "anthropic", label: "Anthropic (anthropic)" },
-  { value: "google", label: "Google Gemini (google)" },
 ] as const;
+
+function normalizeLlmProvider(provider?: string): string {
+  const normalized = provider?.trim().toLowerCase().replaceAll("_", "-") ?? "";
+  if (
+    normalized === "bailian"
+    || normalized === "deepseek"
+    || normalized === "openai"
+    || normalized === "openai-compatible"
+  ) {
+    return "openai-compatible";
+  }
+  return normalized || "openai-compatible";
+}
 
 export function normalizeLlmSettings(
   settings?: Record<string, string>,
@@ -1077,7 +1085,7 @@ export function normalizeLlmSettings(
   modelName: string;
 } {
   return {
-    provider: settings?.provider ?? "openai-compatible",
+    provider: normalizeLlmProvider(settings?.provider),
     baseUrl: settings?.baseUrl ?? settings?.base_url ?? "",
     apiKey: settings?.apiKey ?? settings?.api_key ?? "",
     modelName:
@@ -1668,7 +1676,7 @@ export const WORKSPACE_CONFIG_FIELDS: Record<
       inputType: "select",
       options: [...LLM_PROVIDER_OPTIONS],
       helpText:
-        "openai-compatible / bailian use the OpenAI-compatible path. anthropic/google await integration validation.",
+        "All chat models use the OpenAI-compatible /chat/completions path.",
       required: true,
       fullWidth: true,
     },
