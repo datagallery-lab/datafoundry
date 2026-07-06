@@ -4,6 +4,10 @@ import {
   createMastraStreamNormalizerHooks,
   tokenUsageEventFromChunk,
 } from "../../../../../../packages/agent-runtime/src/stream/mastra-stream-hooks";
+import {
+  normalizeMastraFullStream,
+  wrapAgentForAgUi,
+} from "../../../../../../packages/agent-runtime/src/stream/mastra-stream-normalizer";
 
 describe("tokenUsageEventFromChunk", () => {
   it("extracts usage, tool_call_id, and tool_name from step output", () => {
@@ -78,3 +82,95 @@ describe("createMastraStreamNormalizerHooks token emission", () => {
     });
   });
 });
+
+describe("normalizeMastraFullStream", () => {
+  it("drops Mastra internal chunks before AG-UI processing", async () => {
+    const chunks = normalizeMastraFullStream(streamFrom([
+      { type: "abort", payload: { reason: "cancelled" } },
+      { type: "text-start", payload: { id: "msg-1" } },
+      { type: "finish", payload: {} },
+    ]));
+
+    await expect(collectStream(chunks)).resolves.toEqual([{ type: "finish", payload: {} }]);
+  });
+});
+
+describe("wrapAgentForAgUi abort signal passthrough", () => {
+  it("passes the run abort signal into stream options", async () => {
+    const runAbortController = new AbortController();
+    let receivedSignal: AbortSignal | undefined;
+    const agent = wrapAgentForAgUi(
+      {
+        async stream(_messages: unknown, options?: { abortSignal?: AbortSignal; marker?: string }) {
+          receivedSignal = options?.abortSignal;
+          return { fullStream: emptyStream() };
+        },
+      },
+      {},
+      { abortSignal: runAbortController.signal },
+    );
+
+    await agent.stream([], { marker: "kept" });
+
+    expect(receivedSignal).toBe(runAbortController.signal);
+  });
+
+  it("merges an existing stream abort signal with the run abort signal", async () => {
+    const upstreamAbortController = new AbortController();
+    const runAbortController = new AbortController();
+    let receivedSignal: AbortSignal | undefined;
+    const agent = wrapAgentForAgUi(
+      {
+        async stream(_messages: unknown, options?: { abortSignal?: AbortSignal }) {
+          receivedSignal = options?.abortSignal;
+          return { fullStream: emptyStream() };
+        },
+      },
+      {},
+      { abortSignal: runAbortController.signal },
+    );
+
+    await agent.stream([], { abortSignal: upstreamAbortController.signal });
+    runAbortController.abort(new Error("run cancelled"));
+
+    expect(receivedSignal).not.toBe(upstreamAbortController.signal);
+    expect(receivedSignal?.aborted).toBe(true);
+  });
+
+  it("passes the run abort signal into resumeStream options", async () => {
+    const runAbortController = new AbortController();
+    let receivedSignal: AbortSignal | undefined;
+    const agent = wrapAgentForAgUi(
+      {
+        async resumeStream(_resumeData: unknown, options?: { abortSignal?: AbortSignal }) {
+          receivedSignal = options?.abortSignal;
+          return { fullStream: emptyStream() };
+        },
+      },
+      {},
+      { abortSignal: runAbortController.signal },
+    );
+
+    await agent.resumeStream({ answer: "yes" }, {});
+
+    expect(receivedSignal).toBe(runAbortController.signal);
+  });
+});
+
+async function* emptyStream() {
+  yield { type: "finish", payload: {} };
+}
+
+async function* streamFrom(chunks: Array<{ payload?: unknown; type: string }>) {
+  for (const chunk of chunks) {
+    yield chunk;
+  }
+}
+
+async function collectStream<T>(stream: AsyncIterable<T>): Promise<T[]> {
+  const chunks: T[] = [];
+  for await (const chunk of stream) {
+    chunks.push(chunk);
+  }
+  return chunks;
+}

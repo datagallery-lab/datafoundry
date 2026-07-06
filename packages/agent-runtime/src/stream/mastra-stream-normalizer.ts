@@ -13,7 +13,12 @@ export type MastraStreamNormalizerHooks = {
   onQuarantine?: (chunk: MastraStreamChunk) => void;
 };
 
-const PAYLOADLESS_CHUNK_TYPES = new Set([
+export type MastraAgentForAgUiOptions = {
+  abortSignal?: AbortSignal | undefined;
+};
+
+const INTERNAL_CHUNK_TYPES = new Set([
+  "abort",
   "text-start",
   "text-end",
   "tool-call-input-streaming-start",
@@ -48,7 +53,7 @@ export async function* normalizeMastraFullStream(
       continue;
     }
 
-    if (type && PAYLOADLESS_CHUNK_TYPES.has(type) && chunk.payload === undefined) {
+    if (type && INTERNAL_CHUNK_TYPES.has(type)) {
       continue;
     }
 
@@ -85,15 +90,16 @@ export async function* normalizeMastraFullStream(
 /** Wrap a local Mastra Agent so only fullStream is normalized for AG-UI consumption. */
 export function wrapAgentForAgUi<TAgent extends object>(
   agent: TAgent,
-  hooks: MastraStreamNormalizerHooks = {}
+  hooks: MastraStreamNormalizerHooks = {},
+  options: MastraAgentForAgUiOptions = {}
 ): TAgent {
   return new Proxy(agent, {
     get(target, prop, receiver) {
       const value = Reflect.get(target, prop, receiver);
 
-      if (prop === "stream" && typeof value === "function") {
+      if ((prop === "stream" || prop === "resumeStream") && typeof value === "function") {
         return async (...args: unknown[]) => {
-          const response = await value.apply(target, args);
+          const response = await value.apply(target, withAbortSignal(args, options.abortSignal));
           if (!response || typeof response !== "object") {
             return response;
           }
@@ -121,6 +127,45 @@ export function wrapAgentForAgUi<TAgent extends object>(
     }
   }) as TAgent;
 }
+
+const withAbortSignal = (args: unknown[], abortSignal?: AbortSignal | undefined): unknown[] => {
+  if (!abortSignal) {
+    return args;
+  }
+  const nextArgs = [...args];
+  const streamOptions = isRecord(nextArgs[1]) ? nextArgs[1] : {};
+  nextArgs[1] = {
+    ...streamOptions,
+    abortSignal: mergeAbortSignals(streamOptions.abortSignal, abortSignal)
+  };
+  return nextArgs;
+};
+
+const mergeAbortSignals = (
+  first: unknown,
+  second: AbortSignal
+): AbortSignal => {
+  if (!(first instanceof AbortSignal)) {
+    return second;
+  }
+  if (first === second) {
+    return second;
+  }
+  if (typeof AbortSignal.any === "function") {
+    return AbortSignal.any([first, second]);
+  }
+  if (first.aborted) {
+    return AbortSignal.abort(first.reason);
+  }
+  if (second.aborted) {
+    return AbortSignal.abort(second.reason);
+  }
+  const controller = new AbortController();
+  const abort = (signal: AbortSignal): void => controller.abort(signal.reason);
+  first.addEventListener("abort", () => abort(first), { once: true });
+  second.addEventListener("abort", () => abort(second), { once: true });
+  return controller.signal;
+};
 
 const stringifyStreamError = (error: unknown): string => {
   if (error instanceof Error) {

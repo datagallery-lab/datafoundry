@@ -112,6 +112,7 @@ export {
 export {
   normalizeMastraFullStream,
   wrapAgentForAgUi,
+  type MastraAgentForAgUiOptions,
   type MastraStreamChunk,
   type MastraStreamNormalizerHooks
 } from "./stream/mastra-stream-normalizer.js";
@@ -441,6 +442,7 @@ export const createDataFoundry = async (
   const agentForAgUi = wrapAgentForAgUi(
     agent,
     createMastraStreamNormalizerHooks(input.emitter),
+    { ...(input.abortSignal ? { abortSignal: input.abortSignal } : {}) },
   );
   const mastra = input.taskStateRuntime
     ? new Mastra({

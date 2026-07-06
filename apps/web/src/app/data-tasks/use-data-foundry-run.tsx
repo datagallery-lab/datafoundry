@@ -153,7 +153,7 @@ export function LiveRunProvider({ children }: { children: ReactNode }) {
     [isRestoringConversation],
   );
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const previous = prevRunStatusRef.current;
     const current = liveRun.runStatus;
     if (previous === "running" && current === "completed") {
