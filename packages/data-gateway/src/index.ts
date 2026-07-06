@@ -189,6 +189,7 @@ export class LocalDataGateway implements DataGateway {
     throwIfAborted(input.signal);
     const startedAt = Date.now();
     const auditLogId = randomUUID();
+    let auditLogCreated = false;
     const dataSource = this.metadataStore.dataSources.get(input);
     const guard = guardReadonlySql(input.sql);
 
@@ -203,6 +204,7 @@ export class LocalDataGateway implements DataGateway {
         ...(input.run_id ? { run_id: input.run_id } : {}),
         elapsed_ms: Date.now() - startedAt
       });
+      auditLogCreated = true;
       throw new Error(`SQL_BLOCKED: ${guard.reason}`);
     }
 
@@ -231,7 +233,7 @@ export class LocalDataGateway implements DataGateway {
         timeoutMs,
         input.signal
       );
-      const maskedResult = maskTableResult(result, resourcePolicy.maskFields);
+      const maskedResult = normalizeTableResult(maskTableResult(result, resourcePolicy.maskFields));
       const elapsedMs = Date.now() - startedAt;
       const audit = this.metadataStore.sqlAuditLogs.create({
         user_id: input.user_id,
@@ -243,6 +245,7 @@ export class LocalDataGateway implements DataGateway {
         elapsed_ms: elapsedMs,
         ...(input.run_id ? { run_id: input.run_id } : {})
       });
+      auditLogCreated = true;
       const run = input.run_id
         ? this.metadataStore.runs.get({ user_id: input.user_id, run_id: input.run_id })
         : undefined;
@@ -278,16 +281,18 @@ export class LocalDataGateway implements DataGateway {
       const elapsedMs = Date.now() - startedAt;
       const isTimeout = error instanceof Error && error.message === "SQL_TIMEOUT";
       const isCancelled = error instanceof Error && isAbortError(error);
-      this.metadataStore.sqlAuditLogs.create({
-        user_id: input.user_id,
-        id: auditLogId,
-        datasource_id: input.datasource_id,
-        sql_text: guard.normalized_sql,
-        status: isCancelled ? "canceled" : isTimeout ? "timeout" : "failed",
-        blocked_reason: error instanceof Error ? error.message : "Unknown SQL execution error",
-        elapsed_ms: elapsedMs,
-        ...(input.run_id ? { run_id: input.run_id } : {})
-      });
+      if (!auditLogCreated) {
+        this.metadataStore.sqlAuditLogs.create({
+          user_id: input.user_id,
+          id: auditLogId,
+          datasource_id: input.datasource_id,
+          sql_text: guard.normalized_sql,
+          status: isCancelled ? "canceled" : isTimeout ? "timeout" : "failed",
+          blocked_reason: error instanceof Error ? error.message : "Unknown SQL execution error",
+          elapsed_ms: elapsedMs,
+          ...(input.run_id ? { run_id: input.run_id } : {})
+        });
+      }
       throw error;
     }
   }
@@ -487,6 +492,37 @@ const maskTableResult = (result: TableResult, maskFields: string[]): TableResult
     rows: result.rows.map((row) =>
       row.map((value, index) => maskedIndexes.includes(index) && value !== null ? "[MASKED]" : value))
   };
+};
+
+const normalizeTableResult = (result: TableResult): TableResult => ({
+  ...result,
+  rows: result.rows.map((row) => row.map(jsonSafeValue))
+});
+
+const jsonSafeValue = (value: unknown): unknown => {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  if (typeof value === "bigint") {
+    const numberValue = Number(value);
+    return Number.isSafeInteger(numberValue) ? numberValue : value.toString();
+  }
+  if (value instanceof Date) {
+    return value.toISOString();
+  }
+  if (Array.isArray(value)) {
+    return value.map(jsonSafeValue);
+  }
+  if (typeof value === "object") {
+    const jsonValue = value as { toJSON?: () => unknown };
+    if (typeof jsonValue.toJSON === "function") {
+      return jsonSafeValue(jsonValue.toJSON());
+    }
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>).map(([key, item]) => [key, jsonSafeValue(item)])
+    );
+  }
+  return value;
 };
 
 const stringArray = (value: unknown): string[] =>
