@@ -8,7 +8,7 @@ import {
 describe("dashscope prompt compat", () => {
   it("enables compat for openai-compatible providers", () => {
     expect(shouldApplyDashScopePromptCompat("openai-compatible")).toBe(true);
-    expect(shouldApplyDashScopePromptCompat("mastra-router")).toBe(false);
+    expect(shouldApplyDashScopePromptCompat("unsupported-provider")).toBe(false);
   });
 
   it("adds placeholder text to assistant messages that only contain tool calls", () => {

@@ -133,7 +133,7 @@ try {
     longTermMemory: { records: memories },
     messages: [{ id: "agent-user", role: "user", content: "继续分析 GMV 和退款率" }],
     modelProvider: {
-      kind: "mastra-router",
+      kind: "openai-compatible",
       model_name: "long-term-memory-smoke/model",
       model: { id: "long-term-memory-smoke/model", url: "http://127.0.0.1:1", apiKey: "unused" }
     },

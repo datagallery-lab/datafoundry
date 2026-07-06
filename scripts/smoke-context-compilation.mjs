@@ -1071,7 +1071,7 @@ const configuredAgent = await createDataFoundry({
   dataGateway: {},
   emitter: { emit: () => undefined },
   modelProvider: {
-    kind: "mastra-router",
+    kind: "openai-compatible",
     model_name: "context-smoke/model",
     model: { id: "context-smoke/model", url: "http://127.0.0.1:1", apiKey: "unused" }
   },

@@ -87,7 +87,7 @@ const knowledgeService = new LocalKnowledgeService(store, {
 const gateway = new LocalDataGateway(store);
 
 const fakeModelProvider = {
-  kind: "mastra-router",
+  kind: "openai-compatible",
   model: "openai/verify",
   model_name: "verify",
 };
