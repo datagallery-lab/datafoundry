@@ -1,5 +1,6 @@
 import type { Message } from "@ag-ui/core";
 import type {
+  ConversationCheckpointDto,
   ConversationMessageDto,
   ConversationToolCallDto,
   RestorableCustomEventDto,
@@ -89,8 +90,9 @@ export function hydrateSessionUsageFromConversation(
   const events = sortRestorableCustomEvents(dto.restorableCustomEvents ?? []);
   let session = createInitialSessionUsage();
 
+  const checkpoints = checkpointByRunId(dto);
   for (const segment of collectRestorableRunSegments(dto)) {
-    const status = hydratedSegmentStatus(segment);
+    const status = hydratedSegmentStatus(segment, checkpoints.get(segment.runId));
     if (status === "suspended" || status === "running" || status === "idle" || status === "canceled") {
       continue;
     }
@@ -113,7 +115,7 @@ export function hydrateSessionUsageFromConversation(
       status === "failed"
         ? reduceLiveRunEvent(run, {
             type: "RUN_ERROR",
-            message: ORPHANED_RUN_ASSISTANT_PLACEHOLDER,
+            message: failedRunErrorMessage(dto, segment.runId),
           })
         : reduceLiveRunEvent(run, { type: "RUN_FINISHED" });
     session = accumulateSessionUsage(session, deriveRunUsage(run), status);
@@ -589,24 +591,57 @@ function createRunFacts(dto: SessionConversationDto): {
   };
 }
 
+function checkpointByRunId(
+  dto: SessionConversationDto,
+): Map<string, ConversationCheckpointDto> {
+  const map = new Map<string, ConversationCheckpointDto>();
+  for (const checkpoint of dto.checkpoints ?? []) {
+    map.set(checkpoint.runId, checkpoint);
+  }
+  return map;
+}
+
+function runStatusFromCheckpoint(
+  checkpoint: ConversationCheckpointDto | undefined,
+): LiveRun["runStatus"] | undefined {
+  if (!checkpoint) {
+    return undefined;
+  }
+  switch (checkpoint.status) {
+    case "queued":
+    case "running":
+      return "running";
+    case "suspended":
+      return "suspended";
+    case "canceled":
+      return "canceled";
+    case "failed":
+      return "failed";
+    case "completed":
+      return "completed";
+    default:
+      return undefined;
+  }
+}
+
+function failedRunErrorMessage(
+  dto: SessionConversationDto,
+  runId: string | undefined,
+): string {
+  if (!runId) {
+    return ORPHANED_RUN_ASSISTANT_PLACEHOLDER;
+  }
+  const checkpoint = checkpointByRunId(dto).get(runId);
+  return checkpoint?.errorMessage?.trim() || ORPHANED_RUN_ASSISTANT_PLACEHOLDER;
+}
+
 function shouldInsertOrphanedRunPlaceholder(
-  entry: ConversationMessageDto,
-  sortedEntries: ConversationMessageDto[],
-  index: number,
-  facts: ReturnType<typeof createRunFacts>,
+  _entry: ConversationMessageDto,
+  _sortedEntries: ConversationMessageDto[],
+  _index: number,
+  _facts: ReturnType<typeof createRunFacts>,
 ): boolean {
-  if (entry.role !== "user" || !entry.runId) {
-    return false;
-  }
-  if (
-    facts.assistantRunIds.has(entry.runId) ||
-    facts.toolRunIds.has(entry.runId) ||
-    facts.pendingRunIds.has(entry.runId)
-  ) {
-    return false;
-  }
-  const nextEntry = sortedEntries[index + 1];
-  return !nextEntry || nextEntry.runId !== entry.runId || nextEntry.role === "user";
+  return false;
 }
 
 function orphanedRunAssistantPlaceholder(runId: string): Message {
@@ -1069,7 +1104,14 @@ function collectRestorableRunSegments(dto: SessionConversationDto): RestorableRu
     }));
 }
 
-function hydratedSegmentStatus(segment: RestorableRunSegment): LiveRun["runStatus"] {
+function hydratedSegmentStatus(
+  segment: RestorableRunSegment,
+  checkpoint?: ConversationCheckpointDto,
+): LiveRun["runStatus"] {
+  const checkpointStatus = runStatusFromCheckpoint(checkpoint);
+  if (checkpointStatus) {
+    return checkpointStatus;
+  }
   if (segment.tools.length > 0) {
     return isPendingCollaborationRunEnd(segment.tools) ? "suspended" : "completed";
   }
@@ -1237,11 +1279,26 @@ function finalizeHydratedRunSegment(
 function finalizeMessageOnlyHydratedRunSegment(
   state: LiveRun,
   segment: RestorableRunSegment,
+  dto: SessionConversationDto,
 ): LiveRun {
+  const checkpoint = checkpointByRunId(dto).get(segment.runId);
+  const checkpointStatus = runStatusFromCheckpoint(checkpoint);
+  if (checkpointStatus === "running" || checkpointStatus === "queued") {
+    return state;
+  }
+  if (checkpointStatus === "suspended") {
+    return reduceLiveRunEvent(state, {
+      type: "STATE_DELTA",
+      delta: [{ op: "replace", path: "/runStatus", value: "suspended" }],
+    });
+  }
+  if (checkpointStatus === "canceled") {
+    return reduceLiveRunEvent(state, { type: "RUN_FINISHED" });
+  }
   if (segment.hasUser && !segment.hasAssistant) {
     return reduceLiveRunEvent(state, {
       type: "RUN_ERROR",
-      message: ORPHANED_RUN_ASSISTANT_PLACEHOLDER,
+      message: failedRunErrorMessage(dto, segment.runId),
     });
   }
   return reduceLiveRunEvent(state, { type: "RUN_FINISHED" });
@@ -1311,7 +1368,7 @@ export function hydrateLiveRunFromConversation(
     next =
       segment.tools.length > 0
         ? finalizeHydratedRunSegment(next, segment.tools)
-        : finalizeMessageOnlyHydratedRunSegment(next, segment);
+        : finalizeMessageOnlyHydratedRunSegment(next, segment, dto);
   }
 
   next = reconcileLiveRunArtifacts(mergePreservedLiveRunSessionData(state, next));

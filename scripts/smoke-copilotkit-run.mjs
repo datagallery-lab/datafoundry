@@ -235,6 +235,7 @@ try {
     forwardedProps: {
       run_config: {
         activeDatasourceId: "api-duckdb-demo",
+        activeLlmProfileId: "server-default",
         enabledDatasourceIds: ["api-duckdb-demo"],
         enabledKnowledgeIds: [],
         enabledMcpServerIds: [],
@@ -244,6 +245,9 @@ try {
   });
 
   assert(events.length > 0, "CopilotKit run should emit events");
+  if (events[events.length - 1]?.type !== EventType.RUN_FINISHED) {
+    console.error("Unexpected normal run events:", JSON.stringify(events, null, 2));
+  }
   assert.equal(events[events.length - 1]?.type, EventType.RUN_FINISHED, "RUN_FINISHED should be the last event");
   assertEventOrder(events, EventType.RUN_STARTED, EventType.RUN_FINISHED);
   assertRunStatusCompletedBeforeFinish(events);
@@ -260,6 +264,90 @@ try {
   assert.equal(llmRequests[0]?.path, "/chat/completions");
   assert.equal(llmRequests[0]?.authorization, "Bearer copilotkit-smoke-key");
   assert(llmRequests.length >= 2, "The fake model should be called once for tool call and once for final answer");
+
+  const branchParentSessionId = `copilotkit-branch-parent-${Date.now()}`;
+  const branchParentRunId = `copilotkit-branch-parent-run-${Date.now()}`;
+  const branchSeedStore = createMetadataStore({ database_path: metadataPath });
+  try {
+    branchSeedStore.sessions.create({
+      user_id: "dev-user",
+      id: branchParentSessionId,
+      title: "CopilotKit branch smoke"
+    });
+    branchSeedStore.runs.create({
+      user_id: "dev-user",
+      id: branchParentRunId,
+      session_id: branchParentSessionId,
+      user_input: "请分析订单。",
+      status: "completed"
+    });
+    branchSeedStore.conversationMessages.append({
+      user_id: "dev-user",
+      session_id: branchParentSessionId,
+      run_id: branchParentRunId,
+      id: `${branchParentRunId}:user`,
+      role: "user",
+      source: "client",
+      message_id: `${branchParentRunId}:frontend-user`,
+      content_text: "请分析订单。",
+      content: { text: "请分析订单。" }
+    });
+    branchSeedStore.conversationMessages.append({
+      user_id: "dev-user",
+      session_id: branchParentSessionId,
+      run_id: branchParentRunId,
+      id: `${branchParentRunId}:assistant`,
+      role: "assistant",
+      source: "agent",
+      message_id: `${branchParentRunId}:assistant`,
+      content_text: "订单分析已完成。",
+      content: { text: "订单分析已完成。" }
+    });
+    branchSeedStore.sessions.touchLastMessage({
+      user_id: "dev-user",
+      session_id: branchParentSessionId
+    });
+  } finally {
+    branchSeedStore.close();
+  }
+  const branchResponse = await fetch(`${baseUrl}/api/v1/sessions/${branchParentSessionId}/branches`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ runId: branchParentRunId })
+  });
+  const branchPayload = await branchResponse.json();
+  assert.equal(branchResponse.status, 201, JSON.stringify(branchPayload));
+  const branchThreadId = branchPayload.data.session.id;
+  const branchRunId = `copilotkit-branch-run-${Date.now()}`;
+  const branchEvents = await runCopilotKitAgent(baseUrl, {
+    threadId: branchThreadId,
+    runId: branchRunId,
+    parentRunId: branchParentRunId,
+    state: {},
+    messages: [{
+      id: "user-message-branch",
+      role: "user",
+      content: "请把订单分析改成表格。"
+    }],
+    tools: [],
+    context: [],
+    forwardedProps: {
+      run_config: {
+        activeDatasourceId: "api-duckdb-demo",
+        activeLlmProfileId: "server-default",
+        enabledDatasourceIds: ["api-duckdb-demo"],
+        enabledKnowledgeIds: [],
+        enabledMcpServerIds: [],
+        enabledSkillIds: []
+      }
+    }
+  });
+  assert.equal(
+    branchEvents.some((event) => event.type === EventType.RUN_ERROR && String(event.message).includes("Thread")),
+    false,
+    `Branch session run should create its working-memory thread before Mastra run: ${JSON.stringify(branchEvents)}`
+  );
+  assert.equal(branchEvents[branchEvents.length - 1]?.type, EventType.RUN_FINISHED);
 
   const skillRunId = `copilotkit-skill-run-smoke-${Date.now()}`;
   const skillThreadId = `copilotkit-skill-thread-smoke-${Date.now()}`;
@@ -278,6 +366,7 @@ try {
     forwardedProps: {
       run_config: {
         activeDatasourceId: "api-duckdb-demo",
+        activeLlmProfileId: "server-default",
         enabledDatasourceIds: ["api-duckdb-demo"],
         enabledKnowledgeIds: [],
         enabledMcpServerIds: [],
@@ -367,6 +456,7 @@ try {
     forwardedProps: {
       run_config: {
         activeDatasourceId: "api-duckdb-demo",
+        activeLlmProfileId: "server-default",
         enabledDatasourceIds: ["api-duckdb-demo"],
         enabledKnowledgeIds: [],
         enabledMcpServerIds: [],
@@ -415,7 +505,7 @@ try {
   }
 
   console.log(
-    "CopilotKit run smoke OK: endpoint run, bad model failure persistence, terminal order, tool results, persistence, replay, suspended state, run timeout"
+    "CopilotKit run smoke OK: endpoint run, branch thread creation, bad model failure persistence, terminal order, tool results, persistence, replay, suspended state, run timeout"
   );
 } finally {
   await closeHttpServer(server);

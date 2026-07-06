@@ -171,6 +171,7 @@ import {
 import {
   LiveRunEventSubscriber,
   LiveRunProvider,
+  useConversationRestoreGate,
   useLiveRun,
 } from "./use-data-foundry-run";
 import {
@@ -248,6 +249,8 @@ import {
   buildDatasourceSettingsForType,
   summarizeDatasourceConnection,
 } from "./datasource-metadata";
+import { useConversationBranchSnapshot } from "./conversation-branch-store";
+import { resolveUserMessageBranchState } from "./conversation-branches";
 import {
   getCollapsedWorkspaceRailCopy,
   getCollapsedWorkspacePreviewClassNames,
@@ -379,6 +382,13 @@ function StableDataTaskChatInput({
     },
     [agent, bindings, copilotkit, reportRunError],
   );
+
+  useEffect(() => {
+    if (!bindings.stopActiveChatRunRef) {
+      return;
+    }
+    bindings.stopActiveChatRunRef.current = inputProps.onStop;
+  }, [bindings.stopActiveChatRunRef, inputProps.onStop]);
 
   const handleSubmitMessage = (value: string) => {
     const ready = attachmentsApi.consumeAttachments();
@@ -706,6 +716,8 @@ function DataTaskWorkspace({
     id: number;
     text: string;
   } | null>(null);
+  const [pendingBranchRun, setPendingBranchRun] = useState<PendingBranchRun | null>(null);
+  const stopActiveChatRunRef = useRef<(() => void) | undefined>(undefined);
   const [chatColumnWidth, setChatColumnWidth] = useState(1280);
   const [layoutHydrated, setLayoutHydrated] = useState(false);
 
@@ -1097,7 +1109,13 @@ function DataTaskWorkspace({
   );
 
   const cancelCurrentRun = useCallback(async () => {
-    if (!liveRun.runId || (liveRun.runStatus !== "running" && liveRun.runStatus !== "suspended")) {
+    if (!liveRun.runId) {
+      return;
+    }
+    const cancellable =
+      liveRun.runStatus === "running" ||
+      liveRun.runStatus === "suspended";
+    if (!cancellable) {
       return;
     }
     setRunCancelBusy(true);
@@ -1105,11 +1123,21 @@ function DataTaskWorkspace({
     try {
       await configApi.cancelRun(liveRun.runId, "user-requested");
     } catch (error) {
-      setConfigActionError(error instanceof Error ? error.message : "Failed to cancel run");
+      const message = error instanceof Error ? error.message : "Failed to cancel run";
+      setConfigActionError(message);
+      throw error instanceof Error ? error : new Error(message);
     } finally {
       setRunCancelBusy(false);
     }
   }, [liveRun.runId, liveRun.runStatus]);
+
+  const stopActiveRun = useCallback(async () => {
+    await performChatRunCancellation({
+      onCancelRun: cancelCurrentRun,
+      onStopFrontend: () => stopActiveChatRunRef.current?.(),
+      throwOnCancelFailure: true,
+    });
+  }, [cancelCurrentRun]);
 
   const filteredSessions = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
@@ -1120,6 +1148,12 @@ function DataTaskWorkspace({
       : sessions;
     return sortChatSessions(matched);
   }, [query, sessions]);
+
+  useEffect(() => {
+    if (pendingBranchRun && activeThreadId && pendingBranchRun.sessionId !== activeThreadId) {
+      setPendingBranchRun(null);
+    }
+  }, [activeThreadId, pendingBranchRun]);
 
   const createSession = useCallback(() => {
     const next = createChatSession();
@@ -1158,6 +1192,27 @@ function DataTaskWorkspace({
         setSessionSyncError(error instanceof Error ? error.message : "Failed to sync session rename");
       });
   }, []);
+
+  const switchConversationBranch = useCallback((sessionId: string) => {
+    setActiveSessionId(sessionId);
+    setSelection(null);
+    setArtifactFocusId(null);
+    setIsTraceOpen(false);
+    setConfigPanel(null);
+    setWorkspaceFilesPanelOpen(false);
+  }, []);
+
+  const createBranchRewrite = useCallback(async ({ runId, text }: BranchRewriteRequest) => {
+    if (!activeThreadId) return;
+    const created = await configApi.createSessionBranch(activeThreadId, { runId });
+    const branchSession = serverSessionDtoToChatSession(created.session);
+    setSessions((current) => {
+      const withoutDuplicate = current.filter((session) => session.id !== branchSession.id);
+      return sortChatSessions([branchSession, ...withoutDuplicate]);
+    });
+    setPendingBranchRun({ sessionId: branchSession.threadId, text });
+    switchConversationBranch(branchSession.id);
+  }, [activeThreadId, switchConversationBranch]);
 
   const deleteSession = useCallback(
     (sessionId: string) => {
@@ -1354,6 +1409,8 @@ function DataTaskWorkspace({
       liveRunStatus: liveRun.runStatus,
       liveRunRunId: liveRun.runId ?? null,
       onCancelRun: cancelCurrentRun,
+      stopActiveRun,
+      stopActiveChatRunRef,
       cancelRunBusy: runCancelBusy,
       getRunForwardedProps,
     }),
@@ -1365,6 +1422,7 @@ function DataTaskWorkspace({
       draftPromptRequest,
       applyFirstUserMessageTitle,
       cancelCurrentRun,
+      stopActiveRun,
       chatColumnWidth,
       enabledLlmOptions,
       openConfigPanel,
@@ -1386,6 +1444,14 @@ function DataTaskWorkspace({
       runCancelBusy,
       getRunForwardedProps,
     ],
+  );
+
+  const conversationBranchActions = useMemo<ConversationBranchActions>(
+    () => ({
+      onCreateBranchRewrite: createBranchRewrite,
+      onSwitchBranch: switchConversationBranch,
+    }),
+    [createBranchRewrite, switchConversationBranch],
   );
 
   const chatInput = useMemo(
@@ -1603,6 +1669,7 @@ function DataTaskWorkspace({
       ) : (
         <>
       <DataTaskChatInputBindingsProvider value={chatInputBindings}>
+      <ConversationBranchActionsContext.Provider value={conversationBranchActions}>
       <ToolActionSelectionContext.Provider value={handleSelectToolAction}>
       <ToolGroupSelectionContext.Provider value={handleSelectToolGroup}>
       <div className="relative z-10 min-h-0 min-w-0 overflow-hidden">
@@ -1625,10 +1692,15 @@ function DataTaskWorkspace({
           }))
         }
         capabilitiesReady={capabilitiesReady}
+        pendingBranchRun={pendingBranchRun}
+        onPendingBranchRunDispatched={() => setPendingBranchRun(null)}
+        getRunForwardedProps={getRunForwardedProps}
+        onUserMessageSubmitted={applyFirstUserMessageTitle}
       />
       </div>
       </ToolGroupSelectionContext.Provider>
       </ToolActionSelectionContext.Provider>
+      </ConversationBranchActionsContext.Provider>
       </DataTaskChatInputBindingsProvider>
 
       {canDockRightPanel && rightPanelOpen ? (
@@ -2389,6 +2461,7 @@ const ToolActionSelectionContext = createContext<
 const ToolGroupSelectionContext = createContext<
   ((groupId: string) => void) | null
 >(null);
+const ConversationBranchActionsContext = createContext<ConversationBranchActions | null>(null);
 const ProcessTimelineCollapseContext = createContext<{
   collapsed: boolean;
   toggle: () => void;
@@ -2477,13 +2550,20 @@ function buildGroupIdForAssistantMessage(
   return fallbackId ? `group-${fallbackId}` : undefined;
 }
 
-function CopyContentButton({ content }: { content: string }) {
+function CopyContentButton({
+  className = "",
+  content,
+}: {
+  className?: string;
+  content: string;
+}) {
   const [copied, setCopied] = useState(false);
   const label = copied ? "Copied" : "Copy this message";
   return (
     <button
       type="button"
-      onClick={async () => {
+      onClick={async (event) => {
+        event.stopPropagation();
         try {
           await navigator.clipboard.writeText(content);
           setCopied(true);
@@ -2492,7 +2572,10 @@ function CopyContentButton({ content }: { content: string }) {
           /* clipboard unavailable */
         }
       }}
-      className="cursor-pointer rounded-md p-0.5 text-muted-light transition-colors duration-150 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/20"
+      className={[
+        "cursor-pointer rounded-md p-0.5 text-muted-light transition-colors duration-150 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/20",
+        className,
+      ].filter(Boolean).join(" ")}
       title={label}
       aria-label={label}
     >
@@ -2511,6 +2594,32 @@ function CopyContentButton({ content }: { content: string }) {
 }
 
 type CopilotChatUserMessageProps = ComponentProps<typeof CopilotChatUserMessage>;
+
+type BranchRewriteRequest = {
+  runId: string;
+  text: string;
+};
+
+type PendingBranchRun = {
+  sessionId: string;
+  text: string;
+};
+
+async function waitForAgentIdle(
+  agent: { isRunning?: boolean },
+  timeoutMs = 5000,
+): Promise<boolean> {
+  const startedAt = Date.now();
+  while (Boolean(agent.isRunning) && Date.now() - startedAt < timeoutMs) {
+    await new Promise((resolve) => window.setTimeout(resolve, 50));
+  }
+  return !Boolean(agent.isRunning);
+}
+
+type ConversationBranchActions = {
+  onCreateBranchRewrite: (request: BranchRewriteRequest) => Promise<void>;
+  onSwitchBranch: (sessionId: string) => void;
+};
 
 /** Hide reasoning bubbles that belong inside the next tool step card. */
 function StepReasoningMessage({
@@ -2540,9 +2649,177 @@ function StepReasoningMessage({
 
 /** Host pending HITL cards below the user turn when suspend lands before assistant bubble. */
 function StepUserMessage(props: CopilotChatUserMessageProps) {
+  const chatConfig = useCopilotChatConfiguration();
+  const { agent } = useAgent({ agentId: chatConfig?.agentId ?? agentId });
+  const { copilotkit } = useCopilotKit();
+  const bindings = useDataTaskChatInputBindings();
+  const branchActions = useContext(ConversationBranchActionsContext);
+  const conversation = useConversationBranchSnapshot(chatConfig?.threadId);
+  const branchState = resolveUserMessageBranchState({
+    activeSessionId: chatConfig?.threadId,
+    conversation,
+    messageId: props.message.id,
+  });
+  const content = messageTextContent(props.message.content);
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(content);
+  const [busy, setBusy] = useState(false);
+  const canRewrite = Boolean(branchState);
+
+  useEffect(() => {
+    if (!editing) {
+      setDraft(content);
+    }
+  }, [content, editing]);
+
+  const submitRewrite = async () => {
+    const text = draft.trim();
+    if (!text || !branchState) {
+      setEditing(false);
+      return;
+    }
+    setBusy(true);
+    try {
+      if (branchState.branchable) {
+        await branchActions?.onCreateBranchRewrite({ runId: branchState.runId, text });
+      } else if (branchState.refreshOnly) {
+        await bindings.stopActiveRun?.();
+        if (
+          branchState.runId &&
+          branchState.runId !== bindings.liveRunRunId &&
+          (branchState.status === "queued" ||
+            branchState.status === "running" ||
+            branchState.status === "suspended")
+        ) {
+          await configApi.cancelRun(branchState.runId, "user-requested");
+        }
+        const idle = await waitForAgentIdle(agent);
+        if (!idle) {
+          throw new Error("Could not stop the current run before rewriting.");
+        }
+        const currentMessages = agent.messages ?? [];
+        const index = currentMessages.findIndex((message) => message.id === props.message.id);
+        agent.setMessages(index >= 0 ? currentMessages.slice(0, index) : []);
+        const forwardedProps = bindings.getRunForwardedProps();
+        bindings.onUserMessageSubmitted(text);
+        agent.setState(buildAgentRunStatePatch(forwardedProps, agent.state));
+        agent.addMessage({ id: crypto.randomUUID(), role: "user", content: text });
+        void copilotkit.runAgent({ agent, forwardedProps }).catch((error) => {
+          const message = error instanceof Error ? error.message : String(error);
+          window.dispatchEvent(new CustomEvent("datafoundry-run-error", { detail: { message } }));
+        });
+      }
+      setEditing(false);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      window.dispatchEvent(new CustomEvent("datafoundry-run-error", { detail: { message } }));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (editing) {
+    return (
+      <>
+        <div className="copilotKitMessage copilotKitUserMessage flex flex-col items-end px-3 pt-1">
+          <form
+            className="flex w-[min(520px,calc(100%-24px))] max-w-full flex-col gap-2 rounded-[1.35rem] bg-surface-subtle px-4 py-3 text-left text-foreground"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void submitRewrite();
+            }}
+          >
+            <textarea
+              value={draft}
+              onChange={(event) => setDraft(event.target.value)}
+              className="min-h-16 w-full resize-none rounded-xl border border-transparent bg-transparent p-0 text-base leading-7 text-foreground outline-none transition-colors placeholder:text-muted-light"
+              disabled={busy}
+            />
+            <div className="flex justify-end gap-2 pt-0.5">
+              <button
+                type="button"
+                className="rounded-md px-2 py-1 text-sm text-muted-light transition-colors hover:text-foreground"
+                onClick={() => setEditing(false)}
+                disabled={busy}
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                className="rounded-lg bg-primary px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50"
+                disabled={busy || draft.trim().length === 0}
+              >
+                Rewrite
+              </button>
+            </div>
+          </form>
+        </div>
+        <CollaborationPendingInterruptSlot message={props.message} />
+      </>
+    );
+  }
+
   return (
     <>
-      <CopilotChatUserMessage {...props} />
+      <div className="copilotKitMessage copilotKitUserMessage flex flex-col items-end px-3 pt-1">
+        <div
+          className={[
+            "group w-fit max-w-[min(520px,calc(100%-24px))] rounded-[1.35rem] bg-surface-subtle px-4 py-3 text-left text-base leading-7 text-foreground",
+            canRewrite ? "cursor-text transition-colors hover:bg-surface-subtle/80" : "",
+          ].filter(Boolean).join(" ")}
+          onClick={() => {
+            if (canRewrite) setEditing(true);
+          }}
+          title={canRewrite ? "Click to rewrite this question" : undefined}
+        >
+          <div className="whitespace-pre-wrap break-words">{content}</div>
+        </div>
+      </div>
+      <div className="flex justify-end px-3 pt-1">
+        <div className="flex items-center gap-1 text-muted-light">
+          {branchState && branchState.total > 1 ? (
+            <div className="mr-1 flex items-center gap-1">
+              <button
+                type="button"
+                className="cursor-pointer rounded-md p-0.5 transition-colors duration-150 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/20"
+                title="Previous branch"
+                aria-label="Previous branch"
+                onClick={() => {
+                  if (branchState.previousSessionId) branchActions?.onSwitchBranch(branchState.previousSessionId);
+                }}
+              >
+                <ChevronIcon direction="left" />
+              </button>
+              <span className="min-w-8 text-center text-[11px] tabular-nums">
+                {branchState.currentIndex + 1}/{branchState.total}
+              </span>
+              <button
+                type="button"
+                className="cursor-pointer rounded-md p-0.5 transition-colors duration-150 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/20"
+                title="Next branch"
+                aria-label="Next branch"
+                onClick={() => {
+                  if (branchState.nextSessionId) branchActions?.onSwitchBranch(branchState.nextSessionId);
+                }}
+              >
+                <ChevronIcon direction="right" />
+              </button>
+            </div>
+          ) : null}
+          <CopyContentButton content={content} />
+          {branchState ? (
+            <button
+              type="button"
+              className="cursor-pointer rounded-md p-0.5 transition-colors duration-150 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/20"
+              title={branchState.branchable ? "Rewrite from here" : "Refresh this question"}
+              aria-label={branchState.branchable ? "Rewrite from here" : "Refresh this question"}
+              onClick={() => setEditing(true)}
+            >
+              <PencilMenuIcon />
+            </button>
+          ) : null}
+        </div>
+      </div>
       <CollaborationPendingInterruptSlot message={props.message} />
     </>
   );
@@ -6011,6 +6288,57 @@ function ChatWelcomeOverlay({
   );
 }
 
+function PendingBranchRunDispatcher({
+  pending,
+  getRunForwardedProps,
+  onDispatched,
+  onUserMessageSubmitted,
+}: {
+  pending: PendingBranchRun | null;
+  getRunForwardedProps: () => ReturnType<typeof buildRunForwardedProps>;
+  onDispatched: () => void;
+  onUserMessageSubmitted: (text: string) => void;
+}) {
+  const chatConfig = useCopilotChatConfiguration();
+  const { agent } = useAgent({ agentId: chatConfig?.agentId ?? agentId });
+  const { copilotkit } = useCopilotKit();
+  const restoredConversation = useConversationBranchSnapshot(chatConfig?.threadId);
+  const { isRestoringConversation } = useConversationRestoreGate();
+
+  useEffect(() => {
+    if (!pending || chatConfig?.threadId !== pending.sessionId) {
+      return;
+    }
+    if (!restoredConversation || agent.isRunning || isRestoringConversation) {
+      return;
+    }
+    const timeout = window.setTimeout(() => {
+      const forwardedProps = getRunForwardedProps();
+      onUserMessageSubmitted(pending.text);
+      agent.setState(buildAgentRunStatePatch(forwardedProps, agent.state));
+      agent.addMessage({ id: crypto.randomUUID(), role: "user", content: pending.text });
+      onDispatched();
+      void copilotkit.runAgent({ agent, forwardedProps }).catch((error) => {
+        const message = error instanceof Error ? error.message : String(error);
+        window.dispatchEvent(new CustomEvent("datafoundry-run-error", { detail: { message } }));
+      });
+    }, 0);
+    return () => window.clearTimeout(timeout);
+  }, [
+    agent,
+    chatConfig?.threadId,
+    copilotkit,
+    getRunForwardedProps,
+    isRestoringConversation,
+    onDispatched,
+    onUserMessageSubmitted,
+    pending,
+    restoredConversation,
+  ]);
+
+  return null;
+}
+
 function ChatPane({
   activeThreadId,
   title,
@@ -6025,6 +6353,10 @@ function ChatPane({
   onToolGroupsChange,
   onUseExamplePrompt,
   capabilitiesReady,
+  pendingBranchRun,
+  onPendingBranchRunDispatched,
+  getRunForwardedProps,
+  onUserMessageSubmitted,
 }: {
   activeThreadId?: string;
   title: string;
@@ -6039,6 +6371,10 @@ function ChatPane({
   onToolGroupsChange: (groups: ProcessToolGroup[]) => void;
   onUseExamplePrompt: (prompt: string) => void;
   capabilitiesReady: boolean;
+  pendingBranchRun: PendingBranchRun | null;
+  onPendingBranchRunDispatched: () => void;
+  getRunForwardedProps: () => ReturnType<typeof buildRunForwardedProps>;
+  onUserMessageSubmitted: (text: string) => void;
 }) {
   const { containerRef, chatColumnWidth } = useChatColumnWidth();
   const [processTimelineCollapsed, setProcessTimelineCollapsed] = useState(false);
@@ -6130,6 +6466,12 @@ function ChatPane({
             <SessionConversationRestore
               agentId={agentId}
               capabilitiesReady={capabilitiesReady}
+            />
+            <PendingBranchRunDispatcher
+              pending={pendingBranchRun}
+              getRunForwardedProps={getRunForwardedProps}
+              onDispatched={onPendingBranchRunDispatched}
+              onUserMessageSubmitted={onUserMessageSubmitted}
             />
             <SessionArtifactsRestore
               capabilitiesReady={capabilitiesReady}

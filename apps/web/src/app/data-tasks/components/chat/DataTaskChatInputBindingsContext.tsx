@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useContext, type ReactNode } from "react";
+import { createContext, useContext, type MutableRefObject, type ReactNode } from "react";
 import type {
   ChatSession,
   FileMentionResource,
@@ -48,6 +48,8 @@ export type DataTaskChatInputBindings = {
   liveRunStatus: LiveRunStatus;
   liveRunRunId: string | null;
   onCancelRun?: () => Promise<void> | void;
+  stopActiveRun?: () => Promise<void>;
+  stopActiveChatRunRef?: MutableRefObject<(() => void) | undefined>;
   cancelRunBusy?: boolean;
   getRunForwardedProps: () => RunForwardedProps;
 };

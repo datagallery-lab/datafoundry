@@ -111,8 +111,9 @@ curl http://127.0.0.1:8787/api/v1/capabilities
 | GET | `/api/v1/sessions` | 列出服务端会话。支持 `limit`、`cursor`。 |
 | PATCH | `/api/v1/sessions/:sessionId` | 更新会话标题。 |
 | GET | `/api/v1/sessions/:sessionId/conversation` | 读取服务端权威对话历史。支持 `limit`。 |
+| POST | `/api/v1/sessions/:sessionId/branches` | 从已结束 run 创建持久分支。请求体：`{ "runId": "..." }`。 |
 
-会话接口用于 Web/TUI 恢复历史、显示标题和读取 tool-call 配对。`conversation` 响应包含 `messages`、`runEventRefs`、`toolCalls`，并可包含 `checkpoints`。每个 checkpoint 从现有 run、message 和 run event 派生，包含 `runId`、`status`、消息位置范围、事件 seq 范围、开始/结束时间和可选错误信息；它表示一轮 run 的可恢复历史边界。
+会话接口用于 Web/TUI 恢复历史、显示标题、读取 tool-call 配对，并支持从 checkpoint 重新提问。`conversation` 响应包含 `messages`、`runEventRefs`、`toolCalls`，并可包含 `checkpoints`、`branch` 和 `branches`。每个 checkpoint 从现有 run、message 和 run event 派生，包含 `runId`、`status`、消息位置范围、事件 seq 范围、开始/结束时间和可选错误信息；它表示一轮 run 的可恢复历史边界。分支会话引用父会话到 fork checkpoint 之前的历史，不复制旧消息；读取分支时返回可见父前缀加上分支自身消息。
 
 ## 工作区配置
 

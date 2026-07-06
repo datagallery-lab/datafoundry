@@ -2,6 +2,7 @@ export type ChatRunCancellationOptions = {
   fallbackTimeoutMs?: number;
   onCancelRun?: () => Promise<void> | void;
   onStopFrontend?: () => void;
+  throwOnCancelFailure?: boolean;
 };
 
 export function performChatRunCancellation(
@@ -12,7 +13,7 @@ export function performChatRunCancellation(
     return Promise.resolve();
   }
 
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     let settled = false;
     let fallbackUsed = false;
     const fallback = () => {
@@ -32,13 +33,23 @@ export function performChatRunCancellation(
           clearTimeout(timeout);
           resolve();
         },
-        () => {
+        (error) => {
           clearTimeout(timeout);
+          if (options.throwOnCancelFailure) {
+            settled = true;
+            reject(error);
+            return;
+          }
           fallback();
         },
       );
-    } catch {
+    } catch (error) {
       clearTimeout(timeout);
+      if (options.throwOnCancelFailure) {
+        settled = true;
+        reject(error);
+        return;
+      }
       fallback();
     }
   });

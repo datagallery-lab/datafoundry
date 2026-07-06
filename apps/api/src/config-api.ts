@@ -40,6 +40,7 @@ import {
   type QueryHistoryRecord,
   type RunRecord,
   type RunEventRecord,
+  type SessionBranchRecord,
   type SessionRecord,
   type UserRecord
 } from "@datafoundry/metadata";
@@ -53,6 +54,14 @@ import { resolveEffectiveRunConfig } from "./run-input.js";
 import { handleCapabilitiesRequest } from "./routes/capabilities.js";
 import type { ConfigApiContext, ConfigApiResponse } from "./routes/types.js";
 import { sessionTitleDto } from "./session-title.js";
+import {
+  createSessionBranch,
+  latestVisibleConversationSummary,
+  listConversationBranchOptions,
+  listVisibleConversationMessages,
+  resolveSessionLineage,
+  type ConversationBranchOption
+} from "./session-branching.js";
 import { readMultipartFiles, readMultipartUpload } from "./upload-parser.js";
 
 const MAX_JSON_BODY_BYTES = 1024 * 1024;
@@ -359,6 +368,22 @@ const handleSessionRequest = async (
     });
     return ok(sessionTitleDto(session));
   }
+  if (action === "branches" && request.method === "POST") {
+    const body = await readJsonBody(request);
+    const runId = stringValue(body.runId ?? body.run_id);
+    if (!runId) {
+      throw new Error("RUN_ID_REQUIRED");
+    }
+    const title = stringValue(body.title);
+    const created = createSessionBranch({
+      activeSessionId: sessionId,
+      metadataStore: context.metadataStore,
+      runId,
+      ...(title ? { title } : {}),
+      userId: context.userId
+    });
+    return ok(sessionBranchCreatedDto(created), 201);
+  }
   if (action !== "conversation") {
     return methodNotAllowed();
   }
@@ -367,16 +392,24 @@ const handleSessionRequest = async (
   }
 
   const session = context.metadataStore.sessions.get({ user_id: context.userId, session_id: sessionId });
+  const lineage = resolveSessionLineage({
+    metadataStore: context.metadataStore,
+    sessionId,
+    userId: context.userId
+  });
   const requestUrl = new URL(request.url ?? "/", "http://127.0.0.1");
   const limit = clampInteger(Number.parseInt(requestUrl.searchParams.get("limit") ?? "", 10), 1, 200, 80);
-  const messages = context.metadataStore.conversationMessages.listRecent({
-    user_id: context.userId,
-    session_id: sessionId,
-    limit
+  const messages = listVisibleConversationMessages({
+    lineage,
+    limit,
+    metadataStore: context.metadataStore,
+    userId: context.userId
   });
-  const latestSummary = context.metadataStore.conversationSummaries.latest({
-    user_id: context.userId,
-    session_id: sessionId
+  const latestSummary = latestVisibleConversationSummary({
+    lineage,
+    metadataStore: context.metadataStore,
+    sessionId,
+    userId: context.userId
   });
   const runIds = [...new Set([
     ...messages.map((message) => message.run_id),
@@ -386,11 +419,19 @@ const handleSessionRequest = async (
     runId,
     events: context.metadataStore.runEvents.listByRun({ user_id: context.userId, run_id: runId })
   }));
+  const visiblePositions = new Map(messages.map((message, index) => [message.id, index + 1]));
   const checkpoints = runCheckpointDtos({
     context,
     messages,
     runEventGroups,
-    runIds
+    runIds,
+    visiblePositions
+  });
+  const branchOptions = listConversationBranchOptions({
+    lineage,
+    metadataStore: context.metadataStore,
+    sessionId,
+    userId: context.userId
   });
   const pendingInteractions = context.metadataStore.interactions.listPendingBySession({
     user_id: context.userId,
@@ -402,10 +443,12 @@ const handleSessionRequest = async (
     title: session.title ?? "",
     titleSource: session.title_source ?? "fallback",
     updatedAt: session.updated_at,
-    messages: messages.map(conversationMessageDto),
+    messages: messages.map((message, index) => conversationMessageDto(message, index + 1)),
     ...(latestSummary ? { summary: conversationSummaryDto(latestSummary) } : {}),
     runEventRefs: runEventGroups.map(({ runId, events }) => runEventRefDto(runId, events)),
     ...(checkpoints.length > 0 ? { checkpoints } : {}),
+    ...(lineage.branch ? { branch: sessionBranchDto(lineage.branch, session) } : {}),
+    ...(branchOptions.length > 0 ? { branches: branchOptions.map(conversationBranchOptionDto) } : {}),
     toolCalls: runEventGroups.flatMap(({ runId, events }) => toolCallPairDtos(runId, events)),
     pendingInteractions: pendingInteractions.map(pendingInteractionDto),
     restorableCustomEvents: runEventGroups.flatMap(({ runId, events }) =>
@@ -1616,14 +1659,14 @@ const handleArtifactRequest = async (
   });
 };
 
-const conversationMessageDto = (message: ConversationMessageRecord): Record<string, unknown> => ({
+const conversationMessageDto = (message: ConversationMessageRecord, visiblePosition = message.position): Record<string, unknown> => ({
   id: message.id,
   runId: message.run_id,
   role: message.role,
   source: message.source,
   ...(message.message_id ? { messageId: message.message_id } : {}),
   contentText: message.content_text,
-  position: message.position,
+  position: visiblePosition,
   createdAt: message.created_at
 });
 
@@ -1635,6 +1678,38 @@ const sessionListDto = (session: SessionRecord): Record<string, unknown> => ({
   createdAt: session.created_at,
   updatedAt: session.updated_at,
   lastMessageAt: session.last_message_at ?? session.updated_at
+});
+
+const sessionBranchCreatedDto = (input: { branch: SessionBranchRecord; session: SessionRecord }): Record<string, unknown> => ({
+  ...sessionBranchDto(input.branch, input.session),
+  session: sessionListDto(input.session)
+});
+
+const sessionBranchDto = (
+  branch: SessionBranchRecord,
+  session?: SessionRecord
+): Record<string, unknown> => ({
+  id: branch.id,
+  sessionId: branch.child_session_id,
+  threadId: branch.child_session_id,
+  parentSessionId: branch.parent_session_id,
+  rootSessionId: branch.root_session_id,
+  forkRunId: branch.fork_run_id,
+  forkMessageEndPosition: branch.fork_message_end_position,
+  createdAt: branch.created_at,
+  ...(session?.title ? { title: session.title } : {})
+});
+
+const conversationBranchOptionDto = (branch: ConversationBranchOption): Record<string, unknown> => ({
+  sessionId: branch.sessionId,
+  threadId: branch.sessionId,
+  parentSessionId: branch.parentSessionId,
+  rootSessionId: branch.rootSessionId,
+  forkRunId: branch.forkRunId,
+  forkMessageEndPosition: branch.forkMessageEndPosition,
+  isOriginal: branch.isOriginal,
+  createdAt: branch.createdAt,
+  ...(branch.title ? { title: branch.title } : {})
 });
 
 const queryHistoryDto = (record: QueryHistoryRecord): Record<string, unknown> => ({
@@ -1689,6 +1764,7 @@ const runCheckpointDtos = (input: {
   messages: ConversationMessageRecord[];
   runEventGroups: Array<{ events: RunEventRecord[]; runId: string }>;
   runIds: string[];
+  visiblePositions?: Map<string, number>;
 }): Record<string, unknown>[] => {
   const eventsByRun = new Map(input.runEventGroups.map((group) => [group.runId, group.events]));
   return input.runIds.flatMap((runId) => {
@@ -1703,7 +1779,8 @@ const runCheckpointDtos = (input: {
       runCheckpointDto({
         events: eventsByRun.get(runId) ?? [],
         messages: input.messages.filter((message) => message.run_id === runId),
-        run
+        run,
+        ...(input.visiblePositions ? { visiblePositions: input.visiblePositions } : {})
       })
     ];
   });
@@ -1713,8 +1790,9 @@ const runCheckpointDto = (input: {
   events: RunEventRecord[];
   messages: ConversationMessageRecord[];
   run: RunRecord;
+  visiblePositions?: Map<string, number>;
 }): Record<string, unknown> => {
-  const positions = input.messages.map((message) => message.position);
+  const positions = input.messages.map((message) => input.visiblePositions?.get(message.id) ?? message.position);
   const firstEvent = input.events[0];
   const lastEvent = input.events.at(-1);
   return {
@@ -2669,6 +2747,18 @@ const errorResponse = (error: unknown): ConfigApiResponse => {
   const message = messageOf(error);
   if (message.startsWith("REVISION_CONFLICT")) {
     return fail(409, "REVISION_CONFLICT", message);
+  }
+  if (message.startsWith("RUN_NOT_BRANCHABLE")) {
+    return fail(409, "RUN_NOT_BRANCHABLE", message);
+  }
+  if (message.startsWith("RUN_NOT_VISIBLE")) {
+    return fail(404, "RESOURCE_NOT_FOUND", message);
+  }
+  if (message.startsWith("SESSION_BRANCH_CYCLE")) {
+    return fail(409, "REVISION_CONFLICT", message);
+  }
+  if (message.startsWith("SESSION_BRANCH_PARENT_NOT_VISIBLE")) {
+    return fail(404, "RESOURCE_NOT_FOUND", message);
   }
   if (message.includes("NOT_FOUND") || message.includes("not found")) {
     return fail(404, "RESOURCE_NOT_FOUND", message);

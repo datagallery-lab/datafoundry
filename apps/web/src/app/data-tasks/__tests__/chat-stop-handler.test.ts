@@ -25,6 +25,22 @@ describe("performChatRunCancellation", () => {
     expect(onStopFrontend).toHaveBeenCalledTimes(1);
   });
 
+  it("rejects without frontend fallback when strict cancellation rejects", async () => {
+    const onStopFrontend = vi.fn();
+    const onCancelRun = vi.fn().mockRejectedValue(new Error("cancel failed"));
+
+    await expect(
+      performChatRunCancellation({
+        onCancelRun,
+        onStopFrontend,
+        throwOnCancelFailure: true,
+      }),
+    ).rejects.toThrow("cancel failed");
+
+    expect(onCancelRun).toHaveBeenCalledTimes(1);
+    expect(onStopFrontend).not.toHaveBeenCalled();
+  });
+
   it("falls back to frontend stop when backend cancellation times out", async () => {
     vi.useFakeTimers();
     const onStopFrontend = vi.fn();

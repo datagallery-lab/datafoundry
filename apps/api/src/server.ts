@@ -5,6 +5,7 @@ import {
   copilotRuntimeNodeHttpEndpoint
 } from "@copilotkit/runtime";
 import {
+  CONVERSATION_WORKING_MEMORY_CONFIG,
   createTaskStateRuntime,
   createCustomEvent,
   parseAgentMemoryMode,
@@ -631,6 +632,14 @@ class DataFoundryAgUiAgent extends AbstractAgent {
         });
         subscriber.add(() => unregisterCancel());
 
+        if (this.input.conversationMemoryMode === "working-memory-readonly") {
+          await ensureConversationWorkingMemoryThread({
+            resourceId: this.input.user.id,
+            taskStateRuntime: this.input.taskStateRuntime,
+            threadId: sessionId
+          });
+        }
+
         subscription = agentAssembly.mastraAgent.run({
           ...normalizedRunInput,
           runId,
@@ -891,6 +900,7 @@ const resolveRequestAuth = (
       workspaceId: identity.workspace.id
     };
   }
+
   const token = extractAuthToken(request);
   const workspaceId = sanitizeWorkspaceId(headerString(request.headers["x-workspace-id"]));
   const devUser = metadataStore.users.getById({ user_id: DEV_USER.id });
@@ -920,6 +930,26 @@ const resolveRequestAuth = (
     user: userRecordToMeResponse(user),
     workspaceId
   };
+};
+
+const ensureConversationWorkingMemoryThread = async (input: {
+  resourceId: string;
+  taskStateRuntime: TaskStateRuntime;
+  threadId: string;
+}): Promise<void> => {
+  const existing = await input.taskStateRuntime.memory.getThreadById({
+    resourceId: input.resourceId,
+    threadId: input.threadId
+  });
+  if (existing) {
+    return;
+  }
+  await input.taskStateRuntime.memory.createThread({
+    memoryConfig: CONVERSATION_WORKING_MEMORY_CONFIG,
+    resourceId: input.resourceId,
+    saveThread: true,
+    threadId: input.threadId
+  });
 };
 
 const isPasswordAuth = (config: PasswordAuthConfig): boolean => config.mode === "password";

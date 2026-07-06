@@ -298,6 +298,31 @@ export type ConversationCheckpointDto = {
   errorMessage?: string;
 };
 
+export type ConversationBranchDto = {
+  sessionId: string;
+  threadId?: string;
+  parentSessionId: string;
+  rootSessionId: string;
+  forkRunId: string;
+  forkMessageEndPosition: number;
+  isOriginal?: boolean;
+  createdAt: string;
+  title?: string;
+};
+
+export type SessionBranchDto = {
+  id: string;
+  sessionId: string;
+  threadId?: string;
+  parentSessionId: string;
+  rootSessionId: string;
+  forkRunId: string;
+  forkMessageEndPosition: number;
+  createdAt: string;
+  title?: string;
+  session: SessionListItemDto;
+};
+
 export type ConversationToolCallDto = {
   runId: string;
   id?: string;
@@ -341,6 +366,8 @@ export type SessionConversationDto = {
   summary?: ConversationSummaryDto;
   runEventRefs: ConversationRunEventRefDto[];
   checkpoints?: ConversationCheckpointDto[];
+  branch?: Omit<ConversationBranchDto, "isOriginal"> & { id: string };
+  branches?: ConversationBranchDto[];
   toolCalls: ConversationToolCallDto[];
   pendingInteractions?: PendingInteractionDto[];
   restorableCustomEvents?: RestorableCustomEventDto[];

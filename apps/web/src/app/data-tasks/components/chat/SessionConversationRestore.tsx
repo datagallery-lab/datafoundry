@@ -29,6 +29,10 @@ import {
   useConversationRestoreGate,
   useLiveRunSetters,
 } from "../../use-data-foundry-run";
+import {
+  clearConversationBranchSnapshot,
+  setConversationBranchSnapshot,
+} from "../../conversation-branch-store";
 
 export function SessionConversationRestore({
   agentId,
@@ -64,6 +68,7 @@ export function SessionConversationRestore({
     agent.setMessages([]);
     clearRestoredInterrupts(threadId);
     clearPendingCollaborationInterrupt(threadId);
+    clearConversationBranchSnapshot(threadId);
   }, [agent, capabilitiesReady, setIsRestoringConversation, threadId]);
 
   useEffect(() => {
@@ -90,6 +95,7 @@ export function SessionConversationRestore({
         if (cancelled || fetchGenerationRef.current !== generation) {
           return;
         }
+        setConversationBranchSnapshot(threadId, conversation);
 
         if (
           shouldRestoreConversationMessages({

@@ -104,6 +104,17 @@ export type SessionRecord = {
   updated_at: string;
 };
 
+export type SessionBranchRecord = {
+  id: string;
+  user_id: string;
+  child_session_id: string;
+  parent_session_id: string;
+  root_session_id: string;
+  fork_run_id: string;
+  fork_message_end_position: number;
+  created_at: string;
+};
+
 export type RunRecord = {
   id: string;
   user_id: string;
@@ -309,6 +320,16 @@ export type CreateSessionInput = {
   selected_collection_id?: string;
 };
 
+export type CreateSessionBranchInput = {
+  user_id: string;
+  id: string;
+  child_session_id: string;
+  parent_session_id: string;
+  root_session_id: string;
+  fork_run_id: string;
+  fork_message_end_position: number;
+};
+
 export type CreateRunInput = {
   user_id: string;
   id: string;
@@ -473,6 +494,7 @@ export class MetadataStore {
   readonly queryHistory: QueryHistoryRepository;
   readonly runEvents: RunEventRepository;
   readonly runs: RunRepository;
+  readonly sessionBranches: SessionBranchRepository;
   readonly sessions: SessionRepository;
   readonly secrets: EncryptedSecretStore;
   readonly sqlAuditLogs: SqlAuditLogRepository;
@@ -492,6 +514,7 @@ export class MetadataStore {
     this.sessions = new SessionRepository(db);
     this.runs = new RunRepository(db);
     this.runEvents = new RunEventRepository(db);
+    this.sessionBranches = new SessionBranchRepository(db);
     this.conversationMessages = new ConversationMessageRepository(db);
     this.conversationSummaries = new ConversationSummaryRepository(db);
     this.artifacts = new ArtifactRepository(db);
@@ -1095,6 +1118,80 @@ export class SessionRepository {
   }
 }
 
+export class SessionBranchRepository {
+  constructor(private readonly db: DatabaseSync) {}
+
+  create(input: CreateSessionBranchInput): SessionBranchRecord {
+    const createdAt = new Date().toISOString();
+    this.db.prepare(`
+      INSERT INTO session_branches (
+        id, user_id, child_session_id, parent_session_id, root_session_id,
+        fork_run_id, fork_message_end_position, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      input.id,
+      input.user_id,
+      input.child_session_id,
+      input.parent_session_id,
+      input.root_session_id,
+      input.fork_run_id,
+      input.fork_message_end_position,
+      createdAt
+    );
+    return this.getByChild({ user_id: input.user_id, child_session_id: input.child_session_id });
+  }
+
+  findByChild(input: { user_id: string; child_session_id: string }): Optional<SessionBranchRecord> {
+    return mapSessionBranchRow(
+      this.db.prepare(`
+        SELECT *
+        FROM session_branches
+        WHERE user_id = ? AND child_session_id = ?
+      `).get(input.user_id, input.child_session_id)
+    );
+  }
+
+  getByChild(input: { user_id: string; child_session_id: string }): SessionBranchRecord {
+    const branch = this.findByChild(input);
+    if (!branch) {
+      throw new Error(`SESSION_BRANCH_NOT_FOUND:${input.child_session_id}`);
+    }
+    return branch;
+  }
+
+  listChildrenForFork(input: {
+    user_id: string;
+    parent_session_id: string;
+    fork_run_id: string;
+  }): SessionBranchRecord[] {
+    return this.db.prepare(`
+      SELECT *
+      FROM session_branches
+      WHERE user_id = ?
+        AND parent_session_id = ?
+        AND fork_run_id = ?
+      ORDER BY created_at ASC, child_session_id ASC
+    `).all(input.user_id, input.parent_session_id, input.fork_run_id)
+      .map(mapRequiredSessionBranchRow);
+  }
+
+  listChildrenForParents(input: { user_id: string; parent_session_ids: string[] }): SessionBranchRecord[] {
+    const parentIds = [...new Set(input.parent_session_ids)].filter((id) => id.length > 0);
+    if (parentIds.length === 0) {
+      return [];
+    }
+    const placeholders = parentIds.map(() => "?").join(", ");
+    return this.db.prepare(`
+      SELECT *
+      FROM session_branches
+      WHERE user_id = ?
+        AND parent_session_id IN (${placeholders})
+      ORDER BY created_at ASC, child_session_id ASC
+    `).all(input.user_id, ...parentIds)
+      .map(mapRequiredSessionBranchRow);
+  }
+}
+
 export class DataSourceRepository {
   constructor(private readonly db: DatabaseSync) {}
 
@@ -1472,6 +1569,30 @@ export class ConversationMessageRepository {
         .all(input.user_id, input.session_id, limit);
 
     return rows.map(mapRequiredConversationMessageRow).reverse();
+  }
+
+  listBySessionRange(input: {
+    user_id: string;
+    session_id: string;
+    max_position?: number;
+    exclude_run_id?: string;
+  }): ConversationMessageRecord[] {
+    const params: Array<string | number> = [input.user_id, input.session_id];
+    let sql = `
+      SELECT *
+      FROM conversation_messages
+      WHERE user_id = ? AND session_id = ?
+    `;
+    if (input.max_position !== undefined) {
+      sql += " AND position <= ?";
+      params.push(Math.max(0, Math.floor(input.max_position)));
+    }
+    if (input.exclude_run_id) {
+      sql += " AND run_id <> ?";
+      params.push(input.exclude_run_id);
+    }
+    sql += " ORDER BY position ASC";
+    return this.db.prepare(sql).all(...params).map(mapRequiredConversationMessageRow);
   }
 
   private findByMessageId(input: {
@@ -2259,6 +2380,25 @@ const runMigrations = (db: DatabaseSync): void => {
     );
     CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
 
+    CREATE TABLE IF NOT EXISTS session_branches (
+      id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      child_session_id TEXT NOT NULL,
+      parent_session_id TEXT NOT NULL,
+      root_session_id TEXT NOT NULL,
+      fork_run_id TEXT NOT NULL,
+      fork_message_end_position INTEGER NOT NULL,
+      created_at TEXT NOT NULL,
+      PRIMARY KEY (user_id, id),
+      UNIQUE (user_id, child_session_id),
+      FOREIGN KEY (user_id, child_session_id) REFERENCES sessions(user_id, id),
+      FOREIGN KEY (user_id, parent_session_id) REFERENCES sessions(user_id, id),
+      FOREIGN KEY (user_id, root_session_id) REFERENCES sessions(user_id, id),
+      FOREIGN KEY (user_id, fork_run_id) REFERENCES runs(user_id, id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_session_branches_parent_fork
+      ON session_branches(user_id, parent_session_id, fork_run_id, created_at);
+
     CREATE TABLE IF NOT EXISTS data_sources (
       id TEXT NOT NULL,
       user_id TEXT NOT NULL,
@@ -2538,6 +2678,9 @@ const runMigrations = (db: DatabaseSync): void => {
   runSchemaMigration(db, "0010_auth_schema", "Ensure password auth metadata schema", () => {
     initializeAuthSchema(db);
   });
+  runSchemaMigration(db, "0011_session_branches", "Ensure conversation branch lineage schema", () => {
+    initializeSessionBranchSchema(db);
+  });
 };
 
 const initializeSchemaMigrationTable = (db: DatabaseSync): void => {
@@ -2714,6 +2857,29 @@ const initializeAuthSchema = (db: DatabaseSync): void => {
       reset_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
+  `);
+};
+
+const initializeSessionBranchSchema = (db: DatabaseSync): void => {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS session_branches (
+      id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      child_session_id TEXT NOT NULL,
+      parent_session_id TEXT NOT NULL,
+      root_session_id TEXT NOT NULL,
+      fork_run_id TEXT NOT NULL,
+      fork_message_end_position INTEGER NOT NULL,
+      created_at TEXT NOT NULL,
+      PRIMARY KEY (user_id, id),
+      UNIQUE (user_id, child_session_id),
+      FOREIGN KEY (user_id, child_session_id) REFERENCES sessions(user_id, id),
+      FOREIGN KEY (user_id, parent_session_id) REFERENCES sessions(user_id, id),
+      FOREIGN KEY (user_id, root_session_id) REFERENCES sessions(user_id, id),
+      FOREIGN KEY (user_id, fork_run_id) REFERENCES runs(user_id, id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_session_branches_parent_fork
+      ON session_branches(user_id, parent_session_id, fork_run_id, created_at);
   `);
 };
 
@@ -2955,6 +3121,8 @@ const migrateUserScopedDataSources = (db: DatabaseSync): void => {
 const createMetadataIndexes = (db: DatabaseSync): void => {
   db.exec(`
     CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
+    CREATE INDEX IF NOT EXISTS idx_session_branches_parent_fork
+      ON session_branches(user_id, parent_session_id, fork_run_id, created_at);
     CREATE INDEX IF NOT EXISTS idx_data_sources_user ON data_sources(user_id);
     CREATE INDEX IF NOT EXISTS idx_runs_user_session ON runs(user_id, session_id);
     CREATE INDEX IF NOT EXISTS idx_run_events_user_run ON run_events(user_id, run_id);
@@ -3246,6 +3414,30 @@ const mapRequiredSessionRow = (row: unknown): SessionRecord => {
   }
 
   return session;
+};
+
+const mapSessionBranchRow = (row: unknown): Optional<SessionBranchRecord> => {
+  if (!isRecord(row)) {
+    return undefined;
+  }
+  return {
+    id: requiredString(row, "id"),
+    user_id: requiredString(row, "user_id"),
+    child_session_id: requiredString(row, "child_session_id"),
+    parent_session_id: requiredString(row, "parent_session_id"),
+    root_session_id: requiredString(row, "root_session_id"),
+    fork_run_id: requiredString(row, "fork_run_id"),
+    fork_message_end_position: requiredNumber(row, "fork_message_end_position"),
+    created_at: requiredString(row, "created_at")
+  };
+};
+
+const mapRequiredSessionBranchRow = (row: unknown): SessionBranchRecord => {
+  const branch = mapSessionBranchRow(row);
+  if (!branch) {
+    throw new Error("Invalid session branch row");
+  }
+  return branch;
 };
 
 const mapRunRow = (row: unknown): Optional<RunRecord> => {

@@ -371,6 +371,150 @@ try {
     }
   );
 
+  const branchBaseRunId = "conversation-branch-base-run";
+  const branchOriginalRunId = "conversation-branch-original-run";
+  const branchPendingRunId = "conversation-branch-pending-run";
+  metadataStore.runs.create({
+    user_id: "dev-user",
+    id: branchBaseRunId,
+    session_id: conversationSessionId,
+    user_input: "summarize orders",
+    status: "completed"
+  });
+  metadataStore.conversationMessages.append({
+    user_id: "dev-user",
+    session_id: conversationSessionId,
+    run_id: branchBaseRunId,
+    id: `${branchBaseRunId}:user`,
+    role: "user",
+    source: "client",
+    message_id: "branch-base-user-message",
+    content_text: "summarize orders",
+    content: { text: "summarize orders" }
+  });
+  metadataStore.conversationMessages.append({
+    user_id: "dev-user",
+    session_id: conversationSessionId,
+    run_id: branchBaseRunId,
+    id: `${branchBaseRunId}:assistant`,
+    role: "assistant",
+    source: "agent",
+    message_id: "branch-base-assistant-message",
+    content_text: "orders summary",
+    content: { text: "orders summary" }
+  });
+  metadataStore.runs.create({
+    user_id: "dev-user",
+    id: branchOriginalRunId,
+    session_id: conversationSessionId,
+    user_input: "make a chart",
+    status: "completed"
+  });
+  metadataStore.conversationMessages.append({
+    user_id: "dev-user",
+    session_id: conversationSessionId,
+    run_id: branchOriginalRunId,
+    id: `${branchOriginalRunId}:user`,
+    role: "user",
+    source: "client",
+    message_id: "branch-original-user-message",
+    content_text: "make a chart",
+    content: { text: "make a chart" }
+  });
+  metadataStore.conversationMessages.append({
+    user_id: "dev-user",
+    session_id: conversationSessionId,
+    run_id: branchOriginalRunId,
+    id: `${branchOriginalRunId}:assistant`,
+    role: "assistant",
+    source: "agent",
+    message_id: "branch-original-assistant-message",
+    content_text: "original chart answer",
+    content: { text: "original chart answer" }
+  });
+  metadataStore.runs.create({
+    user_id: "dev-user",
+    id: branchPendingRunId,
+    session_id: conversationSessionId,
+    user_input: "still running",
+    status: "running"
+  });
+
+  const rejectedRunningBranch = await requestJson(`/api/v1/sessions/${conversationSessionId}/branches`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ runId: branchPendingRunId })
+  });
+  assert.equal(rejectedRunningBranch.response.status, 409);
+  assert.equal(rejectedRunningBranch.body.error.code, "RUN_NOT_BRANCHABLE");
+
+  const createdBranch = await requestJson(`/api/v1/sessions/${conversationSessionId}/branches`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ runId: branchOriginalRunId })
+  });
+  assert.equal(createdBranch.response.status, 201, JSON.stringify(createdBranch.body));
+  assert.equal(createdBranch.body.data.parentSessionId, conversationSessionId);
+  assert.equal(createdBranch.body.data.forkRunId, branchOriginalRunId);
+  assert.equal(createdBranch.body.data.forkMessageEndPosition, 4);
+  const branchSessionId = createdBranch.body.data.session.id;
+
+  const branchRunId = "conversation-branch-child-run";
+  metadataStore.runs.create({
+    user_id: "dev-user",
+    id: branchRunId,
+    session_id: branchSessionId,
+    parent_run_id: branchOriginalRunId,
+    user_input: "make a table instead",
+    status: "completed"
+  });
+  metadataStore.conversationMessages.append({
+    user_id: "dev-user",
+    session_id: branchSessionId,
+    run_id: branchRunId,
+    id: `${branchRunId}:user`,
+    role: "user",
+    source: "client",
+    message_id: "branch-child-user-message",
+    content_text: "make a table instead",
+    content: { text: "make a table instead" }
+  });
+  metadataStore.conversationMessages.append({
+    user_id: "dev-user",
+    session_id: branchSessionId,
+    run_id: branchRunId,
+    id: `${branchRunId}:assistant`,
+    role: "assistant",
+    source: "agent",
+    message_id: "branch-child-assistant-message",
+    content_text: "branch table answer",
+    content: { text: "branch table answer" }
+  });
+
+  const branchConversation = await requestJson(`/api/v1/sessions/${branchSessionId}/conversation?limit=20`);
+  assert.equal(branchConversation.response.status, 200, JSON.stringify(branchConversation.body));
+  assert.deepEqual(
+    branchConversation.body.data.messages.map((message) => message.contentText),
+    [
+      "inspect orders",
+      "orders has 2 columns",
+      "summarize orders",
+      "orders summary",
+      "make a table instead",
+      "branch table answer"
+    ]
+  );
+  assert.equal(branchConversation.body.data.messages.some((message) => message.contentText === "original chart answer"), false);
+  assert.equal(branchConversation.body.data.branch.parentSessionId, conversationSessionId);
+  assert.equal(
+    branchConversation.body.data.branches.some((branch) =>
+      branch.forkRunId === branchOriginalRunId
+      && branch.sessionId === branchSessionId
+      && branch.parentSessionId === conversationSessionId
+    ),
+    true
+  );
+
   const createdDatasource = await requestJson("/api/v1/datasources", {
     method: "POST",
     headers: { "Content-Type": "application/json" },

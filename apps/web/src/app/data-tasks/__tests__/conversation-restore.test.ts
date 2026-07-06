@@ -153,7 +153,7 @@ describe("conversationToAgentMessages", () => {
     ]);
   });
 
-  it("inserts an assistant failure placeholder after user-only failed runs", () => {
+  it("does not insert assistant failure placeholders into restored chat messages", () => {
     const dto: SessionConversationDto = {
       sessionId: "thread-1",
       messages: [
@@ -189,19 +189,9 @@ describe("conversationToAgentMessages", () => {
         content: "用错误模型分析订单",
       },
       {
-        id: "orphan-run:run-bad-model:assistant-placeholder",
-        role: "assistant",
-        content: "Previous request failed before the assistant produced a response.",
-      },
-      {
         id: "msg-user-next",
         role: "user",
         content: "换成正确模型继续",
-      },
-      {
-        id: "orphan-run:run-good-model:assistant-placeholder",
-        role: "assistant",
-        content: "Previous request failed before the assistant produced a response.",
       },
     ]);
   });

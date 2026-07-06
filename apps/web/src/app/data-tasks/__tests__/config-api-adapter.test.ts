@@ -374,6 +374,45 @@ describe("config api adapter", () => {
     expect(conversation.toolCalls[0]?.toolName).toBe("inspect_schema");
   });
 
+  it("creates a server-side session branch through the config client", async () => {
+    process.env.NEXT_PUBLIC_CONFIG_API_URL = "http://config.test";
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
+      success: true,
+      data: {
+        id: "branch-thread-2",
+        sessionId: "thread-2",
+        threadId: "thread-2",
+        parentSessionId: "thread-1",
+        rootSessionId: "thread-1",
+        forkRunId: "run-1",
+        forkMessageEndPosition: 2,
+        createdAt: "now",
+        session: {
+          id: "thread-2",
+          threadId: "thread-2",
+          title: "Branch",
+          titleSource: "fallback",
+          createdAt: "now",
+          updatedAt: "now",
+          lastMessageAt: "now",
+        },
+      },
+    }), { headers: { "Content-Type": "application/json" }, status: 201 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const branch = await configApi.createSessionBranch("thread-1", { runId: "run-1" });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://config.test/api/v1/sessions/thread-1/branches",
+      expect.objectContaining({
+        body: JSON.stringify({ runId: "run-1" }),
+        method: "POST",
+      }),
+    );
+    expect(branch.session.id).toBe("thread-2");
+    expect(branch.forkRunId).toBe("run-1");
+  });
+
   it("loads and patches server sessions through the config client", async () => {
     process.env.NEXT_PUBLIC_CONFIG_API_URL = "http://config.test";
     const fetchMock = vi

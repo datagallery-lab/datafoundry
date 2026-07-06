@@ -19,6 +19,7 @@ import type {
   QueryHistoryListResponseDto,
   RunCancelDto,
   RunDefaultsDto,
+  SessionBranchDto,
   SessionConversationDto,
   SessionListResponseDto,
   SessionTitleDto,
@@ -295,6 +296,13 @@ export const configApi = {
     return requestEnvelope<SessionConversationDto>(
       `/api/v1/sessions/${encodeURIComponent(sessionId)}/conversation${queryString(params)}`,
     );
+  },
+
+  createSessionBranch(sessionId: string, input: { runId: string; title?: string }): Promise<SessionBranchDto> {
+    return requestEnvelope<SessionBranchDto>(`/api/v1/sessions/${encodeURIComponent(sessionId)}/branches`, {
+      method: "POST",
+      body: JSON.stringify(input),
+    });
   },
 
   listSessions(options: { limit?: number; cursor?: string } = {}): Promise<SessionListResponseDto> {

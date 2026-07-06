@@ -16,6 +16,11 @@ import {
   type ConversationMemoryEventObserver
 } from "./conversation-memory.js";
 import { createMastraConversationSummarizer } from "./conversation-summarizer.js";
+import {
+  latestVisibleConversationSummary,
+  listVisibleConversationMessages,
+  resolveSessionLineage
+} from "./session-branching.js";
 import { LongTermMemoryService } from "./long-term-memory.js";
 import { createMastraLongTermMemoryExtractor } from "./long-term-memory-extractor.js";
 
@@ -56,6 +61,29 @@ export const createRunMemoryAssembly = async (
       : createMastraConversationMemoryBridge({
         memory: input.taskStateRuntime.memory
       }),
+    historyProvider: ({ excludeRunId, limit, sessionId, userId }) => {
+      const lineage = resolveSessionLineage({
+        metadataStore: input.metadataStore,
+        sessionId,
+        userId
+      });
+      const summary = latestVisibleConversationSummary({
+        lineage,
+        metadataStore: input.metadataStore,
+        sessionId,
+        userId
+      });
+      return {
+        history: listVisibleConversationMessages({
+          excludeRunId,
+          lineage,
+          limit,
+          metadataStore: input.metadataStore,
+          userId
+        }),
+        ...(summary ? { summary } : {})
+      };
+    },
     repository: input.metadataStore.conversationMessages,
     runEvents: input.metadataStore.runEvents,
     sessionId: input.sessionId,

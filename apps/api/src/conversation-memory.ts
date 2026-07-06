@@ -50,8 +50,19 @@ export type ConversationMemoryRunMessages = {
   report: ConversationMemoryWindowReport;
 };
 
+export type ConversationMemoryHistoryProvider = (input: {
+  excludeRunId: string;
+  limit: number;
+  sessionId: string;
+  userId: string;
+}) => {
+  history: ConversationMessageRecord[];
+  summary?: ConversationSummaryRecord;
+};
+
 export type ConversationMemoryServiceInput = {
   compactMemorySource?: ConversationCompactMemorySource | undefined;
+  historyProvider?: ConversationMemoryHistoryProvider | undefined;
   memoryBridge?: ConversationMemoryBridge | undefined;
   policy?: ConversationMemoryWindowPolicy | undefined;
   repository: ConversationMessageRepository;
@@ -136,16 +147,24 @@ export class ConversationMemoryService {
     runInput: RunAgentInput;
   }): ConversationMemoryRunMessages {
     const policy = normalizePolicy(this.input.policy);
-    const history = this.input.repository.listRecent({
+    const provided = this.input.historyProvider?.({
+      excludeRunId: input.runId,
+      limit: policy.historyLoadLimit,
+      sessionId: this.input.sessionId,
+      userId: this.input.userId
+    });
+    const history = provided?.history ?? this.input.repository.listRecent({
       user_id: this.input.userId,
       session_id: this.input.sessionId,
       exclude_run_id: input.runId,
       limit: policy.historyLoadLimit
     });
-    const summary = this.input.summaryRepository?.latest({
-      user_id: this.input.userId,
-      session_id: this.input.sessionId
-    });
+    const summary = provided
+      ? provided.summary
+      : this.input.summaryRepository?.latest({
+        user_id: this.input.userId,
+        session_id: this.input.sessionId
+      });
     const effectiveHistory = summary ? history.filter((record) => record.position > summary.to_position) : history;
     const toolCheckpoints = this.input.runEvents
       ? buildToolCheckpointsForHistory({

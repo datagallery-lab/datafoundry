@@ -1,6 +1,10 @@
 import type { BaseEvent, RunAgentInput } from "@ag-ui/client";
 import { type MetadataStore, type RunEventWriter, type RunRecord } from "@datafoundry/metadata";
 import { createHash } from "node:crypto";
+import {
+  isRunVisibleInSessionLineage,
+  resolveSessionLineage
+} from "./session-branching.js";
 
 export type ResolveExistingRunInput = {
   existingRun: RunRecord;
@@ -62,7 +66,19 @@ export const validateParentRun = ({
   if (!parentRun) {
     throw new Error(`PARENT_RUN_NOT_FOUND: ${parentRunId}`);
   }
-  if (parentRun.session_id !== sessionId) {
+  if (parentRun.session_id === sessionId) {
+    return;
+  }
+
+  try {
+    const lineage = resolveSessionLineage({ metadataStore, sessionId, userId });
+    if (!isRunVisibleInSessionLineage({ lineage, run: parentRun })) {
+      throw new Error(`PARENT_RUN_SESSION_MISMATCH: ${parentRunId}`);
+    }
+  } catch (error) {
+    if (error instanceof Error && error.message.includes("PARENT_RUN_SESSION_MISMATCH")) {
+      throw error;
+    }
     throw new Error(`PARENT_RUN_SESSION_MISMATCH: ${parentRunId}`);
   }
 };
