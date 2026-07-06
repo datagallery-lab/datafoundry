@@ -919,6 +919,10 @@ function reduceCustomEvent(state: LiveRun, event: AgUiLikeEvent): LiveRun {
         : {}),
       ...(stringValue(value?.model) ? { model: stringValue(value?.model) } : {}),
     };
+    const deltaKey = tokenUsageRecordKey(delta);
+    if (state.tokenUsageEvents.some((record) => tokenUsageRecordKey(record) === deltaKey)) {
+      return state;
+    }
     return {
       ...state,
       tokenUsage: mergeTokenUsageStats(state.tokenUsage ?? emptyTokenUsageStats(), delta),

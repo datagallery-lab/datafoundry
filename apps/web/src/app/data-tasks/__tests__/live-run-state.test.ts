@@ -1259,6 +1259,29 @@ describe("live run state reducer", () => {
     expect(session.tokens.outputTokens).toBe(340);
   });
 
+  it("does not double count duplicate token_usage custom events", () => {
+    let run = createInitialLiveRun();
+    const event = {
+      type: "CUSTOM" as const,
+      name: "token_usage",
+      value: {
+        step_number: 1,
+        model: "qwen-plus",
+        input_tokens: 1200,
+        output_tokens: 340,
+      },
+    };
+
+    run = reduceLiveRunEvent(run, { type: "RUN_STARTED" });
+    run = reduceLiveRunEvent(run, event);
+    run = reduceLiveRunEvent(run, event);
+
+    const runUsage = deriveRunUsage(run);
+    expect(runUsage.tokens.inputTokens).toBe(1200);
+    expect(runUsage.tokens.outputTokens).toBe(340);
+    expect(run.tokenUsageEvents).toHaveLength(1);
+  });
+
   it("tracks token_usage model, cost, and step-level usage", () => {
     let run = createInitialLiveRun();
     run = reduceLiveRunEvent(run, { type: "RUN_STARTED" });
