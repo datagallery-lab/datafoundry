@@ -195,6 +195,27 @@ nextjs-portal {
   animation: account-menu-popover-in 140ms ease-out;
 }
 
+@keyframes auth-card-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.99);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.auth-card-in {
+  animation: auth-card-in 220ms ease-out both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .auth-card-in {
+    animation: none;
+  }
+}
+
 @keyframes collapsed-sidebar-preview-in {
   from {
     opacity: 0;

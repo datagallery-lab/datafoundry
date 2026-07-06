@@ -17,7 +17,10 @@ const firaCode = Fira_Code({
 });
 
 export const metadata: Metadata = {
-  title: "DataFoundry",
+  title: {
+    default: "DataFoundry",
+    template: "%s · DataFoundry",
+  },
   description: "Agent-driven data task workspace",
 };
 

@@ -8,9 +8,9 @@ import {
   useLayoutEffect,
   useMemo,
   useState,
-  type FormEvent,
   type ReactNode,
 } from "react";
+import { useRouter } from "next/navigation";
 import {
   clearConfigApiIdentity,
   configApi,
@@ -19,6 +19,7 @@ import {
   type ConfigApiIdentity,
 } from "../../lib/config-api/client";
 import type { DevIdentityUser } from "../../lib/config-api";
+import { AUTH_BUTTON_CLASS, PasswordAuthShell } from "../../components/auth/auth-flow";
 
 const IDENTITY_STORAGE_KEY = "data-tasks:identity:v1";
 const DEV_SIGNED_OUT_STORAGE_KEY = "data-tasks:identity:signed-out:v1";
@@ -277,16 +278,13 @@ function DevIdentityProvider({ children }: { children: ReactNode }) {
 
 function DevSignedOutScreen({ onContinue }: { onContinue: () => void }) {
   return (
-    <PasswordAuthShell title="Signed out">
-      <div className="flex w-full max-w-sm flex-col gap-3">
-        <p className="text-sm text-muted-light">
-          Local dev mode uses a built-in account. Continue when you are ready to return to the workspace.
+    <PasswordAuthShell title="Signed out" subtitle="Local development mode">
+      <div className="flex flex-col gap-4">
+        <p className="text-sm leading-relaxed text-muted">
+          Local dev mode uses a built-in account. Continue when you are ready to return to the
+          workspace.
         </p>
-        <button
-          type="button"
-          onClick={onContinue}
-          className="h-10 rounded-md bg-primary px-3 text-sm font-semibold text-white"
-        >
+        <button type="button" onClick={onContinue} className={AUTH_BUTTON_CLASS}>
           Continue as Dev User
         </button>
       </div>
@@ -295,6 +293,7 @@ function DevSignedOutScreen({ onContinue }: { onContinue: () => void }) {
 }
 
 function PasswordIdentityProvider({ children }: { children: ReactNode }) {
+  const router = useRouter();
   const [currentUser, setCurrentUser] = useState<ConfigApiIdentity | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -365,144 +364,22 @@ function PasswordIdentityProvider({ children }: { children: ReactNode }) {
     };
   }, [changePassword, createUser, currentUser, error, loading, signOut, signOutAll]);
 
+  useEffect(() => {
+    if (!loading && (!currentUser || !value)) {
+      router.replace("/login");
+    }
+  }, [loading, currentUser, value, router]);
+
   if (loading) {
     return <PasswordAuthShell title="Loading account..." />;
   }
   if (!currentUser || !value) {
-    return <PasswordAuthScreen error={error} onAuthenticated={loadMe} />;
+    return <PasswordAuthShell title="Redirecting to sign in..." />;
   }
   return (
     <DataTaskIdentityContext.Provider value={value}>
       {children}
     </DataTaskIdentityContext.Provider>
-  );
-}
-
-function PasswordAuthScreen({
-  error,
-  onAuthenticated,
-}: {
-  error: string | null;
-  onAuthenticated: () => Promise<void>;
-}) {
-  const [mode, setMode] = useState<"login" | "register" | "forgot" | "verify" | "reset">("login");
-  const [displayName, setDisplayName] = useState("");
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [token, setToken] = useState("");
-  const [message, setMessage] = useState<string | null>(null);
-  const [submitting, setSubmitting] = useState(false);
-  const [localError, setLocalError] = useState<string | null>(null);
-
-  const submit = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    setSubmitting(true);
-    setLocalError(null);
-    setMessage(null);
-    try {
-      if (mode === "login") {
-        await configApi.login({ email, password });
-        await onAuthenticated();
-        return;
-      }
-      if (mode === "register") {
-        const result = await configApi.register({ email, password, displayName });
-        setMessage(result.verificationToken ? `Verify email token: ${result.verificationToken}` : "Verify email");
-        setMode("verify");
-        return;
-      }
-      if (mode === "forgot") {
-        const result = await configApi.forgotPassword({ email });
-        setMessage(result.resetToken ? `Reset token: ${result.resetToken}` : "Check your email for a reset link.");
-        setMode("reset");
-        return;
-      }
-      if (mode === "verify") {
-        await configApi.verifyEmail({ token });
-        setMessage("Email verified. Sign in to continue.");
-        setMode("login");
-        return;
-      }
-      if (mode === "reset") {
-        await configApi.resetPassword({ token, password });
-        setMessage("Password reset. Sign in to continue.");
-        setMode("login");
-      }
-    } catch (err) {
-      setLocalError(err instanceof Error ? err.message : "Authentication failed");
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  return (
-    <PasswordAuthShell title={mode === "register" ? "Create account" : mode === "forgot" ? "Forgot password" : mode === "verify" ? "Verify email" : mode === "reset" ? "Reset password" : "Sign in"}>
-      <form className="flex w-full max-w-sm flex-col gap-3" onSubmit={submit}>
-        {mode === "register" ? (
-          <input
-            className="h-10 rounded-md border border-border bg-surface px-3 text-sm outline-none"
-            value={displayName}
-            onChange={(event) => setDisplayName(event.target.value)}
-            placeholder="Display name"
-          />
-        ) : null}
-        {mode === "verify" || mode === "reset" ? (
-          <input
-            className="h-10 rounded-md border border-border bg-surface px-3 text-sm outline-none"
-            value={token}
-            onChange={(event) => setToken(event.target.value)}
-            placeholder={mode === "verify" ? "Verify email token" : "Reset token"}
-          />
-        ) : null}
-        {mode !== "verify" && mode !== "reset" ? (
-          <input
-            className="h-10 rounded-md border border-border bg-surface px-3 text-sm outline-none"
-            value={email}
-            onChange={(event) => setEmail(event.target.value)}
-            placeholder="Email"
-            type="email"
-          />
-        ) : null}
-        {mode !== "forgot" && mode !== "verify" ? (
-          <input
-            className="h-10 rounded-md border border-border bg-surface px-3 text-sm outline-none"
-            value={password}
-            onChange={(event) => setPassword(event.target.value)}
-            placeholder="Password"
-            type="password"
-          />
-        ) : null}
-        <button
-          className="h-10 rounded-md bg-primary px-3 text-sm font-semibold text-white disabled:opacity-50"
-          disabled={submitting}
-          type="submit"
-        >
-          {mode === "register" ? "Create account" : mode === "forgot" ? "Send reset link" : mode === "verify" ? "Verify email" : mode === "reset" ? "Reset password" : "Sign in"}
-        </button>
-        <div className="flex flex-wrap gap-2 text-xs text-muted-light">
-          <button type="button" onClick={() => setMode("login")}>Sign in</button>
-          <button type="button" onClick={() => setMode("register")}>Create account</button>
-          <button type="button" onClick={() => setMode("forgot")}>Forgot password</button>
-          <button type="button" onClick={() => setMode("verify")}>Verify email</button>
-        </div>
-        {message ? <p className="text-xs text-emerald-700">{message}</p> : null}
-        {localError || error ? <p className="text-xs text-rose-700">{localError || error}</p> : null}
-      </form>
-    </PasswordAuthShell>
-  );
-}
-
-function PasswordAuthShell({ children, title }: { children?: ReactNode; title: string }) {
-  return (
-    <main className="flex min-h-screen items-center justify-center bg-surface-subtle p-6 text-foreground">
-      <section className="flex w-full max-w-sm flex-col gap-4">
-        <div>
-          <h1 className="text-2xl font-semibold">{title}</h1>
-          <p className="mt-1 text-sm text-muted-light">DataFoundry</p>
-        </div>
-        {children}
-      </section>
-    </main>
   );
 }
 
