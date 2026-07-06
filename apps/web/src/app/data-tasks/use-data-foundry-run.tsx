@@ -13,7 +13,11 @@ import {
   type ReactNode,
   type SetStateAction,
 } from "react";
-import { useAgent, UseAgentUpdate } from "@copilotkit/react-core/v2";
+import {
+  useAgent,
+  useCopilotChatConfiguration,
+  UseAgentUpdate,
+} from "@copilotkit/react-core/v2";
 import type { BaseEvent } from "@ag-ui/client";
 import {
   accumulateSessionUsage,
@@ -33,17 +37,30 @@ import {
 import { reconcileSuspendedLiveRunState } from "./collaboration-recap";
 import { getCollaborationResponsesForThread } from "./components/chat/collaboration-responses";
 
-type LiveRunContextValue = {
+type LiveRunThreadSnapshot = {
   liveRun: LiveRun;
   sessionUsage: SessionUsageStats;
   latestQuestion?: string;
   runningThreadIds: ReadonlySet<string>;
 };
 
+type LiveRunStoreContextValue = {
+  liveRunsByThreadId: Readonly<Record<string, LiveRun>>;
+  sessionUsageByThreadId: Readonly<Record<string, SessionUsageStats>>;
+  latestQuestionByThreadId: Readonly<Record<string, string | undefined>>;
+  runningThreadIds: ReadonlySet<string>;
+};
+
 type LiveRunSetters = {
-  setLiveRun: Dispatch<SetStateAction<LiveRun>>;
-  setSessionUsage: Dispatch<SetStateAction<SessionUsageStats>>;
-  setLatestQuestion: Dispatch<SetStateAction<string | undefined>>;
+  setLiveRunForThread: (threadId: string | undefined, action: SetStateAction<LiveRun>) => void;
+  setSessionUsageForThread: (
+    threadId: string | undefined,
+    action: SetStateAction<SessionUsageStats>,
+  ) => void;
+  setLatestQuestionForThread: (
+    threadId: string | undefined,
+    action: SetStateAction<string | undefined>,
+  ) => void;
   syncRunningThreadStatus: (threadId: string | undefined, status: LiveRunStatus) => void;
 };
 
@@ -52,9 +69,18 @@ type ConversationRestoreGate = {
   setIsRestoringConversation: Dispatch<SetStateAction<boolean>>;
 };
 
-const LiveRunContext = createContext<LiveRunContextValue | null>(null);
+const emptyLiveRun = createInitialLiveRun();
+const emptySessionUsage = createInitialSessionUsage();
+
+const LiveRunContext = createContext<LiveRunStoreContextValue | null>(null);
 const LiveRunSettersContext = createContext<LiveRunSetters | null>(null);
 const ConversationRestoreGateContext = createContext<ConversationRestoreGate | null>(null);
+
+function resolveStateAction<T>(current: T, action: SetStateAction<T>): T {
+  return typeof action === "function"
+    ? (action as (current: T) => T)(current)
+    : action;
+}
 
 function normalizeUserQuestion(text: string): string | undefined {
   return normalizeUserQuestionText(text);
@@ -121,14 +147,65 @@ function syncRunningThreadIdSet(
 }
 
 export function LiveRunProvider({ children }: { children: ReactNode }) {
-  const [liveRun, setLiveRun] = useState<LiveRun>(() => createInitialLiveRun());
-  const [sessionUsage, setSessionUsage] = useState<SessionUsageStats>(() =>
-    createInitialSessionUsage(),
-  );
-  const [latestQuestion, setLatestQuestion] = useState<string | undefined>();
+  const [liveRunsByThreadId, setLiveRunsByThreadId] = useState<Record<string, LiveRun>>({});
+  const [sessionUsageByThreadId, setSessionUsageByThreadId] = useState<
+    Record<string, SessionUsageStats>
+  >({});
+  const [latestQuestionByThreadId, setLatestQuestionByThreadId] = useState<
+    Record<string, string | undefined>
+  >({});
   const [runningThreadIds, setRunningThreadIds] = useState<Set<string>>(() => new Set());
   const [isRestoringConversation, setIsRestoringConversation] = useState(false);
-  const prevRunStatusRef = useRef<LiveRunStatus>("idle");
+  const prevRunStatusByThreadRef = useRef<Record<string, LiveRunStatus>>({});
+
+  const setLiveRunForThread = useCallback(
+    (threadId: string | undefined, action: SetStateAction<LiveRun>) => {
+      if (!threadId) return;
+      setLiveRunsByThreadId((current) => {
+        const previous = current[threadId] ?? createInitialLiveRun();
+        const next = resolveStateAction(previous, action);
+        if (next === previous && current[threadId]) {
+          return current;
+        }
+        return { ...current, [threadId]: next };
+      });
+    },
+    [],
+  );
+
+  const setSessionUsageForThread = useCallback(
+    (threadId: string | undefined, action: SetStateAction<SessionUsageStats>) => {
+      if (!threadId) return;
+      setSessionUsageByThreadId((current) => {
+        const previous = current[threadId] ?? createInitialSessionUsage();
+        const next = resolveStateAction(previous, action);
+        if (next === previous && current[threadId]) {
+          return current;
+        }
+        return { ...current, [threadId]: next };
+      });
+    },
+    [],
+  );
+
+  const setLatestQuestionForThread = useCallback(
+    (threadId: string | undefined, action: SetStateAction<string | undefined>) => {
+      if (!threadId) return;
+      setLatestQuestionByThreadId((current) => {
+        const previous = current[threadId];
+        const next = resolveStateAction(previous, action);
+        if (next === previous) {
+          return current;
+        }
+        if (next === undefined) {
+          const { [threadId]: _removed, ...rest } = current;
+          return rest;
+        }
+        return { ...current, [threadId]: next };
+      });
+    },
+    [],
+  );
 
   const syncRunningThreadStatus = useCallback(
     (threadId: string | undefined, status: LiveRunStatus) => {
@@ -141,8 +218,18 @@ export function LiveRunProvider({ children }: { children: ReactNode }) {
   );
 
   const setters = useMemo(
-    () => ({ setLiveRun, setSessionUsage, setLatestQuestion, syncRunningThreadStatus }),
-    [syncRunningThreadStatus],
+    () => ({
+      setLiveRunForThread,
+      setSessionUsageForThread,
+      setLatestQuestionForThread,
+      syncRunningThreadStatus,
+    }),
+    [
+      setLatestQuestionForThread,
+      setLiveRunForThread,
+      setSessionUsageForThread,
+      syncRunningThreadStatus,
+    ],
   );
 
   const restoreGate = useMemo(
@@ -154,26 +241,41 @@ export function LiveRunProvider({ children }: { children: ReactNode }) {
   );
 
   useLayoutEffect(() => {
-    const previous = prevRunStatusRef.current;
-    const current = liveRun.runStatus;
-    if (previous === "running" && current === "completed") {
-      setSessionUsage((stats) =>
-        accumulateSessionUsage(stats, deriveSegmentRunUsage(liveRun), "completed"),
-      );
-    } else if (previous === "running" && current === "failed") {
-      setSessionUsage((stats) =>
-        accumulateSessionUsage(stats, deriveSegmentRunUsage(liveRun), "failed"),
-      );
-    }
-    prevRunStatusRef.current = current;
-  }, [liveRun]);
+    Object.entries(liveRunsByThreadId).forEach(([threadId, liveRun]) => {
+      const previous = prevRunStatusByThreadRef.current[threadId] ?? "idle";
+      const current = liveRun.runStatus;
+      if (previous === "running" && current === "completed") {
+        setSessionUsageForThread(threadId, (stats) =>
+          accumulateSessionUsage(stats, deriveSegmentRunUsage(liveRun), "completed"),
+        );
+      } else if (previous === "running" && current === "failed") {
+        setSessionUsageForThread(threadId, (stats) =>
+          accumulateSessionUsage(stats, deriveSegmentRunUsage(liveRun), "failed"),
+        );
+      }
+      prevRunStatusByThreadRef.current[threadId] = current;
+    });
+  }, [liveRunsByThreadId, setSessionUsageForThread]);
+
+  const value = useMemo(
+    () => ({
+      liveRunsByThreadId,
+      sessionUsageByThreadId,
+      latestQuestionByThreadId,
+      runningThreadIds,
+    }),
+    [
+      latestQuestionByThreadId,
+      liveRunsByThreadId,
+      runningThreadIds,
+      sessionUsageByThreadId,
+    ],
+  );
 
   return (
     <LiveRunSettersContext.Provider value={setters}>
       <ConversationRestoreGateContext.Provider value={restoreGate}>
-        <LiveRunContext.Provider
-          value={{ liveRun, sessionUsage, latestQuestion, runningThreadIds }}
-        >
+        <LiveRunContext.Provider value={value}>
           {children}
         </LiveRunContext.Provider>
       </ConversationRestoreGateContext.Provider>
@@ -181,12 +283,25 @@ export function LiveRunProvider({ children }: { children: ReactNode }) {
   );
 }
 
-export function useLiveRun(): LiveRunContextValue {
+export function useLiveRun(threadId?: string | null): LiveRunThreadSnapshot {
   const ctx = useContext(LiveRunContext);
   if (!ctx) {
     throw new Error("useLiveRun must be used within LiveRunProvider");
   }
-  return ctx;
+  const chatConfig = useCopilotChatConfiguration();
+  const resolvedThreadId = threadId ?? chatConfig?.threadId ?? null;
+  return {
+    liveRun: resolvedThreadId
+      ? ctx.liveRunsByThreadId[resolvedThreadId] ?? emptyLiveRun
+      : emptyLiveRun,
+    sessionUsage: resolvedThreadId
+      ? ctx.sessionUsageByThreadId[resolvedThreadId] ?? emptySessionUsage
+      : emptySessionUsage,
+    latestQuestion: resolvedThreadId
+      ? ctx.latestQuestionByThreadId[resolvedThreadId]
+      : undefined,
+    runningThreadIds: ctx.runningThreadIds,
+  };
 }
 
 export function useLiveRunSetters(): LiveRunSetters {
@@ -206,7 +321,7 @@ export function useConversationRestoreGate(): ConversationRestoreGate {
 }
 
 /**
- * Subscribes to AG-UI events for the active thread. Must render as a sibling
+ * Subscribes to AG-UI events for a thread. Must render as a sibling
  * **before** `<CopilotChat>` inside `<CopilotChatConfigurationProvider>` so
  * its effect runs before connectAgent replays historical events.
  */
@@ -221,7 +336,11 @@ export function LiveRunEventSubscriber({
   if (!setters) {
     throw new Error("LiveRunEventSubscriber requires LiveRunProvider");
   }
-  const { setLiveRun, setSessionUsage, setLatestQuestion, syncRunningThreadStatus } = setters;
+  const {
+    setLiveRunForThread,
+    setLatestQuestionForThread,
+    syncRunningThreadStatus,
+  } = setters;
   const { isRestoringConversation } = useConversationRestoreGate();
   const isRestoringConversationRef = useRef(isRestoringConversation);
   isRestoringConversationRef.current = isRestoringConversation;
@@ -235,22 +354,18 @@ export function LiveRunEventSubscriber({
     ],
   });
 
-  useLayoutEffect(() => {
-    setLiveRun(createInitialLiveRun());
-    setSessionUsage(createInitialSessionUsage());
-    setLatestQuestion(undefined);
-  }, [threadId, setLatestQuestion, setLiveRun, setSessionUsage]);
-
   useEffect(() => {
     const applyEvent = (event: BaseEvent) => {
+      if (!threadId) {
+        return;
+      }
       if (isRestoringConversationRef.current && isRunBoundaryReplayEvent(event)) {
         return;
       }
-      setLiveRun((current) => {
+      setLiveRunForThread(threadId, (current) => {
         const next = reduceLiveRunEvent(current, event);
         const reconciled =
-          threadId &&
-          (event.type === "RUN_FINISHED" || event.type === "STATE_SNAPSHOT")
+          event.type === "RUN_FINISHED" || event.type === "STATE_SNAPSHOT"
             ? reconcileSuspendedLiveRunState(
                 next,
                 getCollaborationResponsesForThread(threadId),
@@ -305,7 +420,10 @@ export function LiveRunEventSubscriber({
         if (isRestoringConversationRef.current) {
           return;
         }
-        setLiveRun((current) => {
+        if (!threadId) {
+          return;
+        }
+        setLiveRunForThread(threadId, (current) => {
           if (shouldIgnoreIncomingRunError(current)) {
             return current;
           }
@@ -320,7 +438,7 @@ export function LiveRunEventSubscriber({
     });
 
     return () => subscription.unsubscribe();
-  }, [agent, setLiveRun, syncRunningThreadStatus, threadId]);
+  }, [agent, setLiveRunForThread, syncRunningThreadStatus, threadId]);
 
   useEffect(() => {
     if (isRestoringConversationRef.current) {
@@ -328,27 +446,35 @@ export function LiveRunEventSubscriber({
     }
     const state = agent.state as Record<string, unknown> | undefined;
     if (!state || Object.keys(state).length === 0) return;
+    if (!threadId) return;
 
-    setLiveRun((current) => {
+    setLiveRunForThread(threadId, (current) => {
       const next = reduceLiveRunEvent(current, {
         type: "STATE_SNAPSHOT",
         snapshot: state,
       });
-      const reconciled = threadId
-        ? reconcileSuspendedLiveRunState(
-            next,
-            getCollaborationResponsesForThread(threadId),
-          )
-        : next;
+      const reconciled = reconcileSuspendedLiveRunState(
+        next,
+        getCollaborationResponsesForThread(threadId),
+      );
       syncRunningThreadStatus(threadId, reconciled.runStatus);
       return reconciled;
     });
-  }, [agent.state, setLiveRun, isRestoringConversation, syncRunningThreadStatus, threadId]);
+  }, [
+    agent.state,
+    setLiveRunForThread,
+    isRestoringConversation,
+    syncRunningThreadStatus,
+    threadId,
+  ]);
 
   useEffect(() => {
     const onError = (event: Event) => {
-      const detail = (event as CustomEvent<{ message?: string }>).detail;
-      setLiveRun((current) => {
+      const detail = (event as CustomEvent<{ message?: string; threadId?: string | null }>).detail;
+      if (!threadId || detail?.threadId !== threadId) {
+        return;
+      }
+      setLiveRunForThread(threadId, (current) => {
         if (shouldIgnoreIncomingRunError(current)) {
           return current;
         }
@@ -365,7 +491,7 @@ export function LiveRunEventSubscriber({
     return () => {
       window.removeEventListener("datafoundry-run-error", onError);
     };
-  }, [setLiveRun, syncRunningThreadStatus, threadId]);
+  }, [setLiveRunForThread, syncRunningThreadStatus, threadId]);
 
   const latestQuestion = extractLatestUserQuestion(
     (agent as { messages?: unknown }).messages,
@@ -374,8 +500,8 @@ export function LiveRunEventSubscriber({
     if (isRestoringConversationRef.current) {
       return;
     }
-    setLatestQuestion(latestQuestion);
-  }, [isRestoringConversation, latestQuestion, setLatestQuestion]);
+    setLatestQuestionForThread(threadId, latestQuestion);
+  }, [isRestoringConversation, latestQuestion, setLatestQuestionForThread, threadId]);
 
   return null;
 }
