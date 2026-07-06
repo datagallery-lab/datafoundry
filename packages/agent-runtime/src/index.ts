@@ -8,6 +8,7 @@ import {
   taskWriteTool
 } from "@mastra/core/harness";
 import { Mastra } from "@mastra/core/mastra";
+import { WorkingMemory } from "@mastra/core/processors";
 import { createSkillTools, createWorkspaceTools } from "@mastra/core/workspace";
 import type { Message } from "@ag-ui/core";
 import type { ArtifactService } from "@datafoundry/artifacts";
@@ -47,6 +48,7 @@ import {
 import {
   type TaskStateRuntime
 } from "./memory/task-state-runtime.js";
+import { CONVERSATION_WORKING_MEMORY_CONFIG } from "./memory/conversation-memory-bridge.js";
 import type { RuntimeContextSource } from "./context/source/runtime-context-source.js";
 import { GoalRuntimeAdapter, type GoalRequest } from "./memory/goal-runtime-adapter.js";
 import { createDataFoundryToolRegistry } from "./tools/data-tools.js";
@@ -131,10 +133,16 @@ export {
   resolveWorkspaceRoot
 } from "./tools/workspace-factory.js";
 export { resolvePythonRuntime } from "./tools/python-runtime.js";
-export { projectWorkspaceObservation } from "./context/tool-observation/adapters/workspace-tool-observation-adapters.js";
+export {
+  projectWorkspaceObservation
+} from "./context/tool-observation/adapters/workspace-tool-observation-adapters.js";
 export { shouldReuseRecordedFileArtifactForPublish } from "./tools/artifact-publish-policy.js";
 export { createDataFoundryToolRegistry, type ToolRegistry } from "./tools/data-tools.js";
-export { GoalRuntimeAdapter, type GoalRequest, type GoalSnapshot } from "./memory/goal-runtime-adapter.js";
+export {
+  GoalRuntimeAdapter,
+  type GoalRequest,
+  type GoalSnapshot
+} from "./memory/goal-runtime-adapter.js";
 export { createContextItem, hashContextContent } from "./context/inventory/context-item.js";
 export type {
   ContextItem,
@@ -253,7 +261,7 @@ export const createDataFoundry = async (
     });
   }
   mkdirSync(join(skillCacheDir, "skills"), { recursive: true });
-  // 绑定到本次 session 的工作区：LocalFilesystem + LocalSandbox（macOS seatbelt / Linux bubblewrap 隔离）。
+  // 绑定到本次 session 的工作区：LocalFilesystem + LocalSandbox。
   // createDataFoundry 每次 run 都调用，直接闭包捕获 runContext，不依赖下游 requestContext 注入。
   const runWorkspace = createRunWorkspace({
     runContext: input.runContext,
@@ -307,6 +315,9 @@ export const createDataFoundry = async (
     runState: contextRunState,
     ...(input.taskStateRuntime ? { taskStateRuntime: input.taskStateRuntime } : {})
   });
+  const readOnlyWorkingMemoryProcessor = input.taskStateRuntime
+    ? await createReadOnlyWorkingMemoryProcessor(input.taskStateRuntime)
+    : undefined;
   const dashScopePromptCompat = new DashScopePromptCompatProcessor(
     shouldApplyDashScopePromptCompat(input.modelProvider.kind),
   );
@@ -439,7 +450,11 @@ export const createDataFoundry = async (
     // Workspace remains attached for execution context, while auto-injection is disabled above.
     // Explicitly created tools are wrapped by the same governed execution boundary as every other tool.
     workspace: runWorkspace.workspace,
-    inputProcessors: [...mastraContextProcessors.inputProcessors, dashScopePromptCompat],
+    inputProcessors: [
+      ...(readOnlyWorkingMemoryProcessor ? [readOnlyWorkingMemoryProcessor] : []),
+      ...mastraContextProcessors.inputProcessors,
+      dashScopePromptCompat
+    ],
     outputProcessors: mastraContextProcessors.outputProcessors,
     defaultOptions: {
       maxSteps: AGENT_MAX_STEPS,
@@ -552,22 +567,34 @@ type MaterializedWorkspaceAttachment = {
 const buildAgentInstructions = (input: AgentInstructionsInput): string => {
   const { runContext: context, collaborationToolsEnabled, commandExecutionEnabled, taskToolsEnabled } = input;
   const enabled = (name: string): boolean => input.toolNames.includes(name);
+  const publishArtifactEnabled = enabled("publish_artifact");
+  const promoteWorkspaceFileEnabled = enabled("promote_workspace_file");
   const dataTools = ["list_data_sources", "inspect_schema", "preview_table", "run_sql_readonly"].filter(enabled);
   const toolGroups: string[] = dataTools.length > 0 ? [`Data tools: ${dataTools.join(", ")}.`] : [];
   if ((context.enabled_knowledge_ids?.length ?? 0) > 0 && enabled("retrieve_knowledge")) {
     toolGroups.push("Knowledge tools: retrieve_knowledge.");
   }
-  if (enabled("publish_artifact")) {
+  if (publishArtifactEnabled) {
     toolGroups.push("Artifact tools: publish_artifact.");
   }
   const workspaceAssetTools = ["list_workspace_files", "read_workspace_file", "promote_workspace_file"]
     .filter(enabled);
   if (workspaceAssetTools.length > 0) {
+    const sessionProducerTools = [
+      ...(enabled("write_file") ? ["write_file"] : []),
+      ...(enabled("execute_command") ? ["execute_command"] : [])
+    ];
+    const sessionProducerText = sessionProducerTools.length > 0
+      ? `New files you write (${sessionProducerTools.join(" / ")}) are session-scoped — only this session sees them. `
+      : "New files in the session workspace are session-scoped — only this session sees them. ";
     toolGroups.push(
       `Workspace asset tools: ${workspaceAssetTools.join(", ")}. `
-      + "New files you write (write_file / execute_command) are session-scoped — only this session sees them. "
+      + sessionProducerText
       + "list_workspace_files / read_workspace_file read the cross-session workspace root (shared across your "
-      + "sessions, read-only). promote_workspace_file copies a session file into that cross-session root."
+      + "sessions, read-only). "
+      + (promoteWorkspaceFileEnabled
+        ? "promote_workspace_file copies a session file into that cross-session root."
+        : "Use only the available workspace asset tools listed above.")
     );
   }
   const workspaceTools = [
@@ -584,18 +611,21 @@ const buildAgentInstructions = (input: AgentInstructionsInput): string => {
     toolGroups.push(`Workspace tools (session-isolated directory): ${workspaceTools.join(", ")}. `
       + "Files you write stay within this session's workspace and can be reused by later runs in the same session. "
       + (enabled("execute_command")
-        ? (input.pythonRuntimeAvailable
+          ? (input.pythonRuntimeAvailable
           ? "execute_command runs in a sandbox without network access. Use `python3.12 script.py` for local analysis; "
-            + "numpy, pandas, matplotlib, and scikit-learn are available from the project venv. Write scripts with write_file first, "
+            + "numpy, pandas, matplotlib, and scikit-learn are available from the project venv. "
+            + "Write scripts with write_file first, "
             + "save charts with plt.savefig(), and persist outputs as workspace files. "
             + "Do not use execute_command for external services or direct database access."
           : "execute_command runs in a sandbox without network access. Use it only for local transforms, charts, "
             + "or exports; never use it to access external services.")
-        : "execute_command is disabled this run; rely on the available data and file tools only."));
+        : "Command execution is disabled this run; rely on the available data and file tools only."));
   }
   if (input.workspaceAttachments.length > 0) {
     toolGroups.push(`Uploaded workspace input files: ${input.workspaceAttachments
-      .map((file) => `${file.path} (file_id=${file.file_id}, mime=${file.mime_type ?? "unknown"}, size=${file.size_bytes})`)
+      .map((file) =>
+        `${file.path} (file_id=${file.file_id}, mime=${file.mime_type ?? "unknown"}, size=${file.size_bytes})`
+      )
       .join("; ")}.`);
   }
   // R-019: per-run @ mentions — focus signal, not a narrowing. The agent is told which
@@ -677,6 +707,9 @@ const buildAgentInstructions = (input: AgentInstructionsInput): string => {
           input.selectedSkills.map((skill) => skill.name).join(", ")
         }.`
       : "";
+    const skillScriptPolicy = enabled("execute_command")
+      ? " Scripts from skills may be executed only through approved workspace tools such as execute_command."
+      : " Treat scripts from skills as reference material this run because command execution is unavailable.";
     policies.push(
       "Use skills as task guidance, not as executable tools. skill_search may search the full shared skill cache; "
         + "a search result does not by itself mean the skill was selected for this run."
@@ -684,11 +717,12 @@ const buildAgentInstructions = (input: AgentInstructionsInput): string => {
         + " When the task matches an available skill, call "
         + "skill_search or skill to load its instructions, then use normal approved tools to act. "
         + "Use skill_read for references, scripts, or assets that belong to a relevant loaded skill. "
-        + "Scripts from skills may be executed only through approved workspace tools such as execute_command."
+        + skillScriptPolicy
     );
   }
   if (enabled("inspect_schema") && (enabled("run_sql_readonly") || enabled("preview_table"))) {
-    policies.push("Inspect before you query, then reuse the schema_id. inspect_schema returns a schema_id token that authorizes "
+    policies.push("Inspect before you query, then reuse the schema_id. "
+      + "inspect_schema returns a schema_id token that authorizes "
       + "run_sql_readonly and preview_table; pass it as their schema_id argument. The first SQL or preview against a "
       + "datasource must be preceded by an inspect_schema for it; without a valid schema_id the tools fail with "
       + "SCHEMA_REQUIRED. The token enforces inspect-before-query ordering within this run; Data Gateway remains the "
@@ -698,12 +732,15 @@ const buildAgentInstructions = (input: AgentInstructionsInput): string => {
   if (enabled("run_sql_readonly")) {
     policies.push("Write read-only SQL only. Generate SELECT or WITH queries and run them through run_sql_readonly. "
       + "Do not attempt writes, DDL, or multi-statement scripts through SQL"
-      + ". Never use execute_command or direct database clients to bypass Data Gateway."
+      + (enabled("execute_command")
+        ? ". Never use execute_command or direct database clients to bypass Data Gateway."
+        : ". Never use direct database clients to bypass Data Gateway.")
     );
   }
   policies.push(
     "Reply in the same natural language as the user's latest request. If the user mixes languages, use the dominant "
-      + "language from the request. Keep SQL, code, table names, column names, and other technical identifiers unchanged."
+      + "language from the request. Keep SQL, code, table names, column names, and other technical identifiers "
+      + "unchanged."
   );
   policies.push(
     `Respect limits. This run allows at most ${AGENT_MAX_STEPS} steps and `
@@ -712,21 +749,33 @@ const buildAgentInstructions = (input: AgentInstructionsInput): string => {
       + "Prefer one focused query per datasource before refining."
   );
   if (commandExecutionEnabled) {
+    const artifactPublishPolicy = publishArtifactEnabled
+      ? "Call publish_artifact for files that should be exposed to the client as artifacts. "
+      : "Do not claim a file was exposed as a client-visible artifact unless a tool result confirms it. ";
+    const workspacePromotionPolicy = promoteWorkspaceFileEnabled
+      ? "Call promote_workspace_file only to lift a session workspace file into a cross-session reusable asset "
+        + "(files in the same session are already retained across runs; do not promote merely to reuse within this "
+        + "session)."
+      : "";
     policies.push(
       "Persist derived artifacts in the workspace. When analysis produces exports, charts, or transformed datasets, "
         + "write them as files via write_file so they are retained with the session, rather than only echoing them in "
-        + "the final message. Call publish_artifact for files that should be exposed to the client as artifacts. "
+        + "the final message. "
+        + artifactPublishPolicy
         + "Do not invent download URLs, link text, or UI placement such as 'click the link below'; the client renders "
         + "download controls from artifact events and file APIs. "
-        + "Call promote_workspace_file only to lift a session workspace file into a cross-session reusable asset "
-        + "(files in the same session are already retained across runs; do not promote merely to reuse within this session)."
+        + workspacePromotionPolicy
     );
     if (input.pythonRuntimeAvailable) {
       policies.push(
-        "For Python analysis, prefer write_file to create a .py script, then execute_command with `python3.12 <script>`. "
+        "For Python analysis, prefer write_file to create a .py script, then execute_command with "
+          + "`python3.12 <script>`. "
           + "Use pandas for tabular work, matplotlib with plt.savefig() for charts (no GUI display), and scikit-learn "
-          + "for modeling. Export CSV/JSON/PNG artifacts to the session workspace and publish_artifact when the user "
-          + "should download results."
+          + "for modeling. "
+          + (publishArtifactEnabled
+            ? "Export CSV/JSON/PNG artifacts to the session workspace and publish_artifact when the user "
+              + "should download results."
+            : "Export CSV/JSON/PNG files to the session workspace when the user should reuse results.")
       );
     }
   }
@@ -773,6 +822,25 @@ const selectToolsByPolicy = <TTool>(
   return Object.fromEntries(Object.entries(availableTools).filter(([name]) =>
     !deniedTools.has(name) && (!allowedTools || allowedTools.has(name) || skillMetaTools.has(name))
   ));
+};
+
+const createReadOnlyWorkingMemoryProcessor = async (
+  runtime: TaskStateRuntime
+): Promise<WorkingMemory | undefined> => {
+  const memoryStore = await runtime.storage.getStore("memory");
+  if (!memoryStore) {
+    return undefined;
+  }
+  return new WorkingMemory({
+    storage: memoryStore,
+    readOnly: true,
+    scope: CONVERSATION_WORKING_MEMORY_CONFIG.workingMemory.scope,
+    template: {
+      format: "markdown",
+      content: CONVERSATION_WORKING_MEMORY_CONFIG.workingMemory.template
+    },
+    templateProvider: runtime.memory
+  });
 };
 
 const requireFileAssetService = (service: FileAssetService | undefined): FileAssetService => {
@@ -986,7 +1054,14 @@ const throwIfAborted = (signal?: AbortSignal | undefined): void => {
 };
 
 /** List files under a directory (one level) relative to the workspace root, read-only. */
-const listWorkspaceFiles = (dirPath: string): Array<{ path: string; name: string; size_bytes: number; is_directory: boolean }> => {
+type WorkspaceFileEntry = {
+  is_directory: boolean;
+  name: string;
+  path: string;
+  size_bytes: number;
+};
+
+const listWorkspaceFiles = (dirPath: string): WorkspaceFileEntry[] => {
   let entries: import("node:fs").Dirent[];
   try {
     entries = readdirSync(dirPath, { withFileTypes: true });

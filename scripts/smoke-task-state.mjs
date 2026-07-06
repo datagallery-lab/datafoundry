@@ -73,6 +73,20 @@ try {
   const configuredTools = await configured.agent.listTools();
   const processorIds = (await configured.agent.listConfiguredInputProcessors()).map((item) => item.id);
   assert("task_write" in configuredTools && "task_check" in configuredTools, "agent should expose builtin task tools");
+  assert(
+    !("updateWorkingMemory" in configuredTools),
+    "agent.listTools should not expose read-only WorkingMemory writes"
+  );
+  assert(
+    processorIds.includes("working-memory"),
+    "agent should explicitly install a read-only WorkingMemory processor"
+  );
+  const configuredInputProcessors = await configured.agent.listConfiguredInputProcessors();
+  const memoryProcessors = await secondRuntime.memory.getInputProcessors(configuredInputProcessors);
+  assert(
+    !memoryProcessors.some((item) => item.id === "working-memory"),
+    "configured read-only WorkingMemory processor should suppress Mastra's writable default"
+  );
   assert(processorIds.includes("task-state-context"), "agent should include durable task context injection");
   await configured.destroyWorkspace();
   await secondRuntime.close();
