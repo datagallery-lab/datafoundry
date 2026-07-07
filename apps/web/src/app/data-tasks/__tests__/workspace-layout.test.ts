@@ -12,6 +12,7 @@ import {
   LEFT_PANEL_DEFAULT_WIDTH,
   LEFT_PANEL_MAX_WIDTH,
   LEFT_PANEL_MIN_WIDTH,
+  maxDockableRightPanelWidth,
   RIGHT_PANEL_DEFAULT_WIDTH,
   RIGHT_PANEL_MAX_WIDTH,
   RIGHT_PANEL_MIN_WIDTH,
@@ -71,9 +72,10 @@ describe("workspace layout", () => {
     );
   });
 
-  it("does not cap the chat surface width", () => {
-    expect(chatPaneClassName).not.toContain("max-w");
+  it("centers message rows within the content column max-width", () => {
     expect(chatPaneClassName).toContain("w-full");
+    expect(chatPaneClassName).toContain("[&_.copilotKitMessage]:mx-auto");
+    expect(chatPaneClassName).toContain("[&_.copilotKitMessage]:max-w-[760px]");
   });
 });
 
@@ -96,8 +98,8 @@ describe("clampRightPanelWidth", () => {
     expect(clampRightPanelWidth(100)).toBe(RIGHT_PANEL_MIN_WIDTH);
   });
 
-  it("caps at the absolute maximum", () => {
-    expect(clampRightPanelWidth(900)).toBe(RIGHT_PANEL_MAX_WIDTH);
+  it("does not impose a fixed upper cap (viewport drives the max)", () => {
+    expect(clampRightPanelWidth(900)).toBe(900);
   });
 
   it("keeps a requested width within bounds", () => {
@@ -248,11 +250,9 @@ describe("getMinimumWorkspaceWidth", () => {
 });
 
 describe("canDockRightPanel", () => {
-  it("returns true when the viewport fits collapsed left + right + chat reservation", () => {
+  it("returns true when the viewport fits collapsed left + right + chat minimum", () => {
     const minWidth =
-      LEFT_PANEL_WIDTH_COLLAPSED +
-      RIGHT_PANEL_MIN_WIDTH +
-      getChatInputReservedWidth();
+      LEFT_PANEL_WIDTH_COLLAPSED + RIGHT_PANEL_MIN_WIDTH + CHAT_MIN_WIDTH;
     expect(
       canDockRightPanel({
         viewportWidth: minWidth,
@@ -263,15 +263,26 @@ describe("canDockRightPanel", () => {
 
   it("returns false when the viewport is narrower than the dock minimum", () => {
     const minWidth =
-      LEFT_PANEL_WIDTH_COLLAPSED +
-      RIGHT_PANEL_MIN_WIDTH +
-      getChatInputReservedWidth();
+      LEFT_PANEL_WIDTH_COLLAPSED + RIGHT_PANEL_MIN_WIDTH + CHAT_MIN_WIDTH;
     expect(
       canDockRightPanel({
         viewportWidth: minWidth - 1,
         rightPanelWidth: RIGHT_PANEL_MIN_WIDTH,
       }),
     ).toBe(false);
+  });
+
+  it("keeps a max-width panel dockable once the chat is squeezed to its minimum", () => {
+    // Regression: dragging to RIGHT_PANEL_MAX_WIDTH previously undocked the
+    // panel because docking reserved the *preferred* chat width, not the min.
+    const viewport =
+      LEFT_PANEL_WIDTH_COLLAPSED + RIGHT_PANEL_MAX_WIDTH + CHAT_MIN_WIDTH;
+    expect(
+      canDockRightPanel({
+        viewportWidth: viewport,
+        rightPanelWidth: RIGHT_PANEL_MAX_WIDTH,
+      }),
+    ).toBe(true);
   });
 
   it("returns true for unknown viewport width (SSR/hydration)", () => {
@@ -281,6 +292,49 @@ describe("canDockRightPanel", () => {
         rightPanelWidth: RIGHT_PANEL_DEFAULT_WIDTH,
       }),
     ).toBe(true);
+  });
+});
+
+describe("maxDockableRightPanelWidth", () => {
+  it("returns the fallback max when the viewport is unknown", () => {
+    expect(maxDockableRightPanelWidth(0)).toBe(RIGHT_PANEL_MAX_WIDTH);
+  });
+
+  it("caps the width so the resulting panel stays dockable", () => {
+    // A viewport that cannot fit a full-width panel: the returned width must be
+    // small enough that canDockRightPanel is satisfied.
+    const viewport =
+      LEFT_PANEL_WIDTH_COLLAPSED + RIGHT_PANEL_MAX_WIDTH + CHAT_MIN_WIDTH - 120;
+    const capped = maxDockableRightPanelWidth(viewport);
+    expect(capped).toBeLessThan(RIGHT_PANEL_MAX_WIDTH);
+    expect(
+      canDockRightPanel({ viewportWidth: viewport, rightPanelWidth: capped }),
+    ).toBe(true);
+  });
+
+  it("never returns below the absolute minimum width", () => {
+    expect(maxDockableRightPanelWidth(100)).toBe(RIGHT_PANEL_MIN_WIDTH);
+  });
+
+  it("keeps the chat column at its absolute minimum regardless of viewport size", () => {
+    // The chat minimum must be a constant: the max panel width grows 1:1 with
+    // the viewport so that viewport - left - maxRight === CHAT_MIN_WIDTH.
+    for (const viewport of [1200, 1920, 2560, 4000]) {
+      const left = LEFT_PANEL_WIDTH_COLLAPSED;
+      const maxRight = maxDockableRightPanelWidth(viewport, left);
+      expect(viewport - left - maxRight).toBe(CHAT_MIN_WIDTH);
+    }
+  });
+
+  it("lets the panel grow past the fallback max on a wide viewport", () => {
+    const left = LEFT_PANEL_WIDTH_COLLAPSED;
+    const viewport = 4000;
+    expect(maxDockableRightPanelWidth(viewport, left)).toBe(
+      viewport - left - CHAT_MIN_WIDTH,
+    );
+    expect(maxDockableRightPanelWidth(viewport, left)).toBeGreaterThan(
+      RIGHT_PANEL_MAX_WIDTH,
+    );
   });
 });
 
@@ -298,11 +352,28 @@ describe("resolveSidebarExpandPreferences", () => {
     });
   });
 
-  it("closes the right panel when expanding left would overflow", () => {
+  it("never closes the right panel when expanding left, even on a narrow viewport", () => {
+    // Regression: expanding the left sidebar used to close the right console
+    // when the expanded layout overflowed. Expansion is an explicit user
+    // action and must preserve the right panel; the centered chat column
+    // absorbs the width change instead.
     expect(
       resolveSidebarExpandPreferences({
-        viewportWidth: 1200,
+        viewportWidth: 900,
         userRightPanelOpen: true,
+        rightPanelWidth: RIGHT_PANEL_MAX_WIDTH,
+      }),
+    ).toEqual({
+      userSidebarCollapsed: false,
+      userRightPanelOpen: true,
+    });
+  });
+
+  it("keeps the right panel closed when it was already closed", () => {
+    expect(
+      resolveSidebarExpandPreferences({
+        viewportWidth: 1500,
+        userRightPanelOpen: false,
         rightPanelWidth: 360,
       }),
     ).toEqual({

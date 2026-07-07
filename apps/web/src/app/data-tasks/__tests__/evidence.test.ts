@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { buildEvidenceCardsFromLiveRun, toggleEvidenceRef } from "../evidence";
+import { buildEvidenceCardsFromLiveRun, evidenceChipLabel, evidenceChipTooltip, toggleEvidenceRef } from "../evidence";
 import type { LiveRun } from "../live-run-state";
 
 const baseRun = (): LiveRun => ({
@@ -93,5 +93,38 @@ describe("evidence catalog", () => {
 
     expect(toggleEvidenceRef([], ref)).toEqual([ref]);
     expect(toggleEvidenceRef([ref], ref)).toEqual([]);
+  });
+
+  it("formats compact chip labels for long artifact titles and selections", () => {
+    const tableRef = {
+      id: "artifact:table-1",
+      kind: "table" as const,
+      label: "SQL result fd8b140f-4047-4882-afab-5e6e4dc5da5e.csv",
+      sessionId: "session-1",
+      source: {
+        artifactId: "table-1",
+        selection: { mode: "cells" as const, range: { r0: 0, c0: 0, r1: 5, c1: 2 } },
+      },
+    };
+    const fileRef = {
+      id: "artifact:file-1",
+      kind: "file" as const,
+      label: "reports/gmv_orders_weekly_comparison.md",
+      sessionId: "session-1",
+      source: {
+        artifactId: "file-1",
+        selection: {
+          mode: "text" as const,
+          quote: "GMV 与订单数周度对比报告 对比周期 基期 (W1)：2026-06-17 ~ 2026-06-23",
+        },
+      },
+    };
+
+    expect(evidenceChipLabel(tableRef)).toBe("Table · SQL result.csv · A1:C6");
+    expect(evidenceChipLabel(fileRef)).toBe(
+      'File · gmv_orders_weekly_comparison.md · "GMV 与订单数周度对比报告 对比周期 …"',
+    );
+    expect(evidenceChipTooltip(tableRef)).toContain("fd8b140f-4047-4882-afab-5e6e4dc5da5e.csv");
+    expect(evidenceChipTooltip(fileRef)).toContain("2026-06-17");
   });
 });

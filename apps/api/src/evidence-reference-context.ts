@@ -1,7 +1,8 @@
 import type {
   EvidenceRef,
   EvidenceResolutionDiagnostics,
-  EvidenceResolutionIssue
+  EvidenceResolutionIssue,
+  EvidenceSelection
 } from "@datafoundry/contracts";
 import {
   createAgentContextItem,
@@ -92,14 +93,18 @@ const artifactEvidenceItems = (
   assertSession(ref, artifact.session_id);
   const preview = parseJsonValue(artifact.preview_json);
   const metadata = parseJsonValue(artifact.metadata_json);
+  const maxChars = input.maxCharsPerEvidence ?? 6000;
+  const focus = resolveSelectionFocus(ref.source.selection, preview, maxChars);
+  const includeFullPreview = preview !== undefined && (!focus || !focus.replaceFullPreview);
   const content = evidenceText({
     body: [
       `artifact_id=${artifact.id}`,
       `artifact_type=${artifact.type}`,
       `artifact_name=${artifact.name}`,
       artifact.file_asset_ref_id ? `file_id=${artifact.file_asset_ref_id}` : undefined,
-      preview !== undefined ? `preview=${boundJson(preview, input.maxCharsPerEvidence)}` : undefined,
-      metadata !== undefined ? `metadata=${boundJson(metadata, 1200)}` : undefined
+      includeFullPreview ? `preview=${boundJson(preview, maxChars)}` : undefined,
+      metadata !== undefined ? `metadata=${boundJson(metadata, 1200)}` : undefined,
+      ...(focus?.lines ?? [])
     ],
     ref
   });
@@ -119,6 +124,7 @@ const sqlAuditEvidenceItems = (
     const run = input.metadataStore.runs.get({ user_id: input.userId, run_id: audit.run_id });
     assertSession(ref, run.session_id);
   }
+  const focus = resolveSelectionFocus(ref.source.selection, undefined, input.maxCharsPerEvidence ?? 6000);
   const content = evidenceText({
     body: [
       `audit_log_id=${audit.id}`,
@@ -128,7 +134,8 @@ const sqlAuditEvidenceItems = (
       audit.elapsed_ms !== undefined ? `elapsed_ms=${audit.elapsed_ms}` : undefined,
       audit.blocked_reason ? `blocked_reason=${audit.blocked_reason}` : undefined,
       "sql:",
-      boundText(audit.sql_text, input.maxCharsPerEvidence ?? 6000)
+      boundText(audit.sql_text, input.maxCharsPerEvidence ?? 6000),
+      ...(focus?.lines ?? [])
     ],
     ref
   });
@@ -350,3 +357,138 @@ const escapeText = (value: string): string =>
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
+
+type ParsedTable = { columns: string[]; rows: string[][] };
+
+type SelectionFocus = { lines: string[]; replaceFullPreview: boolean };
+
+/**
+ * Translates a fine-grained `EvidenceSelection` into focus lines appended to an
+ * `<evidence_ref>` body. For table selections that can be sliced, it emits only
+ * the selected subset (and replaces the full preview) so the model receives the
+ * user's chosen part rather than the whole artifact. Out-of-range or unparsable
+ * selections degrade safely to the whole preview plus a selection note.
+ */
+export const resolveSelectionFocus = (
+  selection: EvidenceSelection | undefined,
+  preview: unknown,
+  maxChars: number
+): SelectionFocus | null => {
+  if (!selection) {
+    return null;
+  }
+  if (selection.mode === "text") {
+    return {
+      lines: ["selection=text", `selected_quote=${boundText(selection.quote, Math.min(maxChars, 1600))}`],
+      replaceFullPreview: false
+    };
+  }
+  const description = describeSelectionRange(selection);
+  const table = parseTablePreview(preview);
+  if (!table) {
+    return { lines: [`selection=${description}`], replaceFullPreview: false };
+  }
+  const sliced = sliceTable(table, selection);
+  if (!sliced) {
+    return { lines: [`selection=${description}`], replaceFullPreview: false };
+  }
+  return {
+    lines: [
+      `selection=${description}`,
+      `full_context: columns=[${table.columns.join(", ")}] total_rows=${table.rows.length}`,
+      "selected_subset:",
+      boundText(renderTableText(sliced), maxChars)
+    ],
+    replaceFullPreview: true
+  };
+};
+
+const parseTablePreview = (preview: unknown): ParsedTable | null => {
+  if (!isRecord(preview)) {
+    return null;
+  }
+  const columns = Array.isArray(preview.columns)
+    ? preview.columns.filter((column): column is string => typeof column === "string")
+    : [];
+  const rawRows = Array.isArray(preview.rows) ? preview.rows : [];
+  if (columns.length === 0 || rawRows.length === 0) {
+    return null;
+  }
+  const rows = rawRows
+    .map((row) => {
+      if (Array.isArray(row)) {
+        return row.map((cell) => (cell === null || cell === undefined ? "" : String(cell)));
+      }
+      if (isRecord(row)) {
+        return columns.map((column) => {
+          const value = row[column];
+          return value === null || value === undefined ? "" : String(value);
+        });
+      }
+      return [];
+    })
+    .filter((row) => row.length > 0);
+  if (rows.length === 0) {
+    return null;
+  }
+  return { columns, rows };
+};
+
+const clampIndex = (value: number, max: number): number =>
+  Math.max(0, Math.min(Number.isFinite(value) ? Math.trunc(value) : 0, max));
+
+const sliceTable = (
+  table: ParsedTable,
+  selection: Extract<EvidenceSelection, { mode: "cells" | "rows" | "cols" }>
+): ParsedTable | null => {
+  const lastRow = table.rows.length - 1;
+  const lastCol = table.columns.length - 1;
+  const minR = Math.min(selection.range.r0, selection.range.r1);
+  const maxR = Math.max(selection.range.r0, selection.range.r1);
+  const minC = Math.min(selection.range.c0, selection.range.c1);
+  const maxC = Math.max(selection.range.c0, selection.range.c1);
+  // No overlap with the table at all → caller degrades to the whole preview.
+  if (maxR < 0 || maxC < 0 || minR > lastRow || minC > lastCol) {
+    return null;
+  }
+  const r0 = clampIndex(minR, lastRow);
+  const r1 = clampIndex(maxR, lastRow);
+  const c0 = clampIndex(minC, lastCol);
+  const c1 = clampIndex(maxC, lastCol);
+  const columns = table.columns.slice(c0, c1 + 1);
+  const rows = table.rows.slice(r0, r1 + 1).map((row) => row.slice(c0, c1 + 1));
+  if (columns.length === 0 || rows.length === 0) {
+    return null;
+  }
+  return { columns, rows };
+};
+
+const renderTableText = (table: ParsedTable): string => {
+  const header = table.columns.join(" | ");
+  const body = table.rows.map((row) => row.join(" | ")).join("\n");
+  return `${header}\n${body}`;
+};
+
+const columnLetter = (index: number): string => {
+  let value = Math.max(0, Math.trunc(index));
+  let label = "";
+  do {
+    label = String.fromCharCode(65 + (value % 26)) + label;
+    value = Math.floor(value / 26) - 1;
+  } while (value >= 0);
+  return label;
+};
+
+const describeSelectionRange = (
+  selection: Extract<EvidenceSelection, { mode: "cells" | "rows" | "cols" }>
+): string => {
+  const { range } = selection;
+  if (selection.mode === "rows") {
+    return `rows ${range.r0 + 1}-${range.r1 + 1}`;
+  }
+  if (selection.mode === "cols") {
+    const names = selection.columns && selection.columns.length > 0 ? ` (${selection.columns.join(", ")})` : "";
+    return `cols ${columnLetter(range.c0)}-${columnLetter(range.c1)}${names}`;
+  }
+  return `${columnLetter(range.c0)}${range.r0 + 1}:${columnLetter(range.c1)}${range.r1 + 1}`;
+};

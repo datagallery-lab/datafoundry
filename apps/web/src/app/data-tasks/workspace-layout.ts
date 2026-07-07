@@ -1,9 +1,24 @@
 export const RIGHT_PANEL_MIN_WIDTH = 320;
+/**
+ * Fallback upper bound for the right panel, used *only* when the viewport width
+ * is unknown (SSR / hydration). The effective maximum is otherwise derived from
+ * the viewport by {@link maxDockableRightPanelWidth} so the chat column always
+ * keeps the same absolute minimum width ({@link CHAT_MIN_WIDTH}) at every screen
+ * size — the panel is free to grow past this value on wide viewports.
+ */
 export const RIGHT_PANEL_MAX_WIDTH = 640;
 export const RIGHT_PANEL_DEFAULT_WIDTH = 400;
-export const CHAT_MIN_WIDTH = 400;
-/** Preferred chat input card width (Tailwind `max-w-3xl`). */
-export const CHAT_INPUT_PREFERRED_WIDTH = 768;
+export const CHAT_MIN_WIDTH = 420;
+/**
+ * Centered chat content column bounds. Messages and the input flow between the
+ * min and max width and stay horizontally centered within the chat column, so
+ * opening/closing side panels shifts the centered column instead of reflowing
+ * content (Codex/Cursor-style).
+ */
+export const CHAT_CONTENT_MIN_WIDTH = 360;
+export const CHAT_CONTENT_MAX_WIDTH = 760;
+/** Preferred (max) chat input card width; matches the content column max. */
+export const CHAT_INPUT_PREFERRED_WIDTH = CHAT_CONTENT_MAX_WIDTH;
 /** Minimum chat input card width before extreme squeeze. */
 export const CHAT_INPUT_MIN_WIDTH = 360;
 /** Horizontal margin around the chat input within the middle column. */
@@ -104,15 +119,14 @@ export function getWorkspaceGridTemplateColumns({
 }
 
 /**
- * Clamp the right panel width to the absolute drag range only.
- * Viewport pressure is handled by `resolveResponsiveSidebars` (fold/close),
- * not by shrinking panel widths.
+ * Floor the right panel width to its absolute minimum. There is intentionally no
+ * fixed upper cap here: the maximum is derived per-viewport by
+ * {@link maxDockableRightPanelWidth} so that the chat column retains a constant
+ * absolute minimum width regardless of screen size. Viewport pressure is handled
+ * by `resolveResponsiveSidebars` (fold/close), not by shrinking panel widths.
  */
 export function clampRightPanelWidth(width: number): number {
-  return Math.max(
-    RIGHT_PANEL_MIN_WIDTH,
-    Math.min(width, RIGHT_PANEL_MAX_WIDTH),
-  );
+  return Math.max(RIGHT_PANEL_MIN_WIDTH, width);
 }
 
 /**
@@ -159,14 +173,13 @@ export function resolveResponsiveSidebars({
 }
 
 /**
- * When the user explicitly expands the left panel, honor that intent even if the
- * viewport cannot fit a docked right console at the same time.
+ * Expanding the left panel is an explicit user action and must never close the
+ * right console. The centered chat column absorbs the width change (it can
+ * shrink toward {@link CHAT_CONTENT_MIN_WIDTH}); genuinely tiny viewports are
+ * still handled by {@link resolveResponsiveSidebars}.
  */
 export function resolveSidebarExpandPreferences({
-  viewportWidth,
   userRightPanelOpen,
-  rightPanelWidth,
-  leftPanelWidth = LEFT_PANEL_DEFAULT_WIDTH,
 }: {
   viewportWidth: number;
   userRightPanelOpen: boolean;
@@ -176,28 +189,19 @@ export function resolveSidebarExpandPreferences({
   userSidebarCollapsed: false;
   userRightPanelOpen: boolean;
 } {
-  let nextRightPanelOpen = userRightPanelOpen;
-  const expandedWidthExceedsViewport = (rightPanelOpen: boolean) =>
-    getRequiredWorkspaceWidth({
-      sidebarCollapsed: false,
-      rightPanelOpen,
-      rightPanelWidth,
-      leftPanelWidth,
-    }) > viewportWidth;
-
-  if (expandedWidthExceedsViewport(nextRightPanelOpen) && nextRightPanelOpen) {
-    nextRightPanelOpen = false;
-  }
-
   return {
     userSidebarCollapsed: false,
-    userRightPanelOpen: nextRightPanelOpen,
+    userRightPanelOpen,
   };
 }
 
 /**
  * Whether the viewport can fit a docked right panel (left collapsed + chat
- * reservation + right panel). When false, TaskConsole should use drawer mode.
+ * *minimum* + right panel). When false, TaskConsole should use drawer mode.
+ *
+ * Uses the chat column minimum (not the preferred reservation): the chat can be
+ * squeezed toward {@link CHAT_MIN_WIDTH} to keep the panel docked, so docking
+ * should only fail when even the minimum layout overflows.
  */
 export function canDockRightPanel({
   viewportWidth,
@@ -208,7 +212,7 @@ export function canDockRightPanel({
 }): boolean {
   if (viewportWidth <= 0) return true;
   return (
-    getRequiredWorkspaceWidth({
+    getMinimumWorkspaceWidth({
       sidebarCollapsed: true,
       rightPanelOpen: true,
       rightPanelWidth,
@@ -216,5 +220,27 @@ export function canDockRightPanel({
   );
 }
 
+/**
+ * Largest right-panel width that still keeps the panel docked at the given
+ * viewport, alongside the current left sidebar with the chat squeezed to its
+ * absolute minimum ({@link CHAT_MIN_WIDTH}). This is the single source of the
+ * upper bound: it is derived purely from the viewport (no fixed cap), so the
+ * chat column keeps the same absolute minimum width at every screen size and the
+ * panel may grow wide on large viewports. Drag handling clamps to this so the
+ * user can never widen the panel into the responsive "close right / undock"
+ * path. Returns the fallback max when the viewport is unknown (SSR/hydration).
+ */
+export function maxDockableRightPanelWidth(
+  viewportWidth: number,
+  leftPanelWidth: number = LEFT_PANEL_WIDTH_COLLAPSED,
+): number {
+  if (viewportWidth <= 0) return RIGHT_PANEL_MAX_WIDTH;
+  const available = viewportWidth - leftPanelWidth - CHAT_MIN_WIDTH;
+  return Math.max(RIGHT_PANEL_MIN_WIDTH, available);
+}
+
 export const chatPaneClassName =
-  "min-h-0 w-full flex-1 [&_[data-testid='copilot-scrollable']]:pb-32";
+  "min-h-0 w-full flex-1 [&_[data-testid='copilot-scrollable']]:pb-32 " +
+  // Center every message row within the content column max-width so the chat
+  // reads as a centered column that shifts (not reflows) as side panels toggle.
+  "[&_.copilotKitMessage]:mx-auto [&_.copilotKitMessage]:w-full [&_.copilotKitMessage]:max-w-[760px]";

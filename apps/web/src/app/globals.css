@@ -83,6 +83,10 @@ body {
     scrollbar-color: var(--scrollbar-thumb) transparent;
   }
 
+  [data-chat-column]:not(:hover) * {
+    scrollbar-color: transparent transparent;
+  }
+
   .scrollbar-always {
     scrollbar-color: var(--scrollbar-thumb) transparent;
   }
@@ -110,6 +114,10 @@ body {
   background-color: var(--scrollbar-thumb);
 }
 
+[data-chat-column]:not(:hover) *::-webkit-scrollbar-thumb {
+  background-color: transparent;
+}
+
 *::-webkit-scrollbar-thumb:hover {
   background-color: var(--scrollbar-thumb-hover);
 }
@@ -120,6 +128,11 @@ body {
 
 .scrollbar-always::-webkit-scrollbar-thumb {
   background-color: var(--scrollbar-thumb);
+}
+
+/* CopilotKit stick-to-bottom reserves a gutter on both edges; match app overlay scrollbars. */
+[data-copilotkit] .cpk\:overflow-y-auto {
+  scrollbar-gutter: auto !important;
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -17,8 +17,16 @@ function readProxyTarget(...values: Array<string | undefined>): string {
   return "http://127.0.0.1:8787";
 }
 
+const workspaceRoot = path.join(__dirname, "../..");
+
 const nextConfig: NextConfig = {
-  outputFileTracingRoot: path.join(__dirname, "../.."),
+  outputFileTracingRoot: workspaceRoot,
+  // Dev uses Turbopack (see `dev` script). Declaring this key pins the
+  // monorepo root and silences the "Webpack is configured while Turbopack is
+  // not" warning; the webpack() hook below still applies to `next build`.
+  turbopack: {
+    root: workspaceRoot,
+  },
   async rewrites() {
     return [
       {

@@ -9,10 +9,17 @@ import {
 import {
   clampRightPanelWidth,
   RIGHT_PANEL_DEFAULT_WIDTH,
+  RIGHT_PANEL_MAX_WIDTH,
 } from "../workspace-layout";
 
 type UsePanelResizeOptions = {
   enabled: boolean;
+  /**
+   * Dynamic upper bound (from viewport) that keeps the panel dockable. The
+   * stored width still remembers the user's larger intent; only the returned
+   * effective width is capped, so it restores when the viewport grows again.
+   */
+  maxWidth?: number;
 };
 
 type UsePanelResizeResult = {
@@ -30,16 +37,25 @@ type UsePanelResizeResult = {
  */
 export function usePanelResize({
   enabled,
+  maxWidth = RIGHT_PANEL_MAX_WIDTH,
 }: UsePanelResizeOptions): UsePanelResizeResult {
-  const [width, setWidth] = useState<number>(() => loadRightPanelWidth());
+  // `storedWidth` remembers the user's intended width (persisted); the returned
+  // `width` is additionally capped to the dockable max so the panel can never
+  // be widened into an undockable state.
+  const [storedWidth, setStoredWidth] = useState<number>(() =>
+    loadRightPanelWidth(),
+  );
   const [isResizing, setIsResizing] = useState(false);
+
+  const effectiveMax = clampRightPanelWidth(maxWidth);
+  const width = Math.min(storedWidth, effectiveMax);
 
   const dragStateRef = useRef<{ startX: number; startWidth: number } | null>(
     null,
   );
 
   const applyWidth = useCallback((next: number) => {
-    setWidth(clampRightPanelWidth(next));
+    setStoredWidth(clampRightPanelWidth(next));
   }, []);
 
   const onResizeStart = useCallback(
@@ -93,11 +109,12 @@ export function usePanelResize({
     };
   }, [isResizing, applyWidth]);
 
-  // Persist once a drag settles.
+  // Persist the user's intended width (not the viewport-capped value) so it
+  // restores when the viewport grows back.
   useEffect(() => {
     if (!isResizing || !enabled) return;
-    persistRightPanelWidth(width);
-  }, [isResizing, enabled, width]);
+    persistRightPanelWidth(storedWidth);
+  }, [isResizing, enabled, storedWidth]);
 
   return { width, isResizing, onResizeStart, resetWidth };
 }

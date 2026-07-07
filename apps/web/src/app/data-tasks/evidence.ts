@@ -1,4 +1,8 @@
-import type { EvidenceKind, EvidenceRef } from "@datafoundry/contracts";
+import type {
+  EvidenceKind,
+  EvidenceRef,
+  EvidenceSelection,
+} from "@datafoundry/contracts";
 
 import type { DataArtifact } from "./data-task-state";
 import type { LiveAudit, LiveRun } from "./live-run-state";
@@ -70,9 +74,115 @@ export function uniqueEvidenceRefs(refs: readonly EvidenceRef[]): EvidenceRef[] 
   return uniqueRefs;
 }
 
-/** Formats a compact label suitable for input chips. */
+/** Full label for tooltips and screen readers. */
+export function evidenceChipTooltip(ref: EvidenceRef): string {
+  const base = `${evidenceKindLabel(ref.kind)}: ${ref.label}`;
+  const selection = ref.source.selection;
+  return selection ? `${base} · ${describeEvidenceSelection(selection)}` : base;
+}
+
+/** Formats a compact label suitable for input chips, including any sub-selection. */
 export function evidenceChipLabel(ref: EvidenceRef): string {
-  return `${evidenceKindLabel(ref.kind)}: ${ref.label}`;
+  const kind = evidenceKindLabel(ref.kind);
+  const name = compactEvidenceLabel(ref.label, ref.kind);
+  const selection = ref.source.selection;
+  const base = `${kind} · ${name}`;
+  return selection ? `${base} · ${describeEvidenceSelection(selection, { compact: true })}` : base;
+}
+
+/** Human-readable description of a fine-grained selection, e.g. "B2:D9 (12 cells)". */
+export function describeEvidenceSelection(
+  selection: EvidenceSelection,
+  options?: { compact?: boolean; maxQuoteLength?: number },
+): string {
+  const compact = options?.compact ?? false;
+  const maxQuoteLength = options?.maxQuoteLength ?? (compact ? 20 : 48);
+  if (selection.mode === "text") {
+    const quote = selection.quote.replace(/\s+/gu, " ").trim();
+    const clipped = quote.length > maxQuoteLength ? `${quote.slice(0, maxQuoteLength)}…` : quote;
+    return `"${clipped}"`;
+  }
+  const { range } = selection;
+  const rowCount = Math.abs(range.r1 - range.r0) + 1;
+  const colCount = Math.abs(range.c1 - range.c0) + 1;
+  if (selection.mode === "rows") {
+    if (compact) {
+      return rowCount === 1 ? `row ${range.r0 + 1}` : `rows ${range.r0 + 1}–${range.r1 + 1}`;
+    }
+    return rowCount === 1 ? `row ${range.r0 + 1}` : `rows ${range.r0 + 1}–${range.r1 + 1} (${rowCount} rows)`;
+  }
+  if (selection.mode === "cols") {
+    if (selection.columns && selection.columns.length > 0) {
+      const limit = compact ? 2 : 3;
+      const names = selection.columns.slice(0, limit).join(", ");
+      const suffix = selection.columns.length > limit ? `, +${selection.columns.length - limit}` : "";
+      return compact ? `cols ${names}${suffix}` : `cols ${names}${suffix}`;
+    }
+    if (compact) {
+      return colCount === 1
+        ? `col ${columnLetter(range.c0)}`
+        : `cols ${columnLetter(range.c0)}–${columnLetter(range.c1)}`;
+    }
+    return colCount === 1
+      ? `col ${columnLetter(range.c0)}`
+      : `cols ${columnLetter(range.c0)}–${columnLetter(range.c1)} (${colCount} cols)`;
+  }
+  const start = `${columnLetter(range.c0)}${range.r0 + 1}`;
+  const end = `${columnLetter(range.c1)}${range.r1 + 1}`;
+  if (compact) {
+    return start === end ? start : `${start}:${end}`;
+  }
+  const cellCount = rowCount * colCount;
+  return start === end ? `${start} (1 cell)` : `${start}:${end} (${cellCount} cells)`;
+}
+
+const SQL_RESULT_LABEL = /^SQL result\s+[0-9a-f-]{8,}(?:\.[a-z0-9]+)?$/iu;
+
+function compactEvidenceLabel(label: string, kind: EvidenceKind): string {
+  const trimmed = label.trim();
+  if (!trimmed) return evidenceKindLabel(kind);
+
+  if (SQL_RESULT_LABEL.test(trimmed)) {
+    const extension = trimmed.match(/(\.[a-z0-9]+)$/iu)?.[1];
+    return extension ? `SQL result${extension}` : "SQL result";
+  }
+
+  const basename = trimmed.includes("/") ? (trimmed.split("/").pop() ?? trimmed) : trimmed;
+  if (basename.length <= 36) return basename;
+  return `${basename.slice(0, 33)}…`;
+}
+
+/** Converts a 0-based column index to a spreadsheet-style letter (0 -> A, 26 -> AA). */
+export function columnLetter(index: number): string {
+  let value = Math.max(0, index);
+  let label = "";
+  do {
+    label = String.fromCharCode(65 + (value % 26)) + label;
+    value = Math.floor(value / 26) - 1;
+  } while (value >= 0);
+  return label;
+}
+
+/** Builds the whole-artifact evidence reference (id and source) for an artifact. */
+export function artifactEvidenceRef(
+  artifact: DataArtifact,
+  sessionId: string,
+  runId?: string,
+): EvidenceRef {
+  const kind = artifactEvidenceKind(artifact);
+  return {
+    id: `artifact:${artifact.id}`,
+    kind,
+    label: artifact.title,
+    summary: artifact.summary,
+    sessionId,
+    ...(runId ? { runId } : {}),
+    source: {
+      artifactId: artifact.id,
+      ...(artifact.fileId ? { fileId: artifact.fileId } : {}),
+      ...(artifact.createdByEventId ? { eventId: artifact.createdByEventId } : {}),
+    },
+  };
 }
 
 export function evidenceKindLabel(kind: EvidenceKind): string {
@@ -105,19 +215,7 @@ const artifactEvidenceCard = (
   index: number,
 ): EvidenceCard => {
   const kind = artifactEvidenceKind(artifact);
-  const ref: EvidenceRef = {
-    id: `artifact:${artifact.id}`,
-    kind,
-    label: artifact.title,
-    summary: artifact.summary,
-    sessionId,
-    ...(runId ? { runId } : {}),
-    source: {
-      artifactId: artifact.id,
-      ...(artifact.fileId ? { fileId: artifact.fileId } : {}),
-      ...(artifact.createdByEventId ? { eventId: artifact.createdByEventId } : {}),
-    },
-  };
+  const ref = artifactEvidenceRef(artifact, sessionId, runId);
   return {
     ref,
     title: `${evidenceKindLabel(kind)} · ${artifact.title}`,
