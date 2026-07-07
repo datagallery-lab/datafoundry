@@ -11,11 +11,14 @@ function createScrollFixture() {
     parentElement: null as HTMLElement | null,
   } as unknown as HTMLElement;
 
+  const scrollCalls: ScrollToOptions[] = [];
   const scroll = {
-    style: { overflowY: "auto" },
+    style: { overflowY: "auto", scrollBehavior: "" },
     scrollTop: 0,
     scrollHeight: 400,
-    scrollTo({ top }: ScrollToOptions) {
+    scrollTo(options: ScrollToOptions) {
+      scrollCalls.push(options);
+      const { top } = options;
       this.scrollTop = top ?? 0;
     },
     parentElement: null,
@@ -23,12 +26,12 @@ function createScrollFixture() {
 
   content.parentElement = scroll;
   const root = {
-    querySelector(selector: string) {
-      return selector === '[data-testid="copilot-scroll-content"]' ? content : null;
+    querySelectorAll(selector: string) {
+      return selector === '[data-testid="copilot-scroll-content"]' ? [content] : [];
     },
   } as unknown as ParentNode;
 
-  return { root, scroll };
+  return { root, scroll, scrollCalls };
 }
 
 describe("chat scroll helpers", () => {
@@ -41,6 +44,67 @@ describe("chat scroll helpers", () => {
     const { root, scroll } = createScrollFixture();
     expect(scrollCopilotChatToBottom(root)).toBe(true);
     expect(scroll.scrollTop).toBe(scroll.scrollHeight);
+  });
+
+  it("uses instant scroll even when the container has smooth scroll behavior", () => {
+    const { root, scroll, scrollCalls } = createScrollFixture();
+    scroll.style.scrollBehavior = "smooth";
+
+    expect(scrollCopilotChatToBottom(root)).toBe(true);
+    expect(scroll.scrollTop).toBe(scroll.scrollHeight);
+    expect(scrollCalls).toEqual([{ top: scroll.scrollHeight, behavior: "auto" }]);
+    expect(scroll.style.scrollBehavior).toBe("smooth");
+  });
+
+  it("skips hidden chat sessions when finding the active scroll container", () => {
+    const hiddenContent = {
+      dataset: { testid: "copilot-scroll-content" },
+      parentElement: null as HTMLElement | null,
+    } as unknown as HTMLElement;
+    const hiddenScroll = {
+      style: { overflowY: "auto", display: "none" },
+      parentElement: null,
+    } as unknown as HTMLElement;
+    hiddenContent.parentElement = hiddenScroll;
+
+    const { scroll, root } = createScrollFixture();
+    const scopedRoot = {
+      querySelectorAll(selector: string) {
+        return selector === '[data-testid="copilot-scroll-content"]'
+          ? [hiddenContent, ...(root.querySelectorAll(selector) as unknown as HTMLElement[])]
+          : [];
+      },
+    } as unknown as ParentNode;
+
+    expect(findCopilotChatScrollContainer(scopedRoot)).toBe(scroll);
+  });
+
+  it("prefers the ancestor that actually scrolls over a non-scrolling overflow wrapper", () => {
+    const content = {
+      dataset: { testid: "copilot-scroll-content" },
+      parentElement: null as HTMLElement | null,
+    } as unknown as HTMLElement;
+    const innerOverflow = {
+      style: { overflowY: "auto" },
+      scrollHeight: 800,
+      clientHeight: 800,
+      parentElement: null as HTMLElement | null,
+    } as unknown as HTMLElement;
+    const scrollViewport = {
+      style: { overflowY: "auto" },
+      scrollHeight: 800,
+      clientHeight: 300,
+      parentElement: null,
+    } as unknown as HTMLElement;
+    content.parentElement = innerOverflow;
+    innerOverflow.parentElement = scrollViewport;
+    const root = {
+      querySelectorAll(selector: string) {
+        return selector === '[data-testid="copilot-scroll-content"]' ? [content] : [];
+      },
+    } as unknown as ParentNode;
+
+    expect(findCopilotChatScrollContainer(root)).toBe(scrollViewport);
   });
 
   it("retries scrolling until attempts are exhausted", () => {
