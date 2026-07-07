@@ -9,6 +9,10 @@ interface InputBoxProps {
   onSubmit: (value: string) => void;
   disabled?: boolean;
   commands?: string[];
+  placeholder?: string | undefined;
+  modelName?: string | undefined;
+  datasourceId?: string | undefined;
+  skillId?: string | undefined;
 }
 
 export const InputBox: React.FC<InputBoxProps> = ({
@@ -17,10 +21,21 @@ export const InputBox: React.FC<InputBoxProps> = ({
   onSubmit,
   disabled = false,
   commands = DEFAULT_COMMANDS,
+  placeholder = 'Ask about your data... "Show tables"',
+  modelName,
+  datasourceId,
+  skillId,
 }) => {
   const [localValue, setLocalValue] = useState('');
   const [completionHint, setCompletionHint] = useState<string>('');
   const { isRawModeSupported } = useStdin();
+  const accent = disabled ? 'gray' : 'cyan';
+  const panelBackground = '#1e1e1e';
+  const metaParts = [
+    modelName || 'server default',
+    datasourceId ? `db ${datasourceId}` : 'no datasource',
+    skillId ? `skill ${skillId}` : undefined,
+  ].filter((part): part is string => Boolean(part));
 
   // Use refs to maintain history and completion across renders
   const historyRef = useRef(new CommandHistory());
@@ -161,42 +176,51 @@ export const InputBox: React.FC<InputBoxProps> = ({
   );
 
   return (
-    <Box
-      flexDirection="column"
-      flexShrink={0}
-      minHeight={4}
-      borderStyle="single"
-      borderColor={disabled ? 'gray' : 'blue'}
-      paddingX={1}
-    >
-      {/* Input prompt */}
-      <Box>
-        <Text bold color={disabled ? 'gray' : 'blue'}>
-          {disabled ? '⊗' : '>'}{' '}
+    <Box flexDirection="column" flexShrink={0} minHeight={4}>
+      <Box flexDirection="row" width="100%">
+        <Text color={accent} bold>
+          {disabled ? '│' : '┃'}
         </Text>
-        <Text color={disabled ? 'gray' : 'white'}>
-          {localValue}
-          {!disabled && <Text inverse> </Text>}
-        </Text>
-      </Box>
+        <Box
+          flexDirection="column"
+          flexGrow={1}
+          paddingLeft={1}
+          paddingRight={2}
+          paddingY={1}
+          backgroundColor={panelBackground}
+        >
+          <Box minHeight={1}>
+            <Text color={disabled ? 'gray' : 'white'} backgroundColor={panelBackground} wrap="truncate-end">
+              {localValue}
+              {!disabled && <Text inverse> </Text>}
+              {!localValue && <Text color="gray">{placeholder}</Text>}
+            </Text>
+          </Box>
 
-      {/* Completion hint */}
-      {!disabled && completionHint && (
-        <Box paddingLeft={2}>
-          <Text dimColor color="cyan">
-            {completionHint}
-          </Text>
+          {!disabled && completionHint && (
+            <Box paddingTop={1}>
+              <Text dimColor color="cyan" backgroundColor={panelBackground} wrap="truncate-end">
+                {completionHint}
+              </Text>
+            </Box>
+          )}
+
+          <Box flexDirection="row" justifyContent="space-between" paddingTop={1}>
+            <Text wrap="truncate-end" backgroundColor={panelBackground}>
+              <Text color={accent} backgroundColor={panelBackground}>Analyze</Text>
+              <Text dimColor backgroundColor={panelBackground}> · </Text>
+              <Text color={disabled ? 'gray' : 'white'} backgroundColor={panelBackground}>
+                {metaParts.join(' · ')}
+              </Text>
+            </Text>
+            <Text backgroundColor={panelBackground}>
+              <Text color="white" backgroundColor={panelBackground}>tab</Text>
+              <Text dimColor backgroundColor={panelBackground}> complete  </Text>
+              <Text color="white" backgroundColor={panelBackground}>enter</Text>
+              <Text dimColor backgroundColor={panelBackground}> send</Text>
+            </Text>
+          </Box>
         </Box>
-      )}
-
-      {/* Help text */}
-      <Box justifyContent="space-between">
-        <Text dimColor>
-          {disabled
-            ? 'Input visible | wait to send messages | /exit works'
-            : '↑/↓ History | Tab Complete | Enter Send | Ctrl+U Clear'}
-        </Text>
-        <Text dimColor>Ctrl+C Exit</Text>
       </Box>
     </Box>
   );

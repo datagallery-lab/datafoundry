@@ -10,6 +10,7 @@ import { WorkspaceFrame, chatViewportRows } from './workspace-layout.js';
 import { KeybindingsHelp } from './KeybindingsHelp.js';
 import { SessionPicker } from './SessionPicker.js';
 import { ResourcePicker, type ResourcePickerItem } from './ResourcePicker.js';
+import { HomeSplash } from './HomeSplash.js';
 import { DEFAULT_COMMANDS, getStatusBarShortcuts } from './keybindings.js';
 import { AssistantTextStreamBuffer, type AssistantTextFlush } from './assistant-stream-buffer.js';
 import { wheelScrollDelta } from '../input/mouse-wheel.js';
@@ -994,6 +995,11 @@ export const App: React.FC<AppProps> = ({
         events: [],
       };
   const showLiveActivity = false;
+  const isHomeScreen = activeTab === 'chat'
+    && visibleMessages.length === 0
+    && state.messages.length === 0
+    && !commandNotice
+    && !showLiveActivity;
 
   // Render tab navigation
   const renderTabs = () => {
@@ -1150,42 +1156,63 @@ export const App: React.FC<AppProps> = ({
           scrollable={
             <Box flexDirection="row" flexGrow={1} overflowY="hidden">
               {activeTab === 'chat' ? (
-                <>
-                  <Box
-                    flexDirection="column"
-                    width={showLiveActivity ? `${chatWidth}%` : '100%'}
-                    flexGrow={1}
-                    paddingX={1}
-                    overflowY="hidden"
-                  >
-                    <ChatArea
-                      messages={visibleMessages}
-                      artifacts={visibleArtifacts}
-                      totalMessageCount={state.messages.length}
-                      toolCalls={state.toolCalls}
-                      viewportRows={chatViewportRowCount}
-                      scrollbackRows={chatScrollbackRows}
+                isHomeScreen ? (
+                  <Box flexDirection="column" flexGrow={1} paddingX={1} overflowY="hidden">
+                    <HomeSplash
+                      rows={Math.max(12, terminalRows - 1)}
                       columns={terminalColumns}
                       startup={startup}
+                      input={(
+                        <InputBox
+                          onChange={handleInputChange}
+                          onSubmit={handleSubmit}
+                          disabled={state.connectionStatus !== 'connected' || state.runStatus === 'running'}
+                          commands={inputCommands}
+                          modelName={modelName}
+                          datasourceId={activeDatasourceId}
+                          skillId={activeSkillId}
+                        />
+                      )}
                     />
                   </Box>
-
-                  {showLiveActivity && (
+                ) : (
+                  <>
                     <Box
                       flexDirection="column"
-                      width={`${panelWidth}%`}
-                      borderStyle="single"
-                      borderColor="cyan"
+                      width={showLiveActivity ? `${chatWidth}%` : '100%'}
+                      flexGrow={1}
                       paddingX={1}
+                      overflowY="hidden"
                     >
-                      <ActivityPanel
-                        plan={liveActivity.plan}
-                        toolCalls={liveActivity.toolCalls}
-                        events={liveActivity.events}
+                      <ChatArea
+                        messages={visibleMessages}
+                        artifacts={visibleArtifacts}
+                        totalMessageCount={state.messages.length}
+                        toolCalls={state.toolCalls}
+                        viewportRows={chatViewportRowCount}
+                        scrollbackRows={chatScrollbackRows}
+                        columns={terminalColumns}
+                        startup={startup}
                       />
                     </Box>
-                  )}
-                </>
+
+                    {showLiveActivity && (
+                      <Box
+                        flexDirection="column"
+                        width={`${panelWidth}%`}
+                        borderStyle="single"
+                        borderColor="cyan"
+                        paddingX={1}
+                      >
+                        <ActivityPanel
+                          plan={liveActivity.plan}
+                          toolCalls={liveActivity.toolCalls}
+                          events={liveActivity.events}
+                        />
+                      </Box>
+                    )}
+                  </>
+                )
               ) : activeTab === 'stats' ? (
                 <Box flexDirection="column" flexGrow={1} overflowY="hidden">
                   {renderStatsPanel()}
@@ -1222,14 +1249,19 @@ export const App: React.FC<AppProps> = ({
                 </Box>
               )}
 
-              <InputBox
-                onChange={handleInputChange}
-                onSubmit={handleSubmit}
-                disabled={state.connectionStatus !== 'connected' || state.runStatus === 'running'}
-                commands={inputCommands}
-              />
+              {!isHomeScreen && (
+                <InputBox
+                  onChange={handleInputChange}
+                  onSubmit={handleSubmit}
+                  disabled={state.connectionStatus !== 'connected' || state.runStatus === 'running'}
+                  commands={inputCommands}
+                  modelName={modelName}
+                  datasourceId={activeDatasourceId}
+                  skillId={activeSkillId}
+                />
+              )}
 
-              {activeTab !== 'chat' && (
+              {(isHomeScreen || activeTab !== 'chat') && (
                 <StatusFooter
                   connectionStatus={state.connectionStatus}
                   runStatus={state.runStatus}
