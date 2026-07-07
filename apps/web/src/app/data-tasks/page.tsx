@@ -780,7 +780,7 @@ function DataTaskWorkspace({
   const [isTraceOpen, setIsTraceOpen] = useState(false);
   const [isConsoleDrawerOpen, setIsConsoleDrawerOpen] = useState(false);
   const [userSidebarCollapsed, setUserSidebarCollapsed] = useState(false);
-  const [userRightPanelOpen, setUserRightPanelOpen] = useState(true);
+  const [userRightPanelOpen, setUserRightPanelOpen] = useState(false);
   const [configPanel, setConfigPanel] = useState<WorkspaceConfigPanelKey | null>(
     null,
   );
@@ -909,7 +909,6 @@ function DataTaskWorkspace({
 
   const openTaskConsole = useCallback(() => {
     if (canDockRightPanel) {
-      setUserSidebarCollapsed(true);
       setUserRightPanelOpen(true);
       return;
     }

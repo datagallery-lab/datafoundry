@@ -6,6 +6,7 @@ import {
   clampRightPanelWidth,
   fixedGridColumn,
   getChatInputReservedWidth,
+  getMinimumWorkspaceWidth,
   getRequiredWorkspaceWidth,
   getWorkspaceGridTemplateColumns,
   LEFT_PANEL_DEFAULT_WIDTH,
@@ -123,7 +124,7 @@ describe("resolveResponsiveSidebars", () => {
     });
   });
 
-  it("collapses the left sidebar and closes the right panel when both are needed", () => {
+  it("keeps the left sidebar expanded when the docked console still fits the chat minimum", () => {
     expect(
       resolveResponsiveSidebars({
         viewportWidth: 1200,
@@ -132,12 +133,12 @@ describe("resolveResponsiveSidebars", () => {
         rightPanelWidth: 360,
       }),
     ).toEqual({
-      sidebarCollapsed: true,
-      rightPanelOpen: false,
+      sidebarCollapsed: false,
+      rightPanelOpen: true,
     });
   });
 
-  it("collapses the left sidebar before closing the console when the user wants it open", () => {
+  it("keeps the left sidebar expanded before closing the console for preferred-width pressure", () => {
     expect(
       resolveResponsiveSidebars({
         viewportWidth: 1300,
@@ -146,12 +147,12 @@ describe("resolveResponsiveSidebars", () => {
         rightPanelWidth: 360,
       }),
     ).toEqual({
-      sidebarCollapsed: true,
+      sidebarCollapsed: false,
       rightPanelOpen: true,
     });
   });
 
-  it("collapses the left panel when closing the right panel is not enough", () => {
+  it("closes the right panel before folding the left sidebar", () => {
     expect(
       resolveResponsiveSidebars({
         viewportWidth: 900,
@@ -160,15 +161,29 @@ describe("resolveResponsiveSidebars", () => {
         rightPanelWidth: 360,
       }),
     ).toEqual({
-      sidebarCollapsed: true,
+      sidebarCollapsed: false,
       rightPanelOpen: false,
     });
   });
 
-  it("collapses the left panel on very narrow viewports", () => {
+  it("keeps the left panel on narrow viewports when closing the right panel is enough", () => {
     expect(
       resolveResponsiveSidebars({
         viewportWidth: 700,
+        userSidebarCollapsed: false,
+        userRightPanelOpen: true,
+        rightPanelWidth: 360,
+      }),
+    ).toEqual({
+      sidebarCollapsed: false,
+      rightPanelOpen: false,
+    });
+  });
+
+  it("collapses the left panel only when the minimum chat column would still overflow", () => {
+    expect(
+      resolveResponsiveSidebars({
+        viewportWidth: 500,
         userSidebarCollapsed: false,
         userRightPanelOpen: true,
         rightPanelWidth: 360,
@@ -217,6 +232,18 @@ describe("getRequiredWorkspaceWidth", () => {
         rightPanelWidth: 360,
       }),
     ).toBe(LEFT_PANEL_DEFAULT_WIDTH + 360 + getChatInputReservedWidth());
+  });
+});
+
+describe("getMinimumWorkspaceWidth", () => {
+  it("sums fixed side widths plus the chat column minimum", () => {
+    expect(
+      getMinimumWorkspaceWidth({
+        sidebarCollapsed: false,
+        rightPanelOpen: true,
+        rightPanelWidth: 360,
+      }),
+    ).toBe(LEFT_PANEL_DEFAULT_WIDTH + 360 + CHAT_MIN_WIDTH);
   });
 });
 

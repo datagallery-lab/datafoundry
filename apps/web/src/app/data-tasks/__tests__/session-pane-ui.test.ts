@@ -183,6 +183,14 @@ describe("session pane ui conventions", () => {
     ]);
   });
 
+  it("does not force the task console open on initial load", () => {
+    const source = dataTasksPageSource();
+
+    expect(source).toContain(
+      "const [userRightPanelOpen, setUserRightPanelOpen] = useState(false);",
+    );
+  });
+
   it("moves schema preview from db settings into the chat header", () => {
     const source = dataTasksPageSource();
 
