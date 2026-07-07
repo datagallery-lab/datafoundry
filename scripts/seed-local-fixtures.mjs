@@ -52,8 +52,7 @@ const datasources = [
     id: "local-csv-orders",
     name: "Local CSV Orders",
     type: "csv",
-    settings: { filePath: csvPath },
-    config: { table_name: "orders_csv" },
+    config: { file_path: csvPath, table_name: "orders_csv" },
   },
   {
     id: "local-sqlite-orders",
@@ -72,8 +71,24 @@ async function requestJson(path, init = {}) {
 async function upsertDatasource(spec) {
   const existing = await requestJson(`/api/v1/datasources/${encodeURIComponent(spec.id)}`);
   if (existing.response.status === 200) {
-    console.log(`[seed] datasource ${spec.id} already exists — skipping create`);
-    return existing.body.data;
+    const updated = await requestJson(`/api/v1/datasources/${encodeURIComponent(spec.id)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: spec.name,
+        type: spec.type,
+        defaultEnabled: true,
+        ...(spec.settings ? { settings: spec.settings } : {}),
+        ...(spec.config ? { config: spec.config } : {}),
+      }),
+    });
+    assert.equal(
+      updated.response.status,
+      200,
+      `update ${spec.id} failed: ${JSON.stringify(updated.body)}`,
+    );
+    console.log(`[seed] updated ${spec.id}`);
+    return updated.body.data;
   }
   const created = await requestJson("/api/v1/datasources", {
     method: "POST",
@@ -131,15 +146,26 @@ try {
     console.log("[seed] api-duckdb-demo present (builtin DuckDB demo)");
   }
 
+  const verifiedIds = [];
   for (const spec of datasources) {
     await verifyDatasource(spec.id);
+    verifiedIds.push(spec.id);
   }
   if (demo.response.status === 200) {
-    await verifyDatasource("api-duckdb-demo");
+    try {
+      await verifyDatasource("api-duckdb-demo");
+      verifiedIds.push("api-duckdb-demo");
+    } catch (error) {
+      console.warn(
+        `[seed] api-duckdb-demo verification skipped: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
   }
 
   console.log(
-    `[seed] done — open http://localhost:3000/data-tasks and enable: api-duckdb-demo, local-csv-orders, local-sqlite-orders`,
+    `[seed] done — open http://localhost:3000/data-tasks and enable: ${verifiedIds.join(", ")}`,
   );
 } catch (error) {
   console.error(`[seed] ${error instanceof Error ? error.message : String(error)}`);

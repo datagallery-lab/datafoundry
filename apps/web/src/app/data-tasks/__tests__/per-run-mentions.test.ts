@@ -20,8 +20,12 @@ import {
   type WorkspaceConfigStore,
 } from "../data-task-state";
 
-function item(id: string, name = id) {
-  return { id, name, description: `${name} desc`, enabled: true };
+function item(
+  id: string,
+  name = id,
+  status: "connected" | "failed" | "untested" = "connected",
+) {
+  return { id, name, description: `${name} desc`, enabled: true, status };
 }
 
 const store: WorkspaceConfigStore = {
@@ -177,6 +181,39 @@ describe("buildRunConfig", () => {
     });
     expect(config.enabledDatasourceIds).toEqual(["db-orders"]);
     expect(config.activeDatasourceId).toBe("db-orders");
+  });
+
+  it("excludes unusable datasources from run config and active fallback", () => {
+    const mixedStore: WorkspaceConfigStore = {
+      ...store,
+      db: [
+        item("db-failed", "Failed db", "failed"),
+        item("db-default"),
+        item("db-untested", "Untested db", "untested"),
+      ],
+    };
+    const selection = togglePerRunMention(
+      emptyPerRunSelection(),
+      "db",
+      "db-failed",
+    );
+    const config = buildRunConfig(mixedStore, {
+      activeLlmId: "llm-1",
+      defaultDatasourceId: "db-failed",
+      session,
+      perRunSelection: selection,
+    });
+    expect(config.enabledDatasourceIds).toEqual(["db-default"]);
+    expect(config.activeDatasourceId).toBe("db-default");
+    expect(config.mentioned.db).toEqual([]);
+    expect(
+      resolveActiveDatasourceId(
+        mixedStore,
+        session,
+        selection,
+        "db-failed",
+      ),
+    ).toBe("db-default");
   });
 
   it("splits file mentions into workspace fileIds and session pinnedPaths", () => {

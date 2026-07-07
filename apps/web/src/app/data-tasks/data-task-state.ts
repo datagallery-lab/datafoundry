@@ -1304,7 +1304,8 @@ export const WORKSPACE_CONFIG_FIELDS: Record<
       getOptions: () => dbTypeOptions(),
       pendingOptionValues: [...DB_PENDING_TYPES],
       helpText:
-        "Implemented: DuckDB / SQLite / CSV / Excel / PostgreSQL / MySQL / ClickHouse. Disabled extension types are marked pending backend.",
+        "Implemented: DuckDB / SQLite / CSV / Excel / PostgreSQL / MySQL / ClickHouse. " +
+        "Disabled extension types are marked pending backend.",
       required: true,
     },
     {
@@ -1621,7 +1622,9 @@ export const WORKSPACE_CONFIG_FIELDS: Record<
       key: "serverUrl",
       label: "Endpoint / launch command",
       placeholder: "https://example.com/mcp/sse",
-      helpText: "For remote transports, enter the MCP service URL. For stdio, a full launch command can be used as fallback.",
+      helpText:
+        "For remote transports, enter the MCP service URL. " +
+        "For stdio, a full launch command can be used as fallback.",
       visibleWhen: (settings) => !isMcpStdioTransport(settings),
       required: true,
       fullWidth: true,
@@ -1756,7 +1759,8 @@ export const WORKSPACE_CONFIG_FIELDS: Record<
       inputType: "number",
       placeholder: "300000",
       helpText:
-        "Whole-run timeout for multi-step agent tasks (not just a single LLM call). Use 300000–600000 for deep analysis.",
+        "Whole-run timeout for multi-step agent tasks (not just a single LLM call). " +
+        "Use 300000–600000 for deep analysis.",
     },
     {
       key: "temperature",
@@ -2111,6 +2115,20 @@ export function sessionEnabledIds(
   return sessionEnabledItems(store, kind, session).map((item) => item.id);
 }
 
+export function sessionRunnableDatasourceItems(
+  store: WorkspaceConfigStore,
+  session: ChatSession | null | undefined,
+): WorkspaceConfigItem[] {
+  return sessionEnabledItems(store, "db", session).filter(isConfigItemUsable);
+}
+
+export function sessionRunnableDatasourceIds(
+  store: WorkspaceConfigStore,
+  session: ChatSession | null | undefined,
+): string[] {
+  return sessionRunnableDatasourceItems(store, session).map((item) => item.id);
+}
+
 export function toggleSessionResource(
   session: ChatSession,
   kind: PerRunMentionKind,
@@ -2134,8 +2152,12 @@ export function sessionResourceCounts(
   kind: PerRunMentionKind,
   session: ChatSession | null | undefined,
 ): { enabled: number; total: number } {
-  const total = store[kind].length;
-  const enabled = sessionEnabledItems(store, kind, session).length;
+  const total = kind === "db"
+    ? store.db.filter(isConfigItemUsable).length
+    : store[kind].length;
+  const enabled = kind === "db"
+    ? sessionRunnableDatasourceItems(store, session).length
+    : sessionEnabledItems(store, kind, session).length;
   return { enabled, total };
 }
 
@@ -2354,7 +2376,10 @@ export function buildMentionResources(
 ): MentionResource[] {
   const resources: MentionResource[] = [];
   for (const kind of PER_RUN_MENTION_KINDS) {
-    for (const item of sessionEnabledItems(store, kind, session)) {
+    const items = kind === "db"
+      ? sessionRunnableDatasourceItems(store, session)
+      : sessionEnabledItems(store, kind, session);
+    for (const item of items) {
       resources.push({
         kind,
         id: item.id,
@@ -2481,7 +2506,11 @@ export function prunePerRunSelection(
   const next = emptyPerRunSelection();
   let changed = false;
   for (const kind of PER_RUN_MENTION_KINDS) {
-    const available = new Set(sessionEnabledIds(store, kind, session));
+    const available = new Set(
+      kind === "db"
+        ? sessionRunnableDatasourceIds(store, session)
+        : sessionEnabledIds(store, kind, session),
+    );
     const kept = selection[kind].filter((id) => available.has(id));
     if (kept.length !== selection[kind].length) changed = true;
     next[kind] = kept;
@@ -2536,7 +2565,7 @@ export function buildRunConfig(
   const selection = options.perRunSelection ?? emptyPerRunSelection();
   const fileSelection = options.perRunFiles ?? emptyPerRunFileSelection();
   const session = options.session;
-  const enabledDb = sessionEnabledIds(store, "db", session);
+  const enabledDb = sessionRunnableDatasourceIds(store, session);
   const enabledKb = sessionEnabledIds(store, "kb", session);
   const enabledMcp = sessionEnabledIds(store, "mcp", session);
   const enabledSkill = sessionEnabledIds(store, "skill", session);
@@ -2646,7 +2675,7 @@ export function resolveActiveDatasourceId(
   selection: PerRunSelection,
   fallback: string,
 ): string | undefined {
-  const enabled = sessionEnabledIds(store, "db", session);
+  const enabled = sessionRunnableDatasourceIds(store, session);
   const enabledSet = new Set(enabled);
   const mentioned = selection.db.find((id) => enabledSet.has(id));
   if (mentioned) return mentioned;
@@ -2667,12 +2696,14 @@ export function resolveSendBlockReason(
 ): string | null {
   const llm = store.llm.find((item) => item.id === activeLlmId) ?? store.llm[0] ?? null;
   if (llm && !isConfigItemUsable(llm)) {
-    return `Model "${llm.name}" has not passed a connection test. Open the model configuration and run "Test connection" before using it.`;
+    return `Model "${llm.name}" has not passed a connection test. `
+      + `Open the model configuration and run "Test connection" before using it.`;
   }
   if (activeDatasourceId) {
     const db = store.db.find((item) => item.id === activeDatasourceId);
     if (db && !isConfigItemUsable(db)) {
-      return `Data source "${db.name}" has not passed a connection test. Open the data source configuration and run "Test connection" before using it.`;
+      return `Data source "${db.name}" has not passed a connection test. `
+        + `Open the data source configuration and run "Test connection" before using it.`;
     }
   }
   return null;

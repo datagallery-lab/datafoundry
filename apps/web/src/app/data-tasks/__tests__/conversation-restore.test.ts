@@ -18,6 +18,7 @@ import {
 import { ConfigApiError } from "../../../lib/config-api/types";
 import {
   createInitialLiveRun,
+  deriveRunUsage,
   formatWorkspaceMetadataSummary,
   reconcileLiveRunArtifacts,
   reduceLiveRunEvent,
@@ -1331,6 +1332,93 @@ describe("hydrateLiveRunFromConversation run ordering", () => {
 });
 
 describe("hydrateLiveRunFromConversation", () => {
+  it("restores canceled message-only checkpoints as canceled live runs", () => {
+    const dto: SessionConversationDto = {
+      sessionId: "thread-1",
+      messages: [
+        {
+          id: "run-canceled:user",
+          runId: "run-canceled",
+          role: "user",
+          source: "client",
+          messageId: "frontend-user-canceled",
+          contentText: "Please write a long answer.",
+          position: 1,
+          createdAt: "2026-06-25T10:00:01Z",
+        },
+        {
+          id: "run-canceled:assistant:partial",
+          runId: "run-canceled",
+          role: "assistant",
+          source: "agent",
+          messageId: "assistant-partial",
+          contentText: "Partial answer before cancellation.",
+          position: 2,
+          createdAt: "2026-06-25T10:00:02Z",
+        },
+      ],
+      runEventRefs: [{ runId: "run-canceled", eventCount: 12, firstSeq: 1, lastSeq: 12 }],
+      checkpoints: [
+        {
+          runId: "run-canceled",
+          status: "canceled",
+          messageStartPosition: 1,
+          messageEndPosition: 2,
+          firstEventSeq: 1,
+          lastEventSeq: 12,
+          startedAt: "2026-06-25T10:00:00Z",
+          finishedAt: "2026-06-25T10:00:03Z",
+          errorMessage: "user-requested",
+        },
+      ],
+      toolCalls: [],
+    };
+
+    const run = hydrateLiveRunFromConversation(createInitialLiveRun(), dto);
+    expect(run.runStatus).toBe("canceled");
+    expect(run.runStartedAt).toBe(Date.parse("2026-06-25T10:00:00Z"));
+    expect(run.runFinishedAt).toBe(Date.parse("2026-06-25T10:00:03Z"));
+    expect(deriveRunUsage(run).durationMs).toBe(3000);
+  });
+
+  it("restores canceled tool checkpoints with checkpoint timing", () => {
+    const dto: SessionConversationDto = {
+      sessionId: "thread-1",
+      messages: [],
+      runEventRefs: [{ runId: "run-canceled", eventCount: 4, firstSeq: 1, lastSeq: 4 }],
+      checkpoints: [
+        {
+          runId: "run-canceled",
+          status: "canceled",
+          messageStartPosition: 1,
+          messageEndPosition: 2,
+          firstEventSeq: 1,
+          lastEventSeq: 4,
+          startedAt: "2026-06-25T10:00:00Z",
+          finishedAt: "2026-06-25T10:00:05Z",
+          errorMessage: "user-requested",
+        },
+      ],
+      toolCalls: [
+        {
+          runId: "run-canceled",
+          toolCallId: "sql-canceled",
+          status: "completed",
+          toolName: "run_sql_readonly",
+          callEventSeq: 2,
+          resultEventSeq: 3,
+          resultPreview: JSON.stringify({ row_count: 3 }),
+        },
+      ],
+    };
+
+    const run = hydrateLiveRunFromConversation(createInitialLiveRun(), dto);
+    expect(run.runStatus).toBe("canceled");
+    expect(run.runStartedAt).toBe(Date.parse("2026-06-25T10:00:00Z"));
+    expect(run.runFinishedAt).toBe(Date.parse("2026-06-25T10:00:05Z"));
+    expect(deriveRunUsage(run).durationMs).toBe(5000);
+  });
+
   it("hydrates live run tool calls and links restored artifacts", () => {
     const dto: SessionConversationDto = {
       sessionId: "thread-1",
