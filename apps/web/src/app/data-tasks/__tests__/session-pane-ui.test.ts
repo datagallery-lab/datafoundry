@@ -11,8 +11,8 @@ import {
 import type { WorkspaceConfigStore } from "../data-task-state";
 import { LEFT_PANEL_MAX_WIDTH } from "../workspace-layout";
 
-function item(id: string, name = id) {
-  return { id, name, description: `${name} desc`, enabled: true };
+function item(id: string, name = id, status: "connected" | "failed" | "untested" = "connected") {
+  return { id, name, description: `${name} desc`, enabled: true, status };
 }
 
 const workspaceConfig: WorkspaceConfigStore = {
@@ -124,6 +124,32 @@ describe("session pane ui conventions", () => {
       title: "Agent Tools",
       summary: "1 · 1",
       action: { type: "config", panel: "mcp" },
+    });
+  });
+
+  it("counts only runnable data sources in the workspace rail", () => {
+    const groups = getWorkspaceResourceNavGroups({
+      workspaceConfig: {
+        ...workspaceConfig,
+        db: [
+          item("sqlite-orders", "Orders SQLite", "connected"),
+          item("api-duckdb-demo", "API DuckDB Demo", "failed"),
+          item("warehouse", "Warehouse", "untested"),
+        ],
+      },
+      workspaceFileCount: 0,
+      activeConfigPanel: null,
+      activeFilesPanel: false,
+      capabilitiesReady: true,
+      supportsFiles: true,
+      supportsKnowledge: true,
+      supportsMcp: true,
+      supportsSkills: true,
+    });
+
+    expect(groups[0]).toMatchObject({
+      title: "Data Sources",
+      summary: "1",
     });
   });
 

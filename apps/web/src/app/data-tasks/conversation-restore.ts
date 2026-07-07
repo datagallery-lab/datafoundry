@@ -613,6 +613,14 @@ function checkpointByRunId(
   return map;
 }
 
+function timestampFromIso(value: string | undefined): number | undefined {
+  if (!value) {
+    return undefined;
+  }
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
 function runStatusFromCheckpoint(
   checkpoint: ConversationCheckpointDto | undefined,
 ): LiveRun["runStatus"] | undefined {
@@ -1273,11 +1281,25 @@ function applyConversationToolCall(state: LiveRun, toolCall: ConversationToolCal
 function finalizeHydratedRunSegment(
   state: LiveRun,
   tools: ConversationToolCallDto[],
+  checkpoint: ConversationCheckpointDto | undefined,
 ): LiveRun {
+  const checkpointStatus = runStatusFromCheckpoint(checkpoint);
+  if (checkpointStatus === "running" || checkpointStatus === "queued") {
+    return state;
+  }
+  if (checkpointStatus === "failed") {
+    return reduceLiveRunEvent(state, {
+      type: "RUN_ERROR",
+      message: checkpoint?.errorMessage?.trim() || ORPHANED_RUN_ASSISTANT_PLACEHOLDER,
+    });
+  }
+  if (checkpointStatus === "canceled") {
+    return reduceLiveRunEvent(state, { type: "RUN_FINISHED", status: "canceled" });
+  }
   if (tools.length === 0) {
     return state;
   }
-  if (isPendingCollaborationRunEnd(tools)) {
+  if (checkpointStatus === "suspended" || isPendingCollaborationRunEnd(tools)) {
     let next = reduceLiveRunEvent(state, {
       type: "STATE_DELTA",
       delta: [{ op: "replace", path: "/runStatus", value: "suspended" }],
@@ -1291,9 +1313,9 @@ function finalizeHydratedRunSegment(
 function finalizeMessageOnlyHydratedRunSegment(
   state: LiveRun,
   segment: RestorableRunSegment,
+  checkpoint: ConversationCheckpointDto | undefined,
   dto: SessionConversationDto,
 ): LiveRun {
-  const checkpoint = checkpointByRunId(dto).get(segment.runId);
   const checkpointStatus = runStatusFromCheckpoint(checkpoint);
   if (checkpointStatus === "running" || checkpointStatus === "queued") {
     return state;
@@ -1305,7 +1327,7 @@ function finalizeMessageOnlyHydratedRunSegment(
     });
   }
   if (checkpointStatus === "canceled") {
-    return reduceLiveRunEvent(state, { type: "RUN_FINISHED" });
+    return reduceLiveRunEvent(state, { type: "RUN_FINISHED", status: "canceled" });
   }
   if (segment.hasUser && !segment.hasAssistant) {
     return reduceLiveRunEvent(state, {
@@ -1314,6 +1336,22 @@ function finalizeMessageOnlyHydratedRunSegment(
     });
   }
   return reduceLiveRunEvent(state, { type: "RUN_FINISHED" });
+}
+
+function applyHydratedRunCheckpointTiming(
+  state: LiveRun,
+  checkpoint: ConversationCheckpointDto | undefined,
+): LiveRun {
+  const startedAt = timestampFromIso(checkpoint?.startedAt);
+  const finishedAt = timestampFromIso(checkpoint?.finishedAt);
+  if (startedAt === undefined && finishedAt === undefined) {
+    return state;
+  }
+  return {
+    ...state,
+    ...(startedAt !== undefined ? { runStartedAt: startedAt } : {}),
+    ...(finishedAt !== undefined ? { runFinishedAt: finishedAt } : {}),
+  };
 }
 
 function startNextHydratedRunGroup(state: LiveRun, runId?: string): LiveRun {
@@ -1470,9 +1508,11 @@ export function hydrateLiveRunFromConversation(
   }
 
   const runSegments = collectRestorableRunSegments(dto);
+  const checkpoints = checkpointByRunId(dto);
 
   let next = createInitialLiveRun();
   for (const [index, segment] of runSegments.entries()) {
+    const checkpoint = checkpoints.get(segment.runId);
     next =
       index === 0
         ? reduceLiveRunEvent(next, { type: "RUN_STARTED", runId: segment.runId })
@@ -1486,8 +1526,9 @@ export function hydrateLiveRunFromConversation(
 
     next =
       segment.tools.length > 0
-        ? finalizeHydratedRunSegment(next, segment.tools)
-        : finalizeMessageOnlyHydratedRunSegment(next, segment, dto);
+        ? finalizeHydratedRunSegment(next, segment.tools, checkpoint)
+        : finalizeMessageOnlyHydratedRunSegment(next, segment, checkpoint, dto);
+    next = applyHydratedRunCheckpointTiming(next, checkpoint);
   }
 
   next = reconcileLiveRunArtifacts(mergePreservedLiveRunSessionData(state, next));

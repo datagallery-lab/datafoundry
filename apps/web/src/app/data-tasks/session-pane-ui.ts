@@ -1,4 +1,4 @@
-import type { WorkspaceConfigStore } from "./data-task-state";
+import { isConfigItemUsable, type WorkspaceConfigStore } from "./data-task-state";
 import type { LiveRunStatus } from "./live-run-state";
 import { LEFT_PANEL_MAX_WIDTH } from "./workspace-layout";
 
@@ -59,7 +59,7 @@ export function getWorkspaceResourceNavGroups({
     {
       id: "data-sources",
       title: "Data Sources",
-      summary: String(workspaceConfig.db.length),
+      summary: String(workspaceConfig.db.filter(isConfigItemUsable).length),
       icon: "database",
       action: { type: "config", panel: "db" },
       active: activeConfigPanel === "db",
