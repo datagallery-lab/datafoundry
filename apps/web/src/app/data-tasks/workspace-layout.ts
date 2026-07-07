@@ -57,6 +57,22 @@ export function getRequiredWorkspaceWidth({
   return left + right + getChatInputReservedWidth();
 }
 
+export function getMinimumWorkspaceWidth({
+  sidebarCollapsed,
+  rightPanelOpen,
+  rightPanelWidth,
+  leftPanelWidth = LEFT_PANEL_DEFAULT_WIDTH,
+}: {
+  sidebarCollapsed: boolean;
+  rightPanelOpen: boolean;
+  rightPanelWidth: number;
+  leftPanelWidth?: number;
+}): number {
+  const left = getLeftPanelWidth(sidebarCollapsed, leftPanelWidth);
+  const right = rightPanelOpen ? rightPanelWidth : 0;
+  return left + right + CHAT_MIN_WIDTH;
+}
+
 export function getWorkspaceGridTemplateColumns({
   isConfigPanelOpen,
   isRightPanelOpen,
@@ -100,9 +116,8 @@ export function clampRightPanelWidth(width: number): number {
 }
 
 /**
- * When the viewport is too narrow for the user's sidebar preferences, close
- * the right panel first, then collapse the left panel. When space returns,
- * user preferences are restored by re-running this from the latest user* state.
+ * Keep user sidebar intent unless the layout cannot satisfy the chat minimum.
+ * If the right panel causes minimum-width overflow, close it before folding left.
  */
 export function resolveResponsiveSidebars({
   viewportWidth,
@@ -123,23 +138,21 @@ export function resolveResponsiveSidebars({
   let sidebarCollapsed = userSidebarCollapsed;
   let rightPanelOpen = userRightPanelOpen;
 
-  const overflows = () =>
-    getRequiredWorkspaceWidth({
+  const minimumOverflows = () =>
+    viewportWidth > 0 &&
+    getMinimumWorkspaceWidth({
       sidebarCollapsed,
       rightPanelOpen,
       rightPanelWidth,
       leftPanelWidth,
     }) > viewportWidth;
 
-  // Prefer collapsing the left sidebar before closing the console when the user
-  // wants it open — keeps dock mode reachable on medium-width viewports (e.g.
-  // 16" laptops with OS scaling).
-  if (userRightPanelOpen && overflows() && !sidebarCollapsed) {
-    sidebarCollapsed = true;
+  if (minimumOverflows() && rightPanelOpen) {
+    rightPanelOpen = false;
   }
 
-  if (overflows() && rightPanelOpen) {
-    rightPanelOpen = false;
+  if (minimumOverflows() && !sidebarCollapsed) {
+    sidebarCollapsed = true;
   }
 
   return { sidebarCollapsed, rightPanelOpen };
