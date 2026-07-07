@@ -42,6 +42,19 @@ export class ContextRunState {
     return this.currentPackage;
   }
 
+  replaceMatchingItems(shouldReplace: (item: ContextItem) => boolean, contextPackage: ContextPackage): ContextPackage {
+    const retainedItems = this.currentPackage.items.filter((item) => !shouldReplace(item));
+    const incomingItems = contextPackage.items.filter(shouldReplace);
+    this.currentPackage = this.builder.build([...retainedItems, ...incomingItems], {
+      packageId: this.currentPackage.packageId,
+      revision: this.currentPackage.revision + 1,
+      resourceId: this.identity.resourceId,
+      sessionId: this.identity.sessionId,
+      runId: this.identity.runId
+    });
+    return this.currentPackage;
+  }
+
   replaceSourceItems(sourceTypes: string[], contextPackage: ContextPackage): ContextPackage {
     const sourceTypeSet = new Set(sourceTypes);
     const retainedItems = this.currentPackage.items.filter((item) => !sourceTypeSet.has(item.sourceType));

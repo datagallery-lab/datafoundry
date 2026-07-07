@@ -4,10 +4,9 @@ import type {
   EvidenceResolutionIssue
 } from "@datafoundry/contracts";
 import {
-  createContextItem,
-  createContextSourceMetadata,
-  type ContextItem,
-  type RuntimeContextSource
+  createAgentContextItem,
+  createAgentContextSourceMetadata,
+  type AgentContextItem
 } from "@datafoundry/agent-runtime";
 import type {
   MetadataStore,
@@ -27,14 +26,14 @@ type ResolveEvidenceReferenceContextInput = {
 
 export type ResolvedEvidenceReferenceContext = {
   diagnostics: EvidenceResolutionDiagnostics;
-  items: ContextItem[];
+  items: AgentContextItem[];
 };
 
 /** Resolves client EvidenceRef handles into server-authoritative ContextItems for prompt assembly. */
 export function resolveEvidenceReferenceContext(
   input: ResolveEvidenceReferenceContextInput
 ): ResolvedEvidenceReferenceContext {
-  const items: ContextItem[] = [];
+  const items: AgentContextItem[] = [];
   const accepted: string[] = [];
   const dropped: EvidenceResolutionIssue[] = [];
   const seen = new Set<string>();
@@ -58,21 +57,10 @@ export function resolveEvidenceReferenceContext(
   return { diagnostics: { accepted, dropped }, items };
 }
 
-/** Creates a runtime context source from already-resolved evidence ContextItems. */
-export function createEvidenceRuntimeSource(items: ContextItem[]): RuntimeContextSource | undefined {
-  if (items.length === 0) {
-    return undefined;
-  }
-  return {
-    sourceType: "evidence-focus",
-    collect: () => items
-  };
-}
-
 const resolveEvidenceRef = (
   input: ResolveEvidenceReferenceContextInput,
   ref: EvidenceRef
-): { items: ContextItem[]; issue?: never } | { items?: never; issue: EvidenceResolutionIssue } => {
+): { items: AgentContextItem[]; issue?: never } | { items?: never; issue: EvidenceResolutionIssue } => {
   try {
     if (ref.source.artifactId) {
       return { items: artifactEvidenceItems(input, ref, ref.source.artifactId) };
@@ -99,7 +87,7 @@ const artifactEvidenceItems = (
   input: ResolveEvidenceReferenceContextInput,
   ref: EvidenceRef,
   artifactId: string
-): ContextItem[] => {
+): AgentContextItem[] => {
   const artifact = input.metadataStore.artifacts.get({ user_id: input.userId, artifact_id: artifactId });
   assertSession(ref, artifact.session_id);
   const preview = parseJsonValue(artifact.preview_json);
@@ -125,7 +113,7 @@ const sqlAuditEvidenceItems = (
   input: ResolveEvidenceReferenceContextInput,
   ref: EvidenceRef,
   auditLogId: string
-): ContextItem[] => {
+): AgentContextItem[] => {
   const audit = input.metadataStore.sqlAuditLogs.get({ user_id: input.userId, audit_log_id: auditLogId });
   if (audit.run_id) {
     const run = input.metadataStore.runs.get({ user_id: input.userId, run_id: audit.run_id });
@@ -154,7 +142,7 @@ const sqlAuditEvidenceItems = (
 const toolEventEvidenceItems = (
   input: ResolveEvidenceReferenceContextInput,
   ref: EvidenceRef
-): ContextItem[] => {
+): AgentContextItem[] => {
   const run = requireEvidenceRun(input, ref);
   const events = input.metadataStore.runEvents.listByRun({ user_id: input.userId, run_id: run.id });
   const event = findToolEvent(events, ref);
@@ -180,11 +168,11 @@ const toolEventEvidenceItems = (
 const createEvidenceItem = (
   input: ResolveEvidenceReferenceContextInput,
   ref: EvidenceRef,
-  visibility: ContextItem["visibility"],
+  visibility: AgentContextItem["visibility"],
   content: unknown,
-  trust: ContextItem["trust"],
+  trust: AgentContextItem["trust"],
   datasourceId?: string
-): ContextItem => createContextItem({
+): AgentContextItem => createAgentContextItem({
   id: `evidence:${ref.id}:${visibility}`,
   sourceType: "evidence-focus",
   sourceId: ref.id,
@@ -194,7 +182,7 @@ const createEvidenceItem = (
   retention: visibility === "model" ? "active" : "reference",
   priority: visibility === "model" ? 70 : 65,
   content,
-  metadata: createContextSourceMetadata({
+  metadata: createAgentContextSourceMetadata({
     dedupeKeys: evidenceDedupeKeys(ref),
     exclusivityKey: `evidence:${ref.id}`,
     overlapKeys: evidenceOverlapKeys(ref),

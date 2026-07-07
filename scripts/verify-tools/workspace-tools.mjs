@@ -8,15 +8,17 @@ import { rmSync } from "node:fs";
 import path from "node:path";
 
 import { createRunWorkspace } from "../../packages/agent-runtime/dist/tools/workspace-factory.js";
-import { wrapWorkspaceToolsWithArtifactRecording } from "../../packages/agent-runtime/dist/tools/workspace-artifact-recorder.js";
 import { GovernedToolFactory } from "../../packages/agent-runtime/dist/tools/governed-tool-factory.js";
-import { ToolResultDispatcher } from "../../packages/agent-runtime/dist/context/tool-result-dispatcher.js";
-import { ContextOrchestrator } from "../../packages/agent-runtime/dist/context/context-orchestrator.js";
-import { ContextSourceRegistry } from "../../packages/agent-runtime/dist/context/context-source-registry.js";
-import { ContextBudgetAllocator } from "../../packages/agent-runtime/dist/context/context-budget-allocator.js";
-import { ContextPolicy } from "../../packages/agent-runtime/dist/context/context-policy.js";
-import { WriteFileContextAdapter } from "../../packages/agent-runtime/dist/context/adapters/workspace-tool-context-adapters.js";
-import { ReadFileContextAdapter } from "../../packages/agent-runtime/dist/context/adapters/workspace-tool-context-adapters.js";
+
+const { wrapWorkspaceToolsWithArtifactRecording } = await import(
+  "../../packages/agent-runtime/dist/tools/workspace-artifact-recorder.js"
+);
+const { createToolObservationBoundary } = await import(
+  "../../packages/agent-runtime/dist/context/tool-observation/tool-observation-boundary.js"
+);
+const { ToolObservationDispatcher } = await import(
+  "../../packages/agent-runtime/dist/context/tool-observation/tool-observation-dispatcher.js"
+);
 
 const timestamp = Date.now();
 const workspaceRoot = `storage/verify-tools/workspace-${timestamp}`;
@@ -99,16 +101,19 @@ async function runToolExpectThrow(tool, name, args, execCtx, customChunks) {
 }
 
 function buildGovernedTool(rawTool, toolName) {
-  const budgetAllocator = new ContextBudgetAllocator();
-  const sourceRegistry = new ContextSourceRegistry();
-  const policy = new ContextPolicy();
-  const orchestrator = new ContextOrchestrator(budgetAllocator, sourceRegistry, policy);
-  if (toolName === "write_file") {
-    sourceRegistry.registerToolAdapter(new WriteFileContextAdapter());
-  } else if (toolName === "read_file") {
-    sourceRegistry.registerToolAdapter(new ReadFileContextAdapter());
-  }
-  const dispatcher = new ToolResultDispatcher(orchestrator, runContext);
+  const boundary = createToolObservationBoundary({
+    identity: {
+      resourceId: runContext.user_id,
+      runId: runContext.run_id,
+      sessionId: runContext.session_id
+    }
+  });
+  const dispatcher = new ToolObservationDispatcher(boundary.packager, {
+    modelName: runContext.model_name,
+    resourceId: runContext.user_id,
+    runId: runContext.run_id,
+    sessionId: runContext.session_id
+  });
   const factory = new GovernedToolFactory(dispatcher);
   return factory.governTool(toolName, rawTool);
 }
@@ -426,7 +431,10 @@ try {
   console.log("\n=== GOVERNED ADAPTER BONUS ===");
   console.log(JSON.stringify(governed, null, 2));
   console.log(
-    "\nAdapter contract: pickFields/asRecord adapters expect JSON objects with named fields; plain-string returns yield empty {} (pickFields) or { value: \"...\" } (asRecord on string)."
+    [
+      "\nAdapter contract: pickFields/asRecord adapters expect JSON objects with named fields;",
+      'plain-string returns yield empty {} (pickFields) or { value: "..." } (asRecord on string).'
+    ].join(" ")
   );
 
   console.log("\n=== ARTIFACT RECORDING ===");

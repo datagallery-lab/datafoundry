@@ -10,12 +10,18 @@ type PromptMessage = {
   providerOptions?: unknown;
 };
 
-export function shouldApplyDashScopePromptCompat(modelProviderKind: string): boolean {
-  return modelProviderKind === "openai-compatible";
+type PromptCompatModelProvider = {
+  prompt_compat?: {
+    requires_non_empty_message_content?: boolean;
+  };
+};
+
+export function shouldApplyNonEmptyMessageContentCompat(modelProvider: PromptCompatModelProvider): boolean {
+  return modelProvider.prompt_compat?.requires_non_empty_message_content === true;
 }
 
-/** DashScope/Qwen rejects requests when any message lacks usable `content`. */
-export function ensureDashScopeCompatiblePrompt<T extends PromptMessage>(prompt: T[]): T[] {
+/** Some OpenAI-compatible endpoints reject requests when a message lacks usable `content`. */
+export function ensureNonEmptyMessageContentPrompt<T extends PromptMessage>(prompt: T[]): T[] {
   return prompt.map((message) => {
     if (message.role === "system") {
       const content =
@@ -44,15 +50,15 @@ export function ensureDashScopeCompatiblePrompt<T extends PromptMessage>(prompt:
   });
 }
 
-export class DashScopePromptCompatProcessor implements Processor<"dashscope-prompt-compat"> {
-  readonly id = "dashscope-prompt-compat";
-  readonly name = "DashScope Prompt Compat";
+export class NonEmptyMessageContentCompatProcessor implements Processor<"non-empty-message-content-compat"> {
+  readonly id = "non-empty-message-content-compat";
+  readonly name = "Non-Empty Message Content Compat";
 
   constructor(private readonly enabled: boolean) {}
 
   processLLMRequest(args: ProcessLLMRequestArgs): ProcessLLMRequestResult {
     if (!this.enabled) return undefined;
-    return { prompt: ensureDashScopeCompatiblePrompt(args.prompt) };
+    return { prompt: ensureNonEmptyMessageContentPrompt(args.prompt) };
   }
 }
 
@@ -98,8 +104,7 @@ function normalizeAssistantContent(content: unknown): PromptPart[] {
     (part) => isRecord(part) && part.type === "text" && typeof part.text === "string" && part.text.trim().length > 0,
   );
 
-  // DashScope rejects assistant messages whose OpenAI conversion yields null/empty content
-  // (e.g. tool-call-only, reasoning-only, or inline tool-result without text).
+  // Some endpoints reject assistant messages whose OpenAI conversion yields null/empty content.
   if (!hasText) {
     normalized = [{ type: "text", text: PLACEHOLDER_TEXT }, ...normalized];
   }

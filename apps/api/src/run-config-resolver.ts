@@ -2,7 +2,7 @@ import type { RunAgentInput } from "@ag-ui/client";
 import {
   createModelProviderFromEnv,
   createModelProviderFromProfile,
-  type ModelContextProfile
+  type AgentModelContextProfile
 } from "@datafoundry/agent-runtime";
 import type { MetadataStore } from "@datafoundry/metadata";
 import {
@@ -26,7 +26,7 @@ export type ResolvedRunConfig = {
     temperature?: number;
     topP?: number;
   };
-  modelContextProfile?: ModelContextProfile;
+  modelContextProfile?: AgentModelContextProfile;
   reasoningModel?: boolean;
   runTimeoutMs?: number;
   skillSelection: SkillSelectionResult;
@@ -377,7 +377,7 @@ const resolveModelContextProfile = (
   metadataStore: MetadataStore,
   userId: string,
   workspaceId: string
-): ModelContextProfile | undefined => {
+): AgentModelContextProfile | undefined => {
   if (!profileId || profileId === "server-default") {
     return undefined;
   }

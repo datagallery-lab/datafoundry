@@ -48,10 +48,7 @@ import {
   sendAuthError
 } from "./auth/routes.js";
 import { persistCurrentUserMessage } from "./conversation-memory.js";
-import {
-  createEvidenceRuntimeSource,
-  resolveEvidenceReferenceContext
-} from "./evidence-reference-context.js";
+import { resolveEvidenceReferenceContext } from "./evidence-reference-context.js";
 import { createRunAgentAssembly, createRunAgentContext } from "./run-agent-assembly.js";
 import { resolveRunConfig } from "./run-config-resolver.js";
 import { resolveRunIdentity } from "./run-identity-orchestrator.js";
@@ -524,7 +521,6 @@ class DataFoundryAgUiAgent extends AbstractAgent {
           userId: this.input.user.id,
           workspaceId: this.input.workspaceId
         });
-        const evidenceRuntimeSource = createEvidenceRuntimeSource(evidenceContext.items);
         const taskPlanProjector = new TaskPlanProjector(runContext);
         const toolCallResultBridge = new ToolCallResultBridge();
         const runAbortController = new AbortController();
@@ -552,7 +548,7 @@ class DataFoundryAgUiAgent extends AbstractAgent {
           dataGateway: this.input.dataGateway,
           artifactService: this.input.artifactService,
           effectiveRunConfig,
-          ...(evidenceRuntimeSource ? { evidenceRuntimeSources: [evidenceRuntimeSource] } : {}),
+          ...(evidenceContext.items.length ? { evidenceContextItems: evidenceContext.items } : {}),
           fileAssetService: this.input.fileAssetService,
           emitter: { emit },
           ...(effectiveRunConfig.goal ? { goal: effectiveRunConfig.goal } : {}),

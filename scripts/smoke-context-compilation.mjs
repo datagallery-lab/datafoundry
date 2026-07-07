@@ -30,6 +30,8 @@ import {
   contextItemSourceOwner,
   groupMessagesByTurn
 } from "../packages/agent-runtime/dist/testing.js";
+import { convertAGUIMessagesToMastra } from "@ag-ui/mastra";
+import { MessageList } from "@mastra/core/agent";
 
 const identity = { resourceId: "context-smoke-user", sessionId: "context-smoke-session", runId: "context-smoke-run" };
 const runState = new ContextRunState(identity);
@@ -270,6 +272,90 @@ const plannedTurnIds = new Set(alignmentState.plans[0]?.selectedGroupIds ?? []);
 
 if (inventoryTurnIds.size !== plannedTurnIds.size || [...inventoryTurnIds].some((id) => !plannedTurnIds.has(id))) {
   throw new Error("Expected processor inventory group IDs to align with planner group IDs");
+}
+
+const replacementState = new ContextRunState({ ...identity, runId: "context-replacement-run" });
+const replacementProcessor = new MastraContextBudgetProcessor({
+  eventSink: createMemoryEventSink(),
+  modelName: "context-smoke-model",
+  runState: replacementState
+});
+replacementProcessor.processInputStep({
+  messages: [
+    createMessage("replace-user-1", "user", "first question"),
+    createMessage("replace-assistant-1", "assistant", "first answer"),
+    createMessage("replace-user-2", "user", "second question"),
+    createMessage("replace-assistant-old", "assistant", "old current answer")
+  ],
+  systemMessages: [],
+  tools: {},
+  stepNumber: 0
+});
+const replacementResult = replacementProcessor.processInputStep({
+  messages: [
+    createMessage("replace-user-1", "user", "first question"),
+    createMessage("replace-assistant-1", "assistant", "first answer"),
+    createMessage("replace-user-2", "user", "second question"),
+    createMessage("replace-assistant-new", "assistant", "new current answer")
+  ],
+  systemMessages: [],
+  tools: {},
+  stepNumber: 1
+});
+const replacementIds = replacementResult.messages.map((message) => message.id).join(",");
+if (replacementIds !== "replace-user-1,replace-assistant-1,replace-user-2,replace-assistant-new") {
+  throw new Error(`Expected protocol message snapshot replacement, got: ${replacementIds}`);
+}
+if (replacementState.package.items.some((item) => item.id === "message-replace-assistant-old")) {
+  throw new Error("Expected stale assistant message inventory item to be removed on the next input step");
+}
+
+const agUiStepState = new ContextRunState({ ...identity, runId: "context-ag-ui-step-run" });
+const agUiStepProcessor = new MastraContextBudgetProcessor({
+  eventSink: createMemoryEventSink(),
+  modelName: "context-smoke-model",
+  runState: agUiStepState
+});
+const agUiStepMessageList = new MessageList();
+agUiStepMessageList.add(convertAGUIMessagesToMastra([
+  { id: "hello-user", role: "user", content: "你好" },
+  { id: "hello-assistant", role: "assistant", content: "你好 blabla" },
+  { id: "analysis-user", role: "user", content: "分析很多数据" }
+]), "user");
+agUiStepProcessor.processInputStep({
+  messages: agUiStepMessageList.get.all.db(),
+  messageList: agUiStepMessageList,
+  systemMessages: [],
+  tools: {},
+  stepNumber: 0
+});
+agUiStepMessageList.add(convertAGUIMessagesToMastra([
+  {
+    role: "assistant",
+    content: "",
+    toolCalls: [{ id: "tc-ag-ui", type: "function", function: { name: "inspect_schema", arguments: "{}" } }]
+  },
+  { role: "tool", content: "{\"tables\":[]}", toolCallId: "tc-ag-ui" }
+]), "response");
+agUiStepProcessor.processInputStep({
+  messages: agUiStepMessageList.get.all.db(),
+  messageList: agUiStepMessageList,
+  systemMessages: [],
+  tools: {},
+  stepNumber: 1
+});
+const agUiStepMessages = agUiStepMessageList.get.all.db();
+const helloAssistantIndex = agUiStepMessages.findIndex((message) => promptText(message) === "你好 blabla");
+const analysisUserIndex = agUiStepMessages.findIndex((message) => promptText(message) === "分析很多数据");
+const toolStepIndex = agUiStepMessages.findIndex((message) => messageContainsToolInvocation(message, "tc-ag-ui"));
+if (
+  helloAssistantIndex !== 1
+  || analysisUserIndex <= helloAssistantIndex
+  || toolStepIndex <= analysisUserIndex
+) {
+  throw new Error(`Expected AG-UI history assistant to keep chronological order, got: ${
+    agUiStepMessages.map(messageOrderLabel).join(" | ")
+  }`);
 }
 
 const profileRegistry = new ModelContextProfileRegistry({
@@ -1209,6 +1295,20 @@ function promptText(message) {
   return Array.isArray(parts)
     ? parts.filter((part) => part.type === "text").map((part) => part.text).join("\n")
     : "";
+}
+
+function messageContainsToolInvocation(message, toolCallId) {
+  const parts = message?.content?.parts;
+  return Array.isArray(parts) && parts.some((part) =>
+    part.type === "tool-invocation" && part.toolInvocation?.toolCallId === toolCallId
+  );
+}
+
+function messageOrderLabel(message) {
+  const text = promptText(message);
+  const toolPart = message?.content?.parts?.find?.((part) => part.type === "tool-invocation");
+  const toolState = toolPart?.toolInvocation?.state;
+  return `${message.role}:${text || toolState || message.id}`;
 }
 
 function createMemoryEventSink(events = []) {

@@ -35,21 +35,26 @@ import { createToolObservationBoundary } from "./context/tool-observation/tool-o
 import {
   createMastraContextProcessorBoundary
 } from "./context/protocol/mastra/mastra-context-processor-boundary.js";
-import {
-  ModelContextProfileRegistry,
-  type ModelContextProfile
-} from "./context/policy/model-context-profile.js";
 import { ToolObservationDispatcher } from "./context/tool-observation/tool-observation-dispatcher.js";
 import { createAgUiContextEventSink } from "./context/protocol/ag-ui/ag-ui-context-event-sink.js";
 import {
-  DashScopePromptCompatProcessor,
-  shouldApplyDashScopePromptCompat,
-} from "./context/dashscope-prompt-compat.js";
+  NonEmptyMessageContentCompatProcessor,
+  shouldApplyNonEmptyMessageContentCompat,
+} from "./provider-compat/non-empty-message-content-compat.js";
 import {
   type TaskStateRuntime
 } from "./memory/task-state-runtime.js";
 import { CONVERSATION_WORKING_MEMORY_CONFIG } from "./memory/conversation-memory-bridge.js";
 import type { RuntimeContextSource } from "./context/source/runtime-context-source.js";
+import {
+  createContextItem,
+  type ContextItem,
+  type CreateContextItemInput
+} from "./context/inventory/context-item.js";
+import {
+  createContextSourceMetadata,
+  type ContextSourceMetadata
+} from "./context/inventory/context-source-metadata.js";
 import { GoalRuntimeAdapter, type GoalRequest } from "./memory/goal-runtime-adapter.js";
 import { createDataFoundryToolRegistry } from "./tools/data-tools.js";
 import { GovernedToolFactory } from "./tools/governed-tool-factory.js";
@@ -69,6 +74,21 @@ import { createTool } from "@mastra/core/tools";
 import { z } from "zod";
 
 export type { AgentRunContext, AgentRunContextInput, AgUiEventEmitter } from "./types.js";
+export type AgentContextItem = ContextItem;
+export type AgentContextSourceMetadata = ContextSourceMetadata;
+export type CreateAgentContextItemInput = CreateContextItemInput;
+export type AgentModelContextProfile = {
+  id: string;
+  contextWindow: number;
+  outputReserve: number;
+  safetyMargin: number;
+  messageOverhead: number;
+  modelPattern: string;
+  toolSchemaOverhead: number;
+};
+export const createAgentContextItem = createContextItem;
+export const createAgentContextSourceMetadata = createContextSourceMetadata;
+
 export const DATA_AGENT_TOOL_NAMES = [
   "inspect_schema",
   "list_data_sources",
@@ -139,9 +159,6 @@ export {
   resolveWorkspaceRoot
 } from "./tools/workspace-factory.js";
 export { resolvePythonRuntime } from "./tools/python-runtime.js";
-export {
-  projectWorkspaceObservation
-} from "./context/tool-observation/adapters/workspace-tool-observation-adapters.js";
 export { shouldReuseRecordedFileArtifactForPublish } from "./tools/artifact-publish-policy.js";
 export { createDataFoundryToolRegistry, type ToolRegistry } from "./tools/data-tools.js";
 export {
@@ -149,16 +166,6 @@ export {
   type GoalRequest,
   type GoalSnapshot
 } from "./memory/goal-runtime-adapter.js";
-export { createContextItem, hashContextContent } from "./context/inventory/context-item.js";
-export type {
-  ContextItem,
-  ContextItemVisibility,
-  ContextRetention,
-  ContextTrust
-} from "./context/inventory/context-item.js";
-export { createContextSourceMetadata } from "./context/inventory/context-source-metadata.js";
-export type { RuntimeContextSource } from "./context/source/runtime-context-source.js";
-export { type ModelContextProfile } from "./context/policy/model-context-profile.js";
 export {
   CONVERSATION_WORKING_MEMORY_CONFIG,
   CONVERSATION_WORKING_MEMORY_TEMPLATE,
@@ -198,7 +205,7 @@ export type CreateDataFoundryInput = {
     records: AgentLongTermMemoryRecord[];
     maxChars?: number;
   };
-  additionalRuntimeSources?: RuntimeContextSource[];
+  evidenceContextItems?: AgentContextItem[];
   messages: Message[];
   modelSettings?: {
     frequencyPenalty?: number;
@@ -207,7 +214,7 @@ export type CreateDataFoundryInput = {
     temperature?: number;
     topP?: number;
   };
-  modelContextProfile?: ModelContextProfile;
+  modelContextProfile?: AgentModelContextProfile;
   workspaceAttachments?: WorkspaceAttachment[];
   goal?: GoalRequest;
   /**
@@ -275,6 +282,7 @@ export const createDataFoundry = async (
     workspaceRoot: input.workspaceRoot
   });
   const workspaceAttachments = materializeWorkspaceAttachments(runWorkspace.runDir, input.workspaceAttachments ?? []);
+  const evidenceRuntimeSource = createEvidenceFocusRuntimeSource(input.evidenceContextItems ?? []);
 
   const governedMessages = normalizeIngressMessages(input.messages);
 
@@ -299,19 +307,11 @@ export const createDataFoundry = async (
   );
   const contextEventSink = createAgUiContextEventSink(input.emitter);
   const mastraContextProcessors = createMastraContextProcessorBoundary({
-    ...(input.modelContextProfile
-      ? {
-          contextCompilation: {
-            profileRegistry: new ModelContextProfileRegistry({
-              defaultProfile: input.modelContextProfile
-            })
-          }
-        }
-      : {}),
     dispatcher,
     eventSink: contextEventSink,
-    ...(input.additionalRuntimeSources?.length ? { additionalRuntimeSources: input.additionalRuntimeSources } : {}),
+    ...(evidenceRuntimeSource ? { additionalRuntimeSources: [evidenceRuntimeSource] } : {}),
     ...(input.longTermMemory ? { longTermMemory: input.longTermMemory } : {}),
+    ...(input.modelContextProfile ? { modelContextProfile: input.modelContextProfile } : {}),
     modelName: input.runContext.model_name,
     runScope: {
       runId: input.runContext.run_id,
@@ -324,8 +324,8 @@ export const createDataFoundry = async (
   const readOnlyWorkingMemoryProcessor = input.taskStateRuntime
     ? await createReadOnlyWorkingMemoryProcessor(input.taskStateRuntime)
     : undefined;
-  const dashScopePromptCompat = new DashScopePromptCompatProcessor(
-    shouldApplyDashScopePromptCompat(input.modelProvider.kind),
+  const nonEmptyMessageContentCompat = new NonEmptyMessageContentCompatProcessor(
+    shouldApplyNonEmptyMessageContentCompat(input.modelProvider),
   );
   const taskTools = input.taskStateRuntime
     ? {
@@ -460,7 +460,7 @@ export const createDataFoundry = async (
     inputProcessors: [
       ...(readOnlyWorkingMemoryProcessor ? [readOnlyWorkingMemoryProcessor] : []),
       ...mastraContextProcessors.inputProcessors,
-      dashScopePromptCompat
+      nonEmptyMessageContentCompat
     ],
     outputProcessors: mastraContextProcessors.outputProcessors,
     defaultOptions: {
@@ -509,6 +509,16 @@ export const createDataFoundry = async (
     isolation: runWorkspace.isolation,
     workspaceDir: runWorkspace.runDir,
     sessionDir: runWorkspace.sessionDir
+  };
+};
+
+const createEvidenceFocusRuntimeSource = (items: AgentContextItem[]): RuntimeContextSource | undefined => {
+  if (items.length === 0) {
+    return undefined;
+  }
+  return {
+    sourceType: "evidence-focus",
+    collect: () => items
   };
 };
 

@@ -2,26 +2,30 @@
  * Contract tests for workspace tool context adapters (Mastra 1.42 string returns).
  */
 import {
-  WriteFileContextAdapter,
-  ReadFileContextAdapter,
-  ExecuteCommandContextAdapter,
+  WriteFileToolObservationAdapter,
+  ReadFileToolObservationAdapter,
+  ExecuteCommandToolObservationAdapter,
   projectWorkspaceObservation
-} from "../packages/agent-runtime/dist/context/adapters/workspace-tool-context-adapters.js";
+} from "../packages/agent-runtime/dist/context/tool-observation/adapters/workspace-tool-observation-adapters.js";
 
 const budget = { maxChars: 12000 };
 
-const writeAdapter = new WriteFileContextAdapter();
+const writeAdapter = new WriteFileToolObservationAdapter();
 const writeItems = writeAdapter.toContextItems("Wrote 28 bytes to verify-test.txt", budget);
 const writeModel = writeItems.find((item) => item.visibility === "model")?.content;
-assert(writeModel === "Wrote 28 bytes to verify-test.txt", `write_file model content must preserve string observation, got ${JSON.stringify(writeModel)}`);
+const expectedWriteModel = "Wrote 28 bytes to verify-test.txt";
+assert(
+  writeModel === expectedWriteModel,
+  `write_file model content must preserve string observation, got ${JSON.stringify(writeModel)}`
+);
 assert(typeof writeModel === "string" && writeModel.length > 0, "write_file must not project to empty string");
 
-const readAdapter = new ReadFileContextAdapter();
+const readAdapter = new ReadFileToolObservationAdapter();
 const readItems = readAdapter.toContextItems("1| hello\n", budget);
 const readModel = readItems.find((item) => item.visibility === "model")?.content;
 assert(readModel === "1| hello\n", "read_file must preserve stdout string");
 
-const execAdapter = new ExecuteCommandContextAdapter();
+const execAdapter = new ExecuteCommandToolObservationAdapter();
 const execItems = execAdapter.toContextItems("verify-ok\n", budget);
 const execModel = execItems.find((item) => item.visibility === "model")?.content;
 assert(execModel === "verify-ok\n", "execute_command must preserve stdout string");

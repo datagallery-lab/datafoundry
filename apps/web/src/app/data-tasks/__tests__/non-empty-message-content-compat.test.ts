@@ -1,18 +1,20 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  ensureDashScopeCompatiblePrompt,
-  shouldApplyDashScopePromptCompat,
-} from "../../../../../../packages/agent-runtime/src/context/dashscope-prompt-compat";
+  ensureNonEmptyMessageContentPrompt,
+  shouldApplyNonEmptyMessageContentCompat,
+} from "../../../../../../packages/agent-runtime/src/provider-compat/non-empty-message-content-compat";
 
-describe("dashscope prompt compat", () => {
-  it("enables compat for openai-compatible providers", () => {
-    expect(shouldApplyDashScopePromptCompat("openai-compatible")).toBe(true);
-    expect(shouldApplyDashScopePromptCompat("unsupported-provider")).toBe(false);
+describe("non-empty message content compat", () => {
+  it("enables compat only for providers that require non-empty message content", () => {
+    expect(shouldApplyNonEmptyMessageContentCompat({
+      prompt_compat: { requires_non_empty_message_content: true },
+    })).toBe(true);
+    expect(shouldApplyNonEmptyMessageContentCompat({})).toBe(false);
   });
 
   it("adds placeholder text to assistant messages that only contain tool calls", () => {
-    const prompt = ensureDashScopeCompatiblePrompt([
+    const prompt = ensureNonEmptyMessageContentPrompt([
       {
         role: "assistant",
         content: [
@@ -30,7 +32,7 @@ describe("dashscope prompt compat", () => {
   });
 
   it("adds placeholder text to assistant messages that only contain reasoning", () => {
-    const prompt = ensureDashScopeCompatiblePrompt([
+    const prompt = ensureNonEmptyMessageContentPrompt([
       {
         role: "assistant",
         content: [{ type: "reasoning", text: "thinking..." }],
@@ -41,7 +43,7 @@ describe("dashscope prompt compat", () => {
   });
 
   it("fills empty tool result outputs", () => {
-    const prompt = ensureDashScopeCompatiblePrompt([
+    const prompt = ensureNonEmptyMessageContentPrompt([
       {
         role: "tool",
         content: [

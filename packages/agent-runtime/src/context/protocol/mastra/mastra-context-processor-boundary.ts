@@ -7,7 +7,7 @@ import {
 } from "../../policy/context-reduction-strategy.js";
 import { createDefaultContextSourcePolicy } from "../../policy/context-source-authority-profile.js";
 import { ContextStepPlanner } from "../../policy/context-step-planner.js";
-import { ModelContextProfileRegistry } from "../../policy/model-context-profile.js";
+import { ModelContextProfileRegistry, type ModelContextProfile } from "../../policy/model-context-profile.js";
 import { PromptTokenCounter } from "../../policy/prompt-token-counter.js";
 import { ContextPromptMaterializer } from "../../projection/context-prompt-materializer.js";
 import type { ContextSourcePromptMaterializer } from "../../projection/context-source-prompt-materializer.js";
@@ -42,6 +42,7 @@ export type CreateMastraContextProcessorBoundaryInput = {
   dispatcher: ToolObservationDispatcher;
   eventSink: ContextProtocolEventSink;
   longTermMemory?: CreateDefaultRuntimeContextSourceRegistryInput["longTermMemory"];
+  modelContextProfile?: ModelContextProfile;
   modelName: string | undefined;
   runScope: RuntimeContextRunScope;
   runState: ContextRunState;
@@ -56,7 +57,9 @@ export type MastraContextProcessorBoundary = {
 export const createMastraContextProcessorBoundary = (
   input: CreateMastraContextProcessorBoundaryInput
 ): MastraContextProcessorBoundary => {
-  const profileRegistry = input.contextCompilation?.profileRegistry ?? new ModelContextProfileRegistry();
+  const profileRegistry = input.contextCompilation?.profileRegistry ?? new ModelContextProfileRegistry({
+    ...(input.modelContextProfile ? { defaultProfile: input.modelContextProfile } : {})
+  });
   const tokenCounter = input.contextCompilation?.tokenCounter ?? new PromptTokenCounter();
   const planner = new ContextStepPlanner({
     profileRegistry,

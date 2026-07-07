@@ -1,6 +1,7 @@
 import type { ProcessInputStepArgs, ProcessInputStepResult, Processor } from "@mastra/core/processors";
 
 import { ContextPackageBuilder } from "../../inventory/context-package-builder.js";
+import type { ContextItem } from "../../inventory/context-item.js";
 import type { ContextRunState } from "../../inventory/context-run-state.js";
 import { ContextSourcePolicy } from "../../policy/context-source-policy.js";
 import { isContextSourceOmissionDecision } from "../../policy/context-source-policy.js";
@@ -19,6 +20,7 @@ import {
   type MastraContextProtocolOutput
 } from "./mastra-context-protocol-adapter.js";
 import { createMastraConversationContextItems } from "./mastra-conversation-context-adapter.js";
+import { applyMastraPromptSnapshot } from "./mastra-prompt-snapshot-applicator.js";
 import type { MastraToolObservationRouter } from "./mastra-tool-observation-router.js";
 
 export type MastraContextBudgetProcessorOptions = {
@@ -58,7 +60,7 @@ export class MastraContextBudgetProcessor implements Processor<"context-budget">
         runId: this.options.runState.identity.runId
       }
     );
-    const contextPackage = this.options.runState.merge(livePackage);
+    const contextPackage = this.options.runState.replaceMatchingItems(isProtocolMessageItem, livePackage);
     const sourcePolicyResult = this.sourcePolicy.applyPackage(contextPackage);
     const groupPlan = this.materializer.createGroupPlan({
       contextPackage,
@@ -93,10 +95,27 @@ export class MastraContextBudgetProcessor implements Processor<"context-budget">
       createMastraContextCompiledEventPayload(contextPackage, result.plan, this.options.modelName)
     );
     const protocolOutput = this.protocolAdapter.toProtocol(promptView);
+    const systemMessages = protocolOutput.systemMessages as NonNullable<ProcessInputStepResult["systemMessages"]>;
+
+    if (!args.messageList) {
+      return {
+        messages: protocolOutput.messages,
+        systemMessages
+      };
+    }
+
+    applyMastraPromptSnapshot(args.messageList, { messages: protocolOutput.messages });
 
     return {
-      messages: protocolOutput.messages,
-      systemMessages: protocolOutput.systemMessages as NonNullable<ProcessInputStepResult["systemMessages"]>
+      messageList: args.messageList,
+      systemMessages
     };
   }
 }
+
+const PROTOCOL_MESSAGE_KINDS = new Set(["message", "source-message", "system"]);
+
+const isProtocolMessageItem = (item: ContextItem): boolean => {
+  const messageKind = item.metadata.messageKind;
+  return typeof messageKind === "string" && PROTOCOL_MESSAGE_KINDS.has(messageKind);
+};

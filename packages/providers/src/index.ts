@@ -22,11 +22,16 @@ export type ModelProvider =
       kind: "openai-compatible";
       model_name: string;
       model: unknown;
+      prompt_compat?: ModelPromptCompatibility;
     }
   | {
       kind: "mock";
       model_name: string;
     };
+
+export type ModelPromptCompatibility = {
+  requires_non_empty_message_content?: boolean;
+};
 
 export const createModelProvider = (env: Record<string, string | undefined>): ModelProvider => {
   const config = createEnvConfig(env);
@@ -56,11 +61,13 @@ export const createModelProviderFromConfig = (config: ChatProviderConfig): Model
     apiKey: config.api_key,
     baseURL: config.base_url
   });
+  const promptCompat = resolvePromptCompatibility(config);
 
   return {
     kind: "openai-compatible",
     model_name: config.model,
-    model: provider.chat(config.model)
+    model: provider.chat(config.model),
+    ...(promptCompat ? { prompt_compat: promptCompat } : {})
   };
 };
 
@@ -76,4 +83,16 @@ const normalizeChatProviderName = (provider: string): "openai-compatible" | unde
   }
 
   return undefined;
+};
+
+const resolvePromptCompatibility = (config: ChatProviderConfig): ModelPromptCompatibility | undefined => {
+  const normalizedProvider = config.provider.trim().toLowerCase().replaceAll("_", "-");
+  const normalizedBaseUrl = config.base_url.trim().toLowerCase();
+  const requiresNonEmptyMessageContent =
+    normalizedProvider === "bailian"
+    || normalizedBaseUrl.includes("dashscope.aliyuncs.com");
+
+  return requiresNonEmptyMessageContent
+    ? { requires_non_empty_message_content: true }
+    : undefined;
 };
