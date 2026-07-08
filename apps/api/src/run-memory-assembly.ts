@@ -87,7 +87,6 @@ export const createRunMemoryAssembly = async (
       };
     },
     repository: input.metadataStore.conversationMessages,
-    runEvents: input.metadataStore.runEvents,
     sessionId: input.sessionId,
     summarizer: createMastraConversationSummarizer({
       model: input.model,

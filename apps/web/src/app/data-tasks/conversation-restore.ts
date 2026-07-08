@@ -148,6 +148,18 @@ export function shouldRestoreConversation(input: {
   );
 }
 
+/** Whether conversation restore should wait for active streaming/run state to settle. */
+export function isConversationRestoreRunActive(input: {
+  agentIsRunning: boolean;
+  liveRunStatus?: LiveRun["runStatus"] | undefined;
+}): boolean {
+  return (
+    input.agentIsRunning ||
+    input.liveRunStatus === "running" ||
+    input.liveRunStatus === "suspended"
+  );
+}
+
 /** True when agent chat messages already reflect the persisted conversation. */
 export function agentMessagesMatchConversation(
   agentMessages: unknown,
@@ -197,7 +209,7 @@ function messageText(message: unknown): string | undefined {
   return text || undefined;
 }
 
-function hasUnpersistedTrailingUserMessage(
+function hasLocalMessagesAfterRestoredPrefix(
   agentMessages: unknown,
   expected: Message[],
 ): boolean {
@@ -213,12 +225,17 @@ function hasUnpersistedTrailingUserMessage(
   }
 
   const trailing = agentMessages.slice(expected.length);
-  const last = trailing.at(-1) as { id?: unknown; role?: unknown } | undefined;
-  if (!last || last.role !== "user" || !messageText(last)) {
-    return false;
-  }
   const expectedIds = new Set(expected.map((message) => message.id));
-  return typeof last.id !== "string" || !expectedIds.has(last.id);
+  return trailing.some((message) => {
+    const item = message as { id?: unknown; role?: unknown } | undefined;
+    if (!item || (item.role !== "user" && item.role !== "assistant")) {
+      return false;
+    }
+    if (!messageText(item)) {
+      return false;
+    }
+    return typeof item.id !== "string" || !expectedIds.has(item.id);
+  });
 }
 
 /** Whether chat messages should be replaced from server conversation metadata. */
@@ -235,7 +252,7 @@ export function shouldRestoreConversationMessages(input: {
   if (expected.length === 0) {
     return false;
   }
-  if (hasUnpersistedTrailingUserMessage(input.agentMessages, expected)) {
+  if (hasLocalMessagesAfterRestoredPrefix(input.agentMessages, expected)) {
     return false;
   }
   return !agentMessagesMatchConversation(input.agentMessages, input.dto);

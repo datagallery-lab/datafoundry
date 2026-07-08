@@ -120,7 +120,6 @@ try {
   });
   const checkpointService = new ConversationMemoryService({
     repository: store.conversationMessages,
-    runEvents: store.runEvents,
     sessionId,
     userId
   });
@@ -135,17 +134,14 @@ try {
       context: []
     }
   }).messages;
-  const restoredToolCheckpoint = resumeAfterCanceledRun.find((message) =>
-    String(message.content).includes("<tool_checkpoint")
-  );
-  if (!restoredToolCheckpoint) {
-    throw new Error("Expected next-run memory to include completed tool checkpoints from prior run events");
+  if (resumeAfterCanceledRun.some((message) => String(message.content).includes("<tool_checkpoint"))) {
+    throw new Error("Expected next-run memory to keep prior tool checkpoints out of model-visible text");
   }
-  if (!String(restoredToolCheckpoint.content).includes("gross_margin_rate")) {
-    throw new Error("Expected restored tool checkpoint to include prior schema result");
+  if (resumeAfterCanceledRun.some((message) => String(message.content).includes("gross_margin_rate"))) {
+    throw new Error("Expected prior schema tool payloads to stay out of next-run prompt messages");
   }
   if (resumeAfterCanceledRun.some((message) => String(message.content).includes("missing-result-call"))) {
-    throw new Error("Expected incomplete tool calls to stay out of restored tool checkpoints");
+    throw new Error("Expected incomplete tool calls to stay out of next-run prompt messages");
   }
   const firstSummaryText = [
     "用户在分析 orders 表。",

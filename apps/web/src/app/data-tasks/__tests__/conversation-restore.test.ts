@@ -7,6 +7,7 @@ import {
   hydratePendingInteractionLiveRun,
   hydrateSessionUsageFromConversation,
   isIgnorableConversationRestoreError,
+  isConversationRestoreRunActive,
   agentMessagesMatchConversation,
   latestUserQuestionFromConversation,
   pendingInteractionsFromConversation,
@@ -842,6 +843,43 @@ describe("shouldRestoreConversation", () => {
   });
 });
 
+describe("isConversationRestoreRunActive", () => {
+  it("waits when the Copilot agent is still running", () => {
+    expect(
+      isConversationRestoreRunActive({
+        agentIsRunning: true,
+        liveRunStatus: "completed",
+      }),
+    ).toBe(true);
+  });
+
+  it("waits while the page live run is running or suspended", () => {
+    expect(
+      isConversationRestoreRunActive({
+        agentIsRunning: false,
+        liveRunStatus: "running",
+      }),
+    ).toBe(true);
+    expect(
+      isConversationRestoreRunActive({
+        agentIsRunning: false,
+        liveRunStatus: "suspended",
+      }),
+    ).toBe(true);
+  });
+
+  it("allows restore after the page live run reaches a terminal or idle state", () => {
+    for (const liveRunStatus of ["idle", "completed", "failed", "canceled"] as const) {
+      expect(
+        isConversationRestoreRunActive({
+          agentIsRunning: false,
+          liveRunStatus,
+        }),
+      ).toBe(false);
+    }
+  });
+});
+
 describe("agentMessagesMatchConversation", () => {
   const dto: SessionConversationDto = {
     sessionId: "thread-1",
@@ -956,6 +994,57 @@ describe("shouldRestoreConversationMessages", () => {
             id: "local-user-message-bad-model",
             role: "user",
             content: "这条错误模型请求还没有写入服务端",
+          },
+        ],
+        dto,
+      }),
+    ).toBe(false);
+  });
+
+  it("does not overwrite local answer messages when restored conversation is an older prefix", () => {
+    const dto: SessionConversationDto = {
+      sessionId: "thread-1",
+      messages: [
+        {
+          id: "m1",
+          runId: "run-1",
+          role: "user",
+          source: "client",
+          messageId: "msg-user-1",
+          contentText: "先查 orders 表",
+          position: 1,
+          createdAt: "2026-06-25T10:00:01Z",
+        },
+        {
+          id: "m2",
+          runId: "run-1",
+          role: "assistant",
+          source: "agent",
+          messageId: "msg-assistant-1",
+          contentText: "orders 表可以查询。",
+          position: 2,
+          createdAt: "2026-06-25T10:00:02Z",
+        },
+      ],
+      runEventRefs: [],
+      toolCalls: [],
+    };
+
+    expect(
+      shouldRestoreConversationMessages({
+        conversationMemoryEnabled: true,
+        isRunning: false,
+        agentMessages: [
+          ...conversationToAgentMessages(dto),
+          {
+            id: "local-user-message-2",
+            role: "user",
+            content: "继续分析 GMV",
+          },
+          {
+            id: "local-assistant-message-2",
+            role: "assistant",
+            content: "正在生成第二轮分析结论。",
           },
         ],
         dto,
