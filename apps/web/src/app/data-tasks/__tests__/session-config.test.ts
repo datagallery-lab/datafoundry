@@ -27,8 +27,12 @@ import {
   type WorkspaceConfigStore,
 } from "../data-task-state";
 
-function item(id: string, name = id) {
-  return { id, name, description: `${name} desc`, enabled: true };
+function item(
+  id: string,
+  name = id,
+  status: "connected" | "failed" | "untested" = "connected",
+) {
+  return { id, name, description: `${name} desc`, enabled: true, status };
 }
 
 const store: WorkspaceConfigStore = {

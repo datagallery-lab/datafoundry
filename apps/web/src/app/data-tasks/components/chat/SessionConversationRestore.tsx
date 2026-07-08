@@ -11,6 +11,7 @@ import {
   hydratePendingInteractionLiveRun,
   hydrateSessionUsageFromConversation,
   isIgnorableConversationRestoreError,
+  isConversationRestoreRunActive,
   latestUserQuestionFromConversation,
   pendingInteractionsFromConversation,
   shouldRestoreConversationMessages,
@@ -27,6 +28,7 @@ import {
 import { clearPendingCollaborationInterrupt } from "./pending-collaboration-interrupt";
 import {
   useConversationRestoreGate,
+  useLiveRun,
   useLiveRunSetters,
 } from "../../use-data-foundry-run";
 import {
@@ -44,6 +46,7 @@ export function SessionConversationRestore({
   const chatConfig = useCopilotChatConfiguration();
   const threadId = chatConfig?.threadId;
   const { agent } = useAgent({ agentId });
+  const { liveRun } = useLiveRun(threadId);
   const {
     setLiveRunForThread,
     setLatestQuestionForThread,
@@ -52,6 +55,10 @@ export function SessionConversationRestore({
   const { setIsRestoringConversation } = useConversationRestoreGate();
   const fetchGenerationRef = useRef(0);
   const prevThreadIdRef = useRef<string | undefined>(undefined);
+  const restoreRunActive = isConversationRestoreRunActive({
+    agentIsRunning: Boolean(agent.isRunning),
+    liveRunStatus: liveRun.runStatus,
+  });
 
   useLayoutEffect(() => {
     if (!threadId || !capabilitiesReady) {
@@ -65,7 +72,7 @@ export function SessionConversationRestore({
     if (!threadChanged) {
       return;
     }
-    if (Boolean(agent.isRunning)) {
+    if (restoreRunActive) {
       return;
     }
     setIsRestoringConversation(true);
@@ -73,7 +80,7 @@ export function SessionConversationRestore({
     clearRestoredInterrupts(threadId);
     clearPendingCollaborationInterrupt(threadId);
     clearConversationBranchSnapshot(threadId);
-  }, [agent, capabilitiesReady, setIsRestoringConversation, threadId]);
+  }, [agent, capabilitiesReady, restoreRunActive, setIsRestoringConversation, threadId]);
 
   useEffect(() => {
     if (!threadId || !capabilitiesReady) {
@@ -85,7 +92,8 @@ export function SessionConversationRestore({
       return;
     }
 
-    if (Boolean(agent.isRunning)) {
+    if (restoreRunActive) {
+      fetchGenerationRef.current += 1;
       return;
     }
 
@@ -104,7 +112,7 @@ export function SessionConversationRestore({
         if (
           shouldRestoreConversationMessages({
             conversationMemoryEnabled,
-            isRunning: Boolean(agent.isRunning),
+            isRunning: restoreRunActive,
             agentMessages: agent.messages,
             dto: conversation,
           })
@@ -163,8 +171,8 @@ export function SessionConversationRestore({
     };
   }, [
     agent,
-    agent.isRunning,
     capabilitiesReady,
+    restoreRunActive,
     setIsRestoringConversation,
     setLatestQuestionForThread,
     setLiveRunForThread,

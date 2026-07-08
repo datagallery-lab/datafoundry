@@ -5,9 +5,7 @@ import {
   type ConversationMessageRecord,
   type ConversationMessageRepository,
   type ConversationSummaryRecord,
-  type ConversationSummaryRepository,
-  type RunEventRecord,
-  type RunEventRepository
+  type ConversationSummaryRepository
 } from "@datafoundry/metadata";
 import { createHash } from "node:crypto";
 
@@ -67,7 +65,6 @@ export type ConversationMemoryServiceInput = {
   memoryBridge?: ConversationMemoryBridge | undefined;
   policy?: ConversationMemoryWindowPolicy | undefined;
   repository: ConversationMessageRepository;
-  runEvents?: RunEventRepository | undefined;
   sessionId: string;
   summarizer?: ConversationSummarizer | undefined;
   summaryRepository?: ConversationSummaryRepository | undefined;
@@ -98,7 +95,6 @@ type BuildConversationMessagesInput = {
   runId: string;
   runInput: RunAgentInput;
   summary?: ConversationSummaryRecord | undefined;
-  toolCheckpoints?: Map<string, string> | undefined;
   historyLimit?: number;
   maxMessageChars?: number;
 };
@@ -168,14 +164,6 @@ export class ConversationMemoryService {
         session_id: this.input.sessionId
       });
     const effectiveHistory = summary ? history.filter((record) => record.position > summary.to_position) : history;
-    const toolCheckpoints = this.input.runEvents
-      ? buildToolCheckpointsForHistory({
-        history: effectiveHistory,
-        maxChars: policy.maxMessageChars,
-        runEvents: this.input.runEvents,
-        userId: this.input.userId
-      })
-      : undefined;
     return buildConversationMemoryMessagesWithReport({
       compactMemorySource: this.input.compactMemorySource,
       currentUserText: input.currentUserText,
@@ -185,7 +173,6 @@ export class ConversationMemoryService {
       runId: input.runId,
       runInput: input.runInput,
       summary,
-      toolCheckpoints,
       tokenCounter: this.tokenCounter
     });
   }
@@ -288,9 +275,7 @@ export const buildConversationMemoryMessagesWithReport = (
   });
   const currentUserMessageId = lastUserMessage(input.runInput)?.id ?? `${input.runId}:user`;
   const messages: Message[] = selected.summary ? [summaryToMessage(selected.summary, policy.maxMessageChars)] : [];
-  messages.push(
-    ...normalizeHistoryMessagePairs(selected.history, policy.maxMessageChars, input.toolCheckpoints)
-  );
+  messages.push(...normalizeHistoryMessagePairs(selected.history, policy.maxMessageChars));
 
   messages.push({
     id: currentUserMessageId,
@@ -549,187 +534,27 @@ const ORPHANED_USER_MESSAGE_PLACEHOLDER =
 
 const normalizeHistoryMessagePairs = (
   records: ConversationMessageRecord[],
-  maxMessageChars: number,
-  toolCheckpoints?: Map<string, string> | undefined
+  maxMessageChars: number
 ): Message[] => {
   const result: Message[] = [];
-  const consumedCheckpointRunIds = new Set<string>();
-  const consumeToolCheckpoint = (runId: string): string | undefined => {
-    if (consumedCheckpointRunIds.has(runId)) {
-      return undefined;
-    }
-    consumedCheckpointRunIds.add(runId);
-    return toolCheckpoints?.get(runId);
-  };
   for (let i = 0; i < records.length; i++) {
     const cur = records[i]!;
     const next = records[i + 1] as ConversationMessageRecord | undefined;
-    const checkpoint = cur.role === "assistant" ? consumeToolCheckpoint(cur.run_id) : undefined;
     result.push({
       id: `memory:${cur.id}`,
       role: cur.role,
-      content: boundText(appendToolCheckpoint(cur.content_text, checkpoint), maxMessageChars)
+      content: boundText(cur.content_text, maxMessageChars)
     });
     if (cur.role === "user" && (!next || next.role === "user")) {
-      const orphanedCheckpoint = consumeToolCheckpoint(cur.run_id);
       result.push({
         id: `memory:${cur.id}:error-placeholder`,
         role: "assistant",
-        content: boundText(
-          appendToolCheckpoint(ORPHANED_USER_MESSAGE_PLACEHOLDER, orphanedCheckpoint),
-          maxMessageChars
-        )
+        content: boundText(ORPHANED_USER_MESSAGE_PLACEHOLDER, maxMessageChars)
       });
     }
   }
   return result;
 };
-
-const appendToolCheckpoint = (content: string, checkpoint: string | undefined): string =>
-  checkpoint ? `${content}\n\n${checkpoint}` : content;
-
-const buildToolCheckpointsForHistory = (input: {
-  history: ConversationMessageRecord[];
-  maxChars: number;
-  runEvents: RunEventRepository;
-  userId: string;
-}): Map<string, string> => {
-  const runIds = [...new Set(input.history.map((record) => record.run_id))];
-  const checkpoints = new Map<string, string>();
-  for (const runId of runIds) {
-    const events = input.runEvents.listByRun({ user_id: input.userId, run_id: runId });
-    const checkpoint = toolCheckpointText(runId, events, input.maxChars);
-    if (checkpoint) {
-      checkpoints.set(runId, checkpoint);
-    }
-  }
-  return checkpoints;
-};
-
-type ToolCheckpointCall = {
-  args?: unknown;
-  result?: unknown;
-  resultSeq?: number;
-  status: "completed" | "failed";
-  toolCallId: string;
-  toolName?: string;
-};
-
-const toolCheckpointText = (
-  runId: string,
-  events: RunEventRecord[],
-  maxChars: number
-): string | undefined => {
-  const calls = new Map<string, Partial<ToolCheckpointCall> & { toolCallId: string }>();
-  for (const eventRecord of events) {
-    const event = parseJsonObject(eventRecord.payload_json);
-    const type = stringValue(event.type);
-    const toolCallId = stringValue(event.toolCallId);
-    if (!type || !toolCallId) {
-      continue;
-    }
-    const existing = calls.get(toolCallId) ?? { toolCallId };
-    const toolName = stringValue(event.toolCallName) ?? existing.toolName;
-    if (type === EventType.TOOL_CALL_START || type === EventType.TOOL_CALL_END) {
-      calls.set(toolCallId, {
-        ...existing,
-        ...(toolName ? { toolName } : {}),
-        ...(existing.args !== undefined ? { args: existing.args } : {}),
-        ...(existing.args === undefined && toolCallArgs(event) !== undefined ? { args: toolCallArgs(event) } : {})
-      });
-      continue;
-    }
-    if (type === EventType.TOOL_CALL_RESULT) {
-      calls.set(toolCallId, {
-        ...existing,
-        ...(toolName ? { toolName } : {}),
-        result: event.content,
-        resultSeq: eventRecord.seq,
-        status: isToolResultError(event.content) ? "failed" : "completed"
-      });
-    }
-  }
-
-  const completed = [...calls.values()]
-    .filter((call): call is ToolCheckpointCall => call.result !== undefined && call.status !== undefined)
-    .sort((a, b) => (a.resultSeq ?? 0) - (b.resultSeq ?? 0));
-  if (completed.length === 0) {
-    return undefined;
-  }
-
-  const maxPayloadChars = Math.max(500, Math.floor(maxChars / Math.max(completed.length, 1)) - 400);
-  const blocks = completed.map((call) => [
-    `<tool_checkpoint run_id="${escapeAttribute(runId)}" tool_call_id="${escapeAttribute(call.toolCallId)}"`
-      + `${call.toolName ? ` tool_name="${escapeAttribute(call.toolName)}"` : ""}`
-      + ` status="${call.status}">`,
-    "Completed tool observation from a previous run. Reuse this result when it answers the current task; repeat the tool only if the result is stale or insufficient.",
-    call.args !== undefined ? `args: ${boundedSerializedValue(call.args, Math.min(1200, maxPayloadChars))}` : undefined,
-    `result: ${boundedSerializedValue(call.result, maxPayloadChars)}`,
-    "</tool_checkpoint>"
-  ].filter((line): line is string => line !== undefined).join("\n"));
-
-  return boundText(blocks.join("\n\n"), maxChars);
-};
-
-const toolCallArgs = (event: Record<string, unknown>): unknown => {
-  if (event.args !== undefined) {
-    return event.args;
-  }
-  if (event.input !== undefined) {
-    return event.input;
-  }
-  if (typeof event.argsText === "string") {
-    return parseJsonValue(event.argsText) ?? event.argsText;
-  }
-  return undefined;
-};
-
-const boundedSerializedValue = (value: unknown, maxChars: number): string =>
-  escapeTaggedText(boundText(serializeToolValue(value), maxChars));
-
-const serializeToolValue = (value: unknown): string => {
-  if (typeof value === "string") {
-    return value;
-  }
-  try {
-    return JSON.stringify(value);
-  } catch {
-    return String(value);
-  }
-};
-
-const parseJsonObject = (value: string): Record<string, unknown> => {
-  const parsed = parseJsonValue(value);
-  return isRecord(parsed) ? parsed : {};
-};
-
-const parseJsonValue = (value: string): unknown => {
-  try {
-    return JSON.parse(value) as unknown;
-  } catch {
-    return undefined;
-  }
-};
-
-const isToolResultError = (value: unknown): boolean =>
-  isRecord(value)
-    && (value.error === true
-      || typeof value.error === "string"
-      || typeof value.errorMessage === "string"
-      || value.isError === true);
-
-const escapeAttribute = (value: string): string =>
-  value
-    .replaceAll("&", "&amp;")
-    .replaceAll("\"", "&quot;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;");
-
-const escapeTaggedText = (value: string): string =>
-  value
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;");
 
 const selectBudgetedHistory = (input: {
   currentUserText: string;
