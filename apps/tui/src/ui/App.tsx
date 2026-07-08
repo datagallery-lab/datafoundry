@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Box, Text, useApp, useInput, useStdin, useStdout } from 'ink';
 import { randomUUID } from 'node:crypto';
 import { StatusFooter } from './Header.js';
-import { ChatArea, countChatLines } from './ChatArea.js';
+import { ChatArea, type ChatAreaRef } from './ChatArea.js';
 import { OutputsView } from './OutputsView.js';
 import { ActivityPanel } from './ActivityPanel.js';
 import { EnhancedInputBox } from './components/EnhancedInputBox.js';
@@ -13,8 +13,7 @@ import { ResourcePicker, type ResourcePickerItem } from './ResourcePicker.js';
 import { HomeSplash } from './HomeSplash.js';
 import { DEFAULT_COMMANDS, getStatusBarShortcuts } from './keybindings.js';
 import { AssistantTextStreamBuffer, type AssistantTextFlush } from './assistant-stream-buffer.js';
-import { wheelScrollDelta } from '../input/mouse-wheel.js';
-import { ScrollAnchor } from './timeline/scroll-anchor.js';
+import { createWheelScrollDecoder } from '../input/mouse-wheel.js';
 import {
   restoreSessionConversation,
   store,
@@ -46,6 +45,10 @@ type CommandNotice = {
   message: string;
   kind: 'info' | 'error';
 };
+
+const SCROLL_FRAME_MS = 16;
+const SCROLL_ROWS_PER_FRAME = 1;
+const MAX_PENDING_SCROLL_ROWS = 120;
 
 const createThreadId = (): string => {
   try {
@@ -233,8 +236,9 @@ export const App: React.FC<AppProps> = ({
   const [skillPickerError, setSkillPickerError] = useState<string | undefined>(undefined);
   const [skillPickerWarning, setSkillPickerWarning] = useState<string | undefined>(undefined);
   const [retryCount, setRetryCount] = useState(0);
-  const [chatScrollbackRows, setChatScrollbackRows] = useState(0);
-  const scrollAnchor = useRef(new ScrollAnchor());
+  const chatAreaRef = useRef<ChatAreaRef>(null);
+  const activeTabRef = useRef(activeTab);
+  const applyChatScrollDeltaRef = useRef<(delta: number) => void>(() => {});
   const startupResumeAttempted = useRef(false);
   const terminalRows = stdout.rows ?? 40;
   const terminalColumns = stdout.columns ?? 100;
@@ -253,15 +257,6 @@ export const App: React.FC<AppProps> = ({
     commandNotice: Boolean(commandNotice),
     activeTab,
   });
-  const chatContentRows = countChatLines({
-    messages: visibleMessages,
-    artifacts: state.artifacts,
-    toolCalls: state.toolCalls,
-    totalMessageCount: state.messages.length,
-    columns: terminalColumns,
-    startup: transcriptStartup,
-  });
-  const maxChatScrollbackRows = Math.max(0, chatContentRows - chatViewportRowCount);
   const pickerOpen = sessionPickerOpen || skillPickerOpen;
   const inputCommands = useMemo(
     () => uniqueStrings([
@@ -280,22 +275,19 @@ export const App: React.FC<AppProps> = ({
     }
   }, [activeDatasourceId, activeSkillId, state.workspaceConfig]);
 
-  const clampChatScrollback = (value: number): number => {
-    return Math.max(0, Math.min(maxChatScrollbackRows, value));
-  };
-
   const scrollChatBy = (delta: number): void => {
     if (activeTab !== 'chat' || delta === 0) return;
-    setChatScrollbackRows((current) => {
-      const next = clampChatScrollback(current + delta);
-      scrollAnchor.current.handleUserScroll(next);
-      return next;
-    });
+    chatAreaRef.current?.scrollBy(delta);
   };
 
   const jumpToLatest = (): void => {
-    scrollAnchor.current.jumpToLatest();
-    setChatScrollbackRows(0);
+    chatAreaRef.current?.scrollToBottom();
+  };
+
+  activeTabRef.current = activeTab;
+  applyChatScrollDeltaRef.current = (delta: number): void => {
+    if (activeTabRef.current !== 'chat' || delta === 0) return;
+    chatAreaRef.current?.scrollBy(delta);
   };
 
   // Subscribe to state changes
@@ -335,25 +327,56 @@ export const App: React.FC<AppProps> = ({
   }, [configClient, state.workspaceConfig.skill, activeSkillId]);
 
   useEffect(() => {
-    setChatScrollbackRows((current) => {
-      const adjustedScrollback = scrollAnchor.current.handleContentGrowth(chatContentRows, current);
-      return clampChatScrollback(adjustedScrollback);
-    });
-  }, [chatContentRows, maxChatScrollbackRows]);
+    const decoder = createWheelScrollDecoder();
+    let pendingRows = 0;
+    let timer: ReturnType<typeof setTimeout> | null = null;
 
-  useEffect(() => {
+    function schedule(): void {
+      if (timer !== null) return;
+      timer = setTimeout(flush, SCROLL_FRAME_MS);
+    }
+
+    function flush(): void {
+      timer = null;
+
+      if (pendingRows === 0) return;
+      const direction = Math.sign(pendingRows);
+      const rows = Math.min(Math.abs(pendingRows), SCROLL_ROWS_PER_FRAME);
+      const delta = direction * rows;
+
+      pendingRows -= delta;
+      applyChatScrollDeltaRef.current(delta);
+
+      if (pendingRows !== 0) {
+        schedule();
+      }
+    }
+
     const onData = (chunk: Buffer | string) => {
-      const delta = wheelScrollDelta(chunk.toString());
-      if (delta !== 0) {
-        scrollChatBy(delta);
+      const deltas = decoder.push(chunk.toString());
+      if (deltas.length === 0) return;
+
+      for (const delta of deltas) {
+        pendingRows = Math.max(
+          -MAX_PENDING_SCROLL_ROWS,
+          Math.min(MAX_PENDING_SCROLL_ROWS, pendingRows + delta),
+        );
+      }
+
+      if (timer === null) {
+        flush();
       }
     };
 
     stdin.prependListener('data', onData);
     return () => {
       stdin.off('data', onData);
+      decoder.reset();
+      if (timer !== null) {
+        clearTimeout(timer);
+      }
     };
-  }, [stdin, activeTab, maxChatScrollbackRows]);
+  }, [stdin]);
 
   // Initialize connection monitoring if client supports it
   useEffect(() => {
@@ -419,9 +442,8 @@ export const App: React.FC<AppProps> = ({
       const conversation = await configClient.getSessionConversation(sessionId);
       const restored = restoreSessionConversation(conversation);
       store.restoreSession(restored);
-      scrollAnchor.current.reset();
+      chatAreaRef.current?.reset();
       setActiveTab('chat');
-      setChatScrollbackRows(0);
       setCommandNotice({
         kind: 'info',
         message: `Resumed session ${restored.title ? `"${restored.title}" ` : ''}(${restored.threadId}).`,
@@ -602,15 +624,13 @@ export const App: React.FC<AppProps> = ({
 
   const clearScreen = (): void => {
     store.clearMessages();
-    scrollAnchor.current.reset();
-    setChatScrollbackRows(0);
+    chatAreaRef.current?.reset();
   };
 
   const startNewSession = (): void => {
     store.startNewSession(createThreadId());
-    scrollAnchor.current.reset();
+    chatAreaRef.current?.reset();
     setActiveTab('chat');
-    setChatScrollbackRows(0);
   };
 
   // Handle global keyboard shortcuts
@@ -629,8 +649,7 @@ export const App: React.FC<AppProps> = ({
     }
 
     if (activeTab === 'chat' && key.home) {
-      scrollAnchor.current.handleUserScroll(maxChatScrollbackRows);
-      setChatScrollbackRows(maxChatScrollbackRows);
+      chatAreaRef.current?.scrollToTop();
       return;
     }
 
@@ -708,13 +727,11 @@ export const App: React.FC<AppProps> = ({
 
           if (action === 'clear_history') {
             store.clearMessages();
-            scrollAnchor.current.reset();
-            setChatScrollbackRows(0);
+            chatAreaRef.current?.reset();
           } else if (action === 'reset_session') {
             store.startNewSession(createThreadId());
-            scrollAnchor.current.reset();
+            chatAreaRef.current?.reset();
             setActiveTab('chat');
-            setChatScrollbackRows(0);
           } else if (action === 'exit_application') {
             if ('dispose' in client && typeof client.dispose === 'function') {
               client.dispose();
@@ -772,8 +789,7 @@ export const App: React.FC<AppProps> = ({
     store.clearInputBuffer();
     // Reset after the message enters history so the startup banner no longer
     // contributes to the viewport slice.
-    scrollAnchor.current.jumpToLatest();
-    setChatScrollbackRows(0);
+    chatAreaRef.current?.scrollToBottom();
 
     // Prepare stable run input material. Retry attempts should not append
     // duplicate chat messages or send retry UI text back as model history.
@@ -1220,12 +1236,12 @@ export const App: React.FC<AppProps> = ({
                       overflowY="hidden"
                     >
                       <ChatArea
+                        ref={chatAreaRef}
                         messages={visibleMessages}
                         artifacts={visibleArtifacts}
                         totalMessageCount={state.messages.length}
                         toolCalls={state.toolCalls}
                         viewportRows={chatViewportRowCount}
-                        scrollbackRows={chatScrollbackRows}
                         columns={terminalColumns}
                         startup={transcriptStartup}
                       />
