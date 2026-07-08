@@ -10,6 +10,12 @@
 import { buildChatLines, countChatLines, chatContentWidth } from './dist/ui/transcript-lines.js';
 import { textWidth, wrapToWidth, truncateToWidth } from './dist/ui/text-width.js';
 import { chatViewportRows } from './dist/ui/workspace-layout.js';
+import {
+  createWheelScrollDecoder,
+  wheelScrollDelta,
+  wheelScrollDeltas,
+  WHEEL_LINES_PER_TICK,
+} from './dist/input/mouse-wheel.js';
 import type { DisplayMessage, LiveToolCallRecord, MessageElement } from './dist/state/index.js';
 
 let failures = 0;
@@ -105,6 +111,24 @@ check(textWidth(truncateToWidth('中文测试内容很长', 5)) <= 5, 'truncate 
 check(chatContentWidth(120) === 116, 'content width is columns - 4');
 check(chatViewportRows(40, { commandNotice: false, activeTab: 'chat' }) === 36, 'chat viewport for 40 rows is 36');
 check(chatViewportRows(40, { commandNotice: true, activeTab: 'chat' }) === 35, 'chat viewport with notice is 35');
+
+// --- mouse wheel parsing ---
+const ESC = '\u001B';
+const wheelBurst = `${ESC}[<64;10;2M${ESC}[<65;10;3M${ESC}[<64;10;4M`;
+check(
+  eq(wheelScrollDeltas(wheelBurst), [WHEEL_LINES_PER_TICK, -WHEEL_LINES_PER_TICK, WHEEL_LINES_PER_TICK]),
+  'wheel parser returns one delta per SGR wheel event',
+);
+check(
+  wheelScrollDelta(wheelBurst) === WHEEL_LINES_PER_TICK,
+  'legacy wheel delta helper still returns the summed delta',
+);
+const wheelDecoder = createWheelScrollDecoder();
+check(wheelDecoder.push(`${ESC}[<64;10`).length === 0, 'wheel decoder buffers split SGR sequences');
+check(
+  eq(wheelDecoder.push(`;2M${ESC}[<65;10;3M`), [WHEEL_LINES_PER_TICK, -WHEEL_LINES_PER_TICK]),
+  'wheel decoder reassembles split SGR sequences before emitting deltas',
+);
 
 // --- startup banner ---
 const startupLines = buildChatLines({

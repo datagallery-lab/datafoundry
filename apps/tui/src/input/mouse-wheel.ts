@@ -1,4 +1,13 @@
-export const WHEEL_LINES_PER_TICK = 3;
+function positiveIntegerFromEnv(value: string | undefined, fallback: number): number {
+  if (!value) return fallback;
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+export const WHEEL_LINES_PER_TICK = positiveIntegerFromEnv(
+  process.env.DATAFOUNDRY_TUI_WHEEL_LINES_PER_TICK,
+  1,
+);
 const MAX_MOUSE_SEQUENCE_LENGTH = 50;
 
 type ParsedMouseInput = {

@@ -7,6 +7,7 @@ import { CopilotKitClient } from "./protocol/copilotkit-client.js";
 import { DemoCopilotKitClient } from "./protocol/demo-client.js";
 import { seedDemoState } from "./state/demo-state.js";
 import { store } from "./state/store.js";
+import { installTerminalRedrawOptimizer } from "./terminal-redraw-optimizer.js";
 import { withAlternateScreen } from "./terminal-screen.js";
 import { App } from "./ui/App.js";
 
@@ -120,10 +121,21 @@ async function main(): Promise<void> {
       seedDemoState(datasourceId);
     }
 
-    await withAlternateScreen(async () => {
-      const instance = render(createAppElement());
-      await instance.waitUntilExit();
-    });
+    const restoreTerminalRedrawOptimizer = process.stdout.isTTY
+      ? installTerminalRedrawOptimizer(process.stdout)
+      : () => {};
+
+    try {
+      await withAlternateScreen(async () => {
+        const instance = render(createAppElement(), {
+          incrementalRendering: true,
+          maxFps: 60,
+        });
+        await instance.waitUntilExit();
+      });
+    } finally {
+      restoreTerminalRedrawOptimizer();
+    }
   } catch (error) {
     console.error("Failed to start TUI:", error);
     process.exitCode = 1;

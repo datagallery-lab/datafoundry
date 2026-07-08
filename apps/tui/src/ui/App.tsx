@@ -47,7 +47,7 @@ type CommandNotice = {
 };
 
 const SCROLL_FRAME_MS = 16;
-const SCROLL_ROWS_PER_FRAME = 1;
+const SCROLL_ROWS_PER_FRAME = 3;
 const MAX_PENDING_SCROLL_ROWS = 120;
 
 const createThreadId = (): string => {
@@ -227,6 +227,7 @@ export const App: React.FC<AppProps> = ({
   const [pickerSessions, setPickerSessions] = useState<SessionListItem[]>([]);
   const [pickerLoading, setPickerLoading] = useState(false);
   const [pickerError, setPickerError] = useState<string | undefined>(undefined);
+  const [resumeLoadingSessionId, setResumeLoadingSessionId] = useState<string | null>(null);
   const [skillPickerOpen, setSkillPickerOpen] = useState(false);
   const [skillPickerItems, setSkillPickerItems] = useState<ResourcePickerItem[]>([]);
   const [skillShortcutItems, setSkillShortcutItems] = useState<ResourcePickerItem[]>(
@@ -252,12 +253,20 @@ export const App: React.FC<AppProps> = ({
     directory,
   };
   const visibleMessages = state.messages;
-  const transcriptStartup = state.messages.length === 0 ? startup : undefined;
+  const isRestoringSession = resumeLoadingSessionId !== null;
+  const transcriptStartup = state.messages.length === 0
+    && !commandNotice
+    && !isRestoringSession
+    ? startup
+    : undefined;
   const chatViewportRowCount = chatViewportRows(terminalRows, {
     commandNotice: Boolean(commandNotice),
     activeTab,
   });
   const pickerOpen = sessionPickerOpen || skillPickerOpen;
+  const inputDisabled = state.connectionStatus !== 'connected'
+    || state.runStatus === 'running'
+    || isRestoringSession;
   const inputCommands = useMemo(
     () => uniqueStrings([
       ...DEFAULT_COMMANDS,
@@ -363,9 +372,7 @@ export const App: React.FC<AppProps> = ({
         );
       }
 
-      if (timer === null) {
-        flush();
-      }
+      schedule();
     };
 
     stdin.prependListener('data', onData);
@@ -403,6 +410,7 @@ export const App: React.FC<AppProps> = ({
     startup = false,
   ): Promise<void> {
     if (store.getState().runStatus === 'running') {
+      setResumeLoadingSessionId(null);
       setCommandNotice({
         kind: 'error',
         message: 'Cannot resume another session while a run is active.',
@@ -411,6 +419,7 @@ export const App: React.FC<AppProps> = ({
     }
 
     if (!configClient) {
+      setResumeLoadingSessionId(null);
       setCommandNotice({
         kind: 'error',
         message: 'Session resume requires a live backend; it is not available in demo mode.',
@@ -418,6 +427,7 @@ export const App: React.FC<AppProps> = ({
       return;
     }
 
+    setResumeLoadingSessionId(requestedSessionId ?? 'latest');
     setCommandNotice({
       kind: 'info',
       message: requestedSessionId
@@ -453,6 +463,8 @@ export const App: React.FC<AppProps> = ({
         kind: 'error',
         message: `Resume failed: ${formatSessionApiError(error)}`,
       });
+    } finally {
+      setResumeLoadingSessionId(null);
     }
   }
 
@@ -1046,7 +1058,11 @@ export const App: React.FC<AppProps> = ({
     && visibleMessages.length === 0
     && state.messages.length === 0
     && !commandNotice
+    && !isRestoringSession
     && !showLiveActivity;
+  const showResumeLoading = activeTab === 'chat'
+    && isRestoringSession
+    && state.messages.length === 0;
 
   // Render tab navigation
   const renderTabs = () => {
@@ -1161,12 +1177,21 @@ export const App: React.FC<AppProps> = ({
   return (
     <>
       {sessionPickerOpen ? (
-        <Box flexDirection="column">
+        <Box
+          flexDirection="column"
+          minHeight={terminalRows}
+          width={terminalColumns}
+          overflowY="hidden"
+          paddingX={1}
+        >
           <SessionPicker
             sessions={pickerSessions}
             loading={pickerLoading}
             error={pickerError}
+            columns={Math.max(20, terminalColumns - 2)}
+            rows={terminalRows}
             onSelect={(sessionId) => {
+              setResumeLoadingSessionId(sessionId);
               setSessionPickerOpen(false);
               void restoreHistoricalSession(sessionId);
             }}
@@ -1176,7 +1201,13 @@ export const App: React.FC<AppProps> = ({
           />
         </Box>
       ) : skillPickerOpen ? (
-        <Box flexDirection="column">
+        <Box
+          flexDirection="column"
+          minHeight={terminalRows}
+          width={terminalColumns}
+          overflowY="hidden"
+          paddingX={1}
+        >
           <ResourcePicker
             title="Select a skill"
             items={skillPickerItems}
@@ -1216,7 +1247,7 @@ export const App: React.FC<AppProps> = ({
                           onFocusChange={setInputFocused}
                           onClearScreen={clearScreen}
                           onNewSession={startNewSession}
-                          disabled={state.connectionStatus !== 'connected' || state.runStatus === 'running'}
+                          disabled={inputDisabled}
                           commands={inputCommands}
                           modelName={modelName}
                           datasourceId={activeDatasourceId}
@@ -1225,6 +1256,20 @@ export const App: React.FC<AppProps> = ({
                         />
                       )}
                     />
+                  </Box>
+                ) : showResumeLoading ? (
+                  <Box
+                    flexDirection="column"
+                    flexGrow={1}
+                    paddingX={1}
+                    overflowY="hidden"
+                    justifyContent="center"
+                  >
+                    <Text color="cyan">
+                      {resumeLoadingSessionId === 'latest'
+                        ? 'Loading latest session...'
+                        : `Loading session ${resumeLoadingSessionId}...`}
+                    </Text>
                   </Box>
                 ) : (
                   <>
@@ -1307,7 +1352,7 @@ export const App: React.FC<AppProps> = ({
                   onFocusChange={setInputFocused}
                   onClearScreen={clearScreen}
                   onNewSession={startNewSession}
-                  disabled={state.connectionStatus !== 'connected' || state.runStatus === 'running'}
+                  disabled={inputDisabled}
                   commands={inputCommands}
                   modelName={modelName}
                   datasourceId={activeDatasourceId}
