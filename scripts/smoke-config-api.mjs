@@ -371,6 +371,50 @@ try {
     }
   );
 
+  // R-018: pending HITL without TOOL_CALL_START still synthesizes toolCalls + checkpoint.
+  const hitlOnlyRunId = "conversation-hitl-only-run";
+  metadataStore.runs.create({
+    user_id: "dev-user",
+    id: hitlOnlyRunId,
+    session_id: conversationSessionId,
+    user_input: "ask the user",
+    status: "suspended"
+  });
+  metadataStore.interactions.request({
+    id: "interaction-hitl-only",
+    user_id: "dev-user",
+    session_id: conversationSessionId,
+    run_id: hitlOnlyRunId,
+    tool_call_id: "call_ask_missing_start",
+    tool_name: "ask_user",
+    payload: { question: "Continue?" },
+    interrupt_event: {
+      type: "mastra_suspend",
+      toolCallId: "call_ask_missing_start",
+      toolName: "ask_user",
+      runId: hitlOnlyRunId,
+      args: { question: "Continue?" },
+      resumeSchema: {},
+      suspendPayload: { question: "Continue?" }
+    }
+  });
+  const hitlConversation = await requestJson(
+    `/api/v1/sessions/${conversationSessionId}/conversation?limit=20`
+  );
+  assert.equal(hitlConversation.response.status, 200);
+  const synthesizedHitl = hitlConversation.body.data.toolCalls.find(
+    (call) => call.toolCallId === "call_ask_missing_start"
+  );
+  assert.ok(synthesizedHitl, "Expected synthesized toolCall for pending interaction");
+  assert.equal(synthesizedHitl.toolName, "ask_user");
+  assert.equal(synthesizedHitl.status, "pending");
+  assert.equal(synthesizedHitl.awaitingInteraction, true);
+  const hitlCheckpoint = hitlConversation.body.data.checkpoints.find(
+    (checkpoint) => checkpoint.runId === hitlOnlyRunId
+  );
+  assert.ok(hitlCheckpoint, "Expected checkpoint for HITL-only run");
+  assert.equal(hitlCheckpoint.status, "suspended");
+
   const branchBaseRunId = "conversation-branch-base-run";
   const branchOriginalRunId = "conversation-branch-original-run";
   const branchPendingRunId = "conversation-branch-pending-run";

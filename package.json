@@ -95,6 +95,7 @@
     "test:ingress-messages": "npm run build && node scripts/test-ingress-messages.mjs",
     "test:mastra-stream": "npm run build && node scripts/test-mastra-stream-normalizer.mjs",
     "test:workspace-adapters": "npm run build && node scripts/test-workspace-adapters.mjs",
+    "test:evidence-selection": "npm run build && node scripts/test-evidence-selection.mjs",
     "smoke:tool-state": "npm run build && node scripts/smoke-tool-state-isolation.mjs",
     "smoke:config-api": "npm run build && node scripts/smoke-config-api.mjs",
     "seed:fixtures": "node scripts/seed-local-fixtures.mjs",

@@ -20,6 +20,8 @@ type RunEventPipelineInput = {
 export class RunEventPipeline {
   private readonly input: RunEventPipelineInput;
   private projecting = false;
+  /** toolCallIds that already delivered a TOOL_CALL_RESULT — later duplicates are dropped. */
+  private readonly deliveredToolResults = new Set<string>();
 
   constructor(input: RunEventPipelineInput) {
     this.input = input;
@@ -55,6 +57,15 @@ export class RunEventPipeline {
   }
 
   private deliver(event: BaseEvent): void {
+    if (event.type === EventType.TOOL_CALL_RESULT) {
+      const toolCallId = typeof event.toolCallId === "string" ? event.toolCallId : undefined;
+      if (toolCallId) {
+        if (this.deliveredToolResults.has(toolCallId)) {
+          return;
+        }
+        this.deliveredToolResults.add(toolCallId);
+      }
+    }
     this.input.runEventWriter.write({
       user_id: this.input.userId,
       run_id: this.input.runId,

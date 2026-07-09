@@ -27,8 +27,12 @@ export class InteractionRuntimeAdapter {
     private readonly runId: string
   ) {}
 
-  /** Convert Mastra's interrupt event into the stable application interaction event. */
-  capture(event: BaseEvent): BaseEvent | undefined {
+  /**
+   * Convert Mastra's interrupt event into the stable application interaction event.
+   * Returns both the parsed interrupt (for TOOL_CALL_START persistence) and the
+   * `interaction.requested` CUSTOM event.
+   */
+  capture(event: BaseEvent): { interrupt: InteractionInterrupt; event: BaseEvent } | undefined {
     const interrupt = parseInterruptEvent(event);
     if (!interrupt) {
       return undefined;
@@ -44,15 +48,18 @@ export class InteractionRuntimeAdapter {
       payload: interrupt.suspendPayload,
       interrupt_event: readInterruptEventValue(event, interrupt)
     });
-    return createCustomEvent("interaction.requested", {
-      interaction_id: interaction.id,
-      interrupt_event: JSON.stringify(interrupt),
-      payload: interrupt.suspendPayload,
-      resume_schema: interrupt.resumeSchema,
-      run_id: this.runId,
-      tool_call_id: interrupt.toolCallId,
-      tool_name: interrupt.toolName
-    });
+    return {
+      interrupt,
+      event: createCustomEvent("interaction.requested", {
+        interaction_id: interaction.id,
+        interrupt_event: JSON.stringify(interrupt),
+        payload: interrupt.suspendPayload,
+        resume_schema: interrupt.resumeSchema,
+        run_id: this.runId,
+        tool_call_id: interrupt.toolCallId,
+        tool_name: interrupt.toolName
+      })
+    };
   }
 
   /** Validate and persist one idempotent resume response. */
@@ -100,6 +107,19 @@ export class InteractionRuntimeAdapter {
     });
   }
 }
+
+/**
+ * Build a TOOL_CALL_START event for a HITL interrupt so suspend persists the tool
+ * call alongside the interactions row (R-018 atomic HITL contract).
+ */
+export const buildHitlToolCallStartEvent = (interrupt: InteractionInterrupt): BaseEvent =>
+  ({
+    type: EventType.TOOL_CALL_START,
+    toolCallId: interrupt.toolCallId,
+    toolCallName: interrupt.toolName,
+    ...(interrupt.args !== undefined ? { args: interrupt.args } : {}),
+    timestamp: Date.now()
+  }) as BaseEvent;
 
 /** Extract a Mastra resume command from an AG-UI run request. */
 export const extractInteractionResume = (input: RunAgentInput): InteractionResume | undefined => {

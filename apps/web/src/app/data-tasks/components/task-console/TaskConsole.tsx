@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
-import type { EvidenceRef } from "@datafoundry/contracts";
 import {
   Bar,
   BarChart,
@@ -20,7 +19,7 @@ import type {
   GenericStepPayload,
   TimelineEvent,
 } from "../../data-task-state";
-import type { ArtifactExportFormat, JobDto } from "../../../../lib/config-api";
+import type { JobDto } from "../../../../lib/config-api";
 import { dataStepKindForTool, dataStepLabel, hasCapability, toolDisplayTitle } from "../../data-task-state";
 import { artifactExportClient } from "../../artifact-export-client";
 import {
@@ -58,6 +57,9 @@ import {
 import { RunConfigurationPanel } from "./RunConfigurationPanel";
 import { TraceList } from "./TraceList";
 import { ArtifactMarkdownPreview } from "./ArtifactMarkdownPreview";
+import { ActionMenu, type ActionMenuItem } from "./ActionMenu";
+import { IconDots } from "./console-icons";
+import { canFormatExport, useArtifactExportActions } from "../../artifact-actions";
 import {
   consoleCodeBlockBaseClass,
   consoleCodeInnerClass,
@@ -68,9 +70,9 @@ import {
 import { ToolFormattedResult, ToolFailureResult } from "../../tool-result-format";
 import { parseSqlToolResult, sqlFromToolPayload } from "../../tool-result-normalize";
 import { toolResultLooksLikeError } from "../../tool-call-display";
-import type { EvidenceCard } from "../../evidence";
 import {
   btnGhostClass,
+  btnPrimaryClass,
   btnSecondaryClass,
   emptyStateClass,
   artifactToneForType,
@@ -87,9 +89,8 @@ type ActiveSelection = Exclude<TaskSelection, null>;
 
 type ConsoleTab = "overview" | "trace" | "outputs" | "detail";
 
-type TaskConsoleProps = {
+export type TaskConsoleProps = {
   artifacts: DataArtifact[];
-  evidenceCards: EvidenceCard[];
   liveRun: LiveRun;
   toolGroups: ProcessToolGroup[];
   sessionUsage: SessionUsageStats;
@@ -102,15 +103,14 @@ type TaskConsoleProps = {
   onClearSelection: () => void;
   onClose?: () => void;
   onMentionArtifact?: (artifact: DataArtifact) => void;
-  onToggleEvidenceRef?: (ref: EvidenceRef) => void;
-  onClearEvidenceRefs?: () => void;
+  /** Opens an artifact in its own full-panel page (a peer of the console). */
+  onOpenArtifactPage?: (artifactId: string) => void;
   onOpenTrace: () => void;
   onPromoteArtifact?: (artifact: DataArtifact) => Promise<void> | void;
   onArtifactExportJob?: (job: JobDto) => void;
   onSelectEvent: (eventId: string) => void;
   onSelectToolGroup: (groupId: string) => void;
   promotedArtifactIds?: ReadonlySet<string>;
-  selectedEvidenceRefs?: EvidenceRef[];
 };
 
 function runStatusLabel(status: LiveRun["runStatus"]): string {
@@ -163,39 +163,30 @@ function stepDurationLabel(call?: LiveToolCallRecord): string {
 
 export function TaskConsole({
   artifacts,
-  evidenceCards,
   liveRun,
   toolGroups,
   sessionUsage,
   selection,
   visibleEvents,
   currentQuestion,
-  artifactFocusId,
-  onArtifactFocusHandled,
   onClearSelection,
   onClose,
   onMentionArtifact,
-  onToggleEvidenceRef,
-  onClearEvidenceRefs,
+  onOpenArtifactPage,
   onOpenTrace,
   onPromoteArtifact,
   onArtifactExportJob,
   onSelectEvent,
   onSelectToolGroup,
   promotedArtifactIds,
-  selectedEvidenceRefs = [],
 }: TaskConsoleProps) {
   const [activeTab, setActiveTab] = useState<ConsoleTab>("overview");
-  const [outputsExpandedId, setOutputsExpandedId] = useState<string | null>(null);
   const runUsage = useMemo(() => deriveRunUsage(liveRun), [liveRun]);
   const sessionView = useMemo(
     () => deriveLiveSessionView(sessionUsage, liveRun),
     [liveRun, sessionUsage],
   );
-  const workspaceHasSignals =
-    liveRun.workspaceMetadata.length > 0 || liveRun.sandboxOutputs.length > 0;
   const overviewSections = overviewSectionPlan({
-    hasWorkspaceSignals: workspaceHasSignals,
     hasToolDistribution: Object.keys(runUsage.toolCalls.byTool).length > 0,
   });
 
@@ -206,23 +197,17 @@ export function TaskConsole({
     }
   }, [selection]);
 
-  useEffect(() => {
-    if (!artifactFocusId) return;
+  const openArtifactOrOutputs = (artifactId: string) => {
     onClearSelection();
-    setOutputsExpandedId(artifactFocusId);
-    setActiveTab("outputs");
-    onArtifactFocusHandled?.();
-  }, [artifactFocusId, onArtifactFocusHandled, onClearSelection]);
-
-  const viewArtifactInOutputs = (artifactId: string) => {
-    onClearSelection();
-    setOutputsExpandedId(artifactId);
+    if (onOpenArtifactPage) {
+      onOpenArtifactPage(artifactId);
+      return;
+    }
     setActiveTab("outputs");
   };
 
   const handleTabClick = (tab: ConsoleTab) => {
     if (tab !== "detail") onClearSelection();
-    if (tab !== "outputs") setOutputsExpandedId(null);
     setActiveTab(tab);
   };
 
@@ -280,7 +265,7 @@ export function TaskConsole({
         ) : null}
       </header>
 
-      <nav className="flex shrink-0 items-center gap-1 border-b border-border px-3 py-2">
+      <nav className="flex shrink-0 items-center gap-0.5 overflow-x-auto border-b border-border px-2 py-2 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
         <TabButton active={activeTab === "overview"} onClick={() => handleTabClick("overview")}>
           Overview
         </TabButton>
@@ -334,9 +319,6 @@ export function TaskConsole({
                   />
                 );
               }
-              if (section.id === "workspace-signals") {
-                return <WorkspaceRunSignalsSummary key={section.id} liveRun={liveRun} />;
-              }
               return <ToolDistributionZone key={section.id} liveRun={liveRun} />;
             })}
           </div>
@@ -345,14 +327,10 @@ export function TaskConsole({
         {activeTab === "trace" ? (
           <EvidenceZone
             artifacts={artifacts}
-            evidenceCards={evidenceCards}
             liveRun={liveRun}
-            onClearEvidenceRefs={onClearEvidenceRefs}
             onOpenTrace={onOpenTrace}
-            onSelectArtifact={viewArtifactInOutputs}
+            onSelectArtifact={openArtifactOrOutputs}
             onSelectEvent={onSelectEvent}
-            onToggleEvidenceRef={onToggleEvidenceRef}
-            selectedEvidenceRefs={selectedEvidenceRefs}
           />
         ) : null}
 
@@ -360,9 +338,8 @@ export function TaskConsole({
           <DeliverablesZone
             artifacts={artifacts}
             events={visibleEvents}
-            expandedId={outputsExpandedId}
-            onExpandedIdChange={setOutputsExpandedId}
             onMentionArtifact={onMentionArtifact}
+            onOpenArtifactPage={onOpenArtifactPage}
             onPromoteArtifact={onPromoteArtifact}
             onArtifactExportJob={onArtifactExportJob}
             onSelectEvent={onSelectEvent}
@@ -418,7 +395,7 @@ function TabButton({
       type="button"
       onClick={onClick}
       className={[
-        "flex cursor-pointer items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors duration-200",
+        "flex shrink-0 cursor-pointer items-center gap-1 whitespace-nowrap rounded-lg px-2.5 py-1.5 text-xs font-semibold transition-colors duration-200",
         active
           ? "bg-primary text-white"
           : "text-muted hover:bg-surface-subtle hover:text-foreground",
@@ -595,54 +572,6 @@ function ConclusionZone({
           stackMeta
         />
       </div>
-    </ConsoleSection>
-  );
-}
-
-function WorkspaceRunSignalsSummary({ liveRun }: { liveRun: LiveRun }) {
-  const metadata = liveRun.workspaceMetadata.slice(0, 4);
-  const sandbox = liveRun.sandboxOutputs.slice(0, 4);
-
-  return (
-    <ConsoleSection title="Workspace signals" collapsible defaultExpanded={false}>
-      <p className="mt-1 text-[11px] leading-4 text-muted-light">
-        From AG-UI CUSTOM events: workspace.metadata (file/workspace operations) and sandbox.output (command output).
-      </p>
-      {metadata.length > 0 ? (
-        <div className="mt-3">
-          <div className="text-[11px] font-semibold text-foreground">Workspace metadata</div>
-          <ul className="mt-1 grid gap-1.5">
-            {metadata.map((entry, index) => (
-              <li
-                key={`${entry.toolCallId ?? "meta"}-${entry.receivedAt}-${index}`}
-                className="rounded-lg border border-border bg-surface px-2.5 py-2 text-[11px] leading-4 text-muted"
-              >
-                {formatWorkspaceMetadataSummary(entry)}
-              </li>
-            ))}
-          </ul>
-        </div>
-      ) : null}
-      {sandbox.length > 0 ? (
-        <div className="mt-3">
-          <div className="text-[11px] font-semibold text-foreground">Sandbox output</div>
-          <ul className="mt-1 grid gap-1.5">
-            {sandbox.map((entry, index) => (
-              <li
-                key={`${entry.kind}-${entry.receivedAt}-${index}`}
-                className="rounded-lg border border-border bg-surface px-2.5 py-2"
-              >
-                <div className="text-[10px] font-semibold uppercase tracking-wide text-muted-light">
-                  {entry.kind}
-                </div>
-                <pre className="mt-1 max-h-24 overflow-auto whitespace-pre-wrap font-mono text-[11px] leading-4 text-muted">
-                  {formatSandboxOutputText(entry)}
-                </pre>
-              </li>
-            ))}
-          </ul>
-        </div>
-      ) : null}
     </ConsoleSection>
   );
 }
@@ -856,129 +785,23 @@ function StepStatusDot({
   );
 }
 
-function EvidenceReferencePanel({
-  cards,
-  onClear,
-  onToggle,
-  selectedRefs,
-}: {
-  cards: EvidenceCard[];
-  onClear?: () => void;
-  onToggle?: (ref: EvidenceRef) => void;
-  selectedRefs: EvidenceRef[];
-}) {
-  const selectedIds = useMemo(() => new Set(selectedRefs.map((ref) => ref.id)), [selectedRefs]);
-  const selectedCount = selectedRefs.length;
-
-  return (
-    <ConsoleSection
-      title="Evidence"
-      badge={
-        selectedCount > 0 ? (
-          <button type="button" onClick={onClear} className={btnSecondaryClass}>
-            Clear {selectedCount}
-          </button>
-        ) : null
-      }
-    >
-      {cards.length === 0 ? (
-        <EmptyState
-          title="No evidence yet"
-          description="Tables, SQL, files, schema, previews, and knowledge snippets appear here after a run."
-        />
-      ) : (
-        <div className="grid min-w-0 gap-2">
-          {cards.map((card) => {
-            const selected = selectedIds.has(card.ref.id);
-            return (
-              <div
-                key={card.ref.id}
-                className={[
-                  "min-w-0 max-w-full overflow-hidden rounded-lg border px-2.5 py-2 transition-colors",
-                  selected ? "border-primary-light/50 bg-primary-light/10" : "border-border bg-surface-subtle",
-                ].join(" ")}
-              >
-                <div className="flex min-w-0 items-start gap-2">
-                  <input
-                    type="checkbox"
-                    checked={selected}
-                    onChange={() => onToggle?.(card.ref)}
-                    className="mt-1 h-3.5 w-3.5 cursor-pointer accent-primary"
-                    aria-label={`Select ${card.title}`}
-                  />
-                  <div className="min-w-0 flex-1">
-                    <div className="flex min-w-0 items-center gap-1.5">
-                      <span className="min-w-0 truncate text-xs font-semibold text-foreground">
-                        {card.title}
-                      </span>
-                      <span className="shrink-0 rounded bg-surface px-1 text-[10px] text-muted-light">
-                        {card.origin}
-                      </span>
-                    </div>
-                    {card.subtitle ? (
-                      <p className="mt-1 line-clamp-2 break-words text-[11px] leading-4 text-muted">
-                        {card.subtitle}
-                      </p>
-                    ) : null}
-                    {card.preview ? (
-                      <p className="mt-1 line-clamp-2 break-all font-mono text-[10px] leading-4 text-muted-light">
-                        {card.preview}
-                      </p>
-                    ) : null}
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => onToggle?.(card.ref)}
-                    className={selected ? btnSecondaryClass : btnGhostClass}
-                  >
-                    {selected ? "Remove" : "Ask"}
-                  </button>
-                </div>
-              </div>
-            );
-          })}
-          {selectedCount > 0 ? (
-            <p className="text-[11px] leading-4 text-muted-light">
-              Selected evidence will appear as chips in the input and focus the next run.
-            </p>
-          ) : null}
-        </div>
-      )}
-    </ConsoleSection>
-  );
-}
-
 // Section 3: Data trail, an inline trace that can expand full-screen.
 function EvidenceZone({
   artifacts,
-  evidenceCards,
   liveRun,
-  onClearEvidenceRefs,
   onOpenTrace,
   onSelectArtifact,
   onSelectEvent,
-  onToggleEvidenceRef,
-  selectedEvidenceRefs,
 }: {
   artifacts: DataArtifact[];
-  evidenceCards: EvidenceCard[];
   liveRun: LiveRun;
-  onClearEvidenceRefs?: () => void;
   onOpenTrace: () => void;
   onSelectArtifact: (artifactId: string) => void;
   onSelectEvent: (eventId: string) => void;
-  onToggleEvidenceRef?: (ref: EvidenceRef) => void;
-  selectedEvidenceRefs: EvidenceRef[];
 }) {
   return (
     <div className="grid gap-4">
       <RunConfigurationPanel liveRun={liveRun} />
-      <EvidenceReferencePanel
-        cards={evidenceCards}
-        onClear={onClearEvidenceRefs}
-        onToggle={onToggleEvidenceRef}
-        selectedRefs={selectedEvidenceRefs}
-      />
       <ConsoleSection
         title="Data trail"
         badge={
@@ -1002,13 +825,12 @@ function EvidenceZone({
   );
 }
 
-// Section 4: Outputs expand in place without jumping to Details.
+// Section 4: Outputs — static peek per card; open the peer page to read/reference.
 function DeliverablesZone({
   artifacts,
   events,
-  expandedId,
-  onExpandedIdChange,
   onMentionArtifact,
+  onOpenArtifactPage,
   onPromoteArtifact,
   onArtifactExportJob,
   onSelectEvent,
@@ -1016,9 +838,8 @@ function DeliverablesZone({
 }: {
   artifacts: DataArtifact[];
   events: TimelineEvent[];
-  expandedId: string | null;
-  onExpandedIdChange: (artifactId: string | null) => void;
   onMentionArtifact?: (artifact: DataArtifact) => void;
+  onOpenArtifactPage?: (artifactId: string) => void;
   onPromoteArtifact?: (artifact: DataArtifact) => Promise<void> | void;
   onArtifactExportJob?: (job: JobDto) => void;
   onSelectEvent: (eventId: string) => void;
@@ -1037,85 +858,32 @@ function DeliverablesZone({
         {artifacts.length === 0 ? (
           <EmptyState
             title="No outputs yet"
-            description="SQL, datasets, charts, and reports appear here after a question. Expand an item to inspect it."
+            description="SQL, datasets, charts, and reports appear here after a question. Open an item to read it and reference the whole or parts."
           />
         ) : (
           <div className="grid gap-3">
             {artifacts.map((artifact) => {
-              const expanded = expandedId === artifact.id;
               const sourceEvent = artifact.createdByEventId
-                ? events.find((event) => event.id === artifact.createdByEventId)
+                ? events.find((event) => event.id === artifact.createdByEventId) ?? null
                 : null;
               return (
-                <div
+                <ArtifactCard
                   key={artifact.id}
-                  className={[
-                    "overflow-hidden rounded-xl border transition-colors duration-200",
-                    expanded
-                      ? "border-primary-light/40 bg-surface shadow-sm"
-                      : "border-border bg-surface-subtle",
-                  ].join(" ")}
-                >
-                  <button
-                    type="button"
-                    onClick={() =>
-                      onExpandedIdChange(
-                        expandedId === artifact.id ? null : artifact.id,
-                      )
-                    }
-                    className="w-full cursor-pointer p-3 text-left transition-colors duration-200 hover:bg-surface focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-light/50"
-                  >
-                    <ArtifactCardHeader
-                      artifact={artifact}
-                      expanded={expanded}
-                      sourceEvent={sourceEvent}
-                    />
-                  </button>
-                  {isFileBackedArtifact(artifact) ? (
-                    <ArtifactFileActions
-                      artifact={artifact}
-                      exportReady={exportReady}
-                      promoted={promotedArtifactIds?.has(artifact.id) ?? false}
-                      onMentionArtifact={onMentionArtifact}
-                      onPromoteArtifact={onPromoteArtifact}
-                    />
-                  ) : null}
-                  {expanded ? (
-                    <div className="max-h-[min(480px,55vh)] overflow-y-auto overflow-x-hidden border-t border-border px-3 pb-3 pt-2">
-                      {sourceEvent ? (
-                        <div className="mb-3 rounded-lg border border-border bg-surface-subtle p-2.5">
-                          <div className={sectionLabelClass}>Source step</div>
-                          <button
-                            type="button"
-                            onClick={() => onSelectEvent(sourceEvent.id)}
-                            className="mt-1 cursor-pointer rounded-sm text-left text-xs font-semibold text-primary underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-light/50"
-                          >
-                            {sourceEvent.title} → View in Details
-                          </button>
-                        </div>
-                      ) : null}
-                      <ArtifactExpandedDetail
-                        artifact={artifact}
-                        exportReady={exportReady}
-                      />
-                      {exportReady ? (
-                        <ArtifactExportActions
-                          artifact={artifact}
-                          onExportJob={onArtifactExportJob}
-                        />
-                      ) : (
-                        <p className="mt-3 text-[11px] leading-4 text-muted-light">
-                          Connect the configuration API to preview and download complete outputs.
-                        </p>
-                      )}
-                    </div>
-                  ) : null}
-                </div>
+                  artifact={artifact}
+                  sourceEvent={sourceEvent}
+                  exportReady={exportReady}
+                  promoted={promotedArtifactIds?.has(artifact.id) ?? false}
+                  onOpenArtifactPage={onOpenArtifactPage}
+                  onMentionArtifact={onMentionArtifact}
+                  onPromoteArtifact={onPromoteArtifact}
+                  onArtifactExportJob={onArtifactExportJob}
+                  onSelectEvent={onSelectEvent}
+                />
               );
             })}
             <p className="text-[11px] leading-4 text-muted-light">
               {exportReady
-                ? "Expand an output to view or download the full content."
+                ? "Open any output to read the full content and reference the whole or a selected part."
                 : "Preview and download require the backend artifact API."}
             </p>
           </div>
@@ -1125,108 +893,270 @@ function DeliverablesZone({
   );
 }
 
-function isFileBackedArtifact(artifact: DataArtifact): boolean {
-  return Boolean(
-    artifact.fileId &&
-      (artifact.type === "file" ||
-        artifact.kind === "file" ||
-        artifact.detail?.type === "file"),
-  );
-}
-
-function ArtifactFileActions({
+function ArtifactCard({
   artifact,
+  sourceEvent,
   exportReady,
   promoted,
+  onOpenArtifactPage,
   onMentionArtifact,
   onPromoteArtifact,
+  onArtifactExportJob,
+  onSelectEvent,
 }: {
   artifact: DataArtifact;
+  sourceEvent: TimelineEvent | null;
   exportReady: boolean;
   promoted: boolean;
+  onOpenArtifactPage?: (artifactId: string) => void;
   onMentionArtifact?: (artifact: DataArtifact) => void;
   onPromoteArtifact?: (artifact: DataArtifact) => Promise<void> | void;
+  onArtifactExportJob?: (job: JobDto) => void;
+  onSelectEvent: (eventId: string) => void;
 }) {
-  const [busy, setBusy] = useState<"download" | "promote" | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const { busy, error, setError, downloadWhole, downloadFormat, exportJob } =
+    useArtifactExportActions(onArtifactExportJob);
+  const [promoting, setPromoting] = useState(false);
   const promoteReady = hasCapability("artifact.promote");
   const canMention = artifact.detail?.type === "file" && Boolean(artifact.detail.path);
-
-  const handleDownload = async () => {
-    if (!exportReady) return;
-    setBusy("download");
-    setError(null);
-    try {
-      const { blob, filename } = await artifactExportClient.download(artifact.id);
-      const url = URL.createObjectURL(blob);
-      const anchor = document.createElement("a");
-      anchor.href = url;
-      anchor.download = filename || artifact.title;
-      anchor.click();
-      URL.revokeObjectURL(url);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "DownloadFailed");
-    } finally {
-      setBusy(null);
-    }
-  };
+  const formatExport = canFormatExport(artifact);
+  const downloadBusy = busy !== null;
 
   const handlePromote = async () => {
-    if (!promoteReady || promoted || !onPromoteArtifact) return;
-    setBusy("promote");
+    if (!onPromoteArtifact || promoted || promoting) return;
+    setPromoting(true);
     setError(null);
     try {
       await onPromoteArtifact(artifact);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Add to workspaceFailed");
+      setError(err instanceof Error ? err.message : "Failed to add to workspace");
     } finally {
-      setBusy(null);
+      setPromoting(false);
     }
   };
 
+  const overflowItems: ActionMenuItem[] = [];
+  if (canMention && onMentionArtifact) {
+    overflowItems.push({
+      key: "mention",
+      label: "@ Mention",
+      onSelect: () => onMentionArtifact(artifact),
+    });
+  }
+  if (promoteReady && onPromoteArtifact) {
+    overflowItems.push({
+      key: "promote",
+      label: promoted ? "Added to workspace" : promoting ? "Adding…" : "Add to workspace",
+      disabled: promoted || promoting,
+      onSelect: () => {
+        void handlePromote();
+      },
+    });
+  }
+  if (sourceEvent) {
+    overflowItems.push({
+      key: "source",
+      label: "View source",
+      onSelect: () => onSelectEvent(sourceEvent.id),
+    });
+  }
+
+  const downloadItems: ActionMenuItem[] = [
+    {
+      key: "whole",
+      label: busy === "whole" ? "Downloading…" : "Download file",
+      disabled: downloadBusy,
+      onSelect: () => void downloadWhole(artifact),
+    },
+    {
+      key: "csv",
+      label: busy === "csv" ? "Preparing CSV…" : "Download CSV",
+      disabled: downloadBusy,
+      onSelect: () => void downloadFormat(artifact, "csv"),
+    },
+    {
+      key: "xlsx",
+      label: busy === "xlsx" ? "Preparing XLSX…" : "Download XLSX",
+      disabled: downloadBusy,
+      onSelect: () => void downloadFormat(artifact, "xlsx"),
+    },
+    {
+      key: "job",
+      label: busy === "job" ? "Submitting…" : "Background export XLSX",
+      disabled: downloadBusy,
+      onSelect: () => void exportJob(artifact, "xlsx"),
+    },
+  ];
+
   return (
-    <div className="border-t border-border bg-surface px-3 py-2">
-      <div className="flex flex-wrap items-center gap-2">
-        <button
-          type="button"
-          onClick={handleDownload}
-          disabled={!exportReady || busy === "download"}
-          className={`${btnSecondaryClass} disabled:cursor-not-allowed disabled:opacity-60`}
-          title={exportReady ? "Download output file" : "Backend unsupported: artifact.export"}
-        >
-          {busy === "download" ? "Downloading" : "Download"}
-        </button>
-        <button
-          type="button"
-          onClick={() => onMentionArtifact?.(artifact)}
-          disabled={!canMention}
-          className={`${btnSecondaryClass} disabled:cursor-not-allowed disabled:opacity-60`}
-          title={canMention ? "Reference this chat output path" : "Missing a workspace path that can be pinned"}
-        >
-          @ Mention
-        </button>
-        <button
-          type="button"
-          onClick={handlePromote}
-          disabled={!promoteReady || promoted || busy === "promote"}
-          className={`${btnSecondaryClass} disabled:cursor-not-allowed disabled:opacity-60`}
-          title={promoteReady ? "Add as reusable workspace file" : "Backend unsupported: artifact.promote"}
-        >
-          {promoted ? "Added to workspace" : busy === "promote" ? "Adding" : "Add to workspace"}
-        </button>
-        {!promoteReady ? (
-          <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-400">
-            Add to workspace is backend unsupported
-          </span>
-        ) : null}
+    <div className="min-w-0 rounded-xl border border-border bg-surface-subtle">
+      <div className="min-w-0 p-3">
+        <ArtifactCardHeader artifact={artifact} sourceEvent={sourceEvent} />
+        <ArtifactStaticSnippet artifact={artifact} />
       </div>
       {error ? (
-        <p className="mt-2 rounded bg-step-error/10 px-2 py-1.5 text-[11px] text-step-error">
+        <p className="border-t border-border bg-step-error/10 px-3 py-1.5 text-[11px] text-step-error">
           {error}
         </p>
       ) : null}
+      <div className="flex flex-wrap items-center justify-end gap-2 rounded-b-xl border-t border-border bg-surface px-3 py-2">
+        <button
+          type="button"
+          onClick={() => onOpenArtifactPage?.(artifact.id)}
+          disabled={!onOpenArtifactPage}
+          className={`${btnPrimaryClass} disabled:cursor-not-allowed disabled:opacity-60`}
+          title="Open its own page to reference the whole artifact or a selected table region / text"
+        >
+          Open
+        </button>
+        {exportReady ? (
+          formatExport ? (
+            <ActionMenu
+              items={downloadItems}
+              placement="up"
+              align="right"
+              triggerClass={`inline-flex items-center gap-1 ${btnSecondaryClass}`}
+              triggerLabel="Download"
+              ariaLabel="Download output"
+            />
+          ) : (
+            <button
+              type="button"
+              onClick={() => void downloadWhole(artifact)}
+              disabled={downloadBusy}
+              className={`${btnSecondaryClass} disabled:cursor-not-allowed disabled:opacity-60`}
+              title="Download output file"
+            >
+              {busy === "whole" ? "Downloading" : "Download"}
+            </button>
+          )
+        ) : null}
+        {overflowItems.length > 0 ? (
+          <ActionMenu
+            items={overflowItems}
+            placement="up"
+            align="right"
+            triggerClass={`inline-flex items-center ${btnGhostClass}`}
+            triggerIcon={<IconDots className="h-4 w-4" />}
+            ariaLabel="More actions"
+            title="More actions"
+            showChevron={false}
+          />
+        ) : null}
+      </div>
     </div>
   );
+}
+
+/**
+ * Zero-click static peek rendered directly on the collapsed card. Uses only
+ * in-memory detail/summary; never triggers a per-card network preview fetch.
+ */
+function ArtifactStaticSnippet({ artifact }: { artifact: DataArtifact }) {
+  const detail = artifact.detail;
+
+  if (!detail) {
+    return (
+      <p className="mt-3 rounded-lg border border-dashed border-border bg-surface px-2.5 py-2 text-[11px] leading-4 text-muted-light">
+        {artifact.summary ? `${truncateText(artifact.summary, 140)} · ` : ""}Open to view full content
+      </p>
+    );
+  }
+
+  if (detail.type === "sql") {
+    return (
+      <pre className="mt-3 max-h-24 overflow-hidden rounded-lg border border-border bg-surface px-2.5 py-2 font-mono text-[10px] leading-4 text-muted">
+        <code>{firstLines(detail.sql, 5)}</code>
+      </pre>
+    );
+  }
+
+  if (detail.type === "dataset") {
+    const maxCols = 4;
+    const maxRows = 4;
+    const cols = detail.columns.slice(0, maxCols);
+    const moreCols = detail.columns.length > maxCols;
+    const rows = detail.rows.slice(0, maxRows);
+    return (
+      <div className="mt-3 overflow-hidden rounded-lg border border-border bg-surface">
+        <table className="w-full table-fixed text-left text-[10px]">
+          <thead className="bg-surface-subtle text-muted-light">
+            <tr>
+              {cols.map((column) => (
+                <th key={column} className="truncate px-2 py-1 font-semibold">
+                  {column}
+                </th>
+              ))}
+              {moreCols ? <th className="w-6 px-2 py-1 text-center">…</th> : null}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row, rowIndex) => (
+              <tr key={rowIndex} className="border-t border-border">
+                {row.slice(0, maxCols).map((cell, cellIndex) => (
+                  <td key={cellIndex} className="truncate px-2 py-1 text-muted">
+                    {formatConsoleTableCell(cell)}
+                  </td>
+                ))}
+                {moreCols ? <td className="px-2 py-1 text-center text-muted-light">…</td> : null}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        {detail.rows.length > maxRows ? (
+          <div className="border-t border-border px-2 py-1 text-[10px] text-muted-light">
+            {detail.rows.length.toLocaleString()} rows · open to view all
+          </div>
+        ) : null}
+      </div>
+    );
+  }
+
+  if (detail.type === "chart") {
+    const pointCount =
+      (detail.series ?? []).reduce((sum, series) => sum + series.points.length, 0) ||
+      detail.points.length;
+    return (
+      <p className="mt-3 rounded-lg border border-border bg-surface px-2.5 py-2 text-[11px] leading-4 text-muted">
+        {detail.chartType ?? "chart"} · {pointCount} points · open to view chart
+      </p>
+    );
+  }
+
+  if (detail.type === "report") {
+    const first = detail.sections[0];
+    return (
+      <p className="mt-3 rounded-lg border border-border bg-surface px-2.5 py-2 text-[11px] leading-4 text-muted">
+        {first ? truncateText(`${first.heading} — ${first.body}`, 180) : "Open to view full report"}
+      </p>
+    );
+  }
+
+  // file
+  if (detail.content) {
+    return (
+      <pre className="mt-3 max-h-24 overflow-hidden rounded-lg border border-border bg-surface px-2.5 py-2 font-mono text-[10px] leading-4 text-muted">
+        <code>{firstLines(detail.content, 5)}</code>
+      </pre>
+    );
+  }
+  return (
+    <p className="mt-3 rounded-lg border border-dashed border-border bg-surface px-2.5 py-2 text-[11px] leading-4 text-muted-light">
+      {detail.path}
+      {detail.size !== undefined ? ` · ${detail.size.toLocaleString()} bytes` : ""} · open to view full content
+    </p>
+  );
+}
+
+function truncateText(value: string, max: number): string {
+  const normalized = value.replace(/\s+/gu, " ").trim();
+  return normalized.length > max ? `${normalized.slice(0, max)}…` : normalized;
+}
+
+function firstLines(value: string, count: number): string {
+  const lines = value.split(/\r?\n/u);
+  const head = lines.slice(0, count).join("\n");
+  return lines.length > count ? `${head}\n…` : head;
 }
 
 function eventForToolCall(
@@ -2023,136 +1953,6 @@ function EventPayloadView({
   );
 }
 
-function ArtifactExportActions({
-  artifact,
-  onExportJob,
-}: {
-  artifact: DataArtifact;
-  onExportJob?: (job: JobDto) => void;
-}) {
-  const [previewDetail, setPreviewDetail] = useState<ArtifactDetail | null>(null);
-  const [previewError, setPreviewError] = useState<string | null>(null);
-  const [loadingPreview, setLoadingPreview] = useState(false);
-  const [busyFormat, setBusyFormat] = useState<ArtifactExportFormat | "job" | null>(null);
-  const canFormatExport =
-    artifact.type === "dataset" ||
-    artifact.type === "sql" ||
-    artifact.kind === "csv" ||
-    artifact.detail?.type === "dataset";
-
-  const handleView = () => {
-    setLoadingPreview(true);
-    setPreviewError(null);
-    void artifactExportClient
-      .fetchPreview(artifact.id)
-      .then((preview) => {
-        const loaded = artifactDetailFromPreview(artifact, preview);
-        if (loaded) {
-          setPreviewDetail(loaded);
-          return;
-        }
-        setPreviewError("Preview data is empty or unsupported.");
-      })
-      .catch((error: unknown) => {
-        setPreviewError(
-          error instanceof Error ? error.message : "Failed to load preview",
-        );
-      })
-      .finally(() => {
-        setLoadingPreview(false);
-      });
-  };
-
-  const handleDownload = (format?: ArtifactExportFormat) => {
-    setBusyFormat(format ?? "job");
-    setPreviewError(null);
-    void artifactExportClient.download(artifact.id, format).then(({ blob, filename }) => {
-      const url = URL.createObjectURL(blob);
-      const anchor = document.createElement("a");
-      anchor.href = url;
-      anchor.download = filename;
-      anchor.click();
-      URL.revokeObjectURL(url);
-    }).catch((error: unknown) => {
-      setPreviewError(error instanceof Error ? error.message : "DownloadFailed");
-    }).finally(() => {
-      setBusyFormat(null);
-    });
-  };
-
-  const handleExportJob = (format: ArtifactExportFormat) => {
-    setBusyFormat("job");
-    setPreviewError(null);
-    void artifactExportClient.export(artifact.id, format)
-      .then((job) => onExportJob?.(job))
-      .catch((error: unknown) => {
-        setPreviewError(error instanceof Error ? error.message : "Failed to create export job");
-      })
-      .finally(() => {
-        setBusyFormat(null);
-      });
-  };
-
-  return (
-    <div className="mt-3 grid gap-2">
-      <div className="flex flex-wrap justify-end gap-2">
-        <button
-          type="button"
-          onClick={handleView}
-          disabled={loadingPreview}
-          className={`${btnSecondaryClass} disabled:cursor-not-allowed disabled:opacity-60`}
-        >
-          {loadingPreview ? "Loading..." : "Preview"}
-        </button>
-        <button
-          type="button"
-          onClick={() => handleDownload()}
-          disabled={busyFormat !== null}
-          className={`${btnSecondaryClass} disabled:cursor-not-allowed disabled:opacity-60`}
-        >
-          {busyFormat === "job" ? "Downloading…" : "Download"}
-        </button>
-        {canFormatExport ? (
-          <>
-            <button
-              type="button"
-              onClick={() => handleDownload("csv")}
-              disabled={busyFormat !== null}
-              className={`${btnSecondaryClass} disabled:cursor-not-allowed disabled:opacity-60`}
-            >
-              {busyFormat === "csv" ? "Preparing CSV..." : "Download CSV"}
-            </button>
-            <button
-              type="button"
-              onClick={() => handleDownload("xlsx")}
-              disabled={busyFormat !== null}
-              className={`${btnSecondaryClass} disabled:cursor-not-allowed disabled:opacity-60`}
-            >
-              {busyFormat === "xlsx" ? "Preparing XLSX..." : "Download XLSX"}
-            </button>
-            <button
-              type="button"
-              onClick={() => handleExportJob("xlsx")}
-              disabled={busyFormat !== null}
-              className={`${btnSecondaryClass} disabled:cursor-not-allowed disabled:opacity-60`}
-            >
-              Background export
-            </button>
-          </>
-        ) : null}
-      </div>
-      {previewError ? (
-        <p className="rounded-lg bg-step-error/10 px-2.5 py-2 text-xs text-step-error">
-          {previewError}
-        </p>
-      ) : null}
-      {previewDetail ? (
-        <ArtifactDetailView detail={previewDetail} artifact={artifact} />
-      ) : null}
-    </div>
-  );
-}
-
 function ArtifactExpandedDetail({
   artifact,
   exportReady = hasCapability("artifact.export"),
@@ -2349,10 +2149,10 @@ function tryFormatJson(content: string): string | undefined {
   }
 }
 
-function FileCodeBlock({ content }: { content: string }) {
+function FileCodeBlock({ content, bare = false }: { content: string; bare?: boolean }) {
   return (
     <div className={consoleScrollXShellClass}>
-      <pre className={[consoleCodeBlockBaseClass, "max-h-80"].join(" ")}>
+      <pre className={[consoleCodeBlockBaseClass, bare ? "max-h-[70vh]" : "max-h-80"].join(" ")}>
         <code className={consoleCodeInnerClass}>{content}</code>
       </pre>
     </div>
@@ -2396,12 +2196,15 @@ function HtmlFilePreview({ content }: { content: string }) {
   );
 }
 
-function FileDetailView({
+export function FileDetailView({
   detail,
   artifact,
+  bare = false,
 }: {
   detail: Extract<ArtifactDetail, { type: "file" }>;
   artifact?: DataArtifact;
+  /** On a dedicated page, skip the nested card chrome and duplicated meta line. */
+  bare?: boolean;
 }) {
   const kind = classifyFileKind(detail.path);
   const fileBacked = Boolean(artifact?.fileId);
@@ -2432,7 +2235,7 @@ function FileDetailView({
     }
 
     if (kind === "markdown") {
-      return <ArtifactMarkdownPreview content={detail.content} />;
+      return <ArtifactMarkdownPreview content={detail.content} bare={bare} />;
     }
 
     if (kind === "csv" || kind === "tsv") {
@@ -2444,19 +2247,23 @@ function FileDetailView({
           />
         );
       }
-      return <FileCodeBlock content={detail.content} />;
+      return <FileCodeBlock content={detail.content} bare={bare} />;
     }
 
     if (kind === "json") {
-      return <FileCodeBlock content={tryFormatJson(detail.content) ?? detail.content} />;
+      return <FileCodeBlock content={tryFormatJson(detail.content) ?? detail.content} bare={bare} />;
     }
 
     if (kind === "html") {
       return <HtmlFilePreview content={detail.content} />;
     }
 
-    return <FileCodeBlock content={detail.content} />;
+    return <FileCodeBlock content={detail.content} bare={bare} />;
   };
+
+  if (bare) {
+    return <div className="grid min-w-0 gap-2 text-xs text-muted">{renderBody()}</div>;
+  }
 
   return (
     <div className="grid gap-2 rounded-xl border border-border bg-surface-subtle p-3 text-xs text-muted">
@@ -2521,7 +2328,7 @@ async function downloadSvgAsPng(container: HTMLDivElement | null, filename: stri
   link.click();
 }
 
-function ChartDetailView({
+export function ChartDetailView({
   detail,
 }: {
   detail: Extract<ArtifactDetail, { type: "chart" }>;
@@ -2681,8 +2488,13 @@ function DatasetDetailView({
             placeholder="Search result table"
           />
         </label>
-        <button type="button" onClick={exportCsv} className={`h-8 ${btnSecondaryClass}`}>
-          Export CSV
+        <button
+          type="button"
+          onClick={exportCsv}
+          className={`h-8 ${btnSecondaryClass}`}
+          title="Export the current filtered / sorted result"
+        >
+          Export current view CSV
         </button>
         <span className="text-[11px] text-muted-light">
           {rows.length.toLocaleString()} / {detail.rows.length.toLocaleString()} rows
@@ -2767,11 +2579,9 @@ function formatConsoleTableCell(value: unknown): string {
 
 function ArtifactCardHeader({
   artifact,
-  expanded,
   sourceEvent,
 }: {
   artifact: DataArtifact;
-  expanded: boolean;
   sourceEvent?: TimelineEvent | null;
 }) {
   const label = artifact.type ?? artifact.kind;
@@ -2820,11 +2630,8 @@ function ArtifactCardHeader({
           <span className="text-muted-light">Source step not linked</span>
         )}
       </div>
-      <div className="mt-3 flex items-center justify-between text-[11px] text-muted-light">
+      <div className="mt-3 text-[11px] text-muted-light">
         <span>{artifact.version ?? "v1"}</span>
-        <span className="font-medium text-muted">
-          {expanded ? "Collapse ↑" : artifact.detail || artifact.previewAvailable ? "Expand content ↓" : "No details"}
-        </span>
       </div>
     </>
   );
@@ -2889,7 +2696,7 @@ function KpiMetric({
         <div className="mt-1 grid min-w-0 gap-0.5">
           <span className={`${kpiValueClass} ${accentClass}`}>{value}</span>
           {meta ? (
-            <span className="break-all text-[11px] font-medium leading-snug text-muted-light">
+            <span className="break-words text-[11px] font-medium leading-snug text-muted-light">
               {meta}
             </span>
           ) : null}

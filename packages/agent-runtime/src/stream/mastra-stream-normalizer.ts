@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+
 export type MastraStreamChunk = {
   type?: string;
   payload?: unknown;
@@ -32,6 +34,16 @@ export async function* normalizeMastraFullStream(
   hooks: MastraStreamNormalizerHooks = {}
 ): AsyncGenerator<MastraStreamChunk> {
   const quarantined = new Set<string>();
+  // Per-step assistant message segmentation. @mastra/core (1.49.x) emits every
+  // `step-start` of a multi-step loop with the SAME payload.messageId, and
+  // @ag-ui/mastra (1.1.x) blindly calls onMessageId() with it — so the current
+  // assistant message id never advances and all iterations (reasoning + tool
+  // calls) collapse into a single AG-UI message, i.e. one "step" in the UI.
+  // We force a distinct id whenever a step-start reuses the previous one so the
+  // bridge opens a new assistant message per iteration. Runs that already emit
+  // distinct ids (e.g. durable loops) are left untouched.
+  let previousStepStartMessageId: string | undefined;
+  let reusedStepStartCount = 0;
 
   for await (const chunk of stream) {
     if (!chunk || typeof chunk !== "object") {
@@ -40,6 +52,25 @@ export async function* normalizeMastraFullStream(
     hooks.onChunk?.(chunk);
 
     const type = typeof chunk.type === "string" ? chunk.type : undefined;
+
+    if (type === "step-start" && isRecord(chunk.payload)) {
+      const payload = chunk.payload;
+      const messageId = typeof payload.messageId === "string" ? payload.messageId : undefined;
+      if (messageId !== undefined) {
+        if (messageId === previousStepStartMessageId) {
+          reusedStepStartCount += 1;
+          // Use a fresh UUID (not a derived suffix) so downstream consumers that
+          // parse, dedupe, or prefix-match message ids treat this as a wholly new
+          // assistant message with no relationship to the reused id.
+          yield {
+            ...chunk,
+            payload: { ...payload, messageId: randomUUID() }
+          };
+          continue;
+        }
+        previousStepStartMessageId = messageId;
+      }
+    }
 
     // Mastra workspace tools emit data-* chunks (e.g. data-workspace-metadata) via
     // writer.custom() with a `data` field and no `payload`. @ag-ui/mastra rejects

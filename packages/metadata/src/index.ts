@@ -589,6 +589,25 @@ export class InteractionRepository {
       .filter((record): record is InteractionRecord => Boolean(record));
   }
 
+  /**
+   * All interactions for a session regardless of status. Used by conversation restore
+   * to authoritatively recover HITL tool names (ask_user / submit_plan) even after the
+   * interaction has been resolved (R-018).
+   */
+  listBySession(input: { user_id: string; session_id: string }): InteractionRecord[] {
+    return this.db
+      .prepare(`
+        SELECT *
+        FROM interactions
+        WHERE user_id = ?
+          AND session_id = ?
+        ORDER BY created_at ASC
+      `)
+      .all(input.user_id, input.session_id)
+      .map((row) => mapInteractionRow(row))
+      .filter((record): record is InteractionRecord => Boolean(record));
+  }
+
   getByToolCall(input: { user_id: string; run_id: string; tool_call_id: string }): InteractionRecord {
     const interaction = mapInteractionRow(
       this.db.prepare(
@@ -1471,8 +1490,17 @@ export class ConversationMessageRepository {
   append(input: CreateConversationMessageInput): ConversationMessageRecord {
     const createdAt = new Date().toISOString();
     const contentJson = JSON.stringify(input.content ?? { text: input.content_text });
+    // Include message_id when present so empty tool-parent rows (same role +
+    // empty content_text, different AG-UI message ids) do not collide on
+    // idx_conversation_messages_run_hash.
     const contentHash = createHash("sha256")
-      .update(JSON.stringify({ role: input.role, content_text: input.content_text }))
+      .update(
+        JSON.stringify({
+          role: input.role,
+          content_text: input.content_text,
+          ...(input.message_id ? { message_id: input.message_id } : {})
+        })
+      )
       .digest("hex");
     const position = this.nextPosition({ user_id: input.user_id, session_id: input.session_id });
 
@@ -2343,12 +2371,46 @@ export const runEventRecordToEnvelope = (record: RunEventRecord): RunEventEnvelo
   event: JSON.parse(record.payload_json) as BaseEvent
 });
 
-export const artifactRecordToSummary = (record: ArtifactRecord): ArtifactSummary => ({
-  id: record.id,
-  type: record.type,
-  name: record.name,
-  ...(record.preview_json ? { preview_json: JSON.parse(record.preview_json) as unknown } : {})
-});
+export const artifactRecordToSummary = (record: ArtifactRecord): ArtifactSummary => {
+  const origin = artifactOriginFromMetadata(record.metadata_json);
+  return {
+    id: record.id,
+    type: record.type,
+    name: record.name,
+    ...(record.preview_json ? { preview_json: JSON.parse(record.preview_json) as unknown } : {}),
+    ...(record.run_id ? { run_id: record.run_id } : {}),
+    ...(origin.tool_call_id ? { tool_call_id: origin.tool_call_id } : {}),
+    ...(origin.step_id ? { step_id: origin.step_id } : {})
+  };
+};
+
+/**
+ * Extract authoritative origin handles (`tool_call_id` / `step_id`) that producers
+ * persist in the artifact's `metadata_json` (R-018). Returns empty handles when the
+ * column is absent or malformed.
+ */
+const artifactOriginFromMetadata = (
+  metadataJson: string | undefined
+): { step_id?: string; tool_call_id?: string } => {
+  if (!metadataJson) {
+    return {};
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(metadataJson);
+  } catch {
+    return {};
+  }
+  if (!isRecord(parsed)) {
+    return {};
+  }
+  const toolCallId = typeof parsed.tool_call_id === "string" ? parsed.tool_call_id : undefined;
+  const stepId = typeof parsed.step_id === "string" ? parsed.step_id : undefined;
+  return {
+    ...(toolCallId ? { tool_call_id: toolCallId } : {}),
+    ...(stepId ? { step_id: stepId } : {})
+  };
+};
 
 const runMigrations = (db: DatabaseSync): void => {
   initializeSchemaMigrationTable(db);

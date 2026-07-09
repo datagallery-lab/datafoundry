@@ -8,18 +8,19 @@ type PendingToolCall = {
 };
 
 /**
- * @ag-ui/mastra emits TOOL_CALL_END when the model finishes streaming tool args.
- * TOOL_CALL_RESULT only follows a Mastra `tool-result` chunk — not `tool-error`.
- * Our ACTIVITY STEP snapshots already carry success/failure output from data-tools.
- * This bridge backfills missing TOOL_CALL_RESULT events so CopilotKit can attach
- * tool-role messages and the frontend can render observations/errors.
+ * Safety net for the TOOL_CALL_RESULT contract.
+ *
+ * The authoritative TOOL_CALL_RESULT is now emitted at the governed tool execution boundary
+ * (see GovernedToolFactory), so every governed tool call produces a canonical result for both
+ * success and failure. This bridge no longer backfills from ACTIVITY STEP snapshots; it only
+ * tracks whether each TOOL_CALL_END received a result and, at run termination, emits a loud
+ * TOOL_RESULT_NOT_DELIVERED marker for any tool that finished without one. That marker means a
+ * contract gap that should be fixed at the boundary rather than papered over here.
  */
 export class ToolCallResultBridge {
   private readonly pending: PendingToolCall[] = [];
 
   observe(event: BaseEvent): BaseEvent[] {
-    const extras: BaseEvent[] = [];
-
     if (event.type === EventType.TOOL_CALL_END && event.toolCallId) {
       this.pending.push({
         toolCallId: String(event.toolCallId),
@@ -33,45 +34,7 @@ export class ToolCallResultBridge {
       if (entry) entry.hasResult = true;
     }
 
-    if (event.type === EventType.ACTIVITY_SNAPSHOT && event.activityType === "STEP") {
-      const content = readRecord(event.content);
-      const toolName = readString(content?.tool_name);
-      const status = readString(content?.status);
-      if (!toolName || !status) return extras;
-
-      const pending = this.pending.find((item) => item.toolName === toolName && !item.hasResult);
-      if (!pending) return extras;
-
-      if (status === "failed") {
-          extras.push(
-            createToolCallResult(
-              pending.toolCallId,
-              pending.toolName,
-              JSON.stringify({
-                error: readString(content?.error_message) ?? "Tool execution failed"
-              })
-            )
-          );
-        pending.hasResult = true;
-        return extras;
-      }
-
-      if (status === "completed") {
-        const payload = content?.content ?? content?.output;
-        if (payload !== undefined) {
-          extras.push(
-            createToolCallResult(
-              pending.toolCallId,
-              pending.toolName,
-              typeof payload === "string" ? payload : JSON.stringify(payload)
-            )
-          );
-          pending.hasResult = true;
-        }
-      }
-    }
-
-    return extras;
+    return [];
   }
 
   /** Must be delivered before RUN_FINISHED / RUN_ERROR — CopilotKit rejects late TOOL_CALL_RESULT. */
@@ -86,7 +49,7 @@ export class ToolCallResultBridge {
           JSON.stringify({
             error: "TOOL_RESULT_NOT_DELIVERED",
             message:
-              "Tool finished without AG-UI TOOL_CALL_RESULT. The runtime could not observe tool output."
+              "Tool finished without an authoritative TOOL_CALL_RESULT from the execution boundary."
           })
         )
       );
@@ -109,11 +72,6 @@ const createToolCallResult = (
   role: "tool",
   timestamp: Date.now()
 });
-
-const readRecord = (value: unknown): Record<string, unknown> | undefined =>
-  value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
 
 const readString = (value: unknown): string | undefined =>
   typeof value === "string" && value.length > 0 ? value : undefined;

@@ -30,7 +30,7 @@ import { buildChatAddActions, type ChatAddAction } from "./chat-add-actions";
 import { SessionConfigBar } from "./SessionConfigBar";
 import { useChatTextareaAutoresize, scheduleChatTextareaResize } from "./use-chat-textarea-autoresize";
 import { resolveChatInputWidth } from "../../chat-input-layout";
-import { evidenceChipLabel } from "../../evidence";
+import { evidenceChipLabel, evidenceChipTooltip } from "../../evidence";
 import { useDataTaskChatInputBindings } from "./DataTaskChatInputBindingsContext";
 import type { ChatSession, WorkspaceConfigStore } from "../../data-task-state";
 import type { QueuedChatPrompt } from "./queued-chat-runs";
@@ -606,7 +606,8 @@ function EvidenceChips({
       {refs.map((ref) => (
         <span
           key={ref.id}
-          className="inline-flex max-w-full items-center gap-1 rounded-md bg-primary-light/12 px-2 py-1 text-xs text-primary"
+          title={evidenceChipTooltip(ref)}
+          className="inline-flex max-w-[220px] items-center gap-1 rounded-md bg-primary-light/12 px-2 py-1 text-xs text-primary"
         >
           <span className="min-w-0 truncate">{evidenceChipLabel(ref)}</span>
           <button

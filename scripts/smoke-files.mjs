@@ -109,7 +109,7 @@ try {
       { label: "bad", value: NaN },          // dropped: non-finite value
       { label: "", value: 5 }                // dropped: empty label
     ],
-    metadata_json: { source_artifact_id: artifact.id }
+    metadata_json: { source_artifact_id: artifact.id, tool_call_id: "tool-chart-1" }
   });
   assert.equal(chartArtifact.type, "chart");
   assert.equal(typeof chartArtifact.id, "string");
@@ -122,6 +122,8 @@ try {
   assert.equal(chartPreview.points[0].value, 42);
   const chartMeta = JSON.parse(chartRecord.metadata_json);
   assert.equal(chartMeta.source_artifact_id, artifact.id, "chart metadata_json should carry source_artifact_id");
+  assert.equal(chartMeta.tool_call_id, "tool-chart-1", "chart metadata_json should carry tool_call_id");
+  assert.equal(chartArtifact.tool_call_id, "tool-chart-1", "chart summary should expose tool_call_id");
   // multi-series variant
   const seriesChart = await artifacts.createChartArtifact({
     user_id: userId,

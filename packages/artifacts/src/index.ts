@@ -53,6 +53,9 @@ export interface ArtifactService {
    * (R-015). This is the backend rule-based path — there is no agent `create_chart`
    * tool; the model never assembles chart data. The frontend renders the produced
    * structure (bar/line/pie).
+   *
+   * R-018: callers should pass `metadata_json.tool_call_id` (and optional `step_id`)
+   * whenever a tool produced the chart so restore can link without heuristics.
    */
   createChartArtifact(input: {
     user_id: string;
@@ -112,6 +115,9 @@ export const buildChartPreview = (input: {
  * value for the artifact record. Returns undefined when neither is present (so the
  * column stays NULL). Caller metadata keys win over citation keys on conflict.
  */
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
 const mergeArtifactMetadata = (metadata: unknown, citations?: Citation[]): unknown => {
   const hasMetadata = metadata !== undefined;
   const hasCitations = citations && citations.length > 0;
@@ -209,6 +215,8 @@ export class LocalArtifactService implements ArtifactService {
       preview_json: input.preview_json,
       metadata_json: {
         ...(input.citations ? { citations: input.citations } : {}),
+        ...(isRecord(input.metadata) ? input.metadata : {}),
+        ...(isRecord(input.metadata_json) ? input.metadata_json : {}),
         file: fileAssetRefDto(file)
       }
     });

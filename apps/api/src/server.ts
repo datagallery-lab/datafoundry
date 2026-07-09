@@ -54,9 +54,12 @@ import { resolveRunConfig } from "./run-config-resolver.js";
 import { resolveRunIdentity } from "./run-identity-orchestrator.js";
 import { createRunMemoryAssembly } from "./run-memory-assembly.js";
 import { extractLastUserText } from "./run-input.js";
-import { extractInteractionResume, InteractionRuntimeAdapter } from "./interaction-runtime-adapter.js";
+import {
+  buildHitlToolCallStartEvent,
+  extractInteractionResume,
+  InteractionRuntimeAdapter
+} from "./interaction-runtime-adapter.js";
 import { RunCancelRegistry } from "./run-cancel-registry.js";
-import { RunCompletionAnswerTracker } from "./run-completion-answer.js";
 import { RunEventPipeline } from "./run-event-pipeline.js";
 import { RunFinalizer, createRunStatusDelta } from "./run-finalizer.js";
 import { startSessionTitleTask } from "./session-title.js";
@@ -592,7 +595,8 @@ class DataFoundryAgUiAgent extends AbstractAgent {
         let runTimeout: ReturnType<typeof setTimeout> | undefined;
         let terminalStarted = false;
         let sessionTitleStarted = false;
-        const completionAnswerTracker = new RunCompletionAnswerTracker();
+        /** toolCallIds that already persisted TOOL_CALL_START in this run (HITL atomic contract). */
+        const startedToolCallIds = new Set<string>();
         const clearRunTimeout = (): void => {
           if (runTimeout) {
             clearTimeout(runTimeout);
@@ -660,14 +664,19 @@ class DataFoundryAgUiAgent extends AbstractAgent {
             if (terminalStarted) {
               return;
             }
-            completionAnswerTracker.observe(event);
             const interactionRequested = interactionRuntime.capture(event);
             if (interactionRequested) {
               terminalStarted = true;
               clearRunTimeout();
               unregisterCancel();
               suspended = true;
-              emit(interactionRequested);
+              // R-018: persist TOOL_CALL_START with the interactions row when the stream
+              // never emitted one (common for Mastra on_interrupt before tool-start).
+              if (!startedToolCallIds.has(interactionRequested.interrupt.toolCallId)) {
+                emit(buildHitlToolCallStartEvent(interactionRequested.interrupt));
+                startedToolCallIds.add(interactionRequested.interrupt.toolCallId);
+              }
+              emit(interactionRequested.event);
               finalizer.suspend();
               // CopilotKit useInterrupt listens for the native Mastra interrupt event.
               if (event.type === EventType.CUSTOM && event.name === "on_interrupt") {
@@ -698,16 +707,19 @@ class DataFoundryAgUiAgent extends AbstractAgent {
               terminalStarted = true;
               clearRunTimeout();
               unregisterCancel();
-              completionAnswerTracker.createFinalAnswerEvents({
-                runId,
-                userInput
-              }).forEach(emit);
               finalization = finalizer.complete({ goalRuntime: agentAssembly.goalRuntime, terminalEvent: event });
               return;
             }
             if (event.type === EventType.RUN_ERROR) {
               failRun("AG-UI run error", event);
               return;
+            }
+            if (
+              event.type === EventType.TOOL_CALL_START
+              && typeof event.toolCallId === "string"
+              && event.toolCallId.length > 0
+            ) {
+              startedToolCallIds.add(event.toolCallId);
             }
             emit(event);
 

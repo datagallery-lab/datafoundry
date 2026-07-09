@@ -202,15 +202,12 @@ describe("right panel regression helpers", () => {
     const runUsage = deriveRunUsage(liveRun);
     const toolGroups = buildProcessToolGroups([...assistantMessagesWithTools], liveRun);
     const sections = overviewSectionPlan({
-      hasWorkspaceSignals:
-        liveRun.workspaceMetadata.length > 0 || liveRun.sandboxOutputs.length > 0,
       hasToolDistribution: Object.keys(runUsage.toolCalls.byTool).length > 0,
     });
 
     expect(sections.map((section) => section.id)).toEqual([
       "conclusion",
       "progress",
-      "workspace-signals",
       "tool-distribution",
     ]);
     expect(deriveProcessGroupUsage(toolGroups, liveRun).stepCount).toBe(2);

@@ -58,13 +58,11 @@ import {
 import { GoalRuntimeAdapter, type GoalRequest } from "./memory/goal-runtime-adapter.js";
 import { createDataFoundryToolRegistry } from "./tools/data-tools.js";
 import { GovernedToolFactory } from "./tools/governed-tool-factory.js";
-import { shouldReuseRecordedFileArtifactForPublish } from "./tools/artifact-publish-policy.js";
 import {
   createRunWorkspace,
   resolveSkillCacheDir,
   resolveWorkspaceDir
 } from "./tools/workspace-factory.js";
-import { wrapWorkspaceToolsWithArtifactRecording } from "./tools/workspace-artifact-recorder.js";
 import { createMastraStreamNormalizerHooks } from "./stream/mastra-stream-hooks.js";
 import { createTokenUsageCorrelationStore } from "./stream/token-usage-correlation.js";
 import { wrapAgentForAgUi } from "./stream/mastra-stream-normalizer.js";
@@ -95,6 +93,8 @@ export const DATA_AGENT_TOOL_NAMES = [
   "preview_table",
   "run_sql_readonly"
 ] as const;
+/** HITL tools that suspend the run; their TOOL_CALL_RESULT is emitted on interaction resume. */
+const HITL_TOOL_NAMES = ["ask_user", "submit_plan"] as const;
 export const STATIC_AGENT_TOOL_NAMES = [
   "ask_user",
   "edit_file",
@@ -159,7 +159,6 @@ export {
   resolveWorkspaceRoot
 } from "./tools/workspace-factory.js";
 export { resolvePythonRuntime } from "./tools/python-runtime.js";
-export { shouldReuseRecordedFileArtifactForPublish } from "./tools/artifact-publish-policy.js";
 export { createDataFoundryToolRegistry, type ToolRegistry } from "./tools/data-tools.js";
 export {
   GoalRuntimeAdapter,
@@ -303,7 +302,13 @@ export const createDataFoundry = async (
   const governedToolFactory = new GovernedToolFactory(
     dispatcher,
     registry.onGovernedResult,
-    registry.onGovernanceError
+    registry.onGovernanceError,
+    {
+      emitter: input.emitter,
+      // HITL tools suspend the run and have their TOOL_CALL_RESULT emitted on interaction
+      // resume; the boundary must not emit a (spurious) result for them.
+      externallyResolvedToolNames: new Set(HITL_TOOL_NAMES)
+    }
   );
   const contextEventSink = createAgUiContextEventSink(input.emitter);
   const mastraContextProcessors = createMastraContextProcessorBoundary({
@@ -369,14 +374,11 @@ export const createDataFoundry = async (
         })
       }
     : {};
-  const recordedWorkspaceArtifacts = new Map<string, RecordedWorkspaceArtifact>();
   const artifactTools = input.artifactService
     ? createArtifactTools({
         ...(input.abortSignal ? { abortSignal: input.abortSignal } : {}),
         artifactService: input.artifactService,
         emitter: input.emitter,
-        findRecordedFileArtifact: (relativePath) =>
-          recordedWorkspaceArtifacts.get(normalizeRecordedWorkspacePath(relativePath)),
         runContext: input.runContext,
         workspaceDir: runWorkspace.sessionDir
       })
@@ -390,37 +392,14 @@ export const createDataFoundry = async (
         workspaceDir: runWorkspace.runDir
       })
     : {};
-  const workspaceToolsRaw = await createWorkspaceTools(runWorkspace.workspace, {
+  // Workspace file tools (write_file / edit_file / execute_command, etc.) produce
+  // session-scoped files only. They are synced to downloadable/restorable file refs at
+  // run finalize (RunFinalizer.syncSessionOutputs) and surfaced via workspace.metadata
+  // events. Client-visible artifacts are produced exclusively by the explicit
+  // publish_artifact tool — writing a file no longer auto-creates an artifact.
+  const workspaceTools = await createWorkspaceTools(runWorkspace.workspace, {
     requestContext: {},
     workspace: runWorkspace.workspace
-  });
-  const workspaceArtifactService = input.artifactService;
-  const workspaceTools = wrapWorkspaceToolsWithArtifactRecording({
-    tools: workspaceToolsRaw,
-    sessionDir: runWorkspace.sessionDir,
-    runContext: input.runContext,
-    emitter: input.emitter,
-    ...(workspaceArtifactService
-      ? {
-          createFileArtifact: (artifactInput) =>
-            workspaceArtifactService.createArtifactFromFile({
-              user_id: input.runContext.user_id,
-              session_id: input.runContext.session_id,
-              run_id: input.runContext.run_id,
-              workspace_id: input.runContext.workspace_id ?? "default",
-              type: artifactInput.type,
-              name: artifactInput.name,
-              source_path: artifactInput.source_path,
-              ...(artifactInput.preview_json !== undefined
-                ? { preview_json: artifactInput.preview_json }
-                : {})
-            })
-        }
-      : {}),
-    createArtifact: (artifactInput) => input.dataGateway.createArtifact(artifactInput),
-    onRecordedFileArtifact: ({ artifact, relativePath }) => {
-      recordedWorkspaceArtifacts.set(normalizeRecordedWorkspacePath(relativePath), artifact);
-    }
   });
   const skillTools = runWorkspace.workspace.skills ? createSkillTools(runWorkspace.workspace.skills) : {};
   runWorkspace.workspace.setToolsConfig({ enabled: false });
@@ -763,6 +742,13 @@ const buildAgentInstructions = (input: AgentInstructionsInput): string => {
       + "unchanged."
   );
   policies.push(
+    "Always finish a run with a brief natural-language message to the user that summarizes what you did and the "
+      + "outcome, even when your most recent action was a tool call such as a file write, command execution, or "
+      + "artifact publish. Never end a run silently right after a tool result: that closing message is how the user "
+      + "learns the result. Summarize outcomes and refer to any produced files or artifacts by name instead of "
+      + "restating raw tool output."
+  );
+  policies.push(
     `Respect limits. This run allows at most ${AGENT_MAX_STEPS} steps and `
       + `${SQL_MAX_EXECUTION_COUNT} SQL executions total `
       + `(SQL longer than ${SQL_MAX_SQL_CHARS} chars is truncated from view). `
@@ -906,7 +892,6 @@ const createArtifactTools = (input: {
   abortSignal?: AbortSignal | undefined;
   artifactService: ArtifactService;
   emitter: AgUiEventEmitter;
-  findRecordedFileArtifact?: (relativePath: string) => RecordedWorkspaceArtifact | undefined;
   runContext: AgentRunContext;
   workspaceDir: string;
 }): Record<string, ReturnType<typeof createTool>> => ({
@@ -919,25 +904,14 @@ const createArtifactTools = (input: {
       type: z.enum(["table", "chart", "markdown", "html", "file", "image", "citation_bundle"]).default("file"),
       preview: z.unknown().optional()
     }),
-    execute: async (toolInput) => {
+    execute: async (toolInput, options?: { agent?: { toolCallId?: string } }) => {
       throwIfAborted(input.abortSignal);
       const sourcePath = resolveWorkspaceRelativePath(input.workspaceDir, toolInput.path);
       const name = toolInput.name ?? basename(sourcePath);
       const requestedType = toolInput.type ?? "file";
-      const recordedFileArtifact = input.findRecordedFileArtifact?.(toolInput.path);
-      if (
-        recordedFileArtifact &&
-        shouldReuseRecordedFileArtifactForPublish({
-          existingFileArtifact: true,
-          requestedType,
-        })
-      ) {
-        return {
-          ...recordedFileArtifact,
-          requested_type: requestedType,
-          reused: true,
-        };
-      }
+      const toolCallId = typeof options?.agent?.toolCallId === "string" && options.agent.toolCallId.length > 0
+        ? options.agent.toolCallId
+        : undefined;
       const artifact = await input.artifactService.createArtifactFromFile({
         user_id: input.runContext.user_id,
         session_id: input.runContext.session_id,
@@ -946,6 +920,9 @@ const createArtifactTools = (input: {
         type: requestedType,
         name,
         source_path: sourcePath,
+        // R-018: record the producing tool call so the frontend links the artifact
+        // back to this publish_artifact call without heuristics.
+        ...(toolCallId ? { metadata: { tool_call_id: toolCallId } } : {}),
         ...(toolInput.preview !== undefined ? { preview_json: toolInput.preview } : {})
       });
       input.emitter.emit(createArtifactEvent(artifact));
@@ -953,15 +930,6 @@ const createArtifactTools = (input: {
     }
   })
 });
-
-type ArtifactSummaryWithFile = Awaited<ReturnType<ArtifactService["createArtifactFromFile"]>>;
-type RecordedWorkspaceArtifact = Awaited<ReturnType<ArtifactService["createArtifact"]>> & {
-  download_url?: string;
-  file_id?: string;
-};
-
-const normalizeRecordedWorkspacePath = (relativePath: string): string =>
-  relativePath.replace(/\\/gu, "/").replace(/^\.\/+/, "");
 
 const createFileAssetTools = (input: {
   abortSignal?: AbortSignal | undefined;

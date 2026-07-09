@@ -167,7 +167,24 @@ export class PolicyMcpMiddleware extends Middleware {
       return;
     }
     if (input.iterations() >= this.maxIterations) {
-      console.warn(`[PolicyMcpMiddleware] Reached maxIterations (${this.maxIterations}); leaving MCP calls open.`);
+      console.warn(`[PolicyMcpMiddleware] Reached maxIterations (${this.maxIterations}); stopping MCP calls.`);
+      // Emit an explicit, authoritative terminal result for every open MCP call so the
+      // frontend can render "stopped: MCP iteration limit" instead of a call that hangs
+      // pending until the run's TOOL_RESULT_NOT_DELIVERED safety net fires.
+      const limitContent = JSON.stringify({
+        status: "error",
+        error: `MCP_ITERATION_LIMIT:${this.maxIterations}`
+      });
+      for (const toolCall of openCalls) {
+        input.subscriber.next({
+          type: EventType.TOOL_CALL_RESULT,
+          messageId: randomUUID(),
+          toolCallId: toolCall.id,
+          toolCallName: toolCall.function.name,
+          content: limitContent,
+          role: "tool"
+        });
+      }
       if (input.pendingFinished) {
         input.subscriber.next(input.pendingFinished);
       }
@@ -188,6 +205,7 @@ export class PolicyMcpMiddleware extends Middleware {
         type: EventType.TOOL_CALL_RESULT,
         messageId,
         toolCallId: toolCall.id,
+        toolCallName: toolCall.function.name,
         content,
         role: "tool"
       });

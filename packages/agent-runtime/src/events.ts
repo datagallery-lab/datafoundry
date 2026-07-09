@@ -1,5 +1,6 @@
 import { EventType, type BaseEvent } from "@ag-ui/core";
 import type { ArtifactSummary } from "@datafoundry/contracts";
+import { randomUUID } from "node:crypto";
 
 import type { AgentRunContext } from "./types.js";
 
@@ -43,6 +44,21 @@ export const createCustomEvent = (name: string, value: unknown): BaseEvent => ({
   timestamp: Date.now()
 });
 
+/** Canonical AG-UI tool result for CopilotKit tool-role messages and conversation restore. */
+export const createToolCallResult = (
+  toolCallId: string,
+  toolCallName: string,
+  content: string,
+): BaseEvent => ({
+  type: EventType.TOOL_CALL_RESULT,
+  toolCallId,
+  toolCallName,
+  content,
+  messageId: randomUUID(),
+  role: "tool",
+  timestamp: Date.now()
+});
+
 export const createArtifactEvent = (artifact: ArtifactSummary & {
   download_url?: string;
   file_id?: string;
@@ -53,17 +69,20 @@ export const createArtifactEvent = (artifact: ArtifactSummary & {
     name: artifact.name,
     title: artifact.name,
     summary: artifactEventSummary(artifact),
-    preview_available: artifact.preview_json !== undefined,
+    preview_available: artifact.preview_json !== undefined || Boolean(artifact.file_id),
     ...(artifact.preview_json !== undefined ? { preview_json: artifact.preview_json } : {}),
     ...(artifact.download_url ? { download_url: artifact.download_url } : {}),
-    ...(artifact.file_id ? { file_id: artifact.file_id } : {})
+    ...(artifact.file_id ? { file_id: artifact.file_id } : {}),
+    ...(artifact.run_id ? { run_id: artifact.run_id } : {}),
+    ...(artifact.tool_call_id ? { tool_call_id: artifact.tool_call_id } : {}),
+    ...(artifact.step_id ? { step_id: artifact.step_id } : {})
   });
 
 const artifactEventSummary = (artifact: ArtifactSummary): string => {
   if (artifact.type === "table" && isRecord(artifact.preview_json)) {
     const rowCount = numberField(artifact.preview_json, "row_count");
     if (rowCount !== undefined) {
-      return `数据集，${rowCount.toLocaleString()} 行`;
+      return `Dataset, ${rowCount.toLocaleString()} rows`;
     }
   }
   return `${artifact.type} artifact`;

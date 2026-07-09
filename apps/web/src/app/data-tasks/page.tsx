@@ -17,6 +17,7 @@ import {
   useRenderTool,
 } from "@copilotkit/react-core/v2";
 import type { EvidenceRef } from "@datafoundry/contracts";
+import nextDynamic from "next/dynamic";
 import { Children, cloneElement, isValidElement, useCallback, createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ComponentProps, ComponentType, MouseEvent, PointerEvent as ReactPointerEvent, ReactNode } from "react";
 import { z } from "zod";
@@ -119,17 +120,40 @@ import type {
   WorkspaceConfigStore,
 } from "./data-task-state";
 import {
-  buildEvidenceCardsFromLiveRun,
   removeEvidenceRef,
-  toggleEvidenceRef,
+  uniqueEvidenceRefs,
 } from "./evidence";
-import { TaskConsole } from "./components/task-console/TaskConsole";
-import { TaskConsoleDrawer } from "./components/task-console/TaskConsoleDrawer";
-import { TraceOverlay } from "./components/task-console/TraceOverlay";
-import { WorkspaceFileAssetsPanel } from "./components/task-console/WorkspaceFileAssetsPanel";
-import { DatasourceSchemaPreviewPopover } from "./components/SchemaBrowserPanel";
-import { DatasourceExplorerPanel } from "./components/DatasourceExplorerPanel";
-import { DatasourceTypeGallery } from "./components/DatasourceTypeGallery";
+// Heavy, first-paint-invisible panels are loaded on demand to keep them (and
+// their transitive deps, notably TaskConsole + recharts) out of the /data-tasks
+// first-compile module graph.
+const TaskConsolePanel = nextDynamic(
+  () => import("./components/task-console/TaskConsolePanel").then((m) => m.TaskConsolePanel),
+  { ssr: false, loading: () => null },
+);
+const TaskConsoleDrawer = nextDynamic(
+  () => import("./components/task-console/TaskConsoleDrawer").then((m) => m.TaskConsoleDrawer),
+  { ssr: false, loading: () => null },
+);
+const TraceOverlay = nextDynamic(
+  () => import("./components/task-console/TraceOverlay").then((m) => m.TraceOverlay),
+  { ssr: false, loading: () => null },
+);
+const WorkspaceFileAssetsPanel = nextDynamic(
+  () => import("./components/task-console/WorkspaceFileAssetsPanel").then((m) => m.WorkspaceFileAssetsPanel),
+  { ssr: false, loading: () => null },
+);
+const DatasourceSchemaPreviewPopover = nextDynamic(
+  () => import("./components/SchemaBrowserPanel").then((m) => m.DatasourceSchemaPreviewPopover),
+  { ssr: false, loading: () => null },
+);
+const DatasourceExplorerPanel = nextDynamic(
+  () => import("./components/DatasourceExplorerPanel").then((m) => m.DatasourceExplorerPanel),
+  { ssr: false, loading: () => null },
+);
+const DatasourceTypeGallery = nextDynamic(
+  () => import("./components/DatasourceTypeGallery").then((m) => m.DatasourceTypeGallery),
+  { ssr: false, loading: () => null },
+);
 import { DatasourceTypeIcon } from "./components/DatasourceTypeIcon";
 import { DataTaskChatInput } from "./components/chat/DataTaskChatInput";
 import { QuickStartGuide } from "./components/guide/QuickStartGuide";
@@ -205,11 +229,12 @@ import { ToolFormattedParams, ToolFailureResult, ToolFormattedResult } from "./t
 import { parseSchemaToolResult } from "./tool-result-normalize";
 import {
   chatPaneClassName,
+  getLeftPanelWidth,
   getWorkspaceGridTemplateColumns,
   LEFT_PANEL_MAX_WIDTH,
   LEFT_PANEL_MIN_WIDTH,
+  maxDockableRightPanelWidth,
   resolveSidebarExpandPreferences,
-  RIGHT_PANEL_MAX_WIDTH,
   RIGHT_PANEL_MIN_WIDTH,
 } from "./workspace-layout";
 import { usePanelResize } from "./hooks/use-panel-resize";
@@ -781,6 +806,11 @@ function DataTaskWorkspace({
   const [isConsoleDrawerOpen, setIsConsoleDrawerOpen] = useState(false);
   const [userSidebarCollapsed, setUserSidebarCollapsed] = useState(false);
   const [userRightPanelOpen, setUserRightPanelOpen] = useState(false);
+  // Sessions where the user explicitly closed the task console; suppresses the
+  // "auto-open on first question" behavior for that session only.
+  const [rightPanelDismissedSessions, setRightPanelDismissedSessions] = useState<
+    Set<string>
+  >(() => new Set());
   const [configPanel, setConfigPanel] = useState<WorkspaceConfigPanelKey | null>(
     null,
   );
@@ -848,8 +878,8 @@ function DataTaskWorkspace({
     () => setPerRunFiles(emptyPerRunFileSelection()),
     [],
   );
-  const toggleSelectedEvidenceRef = useCallback((ref: EvidenceRef) => {
-    setSelectedEvidenceRefs((current) => toggleEvidenceRef(current, ref));
+  const addSelectedEvidenceRef = useCallback((ref: EvidenceRef) => {
+    setSelectedEvidenceRefs((current) => uniqueEvidenceRefs([...current, ref]));
   }, []);
   const removeSelectedEvidenceRef = useCallback((id: string) => {
     setSelectedEvidenceRefs((current) => removeEvidenceRef(current, id));
@@ -858,14 +888,12 @@ function DataTaskWorkspace({
     setSelectedEvidenceRefs([]);
   }, []);
 
+  const sidePanelOpen = Boolean(configPanel) || workspaceFilesPanelOpen;
   const {
-    width: rightPanelWidth,
-    isResizing: isRightPanelResizing,
-    onResizeStart: onRightPanelResizeStart,
-    resetWidth: resetRightPanelWidth,
-  } = usePanelResize({
-    enabled: !configPanel && !workspaceFilesPanelOpen,
-  });
+    containerRef: gridRef,
+    viewportWidth: workspaceViewportWidth,
+    isViewportResizing,
+  } = useWorkspaceViewportWidth(!sidePanelOpen);
 
   const {
     width: leftPanelWidth,
@@ -876,12 +904,25 @@ function DataTaskWorkspace({
     enabled: !configPanel && !workspaceFilesPanelOpen && !userSidebarCollapsed,
   });
 
-  const sidePanelOpen = Boolean(configPanel) || workspaceFilesPanelOpen;
+  // Cap the right panel drag to what still fits *alongside the current left
+  // sidebar* (chat squeezed to its minimum). This prevents widening it into the
+  // responsive "close right first" path that made it vanish and reopen as a
+  // floating drawer.
+  // Viewport-derived upper bound: the right panel may grow until the chat column
+  // reaches its absolute minimum, keeping that minimum constant across sizes.
+  const rightPanelDockableMaxWidth = maxDockableRightPanelWidth(
+    workspaceViewportWidth,
+    getLeftPanelWidth(userSidebarCollapsed, leftPanelWidth),
+  );
   const {
-    containerRef: gridRef,
-    viewportWidth: workspaceViewportWidth,
-    isViewportResizing,
-  } = useWorkspaceViewportWidth(!sidePanelOpen);
+    width: rightPanelWidth,
+    isResizing: isRightPanelResizing,
+    onResizeStart: onRightPanelResizeStart,
+    resetWidth: resetRightPanelWidth,
+  } = usePanelResize({
+    enabled: !configPanel && !workspaceFilesPanelOpen,
+    maxWidth: rightPanelDockableMaxWidth,
+  });
 
   const {
     sidebarCollapsed,
@@ -937,12 +978,20 @@ function DataTaskWorkspace({
   ]);
 
   const closeTaskConsole = useCallback(() => {
+    if (activeSessionId) {
+      setRightPanelDismissedSessions((current) => {
+        if (current.has(activeSessionId)) return current;
+        const next = new Set(current);
+        next.add(activeSessionId);
+        return next;
+      });
+    }
     if (canDockRightPanel) {
       setUserRightPanelOpen(false);
       return;
     }
     setIsConsoleDrawerOpen(false);
-  }, [canDockRightPanel]);
+  }, [canDockRightPanel, activeSessionId]);
 
   const handleToolGroupsChange = useCallback((nextGroups: ProcessToolGroup[]) => {
     setToolGroups((current) =>
@@ -1270,6 +1319,10 @@ function DataTaskWorkspace({
     setSelection(null);
     setConfigPanel(null);
     setWorkspaceFilesPanelOpen(false);
+    // A brand-new session starts with the task console closed; it auto-opens on
+    // the first question (see applyFirstUserMessageTitle).
+    setUserRightPanelOpen(false);
+    setIsConsoleDrawerOpen(false);
     clearDraftPromptRequest();
   }, [clearDraftPromptRequest]);
 
@@ -1360,6 +1413,11 @@ function DataTaskWorkspace({
 
   const applyFirstUserMessageTitle = useCallback((text: string) => {
     if (!activeSessionId) return;
+    // Auto-open the task console when a question is asked, unless the user has
+    // explicitly closed it for this session.
+    if (!rightPanelDismissedSessions.has(activeSessionId)) {
+      openTaskConsole();
+    }
     const now = Date.now();
     setSessions((current) =>
       current.map((session) => {
@@ -1380,7 +1438,7 @@ function DataTaskWorkspace({
         };
       }),
     );
-  }, [activeSessionId]);
+  }, [activeSessionId, rightPanelDismissedSessions, openTaskConsole]);
 
   const agentContext = useMemo<JsonSerializable>(
     () =>
@@ -1408,10 +1466,6 @@ function DataTaskWorkspace({
 
   const visibleArtifacts = liveRun.artifacts;
   const visibleTimelineEvents = liveRun.events;
-  const evidenceCards = useMemo(
-    () => buildEvidenceCardsFromLiveRun(liveRun, activeSession?.id),
-    [activeSession?.id, liveRun],
-  );
 
   const runConfigPayload = useMemo(
     () =>
@@ -1847,16 +1901,18 @@ function DataTaskWorkspace({
             edge="left"
             width={rightPanelWidth}
             minWidth={RIGHT_PANEL_MIN_WIDTH}
-            maxWidth={RIGHT_PANEL_MAX_WIDTH}
+            maxWidth={rightPanelDockableMaxWidth}
             label="Resize task console"
             isResizing={isRightPanelResizing}
             onResizeStart={onRightPanelResizeStart}
             onReset={resetRightPanelWidth}
           />
-          <TaskConsole
+          <TaskConsolePanel
             key={`task-console-dock-${activeThreadId ?? activeSession?.id ?? "no-session"}`}
+            sessionId={activeSession?.id ?? ""}
+            runId={liveRun.runId}
+            onReferenceEvidence={addSelectedEvidenceRef}
             artifacts={visibleArtifacts}
-            evidenceCards={evidenceCards}
             liveRun={liveRun}
             toolGroups={toolGroups}
             sessionUsage={sessionUsage}
@@ -1868,8 +1924,6 @@ function DataTaskWorkspace({
             onClearSelection={() => setSelection(null)}
             onClose={closeTaskConsole}
             onMentionArtifact={mentionArtifactFile}
-            onToggleEvidenceRef={toggleSelectedEvidenceRef}
-            onClearEvidenceRefs={clearSelectedEvidenceRefs}
             onOpenTrace={() => setIsTraceOpen(true)}
             onPromoteArtifact={promoteArtifactToWorkspace}
             onArtifactExportJob={setActiveJob}
@@ -1880,7 +1934,6 @@ function DataTaskWorkspace({
               setSelection({ type: "toolGroup", id: groupId })
             }
             promotedArtifactIds={promotedArtifactIds}
-            selectedEvidenceRefs={selectedEvidenceRefs}
           />
         </div>
       ) : null}
@@ -1889,8 +1942,10 @@ function DataTaskWorkspace({
 
       <TaskConsoleDrawer
         key={`task-console-drawer-${activeThreadId ?? activeSession?.id ?? "no-session"}`}
+        sessionId={activeSession?.id ?? ""}
+        runId={liveRun.runId}
+        onReferenceEvidence={addSelectedEvidenceRef}
         artifacts={visibleArtifacts}
-        evidenceCards={evidenceCards}
         liveRun={liveRun}
         toolGroups={toolGroups}
         sessionUsage={sessionUsage}
@@ -1901,10 +1956,8 @@ function DataTaskWorkspace({
         onArtifactFocusHandled={() => setArtifactFocusId(null)}
         onClearSelection={() => setSelection(null)}
         onMentionArtifact={mentionArtifactFile}
-        onToggleEvidenceRef={toggleSelectedEvidenceRef}
-        onClearEvidenceRefs={clearSelectedEvidenceRefs}
         isOpen={!sidePanelOpen && !canDockRightPanel && isConsoleDrawerOpen}
-        onClose={() => setIsConsoleDrawerOpen(false)}
+        onClose={closeTaskConsole}
         onOpenTrace={() => setIsTraceOpen(true)}
         onPromoteArtifact={promoteArtifactToWorkspace}
         onArtifactExportJob={setActiveJob}
@@ -1915,7 +1968,6 @@ function DataTaskWorkspace({
           setSelection({ type: "toolGroup", id: groupId })
         }
         promotedArtifactIds={promotedArtifactIds}
-        selectedEvidenceRefs={selectedEvidenceRefs}
       />
 
       <TraceOverlay
@@ -6517,7 +6569,10 @@ function ChatPane({
   }, [schemaPreviewDatasourceId]);
 
   return (
-    <main className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-surface">
+    <main
+      data-chat-column
+      className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-surface"
+    >
       <ChatRunStatusContext.Provider value={liveRunStatus}>
       <ChatLiveRunContext.Provider value={liveRun}>
       <ProcessTimelineCollapseContext.Provider value={processTimelineCollapse}>

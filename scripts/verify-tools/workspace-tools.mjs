@@ -10,9 +10,6 @@ import path from "node:path";
 import { createRunWorkspace } from "../../packages/agent-runtime/dist/tools/workspace-factory.js";
 import { GovernedToolFactory } from "../../packages/agent-runtime/dist/tools/governed-tool-factory.js";
 
-const { wrapWorkspaceToolsWithArtifactRecording } = await import(
-  "../../packages/agent-runtime/dist/tools/workspace-artifact-recorder.js"
-);
 const { createToolObservationBoundary } = await import(
   "../../packages/agent-runtime/dist/context/tool-observation/tool-observation-boundary.js"
 );
@@ -143,30 +140,8 @@ try {
     workspace: runWorkspace.workspace
   });
 
-  const artifactEvents = [];
-  const artifactRecords = [];
-  const tools = wrapWorkspaceToolsWithArtifactRecording({
-    tools: toolsRaw,
-    sessionDir: runWorkspace.sessionDir,
-    runContext,
-    emitter: {
-      emit: (event) => {
-        if (event?.name === "artifact") {
-          artifactEvents.push(event.value);
-        }
-      }
-    },
-    createArtifact: async (input) => {
-      const artifact = {
-        id: `artifact-${artifactRecords.length + 1}`,
-        type: input.type,
-        name: input.name,
-        preview_json: input.preview_json
-      };
-      artifactRecords.push(artifact);
-      return artifact;
-    }
-  });
+  // Workspace file tools no longer auto-record artifacts; verify the raw tools directly.
+  const tools = toolsRaw;
 
   const testFile = "verify-test.txt";
   const testDir = "verify-subdir";
@@ -377,29 +352,6 @@ try {
     };
   }
 
-  if (runWorkspace.commandExecutionEnabled) {
-    const cmdOutputFile = "cmd-output.txt";
-    const beforeCount = artifactRecords.length;
-    const { customChunks, writer } = makeWriter();
-    const execCtx = makeExecCtx({
-      name: "execute_command",
-      writer,
-      workspace: runWorkspace.workspace
-    });
-    await tools.execute_command.execute(
-      { command: `touch ${cmdOutputFile}` },
-      execCtx
-    );
-    const cmdArtifact = artifactRecords.find((item) => item.name === cmdOutputFile);
-    if (!cmdArtifact) {
-      console.error(
-        "FAIL: execute_command snapshot diff did not register new file artifact",
-        `(before=${beforeCount}, after=${artifactRecords.length})`
-      );
-      process.exitCode = 1;
-    }
-  }
-
   await runWorkspace.workspace.destroy();
 
   const emitters = results.filter((r) => r.dataTypes?.length > 0);
@@ -436,28 +388,6 @@ try {
       'plain-string returns yield empty {} (pickFields) or { value: "..." } (asRecord on string).'
     ].join(" ")
   );
-
-  console.log("\n=== ARTIFACT RECORDING ===");
-  console.log(`Recorded artifacts: ${artifactRecords.length}`);
-  console.log(`CUSTOM(artifact) events: ${artifactEvents.length}`);
-  for (const artifact of artifactRecords) {
-    console.log(`- ${artifact.type}: ${artifact.name} (${artifact.id})`);
-  }
-
-  const writeArtifact = artifactRecords.find((item) => item.name === testFile);
-  if (!writeArtifact || writeArtifact.type !== "file") {
-    console.error("FAIL: write_file did not create a file artifact");
-    process.exitCode = 1;
-  }
-  if (artifactEvents.length < 1) {
-    console.error("FAIL: no CUSTOM(artifact) events emitted");
-    process.exitCode = 1;
-  }
-
-  const cmdArtifact = artifactRecords.find((item) => item.name === "cmd-output.txt");
-  if (runWorkspace.commandExecutionEnabled && cmdArtifact) {
-    console.log(`execute_command diff artifact: ${cmdArtifact.name}`);
-  }
 
   process.exitCode =
     process.exitCode === 1

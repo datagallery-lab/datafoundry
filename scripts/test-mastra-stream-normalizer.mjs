@@ -82,6 +82,49 @@ for await (const _chunk of response.fullStream) {
 }
 assert(wrappedChunks.length === 1, "wrapAgentForAgUi must normalize fullStream via hooks");
 
+// Regression: @mastra/core reuses ONE messageId across every step-start of a
+// multi-step loop. The normalizer must force distinct ids on reused step-starts
+// so @ag-ui/mastra opens a new assistant message per iteration (otherwise the UI
+// collapses all reasoning + tool calls into a single "step").
+async function* reusedStepStarts() {
+  yield { type: "start", payload: { messageId: "m" }, runId: "r", from: "agent" };
+  yield { type: "step-start", payload: { messageId: "m", request: {} }, runId: "r", from: "agent" };
+  yield { type: "tool-call", payload: { toolCallId: "t0", toolName: "a", args: {} }, runId: "r", from: "agent" };
+  yield { type: "step-finish", payload: { messageId: "m", output: {} }, runId: "r", from: "agent" };
+  yield { type: "step-start", payload: { messageId: "m", request: {} }, runId: "r", from: "agent" };
+  yield { type: "tool-call", payload: { toolCallId: "t1", toolName: "b", args: {} }, runId: "r", from: "agent" };
+  yield { type: "step-finish", payload: { messageId: "m", output: {} }, runId: "r", from: "agent" };
+  yield { type: "step-start", payload: { messageId: "m", request: {} }, runId: "r", from: "agent" };
+  yield { type: "finish", payload: { messageId: "m" }, runId: "r", from: "agent" };
+}
+const segmented = await collectNormalized(reusedStepStarts());
+const stepStartIds = segmented
+  .filter((chunk) => chunk.type === "step-start")
+  .map((chunk) => chunk.payload?.messageId);
+assert(stepStartIds.length === 3, `expected 3 step-start chunks, got ${stepStartIds.length}`);
+assert(
+  new Set(stepStartIds).size === 3,
+  `reused step-start messageIds must be made distinct, got ${JSON.stringify(stepStartIds)}`
+);
+assert(stepStartIds[0] === "m", "first step-start must keep the original messageId");
+assert(
+  stepStartIds[1] !== "m" && stepStartIds[2] !== "m" && stepStartIds[1] !== stepStartIds[2],
+  `subsequent reused step-starts must get fresh distinct ids, got ${JSON.stringify(stepStartIds)}`
+);
+
+// Runs that already emit distinct step-start ids must be left untouched.
+async function* distinctStepStarts() {
+  yield { type: "step-start", payload: { messageId: "a", request: {} }, runId: "r", from: "agent" };
+  yield { type: "step-start", payload: { messageId: "b", request: {} }, runId: "r", from: "agent" };
+}
+const untouched = (await collectNormalized(distinctStepStarts()))
+  .filter((chunk) => chunk.type === "step-start")
+  .map((chunk) => chunk.payload?.messageId);
+assert(
+  JSON.stringify(untouched) === JSON.stringify(["a", "b"]),
+  `distinct step-start ids must be preserved, got ${JSON.stringify(untouched)}`
+);
+
 console.log("Mastra stream normalizer contract tests OK");
 process.exit(0);
 

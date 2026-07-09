@@ -79,6 +79,220 @@ try {
     throw new Error(`Expected one assistant message, got ${assistantRecords.length}`);
   }
 
+  // Isolated session so reasoning fold checks do not pollute the main history assertions.
+  const reasoningSessionId = "conversation-memory-reasoning-session";
+  const reasoningRunId = "conversation-memory-run-reasoning";
+  store.sessions.create({
+    user_id: userId,
+    id: reasoningSessionId,
+    title: "conversation memory reasoning smoke"
+  });
+  store.runs.create({
+    user_id: userId,
+    id: reasoningRunId,
+    session_id: reasoningSessionId,
+    request_fingerprint: "conversation-memory-reasoning",
+    user_input: "带 thinking 的分析",
+    status: "running"
+  });
+  const reasoningService = new ConversationMemoryService({
+    repository: store.conversationMessages,
+    sessionId: reasoningSessionId,
+    userId
+  });
+  const reasoningObserver = reasoningService.createEventObserver({ runId: reasoningRunId });
+  reasoningObserver.observe({
+    type: EventType.REASONING_MESSAGE_START,
+    messageId: "reasoning-message-1",
+    role: "reasoning"
+  });
+  reasoningObserver.observe({
+    type: EventType.REASONING_MESSAGE_CONTENT,
+    messageId: "reasoning-message-1",
+    delta: "先检查 schema。"
+  });
+  reasoningObserver.observe({
+    type: EventType.REASONING_MESSAGE_END,
+    messageId: "reasoning-message-1"
+  });
+  reasoningObserver.observe({
+    type: EventType.TEXT_MESSAGE_CHUNK,
+    role: "assistant",
+    messageId: "assistant-message-reasoning",
+    delta: "查询完成。"
+  });
+  const reasoningRecords = await reasoningObserver.flushCompleted();
+  if (reasoningRecords.length !== 2) {
+    throw new Error(`Expected two folded assistant rows (reasoning + text), got ${reasoningRecords.length}`);
+  }
+  const reasoningOnly = reasoningRecords.find((record) => record.message_id === "reasoning-message-1");
+  const textOnly = reasoningRecords.find((record) => record.message_id === "assistant-message-reasoning");
+  if (!reasoningOnly || !textOnly) {
+    throw new Error("Missing reasoning or text assistant rows after fold persist");
+  }
+  const reasoningJson = JSON.parse(reasoningOnly.content_json);
+  if (!Array.isArray(reasoningJson.parts) || reasoningJson.parts[0]?.type !== "reasoning") {
+    throw new Error(`Expected reasoning parts on reasoning row, got ${reasoningOnly.content_json}`);
+  }
+  if (reasoningOnly.content_text !== "先检查 schema。") {
+    throw new Error(`Unexpected reasoning content_text: ${reasoningOnly.content_text}`);
+  }
+  const textJson = JSON.parse(textOnly.content_json);
+  if (textOnly.content_text !== "查询完成。") {
+    throw new Error(`Unexpected text content_text: ${textOnly.content_text}`);
+  }
+  if (textJson.parts) {
+    throw new Error(`Text-only row should not include parts, got ${textOnly.content_json}`);
+  }
+  const reasoningHistory = buildConversationMemoryMessages({
+    currentUserText: "继续",
+    history: store.conversationMessages.listRecent({
+      user_id: userId,
+      session_id: reasoningSessionId,
+      exclude_run_id: "conversation-memory-run-reasoning-next",
+      limit: 24
+    }),
+    runId: "conversation-memory-run-reasoning-next",
+    runInput: {
+      threadId: reasoningSessionId,
+      runId: "conversation-memory-run-reasoning-next",
+      messages: [{ id: "user-next", role: "user", content: "继续" }],
+      tools: [],
+      context: []
+    }
+  });
+  if (reasoningHistory.some((message) => String(message.content).includes("先检查 schema。"))) {
+    throw new Error("Reasoning-only folded rows must not be re-fed into model history");
+  }
+  if (!reasoningHistory.some((message) => String(message.content).includes("查询完成。"))) {
+    throw new Error("Text assistant rows from reasoning runs must remain in model history");
+  }
+
+  // Tool-only parents (write_file / publish_artifact style) must persist by message_id.
+  const toolParentSessionId = "conversation-memory-tool-parent-session";
+  const toolParentRunId = "conversation-memory-run-tool-parent";
+  store.sessions.create({
+    user_id: userId,
+    id: toolParentSessionId,
+    title: "conversation memory tool-parent smoke"
+  });
+  store.runs.create({
+    user_id: userId,
+    id: toolParentRunId,
+    session_id: toolParentSessionId,
+    request_fingerprint: "conversation-memory-tool-parent",
+    user_input: "写报告并发布",
+    status: "running"
+  });
+  const toolParentService = new ConversationMemoryService({
+    repository: store.conversationMessages,
+    sessionId: toolParentSessionId,
+    userId
+  });
+  toolParentService.persistCurrentUserMessage({
+    currentUserText: "写报告并发布",
+    runId: toolParentRunId,
+    runInput: {
+      threadId: toolParentSessionId,
+      runId: toolParentRunId,
+      messages: [{ id: "user-tool-parent", role: "user", content: "写报告并发布" }],
+      tools: [],
+      context: []
+    }
+  });
+  const toolParentObserver = toolParentService.createEventObserver({ runId: toolParentRunId });
+  toolParentObserver.observe({
+    type: EventType.TOOL_CALL_START,
+    toolCallId: "write-file-call",
+    toolCallName: "write_file",
+    parentMessageId: "msg-write-parent"
+  });
+  toolParentObserver.observe({
+    type: EventType.TOOL_CALL_START,
+    toolCallId: "publish-artifact-call",
+    toolCallName: "publish_artifact",
+    parentMessageId: "msg-publish-parent"
+  });
+  toolParentObserver.observe({
+    type: EventType.TEXT_MESSAGE_CHUNK,
+    role: "assistant",
+    messageId: "msg-final-answer",
+    delta: "报告已发布。"
+  });
+  const toolParentRecords = await toolParentObserver.flushCompleted();
+  const uniqueToolParentMessageIds = [...new Set(toolParentRecords.map((record) => record.message_id))];
+  const writeParent = toolParentRecords.find((record) => record.message_id === "msg-write-parent");
+  const publishParent = toolParentRecords.find((record) => record.message_id === "msg-publish-parent");
+  const finalAnswer = toolParentRecords.find((record) => record.message_id === "msg-final-answer");
+  if (!writeParent || !publishParent) {
+    throw new Error(
+      `Expected empty tool-parent rows for write/publish, got message_ids=${uniqueToolParentMessageIds.join(",")}`
+    );
+  }
+  if (uniqueToolParentMessageIds.length !== toolParentRecords.length) {
+    throw new Error(
+      `Expected distinct persisted tool-parent rows, got duplicates: ${toolParentRecords
+        .map((record) => record.message_id)
+        .join(",")}`
+    );
+  }
+  if (!finalAnswer) {
+    throw new Error("Expected final text assistant row after tool-parent persist");
+  }
+  const writeParentJson = JSON.parse(writeParent.content_json);
+  const publishParentJson = JSON.parse(publishParent.content_json);
+  if (writeParentJson.kind !== "tool_parent" || publishParentJson.kind !== "tool_parent") {
+    throw new Error(
+      `Expected kind=tool_parent on empty parents, got write=${writeParent.content_json} publish=${publishParent.content_json}`
+    );
+  }
+  if (writeParent.content_text !== "" || publishParent.content_text !== "") {
+    throw new Error("Empty tool-parent content_text must be empty string");
+  }
+  const toolParentHistory = buildConversationMemoryMessages({
+    currentUserText: "继续",
+    history: store.conversationMessages.listRecent({
+      user_id: userId,
+      session_id: toolParentSessionId,
+      exclude_run_id: "conversation-memory-run-tool-parent-next",
+      limit: 24
+    }),
+    runId: "conversation-memory-run-tool-parent-next",
+    runInput: {
+      threadId: toolParentSessionId,
+      runId: "conversation-memory-run-tool-parent-next",
+      messages: [{ id: "user-next-tp", role: "user", content: "继续" }],
+      tools: [],
+      context: []
+    }
+  });
+  if (toolParentHistory.some((message) => message.id.includes("msg-write-parent") || message.id.includes("msg-publish-parent"))) {
+    throw new Error("Empty tool-parent rows must not appear in model history by message id");
+  }
+  if (
+    toolParentHistory.filter((message) => message.role === "assistant").some((message) => String(message.content).trim() === "")
+  ) {
+    throw new Error("Empty tool-parent rows must not be re-fed as empty assistant history");
+  }
+  if (!toolParentHistory.some((message) => String(message.content).includes("报告已发布。"))) {
+    throw new Error("Text assistant rows after tool parents must remain in model history");
+  }
+  const persistedMessageIds = new Set(
+    store.conversationMessages
+      .listRecent({
+        user_id: userId,
+        session_id: toolParentSessionId,
+        limit: 24
+      })
+      .map((record) => record.message_id)
+      .filter(Boolean)
+  );
+  for (const parentId of ["msg-write-parent", "msg-publish-parent"]) {
+    if (!persistedMessageIds.has(parentId)) {
+      throw new Error(`Expected persisted message_id=${parentId} so restore has zero orphans`);
+    }
+  }
+
   store.runEvents.append({
     user_id: userId,
     session_id: sessionId,

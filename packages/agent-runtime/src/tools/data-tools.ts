@@ -137,7 +137,7 @@ export const createDataFoundryToolRegistry = (input: CreateDataFoundryToolRegist
     emitStepCorrelation(stepId, "inspect_schema", options?.toolCallId);
     input.emitter.emit(createActivitySnapshot(input.runContext, "STEP", {
       step_id: stepId,
-      title: "检查数据源 schema",
+      title: "Inspect data source schema",
       kind: "schema",
       tool_name: "inspect_schema",
       status: "running",
@@ -159,7 +159,7 @@ export const createDataFoundryToolRegistry = (input: CreateDataFoundryToolRegist
       resultMetadata.set(rawResult, { datasourceId, stepId });
       return rawResult;
     } catch (error) {
-      emitFailedStep(input, stepId, "inspect_schema", "检查数据源 schema", error);
+      emitFailedStep(input, stepId, "inspect_schema", "Inspect data source schema", error);
       throw error;
     }
   };
@@ -192,7 +192,7 @@ export const createDataFoundryToolRegistry = (input: CreateDataFoundryToolRegist
     const sqlActivityPreview = truncateContextText(toolInput.sql, SQL_MAX_SQL_CHARS);
     input.emitter.emit(createActivitySnapshot(input.runContext, "STEP", {
       step_id: stepId,
-      title: "执行只读 SQL",
+      title: "Run read-only SQL",
       kind: "sql",
       tool_name: "run_sql_readonly",
       status: "running",
@@ -228,7 +228,7 @@ export const createDataFoundryToolRegistry = (input: CreateDataFoundryToolRegist
       resultMetadata.set(rawResult, { datasourceId, stepId });
       return rawResult;
     } catch (error) {
-      emitFailedStep(input, stepId, "run_sql_readonly", "执行只读 SQL", error);
+      emitFailedStep(input, stepId, "run_sql_readonly", "Run read-only SQL", error);
       throw error;
     }
   };
@@ -269,7 +269,7 @@ export const createDataFoundryToolRegistry = (input: CreateDataFoundryToolRegist
     }
     input.emitter.emit(createActivitySnapshot(input.runContext, "STEP", {
       step_id: metadata.stepId,
-      title: isSchema ? "检查数据源 schema" : "执行只读 SQL",
+      title: isSchema ? "Inspect data source schema" : "Run read-only SQL",
       kind: isSchema ? "schema" : "sql",
       tool_name: governed.toolName,
       status: "completed",
@@ -290,7 +290,7 @@ export const createDataFoundryToolRegistry = (input: CreateDataFoundryToolRegist
       input,
       metadata.stepId,
       failed.toolName,
-      failed.toolName === "inspect_schema" ? "检查数据源 schema" : "执行只读 SQL",
+      failed.toolName === "inspect_schema" ? "Inspect data source schema" : "Run read-only SQL",
       failed.error
     );
   };

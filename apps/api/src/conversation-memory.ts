@@ -121,10 +121,18 @@ type ConversationMemoryEventObserverInput = {
   maxMessageChars?: number;
 };
 
+type AssistantContentPart = {
+  type: "reasoning" | "text";
+  text: string;
+};
+
 type AssistantDraft = {
   messageId: string;
-  role: "assistant" | "user" | "system" | "developer";
+  role: "assistant" | "user" | "system" | "developer" | "reasoning";
   text: string;
+  reasoning: string;
+  /** True when this messageId was referenced as TOOL_CALL_START.parentMessageId. */
+  toolParent?: boolean;
 };
 
 export class ConversationMemoryService {
@@ -313,15 +321,81 @@ export class ConversationMemoryEventObserver {
   }
 
   observe(event: BaseEvent): void {
+    if (event.type === EventType.TOOL_CALL_START) {
+      const parentMessageId = stringValue(readEventField(event, "parentMessageId"));
+      if (!parentMessageId) {
+        return;
+      }
+      const current = this.drafts.get(parentMessageId);
+      this.drafts.set(parentMessageId, {
+        messageId: parentMessageId,
+        role: current?.role === "reasoning" ? "reasoning" : current?.role ?? "assistant",
+        text: current?.text ?? "",
+        reasoning: current?.reasoning ?? "",
+        toolParent: true
+      });
+      return;
+    }
+
+    if (
+      event.type === EventType.REASONING_MESSAGE_START ||
+      event.type === EventType.REASONING_START
+    ) {
+      const messageId = stringValue(readEventField(event, "messageId"));
+      if (!messageId) {
+        return;
+      }
+      const current = this.drafts.get(messageId);
+      this.drafts.set(messageId, {
+        messageId,
+        role: "reasoning",
+        text: current?.text ?? "",
+        reasoning: current?.reasoning ?? "",
+        ...(current?.toolParent ? { toolParent: true } : {})
+      });
+      return;
+    }
+
+    if (
+      event.type === EventType.REASONING_MESSAGE_CONTENT ||
+      event.type === EventType.REASONING_MESSAGE_CHUNK
+    ) {
+      const delta = typeof event.delta === "string" ? event.delta : "";
+      if (!delta) {
+        return;
+      }
+      const messageId =
+        stringValue(readEventField(event, "messageId")) ?? `${this.input.runId}:reasoning`;
+      const current = this.drafts.get(messageId);
+      this.drafts.set(messageId, {
+        messageId,
+        role: "reasoning",
+        text: current?.text ?? "",
+        reasoning: `${current?.reasoning ?? ""}${delta}`,
+        ...(current?.toolParent ? { toolParent: true } : {})
+      });
+      return;
+    }
+
+    if (
+      event.type === EventType.REASONING_MESSAGE_END ||
+      event.type === EventType.REASONING_END
+    ) {
+      return;
+    }
+
     if (event.type === EventType.TEXT_MESSAGE_START) {
       const messageId = stringValue(readEventField(event, "messageId"));
       if (!messageId) {
         return;
       }
+      const current = this.drafts.get(messageId);
       this.drafts.set(messageId, {
         messageId,
-        role: conversationRole(readEventField(event, "role")) ?? "assistant",
-        text: this.drafts.get(messageId)?.text ?? ""
+        role: conversationRole(readEventField(event, "role")) ?? current?.role ?? "assistant",
+        text: current?.text ?? "",
+        reasoning: current?.reasoning ?? "",
+        ...(current?.toolParent ? { toolParent: true } : {})
       });
       return;
     }
@@ -339,7 +413,9 @@ export class ConversationMemoryEventObserver {
     this.drafts.set(messageId, {
       messageId,
       role: conversationRole(readEventField(event, "role")) ?? current?.role ?? "assistant",
-      text: `${current?.text ?? ""}${delta}`
+      text: `${current?.text ?? ""}${delta}`,
+      reasoning: current?.reasoning ?? "",
+      ...(current?.toolParent ? { toolParent: true } : {})
     });
   }
 
@@ -362,13 +438,24 @@ export class ConversationMemoryEventObserver {
     }).maxMessageChars;
     const records: ConversationMessageRecord[] = [];
     for (const draft of this.drafts.values()) {
-      if (draft.role !== "assistant") {
+      // Fold AG-UI reasoning messages into assistant rows (no DB role migration).
+      if (draft.role !== "assistant" && draft.role !== "reasoning") {
         continue;
       }
+      const reasoning = draft.reasoning.trim();
       const text = draft.text.trim();
-      if (!text) {
+      const toolParent = draft.toolParent === true;
+      if (!reasoning && !text && !toolParent) {
         continue;
       }
+      const parts: AssistantContentPart[] = [];
+      if (reasoning) {
+        parts.push({ type: "reasoning", text: boundText(reasoning, maxMessageChars) });
+      }
+      if (text) {
+        parts.push({ type: "text", text: boundText(text, maxMessageChars) });
+      }
+      const contentText = boundText(text || reasoning, maxMessageChars);
       records.push(this.input.repository.append({
         user_id: this.input.userId,
         session_id: this.input.sessionId,
@@ -377,8 +464,14 @@ export class ConversationMemoryEventObserver {
         role: "assistant",
         source: "agent",
         message_id: draft.messageId,
-        content_text: boundText(text, maxMessageChars),
-        content: { text: boundText(text, maxMessageChars) }
+        content_text: contentText,
+        content: {
+          text: contentText,
+          // Only emit parts when reasoning was observed (fold contract).
+          ...(reasoning ? { parts } : {}),
+          // Empty assistant rows that own tools — restore links by message_id.
+          ...(toolParent && !text && !reasoning ? { kind: "tool_parent" } : {})
+        }
       }));
     }
     this.drafts.clear();
@@ -540,10 +633,15 @@ const normalizeHistoryMessagePairs = (
   for (let i = 0; i < records.length; i++) {
     const cur = records[i]!;
     const next = records[i + 1] as ConversationMessageRecord | undefined;
+    const historyText = historyVisibleText(cur);
+    // Skip reasoning-only assistant rows so folded thinking is not re-fed to the model.
+    if (cur.role === "assistant" && !historyText) {
+      continue;
+    }
     result.push({
       id: `memory:${cur.id}`,
       role: cur.role,
-      content: boundText(cur.content_text, maxMessageChars)
+      content: boundText(historyText || cur.content_text, maxMessageChars)
     });
     if (cur.role === "user" && (!next || next.role === "user")) {
       result.push({
@@ -554,6 +652,49 @@ const normalizeHistoryMessagePairs = (
     }
   }
   return result;
+};
+
+/** Prefer text parts for model history; never return reasoning-only or empty tool-parent content. */
+const historyVisibleText = (record: ConversationMessageRecord): string => {
+  try {
+    const parsed = JSON.parse(record.content_json) as {
+      parts?: unknown;
+      text?: unknown;
+      kind?: unknown;
+    };
+    if (Array.isArray(parsed.parts)) {
+      const textParts = parsed.parts
+        .filter(
+          (part): part is { type: "text"; text: string } =>
+            Boolean(part) &&
+            typeof part === "object" &&
+            (part as { type?: unknown }).type === "text" &&
+            typeof (part as { text?: unknown }).text === "string"
+        )
+        .map((part) => part.text.trim())
+        .filter(Boolean);
+      if (textParts.length > 0) {
+        return textParts.join("\n\n");
+      }
+      const hasReasoning = parsed.parts.some(
+        (part) =>
+          part &&
+          typeof part === "object" &&
+          (part as { type?: unknown }).type === "reasoning"
+      );
+      if (hasReasoning) {
+        return "";
+      }
+    }
+    // Empty tool-parent rows exist only for restore linking — never feed them to the model.
+    if (parsed.kind === "tool_parent") {
+      const text = typeof parsed.text === "string" ? parsed.text.trim() : "";
+      return text;
+    }
+  } catch {
+    // fall through to content_text
+  }
+  return record.content_text;
 };
 
 const selectBudgetedHistory = (input: {
@@ -680,7 +821,7 @@ const stringValue = (value: unknown): string | undefined => (typeof value === "s
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
-const conversationRole = (value: unknown): AssistantDraft["role"] | undefined => {
+const conversationRole = (value: unknown): Exclude<AssistantDraft["role"], "reasoning"> | undefined => {
   if (value === "assistant" || value === "user" || value === "system" || value === "developer") {
     return value;
   }

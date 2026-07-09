@@ -37,6 +37,23 @@ export type EvidenceKind =
   | "knowledge"
   | "step";
 
+/** A rectangular cell range in a table preview, using 0-based inclusive indices. */
+export type EvidenceCellRange = {
+  r0: number;
+  c0: number;
+  r1: number;
+  c1: number;
+};
+
+/**
+ * Optional sub-selection inside an evidence object. Present when a user references
+ * only part of an artifact (a table region, or a highlighted text span) rather than
+ * the whole thing. The backend may ignore this and treat the reference as whole.
+ */
+export type EvidenceSelection =
+  | { mode: "cells" | "rows" | "cols"; range: EvidenceCellRange; columns?: string[] }
+  | { mode: "text"; quote: string; offset?: number };
+
 export type EvidenceRefSource = {
   artifactId?: string;
   toolCallId?: string;
@@ -47,6 +64,8 @@ export type EvidenceRefSource = {
   tableName?: string;
   documentId?: string;
   chunkId?: string;
+  /** Fine-grained selection within the referenced object; omitted means whole-object. */
+  selection?: EvidenceSelection;
 };
 
 export type EvidenceRef = {
@@ -220,6 +239,14 @@ export type ArtifactSummary = {
   type: ArtifactType;
   name: string;
   preview_json?: unknown;
+  /**
+   * Authoritative origin of the artifact so the frontend can link it back to the
+   * producing run / tool call / step without heuristics (R-018). Populated from the
+   * artifact record's `run_id` and its `metadata_json` when present.
+   */
+  run_id?: string;
+  tool_call_id?: string;
+  step_id?: string;
 };
 
 export type AppErrorCode =

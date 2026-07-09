@@ -418,8 +418,15 @@ const handleSessionRequest = async (
     sessionId,
     userId: context.userId
   });
+  const pendingInteractions = context.metadataStore.interactions.listPendingBySession({
+    user_id: context.userId,
+    session_id: sessionId
+  });
+  // R-018: checkpoints must cover every run referenced by messages, pending HITL,
+  // or summary — not only message run_ids (user-only / interaction-only runs).
   const runIds = [...new Set([
     ...messages.map((message) => message.run_id),
+    ...pendingInteractions.map((interaction) => interaction.run_id),
     ...(latestSummary?.source_run_id ? [latestSummary.source_run_id] : [])
   ])];
   const runEventGroups = runIds.map((runId) => ({
@@ -427,9 +434,13 @@ const handleSessionRequest = async (
     events: context.metadataStore.runEvents.listByRun({ user_id: context.userId, run_id: runId })
   }));
   const visiblePositions = new Map(messages.map((message, index) => [message.id, index + 1]));
+  const pendingInteractionRunIds = new Set(
+    pendingInteractions.map((interaction) => interaction.run_id)
+  );
   const checkpoints = runCheckpointDtos({
     context,
     messages,
+    pendingInteractionRunIds,
     runEventGroups,
     runIds,
     visiblePositions
@@ -440,10 +451,26 @@ const handleSessionRequest = async (
     sessionId,
     userId: context.userId
   });
-  const pendingInteractions = context.metadataStore.interactions.listPendingBySession({
-    user_id: context.userId,
-    session_id: sessionId
-  });
+  // R-018: authoritative HITL tool names (ask_user / submit_plan) keyed by tool_call_id,
+  // from the interactions table (all statuses). Overrides any mislabeled AG-UI event name.
+  const authoritativeToolNames = new Map(
+    context.metadataStore.interactions
+      .listBySession({ user_id: context.userId, session_id: sessionId })
+      .map((interaction) => [interaction.tool_call_id, interaction.tool_name])
+  );
+  // R-018: tool_call_ids the run is currently suspended on (pending HITL). Authoritative
+  // "awaiting user" marker so restore does not infer suspension from a missing result.
+  const awaitingInteractionToolCallIds = new Set(
+    pendingInteractions.map((interaction) => interaction.tool_call_id)
+  );
+  const eventToolCalls = runEventGroups.flatMap(({ runId, events }) =>
+    toolCallPairDtos(runId, events, authoritativeToolNames, awaitingInteractionToolCallIds)
+  );
+  const toolCalls = mergePendingInteractionToolCalls(
+    eventToolCalls,
+    pendingInteractions,
+    authoritativeToolNames
+  );
 
   return ok({
     sessionId,
@@ -456,7 +483,7 @@ const handleSessionRequest = async (
     ...(checkpoints.length > 0 ? { checkpoints } : {}),
     ...(lineage.branch ? { branch: sessionBranchDto(lineage.branch, session) } : {}),
     ...(branchOptions.length > 0 ? { branches: branchOptions.map(conversationBranchOptionDto) } : {}),
-    toolCalls: runEventGroups.flatMap(({ runId, events }) => toolCallPairDtos(runId, events)),
+    toolCalls,
     pendingInteractions: pendingInteractions.map(pendingInteractionDto),
     restorableCustomEvents: runEventGroups.flatMap(({ runId, events }) =>
       restorableCustomEventDtos(runId, events)
@@ -1569,18 +1596,56 @@ const handleFileRequest = async (
  * `SessionArtifactsRestore` expects: stable `fileId` (nullable for pure-preview
  * table/chart), `downloadUrl` only when there is a backing file, parsed `preview_json`.
  */
-const sessionArtifactDto = (artifact: ArtifactRecord): Record<string, unknown> => ({
-  id: artifact.id,
-  type: artifact.type,
-  name: artifact.name,
-  ...(artifact.file_asset_ref_id ? { fileId: artifact.file_asset_ref_id } : { fileId: null }),
-  ...(artifact.file_asset_ref_id
-    ? { downloadUrl: `/api/v1/artifacts/${artifact.id}/download` }
-    : {}),
-  ...(artifact.mime_type ? { mimeType: artifact.mime_type } : {}),
-  preview_json: artifact.preview_json ? JSON.parse(artifact.preview_json) as unknown : null,
-  createdAt: artifact.created_at
-});
+const sessionArtifactDto = (artifact: ArtifactRecord): Record<string, unknown> => {
+  const origin = artifactOriginFromMetadata(artifact.metadata_json);
+  const storedPreview = parseStoredArtifactPreview(artifact.preview_json);
+  return {
+    id: artifact.id,
+    type: artifact.type,
+    name: artifact.name,
+    // R-018: authoritative origin so the frontend links the artifact to its run /
+    // tool call / step without heuristics (replaces reconcileLiveRunArtifacts).
+    runId: artifact.run_id,
+    ...(origin.tool_call_id ? { toolCallId: origin.tool_call_id } : {}),
+    ...(origin.step_id ? { stepId: origin.step_id } : {}),
+    ...(artifact.file_asset_ref_id ? { fileId: artifact.file_asset_ref_id } : { fileId: null }),
+    ...(artifact.file_asset_ref_id
+      ? { downloadUrl: `/api/v1/artifacts/${artifact.id}/download` }
+      : {}),
+    ...(artifact.mime_type ? { mimeType: artifact.mime_type } : {}),
+    preview_json: storedPreview === undefined ? null : storedPreview,
+    preview_available: storedPreview !== undefined || Boolean(artifact.file_asset_ref_id),
+    createdAt: artifact.created_at
+  };
+};
+
+/**
+ * Extract R-018 origin handles (`tool_call_id` / `step_id`) that producers persist in
+ * an artifact's `metadata_json`. Returns empty handles when absent or malformed.
+ */
+const artifactOriginFromMetadata = (
+  metadataJson: string | undefined
+): { step_id?: string; tool_call_id?: string } => {
+  if (!metadataJson) {
+    return {};
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(metadataJson);
+  } catch {
+    return {};
+  }
+  if (typeof parsed !== "object" || parsed === null) {
+    return {};
+  }
+  const record = parsed as Record<string, unknown>;
+  const toolCallId = typeof record.tool_call_id === "string" ? record.tool_call_id : undefined;
+  const stepId = typeof record.step_id === "string" ? record.step_id : undefined;
+  return {
+    ...(toolCallId ? { tool_call_id: toolCallId } : {}),
+    ...(stepId ? { step_id: stepId } : {})
+  };
+};
 
 const handleArtifactRequest = async (
   request: IncomingMessage,
@@ -1657,7 +1722,11 @@ const handleArtifactRequest = async (
   }
   const artifact = context.metadataStore.artifacts.get({ user_id: context.userId, artifact_id: id });
   if (segments[1] === "preview") {
-    return ok(artifact.preview_json ? JSON.parse(artifact.preview_json) as unknown : null);
+    const storedPreview = parseStoredArtifactPreview(artifact.preview_json);
+    if (storedPreview !== undefined) {
+      return ok(storedPreview);
+    }
+    return ok(synthesizeArtifactPreviewFromFile(artifact, context));
   }
   if (segments[1] === "content" || segments[1] === "download") {
     const requestUrl = new URL(request.url ?? "/", "http://127.0.0.1");
@@ -1712,9 +1781,39 @@ const conversationMessageDto = (
   ...(message.message_id ? { messageId: message.message_id } : {}),
   contentText: message.content_text,
   ...conversationMessageEvidenceRefsDto(message),
+  ...conversationMessageContentPartsDto(message),
   position: visiblePosition,
   createdAt: message.created_at
 });
+
+const conversationMessageContentPartsDto = (
+  message: ConversationMessageRecord
+): Record<string, unknown> => {
+  const content = parseRecord(message.content_json);
+  const parts = contentPartsFromUnknown(content.parts);
+  return parts.length > 0 ? { contentParts: parts } : {};
+};
+
+const contentPartsFromUnknown = (
+  value: unknown
+): Array<{ type: "reasoning" | "text"; text: string }> => {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const parts: Array<{ type: "reasoning" | "text"; text: string }> = [];
+  for (const item of value) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) {
+      continue;
+    }
+    const record = item as Record<string, unknown>;
+    const type = record.type;
+    const text = typeof record.text === "string" ? record.text : "";
+    if ((type === "reasoning" || type === "text") && text.trim()) {
+      parts.push({ type, text });
+    }
+  }
+  return parts;
+};
 
 const conversationMessageEvidenceRefsDto = (message: ConversationMessageRecord): Record<string, unknown> => {
   const content = parseRecord(message.content_json);
@@ -1814,22 +1913,49 @@ const runEventRefDto = (runId: string, events: RunEventRecord[]): Record<string,
 const runCheckpointDtos = (input: {
   context: Required<ConfigApiContext>;
   messages: ConversationMessageRecord[];
+  pendingInteractionRunIds?: Set<string>;
   runEventGroups: Array<{ events: RunEventRecord[]; runId: string }>;
   runIds: string[];
   visiblePositions?: Map<string, number>;
 }): Record<string, unknown>[] => {
   const eventsByRun = new Map(input.runEventGroups.map((group) => [group.runId, group.events]));
   return input.runIds.flatMap((runId) => {
+    const events = eventsByRun.get(runId) ?? [];
+    const artifactIds = input.context.metadataStore.artifacts
+      .listByRun({ user_id: input.context.userId, run_id: runId })
+      .map((artifact) => artifact.id);
     const run = input.context.metadataStore.runs.find({
       user_id: input.context.userId,
       run_id: runId
     });
     if (!run) {
-      return [];
+      // Legacy / event-only runs without a `runs` row: still emit an authoritative
+      // checkpoint so the frontend never has to guess status (R-018). Status is derived
+      // from the persisted terminal event rather than a frontend "completed" fallback.
+      if (events.length === 0) {
+        // HITL-only legacy: pending interaction exists but neither runs row nor events.
+        if (input.pendingInteractionRunIds?.has(runId)) {
+          return [{
+            runId,
+            status: "suspended"
+          }];
+        }
+        return [];
+      }
+      return [
+        eventOnlyRunCheckpointDto({
+          artifactIds,
+          events,
+          messages: input.messages.filter((message) => message.run_id === runId),
+          runId,
+          ...(input.visiblePositions ? { visiblePositions: input.visiblePositions } : {})
+        })
+      ];
     }
     return [
       runCheckpointDto({
-        events: eventsByRun.get(runId) ?? [],
+        artifactIds,
+        events,
         messages: input.messages.filter((message) => message.run_id === runId),
         run,
         ...(input.visiblePositions ? { visiblePositions: input.visiblePositions } : {})
@@ -1838,7 +1964,66 @@ const runCheckpointDtos = (input: {
   });
 };
 
+/** Map a terminal AG-UI run status to its canonical terminal event name, if any. */
+const terminalEventForStatus = (status: string): string | undefined => {
+  if (status === "completed") {
+    return "RUN_FINISHED";
+  }
+  if (status === "failed" || status === "canceled") {
+    return "RUN_ERROR";
+  }
+  return undefined;
+};
+
+/** Derive an authoritative run status from persisted events when no `runs` row exists. */
+const statusFromTerminalEvent = (events: RunEventRecord[]): string => {
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const record = events[index];
+    if (!record) {
+      continue;
+    }
+    const event = parseRecord(record.payload_json);
+    const type = stringValue(event.type);
+    if (type === "RUN_FINISHED") {
+      return "completed";
+    }
+    if (type === "RUN_ERROR") {
+      return "failed";
+    }
+  }
+  return "running";
+};
+
+const eventOnlyRunCheckpointDto = (input: {
+  artifactIds: string[];
+  events: RunEventRecord[];
+  messages: ConversationMessageRecord[];
+  runId: string;
+  visiblePositions?: Map<string, number>;
+}): Record<string, unknown> => {
+  const positions = input.messages.map((message) => input.visiblePositions?.get(message.id) ?? message.position);
+  const firstEvent = input.events[0];
+  const lastEvent = input.events.at(-1);
+  const status = statusFromTerminalEvent(input.events);
+  const terminalEvent = terminalEventForStatus(status);
+  return {
+    runId: input.runId,
+    status,
+    ...(positions.length > 0
+      ? {
+          messageStartPosition: Math.min(...positions),
+          messageEndPosition: Math.max(...positions)
+        }
+      : {}),
+    ...(firstEvent ? { firstEventSeq: firstEvent.seq } : {}),
+    ...(lastEvent ? { lastEventSeq: lastEvent.seq } : {}),
+    ...(terminalEvent ? { terminalEvent } : {}),
+    ...(input.artifactIds.length > 0 ? { artifactIds: input.artifactIds } : {})
+  };
+};
+
 const runCheckpointDto = (input: {
+  artifactIds?: string[];
   events: RunEventRecord[];
   messages: ConversationMessageRecord[];
   run: RunRecord;
@@ -1847,6 +2032,8 @@ const runCheckpointDto = (input: {
   const positions = input.messages.map((message) => input.visiblePositions?.get(message.id) ?? message.position);
   const firstEvent = input.events[0];
   const lastEvent = input.events.at(-1);
+  const terminalEvent = terminalEventForStatus(input.run.status);
+  const artifactIds = input.artifactIds ?? [];
   return {
     runId: input.run.id,
     status: input.run.status,
@@ -1860,7 +2047,9 @@ const runCheckpointDto = (input: {
     ...(lastEvent ? { lastEventSeq: lastEvent.seq } : {}),
     startedAt: input.run.started_at,
     ...(input.run.finished_at ? { finishedAt: input.run.finished_at } : {}),
-    ...(input.run.error_message ? { errorMessage: input.run.error_message } : {})
+    ...(input.run.error_message ? { errorMessage: input.run.error_message } : {}),
+    ...(terminalEvent ? { terminalEvent } : {}),
+    ...(artifactIds.length > 0 ? { artifactIds } : {})
   };
 };
 
@@ -1870,7 +2059,14 @@ const RESTORABLE_CUSTOM_EVENT_NAMES = new Set([
   "workspace.metadata",
   "sandbox.output",
   "goal.updated",
-  "sql_audit"
+  "sql_audit",
+  // Run-scoped configuration/context events the frontend RunConfigurationPanel restores
+  // on reload. These are emitted+persisted during the live run; without them the panel
+  // hangs on "Waiting for run.config.resolved…" after a session is reopened.
+  "run.config.resolved",
+  "skill.selection",
+  "context.compiled",
+  "context.prompt-verified"
 ]);
 
 const pendingInteractionDto = (interaction: InteractionRecord): Record<string, unknown> => {
@@ -1926,7 +2122,12 @@ const parseJsonValue = (value: string): unknown => {
   }
 };
 
-const toolCallPairDtos = (runId: string, events: RunEventRecord[]): Array<Record<string, unknown>> => {
+const toolCallPairDtos = (
+  runId: string,
+  events: RunEventRecord[],
+  authoritativeToolNames?: Map<string, string>,
+  awaitingInteractionToolCallIds?: Set<string>
+): Array<Record<string, unknown>> => {
   const calls = new Map<string, {
     args?: unknown;
     callEventSeq?: number;
@@ -1986,13 +2187,23 @@ const toolCallPairDtos = (runId: string, events: RunEventRecord[]): Array<Record
     }
   });
 
-  return [...calls.values()].map((call) => ({
+  return [...calls.values()].map((call) => {
+    // R-018: HITL tool names (ask_user / submit_plan) from the interactions table are
+    // authoritative and override any mislabeled name carried on the AG-UI events.
+    const authoritativeName = authoritativeToolNames?.get(call.toolCallId);
+    const resolvedToolName = authoritativeName ?? call.toolName;
+    // R-018: authoritative "run is suspended waiting on this HITL tool" flag, from the
+    // interactions table — distinguishes "awaiting user" from "still running" without the
+    // frontend having to guess from a missing result.
+    const awaitingInteraction = awaitingInteractionToolCallIds?.has(call.toolCallId) ?? false;
+    return {
     runId,
     // R-027: stable id/name/args/result fields plus the legacy toolCallId/toolName aliases.
     id: call.toolCallId,
     toolCallId: call.toolCallId,
     status: call.status,
-    ...(call.toolName ? { name: call.toolName, toolName: call.toolName } : {}),
+    ...(awaitingInteraction ? { awaitingInteraction: true } : {}),
+    ...(resolvedToolName ? { name: resolvedToolName, toolName: resolvedToolName } : {}),
     ...(call.args !== undefined ? { args: call.args } : {}),
     ...(call.result !== undefined ? { result: call.result } : {}),
     ...(call.callEventSeq !== undefined ? { callEventSeq: call.callEventSeq } : {}),
@@ -2001,7 +2212,47 @@ const toolCallPairDtos = (runId: string, events: RunEventRecord[]): Array<Record
     ...(call.parentMessageId ? { parentMessageId: call.parentMessageId } : {}),
     ...(call.resultMessageId ? { resultMessageId: call.resultMessageId } : {}),
     ...(call.resultPreview ? { resultPreview: call.resultPreview } : {})
-  }));
+    };
+  });
+};
+
+/**
+ * Read-path defense for HITL: when an interactions row exists but TOOL_CALL_START was
+ * never persisted (legacy suspend), synthesize a pending tool call DTO so restore does
+ * not depend on frontend bootstrap alone.
+ */
+const mergePendingInteractionToolCalls = (
+  eventToolCalls: Array<Record<string, unknown>>,
+  pendingInteractions: InteractionRecord[],
+  authoritativeToolNames: Map<string, string>
+): Array<Record<string, unknown>> => {
+  if (pendingInteractions.length === 0) {
+    return eventToolCalls;
+  }
+  const knownIds = new Set(
+    eventToolCalls
+      .map((call) => stringValue(call.toolCallId) ?? stringValue(call.id))
+      .filter((id): id is string => Boolean(id))
+  );
+  const synthesized = pendingInteractions.flatMap((interaction) => {
+    if (knownIds.has(interaction.tool_call_id)) {
+      return [];
+    }
+    const toolName =
+      authoritativeToolNames.get(interaction.tool_call_id) ?? interaction.tool_name;
+    const args = parseJsonValue(interaction.payload_json);
+    return [{
+      runId: interaction.run_id,
+      id: interaction.tool_call_id,
+      toolCallId: interaction.tool_call_id,
+      status: "pending",
+      awaitingInteraction: true,
+      name: toolName,
+      toolName,
+      ...(args !== undefined ? { args } : {})
+    }];
+  });
+  return [...eventToolCalls, ...synthesized];
 };
 
 /**
@@ -2149,6 +2400,72 @@ const artifactFileContent = (storagePath: string | undefined): { body: Buffer; m
     throw new Error("ARTIFACT_STORAGE_PATH_INVALID");
   }
   return { body: readFileSync(path), mimeType: mimeTypeForPath(path) };
+};
+
+/** When preview_json is absent but the artifact is file-backed, synthesize a text preview. */
+const synthesizeArtifactPreviewFromFile = (
+  artifact: ArtifactRecord,
+  context: Required<ConfigApiContext>
+): Record<string, unknown> | null => {
+  if (!artifact.file_asset_ref_id) {
+    return null;
+  }
+  const file = context.fileAssetService.readRef({
+    user_id: context.userId,
+    workspace_id: context.workspaceId,
+    id: artifact.file_asset_ref_id
+  });
+  const mime = (file.mimeType || artifact.mime_type || "").toLowerCase();
+  const isTextLike =
+    mime.startsWith("text/") ||
+    mime.includes("markdown") ||
+    mime.includes("json") ||
+    mime.includes("csv") ||
+    mime.includes("html") ||
+    /\.(md|txt|csv|tsv|json|html|htm)$/i.test(artifact.name);
+  if (!isTextLike) {
+    return {
+      type: artifact.type,
+      path: artifact.name,
+      size: file.body.length,
+      tool: "publish_artifact"
+    };
+  }
+  const maxChars = 200_000;
+  const content = file.body.toString("utf8").slice(0, maxChars);
+  if (artifact.type === "markdown" || artifact.type === "html" || artifact.type === "file") {
+    return {
+      type: artifact.type,
+      content,
+      path: artifact.name,
+      size: file.body.length,
+      tool: "publish_artifact"
+    };
+  }
+  // table/chart without stored preview_json: still expose raw text so clients can fall back.
+  return {
+    type: artifact.type,
+    content,
+    path: artifact.name,
+    size: file.body.length,
+    tool: "publish_artifact"
+  };
+};
+
+/**
+ * Returns a real preview payload when stored JSON is present and non-null.
+ * Distinguishes missing / JSON `null` (common for publish_artifact) from usable data.
+ */
+const parseStoredArtifactPreview = (previewJson: string | undefined): unknown | undefined => {
+  if (!previewJson || !previewJson.trim() || previewJson.trim() === "null") {
+    return undefined;
+  }
+  try {
+    const parsed = JSON.parse(previewJson) as unknown;
+    return parsed === null ? undefined : parsed;
+  } catch {
+    return undefined;
+  }
 };
 
 const serializeArtifactPreview = (

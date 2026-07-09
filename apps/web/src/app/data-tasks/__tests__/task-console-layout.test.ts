@@ -5,13 +5,11 @@ describe("task console information architecture", () => {
   it("keeps overview focused on conclusion and progress", () => {
     expect(
       overviewSectionPlan({
-        hasWorkspaceSignals: true,
         hasToolDistribution: true,
       }),
     ).toEqual([
       { id: "conclusion", collapsible: false },
       { id: "progress", collapsible: false },
-      { id: "workspace-signals", collapsible: true },
       { id: "tool-distribution", collapsible: true },
     ]);
   });
