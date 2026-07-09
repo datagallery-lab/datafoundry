@@ -363,8 +363,20 @@ const matchesToolAllowlist = (serverConfig: PolicyMcpClientConfig, toolName: str
   if (!serverConfig.toolAllowlist || serverConfig.toolAllowlist.length === 0) {
     return true;
   }
-  const baseName = `mcp__${sanitizeMcpName(serverConfig.serverId)}__${sanitizeMcpName(toolName)}`;
-  return serverConfig.toolAllowlist.includes(toolName) || serverConfig.toolAllowlist.includes(baseName);
+  return mcpToolAllowlistCandidates(toolName).some((candidate) => {
+    const baseName = `mcp__${sanitizeMcpName(serverConfig.serverId)}__${sanitizeMcpName(candidate)}`;
+    return serverConfig.toolAllowlist?.includes(candidate) || serverConfig.toolAllowlist?.includes(baseName);
+  });
+};
+
+const mcpToolAllowlistCandidates = (toolName: string): string[] => {
+  if (toolName === "datalink_show" || toolName === "datagraph_show") {
+    return ["datalink_show", "datagraph_show"];
+  }
+  if (toolName === "datalink_explore" || toolName === "datagraph_explore") {
+    return ["datalink_explore", "datagraph_explore"];
+  }
+  return [toolName];
 };
 
 const resolveMcpToolName = (serverId: string, toolName: string, usedNames: Set<string>): string => {

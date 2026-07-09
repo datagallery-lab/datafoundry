@@ -165,6 +165,12 @@ export function knowledgeBaseDtoToItem(dto: KnowledgeBaseDto): WorkspaceConfigIt
 }
 
 export function mcpServerDtoToItem(dto: McpServerDto): WorkspaceConfigItem {
+  const toolNames = Array.isArray(dto.toolManifest)
+    ? dto.toolManifest.flatMap((tool) => {
+        const record = tool && typeof tool === "object" ? tool as Record<string, unknown> : {};
+        return typeof record.name === "string" ? [record.name] : [];
+      })
+    : [];
   return {
     id: dto.id,
     name: dto.name,
@@ -190,6 +196,7 @@ export function mcpServerDtoToItem(dto: McpServerDto): WorkspaceConfigItem {
           ? JSON.stringify(dto.env, null, 2)
           : "",
       toolCount: asString(Array.isArray(dto.toolManifest) ? dto.toolManifest.length : 0),
+      toolNames: toolNames.join(", "),
       healthStatus: dto.healthStatus ?? "untested",
     },
   };

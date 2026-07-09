@@ -62,6 +62,10 @@ import {
 } from "./model-profile-connection-status.js";
 import { handleCapabilitiesRequest } from "./routes/capabilities.js";
 import type { ConfigApiContext, ConfigApiResponse } from "./routes/types.js";
+import {
+  connectPolicyMcpClient,
+  type PolicyMcpClientConfig
+} from "./policy-mcp-middleware.js";
 import { sessionTitleDto } from "./session-title.js";
 import {
   createSessionBranch,
@@ -115,6 +119,14 @@ const CHAT_UPLOAD_TYPES = new Set([
   "text/tab-separated-values"
 ]);
 const CHAT_UPLOAD_EXTENSIONS = new Set([".csv", ".json", ".parquet", ".pdf", ".tsv", ".txt", ".xlsx"]);
+const DATALINK_TOOL_ALIASES = {
+  addTable: ["add_table"],
+  explore: ["datalink_explore", "datagraph_explore"],
+  rebuild: ["rebuild"],
+  removeTable: ["remove_table"],
+  show: ["datalink_show", "datagraph_show"]
+} as const;
+type DatalinkToolOperation = keyof typeof DATALINK_TOOL_ALIASES;
 
 /** Handle one configuration REST request, or return undefined for a non-config path. */
 export const handleConfigApiRequest = async (
@@ -154,6 +166,9 @@ const routeConfigRequest = async (
   }
   if (root === "datasources") {
     return handleDatasourceRequest(request, segments.slice(1), context);
+  }
+  if (root === "datalink" || root === "datagraph") {
+    return handleDatalinkRequest(request, segments.slice(1), context);
   }
   if (root === "workspace-config") {
     if (request.method === "GET") {
@@ -662,6 +677,301 @@ const handleDatasourceRequest = async (
     return ok({ deleted: true, id });
   }
   return methodNotAllowed();
+};
+
+const handleDatalinkRequest = async (
+  request: IncomingMessage,
+  segments: string[],
+  context: Required<ConfigApiContext>
+): Promise<ConfigApiResponse> => {
+  const target = segments[0];
+  const action = segments[1];
+  if (target === "servers" && request.method === "GET") {
+    return ok({ servers: listDatalinkServers(context) });
+  }
+  if (!target) {
+    return methodNotAllowed();
+  }
+
+  const serverId = decodeURIComponent(target);
+  const resource = getDatalinkServer(context, serverId);
+  if (action === "graph" && request.method === "GET") {
+    const result = await callDatalinkMcpTool(resource, context, "show", {});
+    return ok({
+      graph: normalizeDatalinkGraph(result),
+      server: datalinkServerDto(resource)
+    });
+  }
+  if (action === "explore" && request.method === "POST") {
+    const body = await readJsonBody(request);
+    const query = stringValue(body.query);
+    if (!query) {
+      throw new Error("DATALINK_QUERY_REQUIRED");
+    }
+    const maxNodes = numberValue(body.maxNodes) ?? numberValue(body.max_nodes);
+    const focus = stringValue(body.focus);
+    const result = await callDatalinkMcpTool(resource, context, "explore", {
+      query,
+      ...(maxNodes !== undefined ? { max_nodes: Math.floor(maxNodes) } : {}),
+      ...(focus ? { focus } : {}),
+      mask_credential: booleanValue(body.maskCredential ?? body.mask_credential, true)
+    });
+    return ok({ result: result.text, server: datalinkServerDto(resource) });
+  }
+  if (action === "tables" && request.method === "POST") {
+    const body = await readJsonBody(request);
+    const source = stringValue(body.source);
+    if (!source) {
+      throw new Error("DATALINK_SOURCE_REQUIRED");
+    }
+    const result = await callDatalinkMcpTool(resource, context, "addTable", {
+      source,
+      table: stringValue(body.table) ?? null,
+      source_type: stringValue(body.sourceType ?? body.source_type) ?? "csv",
+      schema_name: stringValue(body.schemaName ?? body.schema_name) ?? null
+    });
+    return ok({ result: result.text, server: datalinkServerDto(resource) });
+  }
+  if (action === "tables" && request.method === "DELETE") {
+    const body = await readJsonBody(request);
+    const tableId = stringValue(body.tableId ?? body.table_id) ?? (segments[2] ? decodeURIComponent(segments[2]) : "");
+    if (!tableId) {
+      throw new Error("DATALINK_TABLE_ID_REQUIRED");
+    }
+    const result = await callDatalinkMcpTool(resource, context, "removeTable", {
+      table_id: tableId,
+      cleanup_orphans: booleanValue(body.cleanupOrphans ?? body.cleanup_orphans, true)
+    });
+    return ok({ result: result.text, server: datalinkServerDto(resource) });
+  }
+  if (action === "rebuild" && request.method === "POST") {
+    const result = await callDatalinkMcpTool(resource, context, "rebuild", {});
+    return ok({ result: result.text, server: datalinkServerDto(resource) });
+  }
+  return methodNotAllowed();
+};
+
+type DatalinkToolCallResult = {
+  structuredContent?: unknown;
+  text: string;
+};
+
+const listDatalinkServers = (context: Required<ConfigApiContext>): Record<string, unknown>[] =>
+  context.metadataStore.configResources.list({
+    workspace_id: context.workspaceId,
+    user_id: context.userId,
+    kind: "mcp-server"
+  }).filter(isDatalinkServer).map(datalinkServerDto);
+
+const getDatalinkServer = (
+  context: Required<ConfigApiContext>,
+  serverId: string
+): ConfigResourceRecord => {
+  const resource = context.metadataStore.configResources.get({
+    id: serverId,
+    workspace_id: context.workspaceId,
+    user_id: context.userId,
+    kind: "mcp-server"
+  });
+  if (!isDatalinkServer(resource)) {
+    throw new Error(`DATALINK_SERVER_NOT_FOUND:${serverId}`);
+  }
+  return resource;
+};
+
+const isDatalinkServer = (resource: ConfigResourceRecord): boolean => {
+  const tools = datalinkToolManifest(resource);
+  if (tools.some((tool) => isDatalinkManifestToolName(tool.name))) {
+    return true;
+  }
+  const name = resource.name.toLowerCase();
+  const id = resource.id.toLowerCase();
+  return name.includes("datalink") || name.includes("datagraph") || id.includes("datalink") || id.includes("datagraph");
+};
+
+const isDatalinkManifestToolName = (toolName: string): boolean =>
+  toolName.startsWith("datalink_") || toolName.startsWith("datagraph_");
+
+const datalinkServerDto = (resource: ConfigResourceRecord): Record<string, unknown> => {
+  const tools = datalinkToolManifest(resource);
+  return {
+    id: resource.id,
+    name: datalinkServerDisplayName(resource),
+    description: resource.description ?? "",
+    healthStatus: resource.status,
+    serverUrl: stringValue(resource.payload.serverUrl) ?? stringValue(resource.payload.url) ?? "",
+    transport: stringValue(resource.payload.transport) ?? "streamable-http",
+    toolCount: tools.length,
+    toolNames: tools.map((tool) => tool.name),
+    updatedAt: resource.updated_at
+  };
+};
+
+const datalinkServerDisplayName = (resource: ConfigResourceRecord): string => {
+  if (resource.name.toLowerCase() === "datagraph") {
+    return "datalink";
+  }
+  return resource.name;
+};
+
+const datalinkToolManifest = (resource: ConfigResourceRecord): Array<{ name: string }> => {
+  const manifest = arrayValue(resource.payload.toolManifest);
+  if (!manifest) {
+    return [];
+  }
+  return manifest.flatMap((tool) => {
+    const name = isRecord(tool) ? stringValue(tool.name) : undefined;
+    return name ? [{ name }] : [];
+  });
+};
+
+const callDatalinkMcpTool = async (
+  resource: ConfigResourceRecord,
+  context: Required<ConfigApiContext>,
+  operation: DatalinkToolOperation,
+  args: Record<string, unknown>
+): Promise<DatalinkToolCallResult> => {
+  const config = datalinkMcpClientConfig(resource, context);
+  let client: Client | undefined;
+  try {
+    client = await connectPolicyMcpClient(config);
+    const toolName = await resolveDatalinkToolName(resource, client, operation);
+    const result = await client.callTool({ name: toolName, arguments: args });
+    const text = datalinkToolText(result);
+    if (isRecord(result) && result.isError === true) {
+      throw new Error(`DATALINK_TOOL_FAILED:${toolName}:${text}`);
+    }
+    return {
+      ...(isRecord(result) && result.structuredContent !== undefined
+        ? { structuredContent: result.structuredContent }
+        : {}),
+      text
+    };
+  } finally {
+    await client?.close().catch(() => undefined);
+  }
+};
+
+const resolveDatalinkToolName = async (
+  resource: ConfigResourceRecord,
+  client: Client,
+  operation: DatalinkToolOperation
+): Promise<string> => {
+  const liveToolNames = await listDatalinkMcpToolNames(client);
+  const toolName = pickDatalinkToolName(operation, liveToolNames);
+  if (!toolName) {
+    throw new Error(`DATALINK_TOOL_UNAVAILABLE:${operation}:${liveToolNames.join(",")}`);
+  }
+  ensureDatalinkToolAllowed(resource, toolName);
+  return toolName;
+};
+
+const listDatalinkMcpToolNames = async (client: Client): Promise<string[]> => {
+  const result = await client.listTools();
+  return result.tools.flatMap((tool) => typeof tool.name === "string" ? [tool.name] : []);
+};
+
+const pickDatalinkToolName = (operation: DatalinkToolOperation, toolNames: string[]): string | undefined => {
+  const available = new Set(toolNames);
+  const preferred = DATALINK_TOOL_ALIASES[operation].find((toolName) => available.has(toolName));
+  if (preferred) {
+    return preferred;
+  }
+  return toolNames.find((toolName) => matchesDatalinkOperation(toolName, operation));
+};
+
+const matchesDatalinkOperation = (toolName: string, operation: DatalinkToolOperation): boolean => {
+  if (operation === "show") {
+    return toolName.endsWith("_show");
+  }
+  if (operation === "explore") {
+    return toolName.endsWith("_explore");
+  }
+  return DATALINK_TOOL_ALIASES[operation].some((candidate) => candidate === toolName);
+};
+
+const ensureDatalinkToolAllowed = (resource: ConfigResourceRecord, toolName: string): void => {
+  const allowlist = mcpToolAllowlistValue(resource.payload.toolAllowlist);
+  if (!matchesMcpToolAllowlist(resource.id, toolName, allowlist)) {
+    throw new Error(`DATALINK_TOOL_NOT_ALLOWED:${toolName}`);
+  }
+};
+
+const datalinkMcpClientConfig = (
+  resource: ConfigResourceRecord,
+  context: Required<ConfigApiContext>
+): PolicyMcpClientConfig => {
+  const urlOrCommand = stringValue(resource.payload.serverUrl) ?? stringValue(resource.payload.url);
+  const transport = stringValue(resource.payload.transport) ?? "streamable-http";
+  if (!urlOrCommand || (transport !== "streamable-http" && transport !== "sse" && transport !== "stdio")) {
+    throw new Error("DATALINK_MCP_CONFIG_INVALID");
+  }
+  const timeoutMs = numberValue(resource.payload.timeoutMs);
+  if (transport === "stdio") {
+    const command = resolveStdioCommand(resource.payload, urlOrCommand);
+    return {
+      serverId: resource.id,
+      type: "stdio",
+      ...command,
+      ...(timeoutMs !== undefined ? { timeoutMs } : {})
+    };
+  }
+  const headers = datalinkMcpHeaders(resource, context);
+  return {
+    serverId: resource.id,
+    type: transport === "sse" ? "sse" : "http",
+    url: urlOrCommand,
+    ...(headers ? { headers } : {}),
+    ...(timeoutMs !== undefined ? { timeoutMs } : {})
+  };
+};
+
+const datalinkMcpHeaders = (
+  resource: ConfigResourceRecord,
+  context: Required<ConfigApiContext>
+): Record<string, string> | undefined => {
+  const secret = resource.secret_ref
+    ? context.metadataStore.secrets.get({
+        ref: resource.secret_ref,
+        workspace_id: context.workspaceId,
+        user_id: context.userId
+      })
+    : {};
+  const configured = recordStringMapValue(resource.payload.headers) ?? recordStringMapValue(secret.headers);
+  const token = stringValue(secret.token) ?? stringValue(secret.apiKey);
+  if ((stringValue(resource.payload.authType) ?? "none") === "bearer" && token) {
+    return { ...configured, Authorization: `Bearer ${token}` };
+  }
+  return configured;
+};
+
+const datalinkToolText = (result: unknown): string => {
+  const record = recordValue(result) ?? {};
+  const content = arrayValue(record.content);
+  const textParts = content?.flatMap((part) => {
+    const item = recordValue(part);
+    return item?.type === "text" && typeof item.text === "string" ? [item.text] : [];
+  }) ?? [];
+  if (textParts.length > 0) {
+    return textParts.join("\n");
+  }
+  const structured = recordValue(record.structuredContent);
+  const structuredResult = structured ? stringValue(structured.result) : undefined;
+  if (structuredResult) {
+    return structuredResult;
+  }
+  return JSON.stringify(record.structuredContent ?? result);
+};
+
+const normalizeDatalinkGraph = (result: DatalinkToolCallResult): Record<string, unknown> => {
+  const parsed = tryParseRecord(result.text) ?? recordValue(result.structuredContent) ?? {};
+  const graph = recordValue(parsed.graph) ?? parsed;
+  const nodes = arrayValue(graph.nodes);
+  const edges = arrayValue(graph.edges);
+  if (!nodes || !edges) {
+    throw new Error("DATALINK_GRAPH_INVALID");
+  }
+  return { nodes, edges };
 };
 
 const saveDatasource = async (
@@ -3599,8 +3909,20 @@ const matchesMcpToolAllowlist = (
   if (!allowlist || allowlist.length === 0) {
     return true;
   }
-  const namespaced = `mcp__${sanitizeMcpName(serverId)}__${sanitizeMcpName(toolName)}`;
-  return allowlist.includes(toolName) || allowlist.includes(namespaced);
+  return mcpToolAllowlistCandidates(toolName).some((candidate) => {
+    const namespaced = `mcp__${sanitizeMcpName(serverId)}__${sanitizeMcpName(candidate)}`;
+    return allowlist.includes(candidate) || allowlist.includes(namespaced);
+  });
+};
+
+const mcpToolAllowlistCandidates = (toolName: string): string[] => {
+  if (toolName === "datalink_show" || toolName === "datagraph_show") {
+    return ["datalink_show", "datagraph_show"];
+  }
+  if (toolName === "datalink_explore" || toolName === "datagraph_explore") {
+    return ["datalink_explore", "datagraph_explore"];
+  }
+  return [toolName];
 };
 
 const recordStringMapValue = (value: unknown): Record<string, string> | undefined => {
