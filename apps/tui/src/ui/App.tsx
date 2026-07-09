@@ -6,6 +6,7 @@ import { ChatArea, type ChatAreaRef } from './ChatArea.js';
 import { OutputsView } from './OutputsView.js';
 import { ActivityPanel } from './ActivityPanel.js';
 import { EnhancedInputBox } from './components/EnhancedInputBox.js';
+import { QueuedPromptDisplay } from './components/QueuedPromptDisplay.js';
 import { WorkspaceFrame, availableContentRows, estimateControlsRows } from './workspace-layout.js';
 import { useTerminalSize } from './use-terminal-size.js';
 import { KeybindingsHelp } from './KeybindingsHelp.js';
@@ -250,6 +251,10 @@ export const App: React.FC<AppProps> = ({
   const activeTabRef = useRef(activeTab);
   const applyChatScrollDeltaRef = useRef<(delta: number) => void>(() => {});
   const startupResumeAttempted = useRef(false);
+  const queuedPromptsRef = useRef<string[]>([]);
+  const drainingQueuedPromptRef = useRef(false);
+  const handleAgentQueryRef = useRef<((input: string) => Promise<void>) | null>(null);
+  const [queuedPrompts, setQueuedPrompts] = useState<string[]>([]);
   const modelName = resolveModelName(state);
   const directory = formatDirectory(process.env.PWD || process.cwd());
   const startup = {
@@ -266,10 +271,12 @@ export const App: React.FC<AppProps> = ({
     && visibleMessages.length === 0
     && state.messages.length === 0
     && !commandNotice
+    && queuedPrompts.length === 0
     && !isRestoringSession
     && !showLiveActivity;
   const transcriptStartup = state.messages.length === 0
     && !commandNotice
+    && queuedPrompts.length === 0
     && !isRestoringSession
     ? startup
     : undefined;
@@ -282,6 +289,7 @@ export const App: React.FC<AppProps> = ({
     terminalColumns,
     terminalRows,
     reportedInputBoxRows ?? 'input-unknown',
+    queuedPrompts.length,
     state.connectionStatus,
     state.runStatus,
     modelName,
@@ -291,6 +299,7 @@ export const App: React.FC<AppProps> = ({
   ].join('\u0000');
   const estimatedControlsRowCount = estimateControlsRows({
     commandNotice: Boolean(commandNotice),
+    queuedPromptCount: queuedPrompts.length,
     activeTab,
     homeScreen: isHomeScreen,
     inputBoxRows: reportedInputBoxRows ?? undefined,
@@ -298,12 +307,7 @@ export const App: React.FC<AppProps> = ({
   const controlsRowCountForViewport = Math.max(estimatedControlsRowCount, controlsHeight);
   const scrollableRowCount = availableContentRows(terminalRows, controlsRowCountForViewport);
   const chatViewportRowCount = scrollableRowCount;
-  const agentResponding = state.runStatus === 'running' && state.agentResponseComplete !== true;
-  const latestMessage = visibleMessages[visibleMessages.length - 1];
-  const assistantReplying = latestMessage?.role === 'assistant' && latestMessage.isStreaming === true;
-  const inputDisabled = agentResponding
-    || assistantReplying
-    || isRestoringSession;
+  const inputDisabled = isRestoringSession;
   const inputCommands = useMemo(
     () => uniqueStrings([
       ...DEFAULT_COMMANDS,
@@ -345,6 +349,28 @@ export const App: React.FC<AppProps> = ({
     }
     exit();
   }, [clearCtrlCExitTimer, client, exit]);
+
+  const clearQueuedPrompts = useCallback((): void => {
+    queuedPromptsRef.current = [];
+    setQueuedPrompts([]);
+  }, []);
+
+  const popAllQueuedPrompts = useCallback((): string | null => {
+    const currentPrompts = queuedPromptsRef.current;
+    if (currentPrompts.length === 0) return null;
+    queuedPromptsRef.current = [];
+    setQueuedPrompts([]);
+    setCommandNotice(null);
+    return currentPrompts.join('\n\n');
+  }, []);
+
+  const enqueueAgentQuery = useCallback((input: string): void => {
+    const nextPrompts = [...queuedPromptsRef.current, input];
+    queuedPromptsRef.current = nextPrompts;
+    setQueuedPrompts(nextPrompts);
+    store.clearInputBuffer();
+    setCommandNotice(null);
+  }, []);
 
   const requestCtrlCExit = useCallback((clearInputDraft?: ClearInputDraft) => {
     if (ctrlCPressedOnce) {
@@ -560,6 +586,7 @@ export const App: React.FC<AppProps> = ({
 
       const conversation = await configClient.getSessionConversation(sessionId);
       const restored = restoreSessionConversation(conversation);
+      clearQueuedPrompts();
       store.restoreSession(restored);
       chatAreaRef.current?.reset();
       setActiveTab('chat');
@@ -749,6 +776,7 @@ export const App: React.FC<AppProps> = ({
   };
 
   const startNewSession = (): void => {
+    clearQueuedPrompts();
     store.startNewSession(createThreadId());
     chatAreaRef.current?.reset();
     setActiveTab('chat');
@@ -813,6 +841,11 @@ export const App: React.FC<AppProps> = ({
       return;
     }
 
+    if (store.getState().runStatus === 'running' || drainingQueuedPromptRef.current) {
+      enqueueAgentQuery(trimmedInput);
+      return;
+    }
+
     // Handle as natural language query to agent
     await handleAgentQuery(trimmedInput);
   };
@@ -857,6 +890,7 @@ export const App: React.FC<AppProps> = ({
             store.clearMessages();
             chatAreaRef.current?.reset();
           } else if (action === 'reset_session') {
+            clearQueuedPrompts();
             store.startNewSession(createThreadId());
             chatAreaRef.current?.reset();
             setActiveTab('chat');
@@ -1187,6 +1221,37 @@ export const App: React.FC<AppProps> = ({
     await runAttempt(0);
   };
 
+  useEffect(() => {
+    handleAgentQueryRef.current = handleAgentQuery;
+  });
+
+  useEffect(() => {
+    if (drainingQueuedPromptRef.current) return;
+    if (isRestoringSession || state.runStatus === 'running') return;
+
+    const runQueuedPrompt = handleAgentQueryRef.current;
+    if (!runQueuedPrompt) return;
+
+    const [nextPrompt, ...remainingPrompts] = queuedPromptsRef.current;
+    if (!nextPrompt) return;
+
+    queuedPromptsRef.current = remainingPrompts;
+    setQueuedPrompts(remainingPrompts);
+    setCommandNotice(null);
+
+    drainingQueuedPromptRef.current = true;
+    void (async () => {
+      try {
+        await runQueuedPrompt(nextPrompt);
+      } finally {
+        drainingQueuedPromptRef.current = false;
+        if (queuedPromptsRef.current.length > 0 && store.getState().runStatus !== 'running') {
+          setQueuedPrompts([...queuedPromptsRef.current]);
+        }
+      }
+    })();
+  }, [isRestoringSession, queuedPrompts, state.runStatus]);
+
   // Handle input change (no-op - InputBox manages its own local state)
   const handleInputChange = (value: string) => {
     // InputBox manages its own state, we don't need to sync to store on every keystroke
@@ -1415,6 +1480,7 @@ export const App: React.FC<AppProps> = ({
                           onClearScreen={clearScreen}
                           onNewSession={startNewSession}
                           onExitRequest={requestCtrlCExit}
+                          onRestoreQueuedMessages={popAllQueuedPrompts}
                           ctrlCExitPending={ctrlCPressedOnce}
                           disabled={inputDisabled}
                           commands={inputCommands}
@@ -1515,6 +1581,10 @@ export const App: React.FC<AppProps> = ({
                 </Box>
               )}
 
+              {queuedPrompts.length > 0 && (
+                <QueuedPromptDisplay prompts={queuedPrompts} />
+              )}
+
               {!isHomeScreen && (
                 <EnhancedInputBox
                   onChange={handleInputChange}
@@ -1523,6 +1593,7 @@ export const App: React.FC<AppProps> = ({
                   onClearScreen={clearScreen}
                   onNewSession={startNewSession}
                   onExitRequest={requestCtrlCExit}
+                  onRestoreQueuedMessages={popAllQueuedPrompts}
                   ctrlCExitPending={ctrlCPressedOnce}
                   onLayoutChange={requestControlsMeasurement}
                   disabled={inputDisabled}

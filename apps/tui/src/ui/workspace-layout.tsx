@@ -1,5 +1,6 @@
 import React from 'react';
 import { Box, Text } from 'ink';
+import { queuedPromptDisplayRows } from './components/QueuedPromptDisplay.js';
 
 export type WorkspaceTab = 'chat' | 'stats' | 'config' | 'outputs';
 
@@ -50,6 +51,7 @@ export function WorkspaceFrame({
 export function estimateControlsRows(
   options: {
     commandNotice: boolean;
+    queuedPromptCount?: number | undefined;
     activeTab: WorkspaceTab;
     homeScreen?: boolean;
     inputBoxRows?: number | undefined;
@@ -60,11 +62,12 @@ export function estimateControlsRows(
   }
 
   const inputBoxRows = Math.max(5, Math.ceil(options.inputBoxRows ?? 5));
+  const queueRows = queuedPromptDisplayRows(options.queuedPromptCount ?? 0);
 
   if (options.activeTab === 'chat') {
-    return inputBoxRows + (options.commandNotice ? 1 : 0);
+    return inputBoxRows + queueRows + (options.commandNotice ? 1 : 0);
   }
-  return inputBoxRows + (options.commandNotice ? 4 : 3);
+  return inputBoxRows + queueRows + (options.commandNotice ? 4 : 3);
 }
 
 /** Backward-compatible alias for older viewport tests/helpers. */

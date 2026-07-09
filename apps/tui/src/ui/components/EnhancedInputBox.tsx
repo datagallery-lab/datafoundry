@@ -12,6 +12,7 @@ interface EnhancedInputBoxProps {
   onClearScreen?: () => void;
   onNewSession?: () => void;
   onExitRequest?: (clearInputDraft: () => boolean) => void;
+  onRestoreQueuedMessages?: () => string | null;
   ctrlCExitPending?: boolean | undefined;
   onLayoutChange?: (rows: number) => void;
   disabled?: boolean;
@@ -82,6 +83,7 @@ export const EnhancedInputBox: React.FC<EnhancedInputBoxProps> = ({
   onClearScreen,
   onNewSession,
   onExitRequest,
+  onRestoreQueuedMessages,
   ctrlCExitPending = false,
   onLayoutChange,
   disabled = false,
@@ -309,6 +311,40 @@ export const EnhancedInputBox: React.FC<EnhancedInputBoxProps> = ({
     [buffer, clearPendingPastes, onChange, redraw, reportLayoutRows, resetCompletion],
   );
 
+  const restoreQueuedMessages = useCallback((): boolean => {
+    const queuedText = onRestoreQueuedMessages?.();
+    if (!queuedText) {
+      return false;
+    }
+
+    const currentText = buffer.text;
+    const currentCursorOffset = buffer.cursorOffset;
+    if (currentText.length > 0) {
+      buffer.setText(`${queuedText}\n${currentText}`);
+      buffer.moveToOffset(cpLen(queuedText) + 1 + currentCursorOffset);
+    } else {
+      buffer.setText(queuedText);
+    }
+
+    clearPendingPastes();
+    resetCompletion();
+    onChange(buffer.text);
+    reportLayoutRows(inputBoxRowsFor(
+      buffer.text.length === 0 ? 1 : buffer.viewportVisualLines.length,
+      false,
+    ));
+    redraw();
+    return true;
+  }, [
+    buffer,
+    clearPendingPastes,
+    onChange,
+    onRestoreQueuedMessages,
+    redraw,
+    reportLayoutRows,
+    resetCompletion,
+  ]);
+
   useEffect(() => {
     completionRef.current.setCommands(commands);
   }, [commands]);
@@ -381,6 +417,8 @@ export const EnhancedInputBox: React.FC<EnhancedInputBoxProps> = ({
       if (key.escape) {
         if (completionHint) {
           resetCompletion();
+        } else if (restoreQueuedMessages()) {
+          return;
         } else if (buffer.text.length > 0) {
           clearBuffer();
         }
@@ -478,6 +516,9 @@ export const EnhancedInputBox: React.FC<EnhancedInputBoxProps> = ({
         if (visualCol > 0) {
           buffer.move('home');
           redraw();
+          return;
+        }
+        if (restoreQueuedMessages()) {
           return;
         }
         restoreHistory(historyRef.current.previous(), 'start');
