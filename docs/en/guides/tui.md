@@ -110,7 +110,7 @@ Type `/` and use `Tab` to complete. Built-in commands:
 
 | Shortcut | Action |
 | --- | --- |
-| `Ctrl+C` | Exit. |
+| `Ctrl+C` | Clear current input; press again within 1 second to exit. |
 | `Ctrl+L` | Clear chat display. |
 | `Ctrl+N` | New session. |
 | `PageUp` / `PageDown` | Scroll in Chat view. |

@@ -94,7 +94,7 @@ export const KeybindingsHelp: React.FC<KeybindingsHelpProps> = ({ compact = fals
 
         <Text> </Text>
         <Text dimColor italic>
-          Press Ctrl+C at any time to exit the application
+          Press Ctrl+C to clear input, then press again to exit
         </Text>
       </Box>
     </Box>

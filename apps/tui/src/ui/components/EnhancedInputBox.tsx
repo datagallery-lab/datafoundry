@@ -11,6 +11,8 @@ interface EnhancedInputBoxProps {
   onFocusChange?: (focused: boolean) => void;
   onClearScreen?: () => void;
   onNewSession?: () => void;
+  onExitRequest?: (clearInputDraft: () => boolean) => void;
+  ctrlCExitPending?: boolean | undefined;
   onLayoutChange?: (rows: number) => void;
   disabled?: boolean;
   commands?: string[];
@@ -79,6 +81,8 @@ export const EnhancedInputBox: React.FC<EnhancedInputBoxProps> = ({
   onFocusChange,
   onClearScreen,
   onNewSession,
+  onExitRequest,
+  ctrlCExitPending = false,
   onLayoutChange,
   disabled = false,
   commands = DEFAULT_COMMANDS,
@@ -350,6 +354,17 @@ export const EnhancedInputBox: React.FC<EnhancedInputBoxProps> = ({
       }
 
       if (key.ctrl && input === 'c') {
+        if (onExitRequest) {
+          onExitRequest(() => {
+            if (buffer.text.length === 0) {
+              return false;
+            }
+            clearBuffer();
+            return true;
+          });
+        } else if (buffer.text.length > 0) {
+          clearBuffer();
+        }
         return;
       }
 
@@ -619,14 +634,20 @@ export const EnhancedInputBox: React.FC<EnhancedInputBoxProps> = ({
                 {metaParts.join(' · ')}
               </Text>
             </Text>
-            <Text backgroundColor={panelBackground} wrap="truncate-end">
-              <Text color="white" backgroundColor={panelBackground}>⇧↵</Text>
-              <Text dimColor backgroundColor={panelBackground}> newline  </Text>
-              <Text color="white" backgroundColor={panelBackground}>tab</Text>
-              <Text dimColor backgroundColor={panelBackground}> complete  </Text>
-              <Text color="white" backgroundColor={panelBackground}>enter</Text>
-              <Text dimColor backgroundColor={panelBackground}> send</Text>
-            </Text>
+            {ctrlCExitPending ? (
+              <Text color="yellow" backgroundColor={panelBackground} wrap="truncate-end">
+                Press Ctrl+C again to exit.
+              </Text>
+            ) : (
+              <Text backgroundColor={panelBackground} wrap="truncate-end">
+                <Text color="white" backgroundColor={panelBackground}>⇧↵</Text>
+                <Text dimColor backgroundColor={panelBackground}> newline  </Text>
+                <Text color="white" backgroundColor={panelBackground}>tab</Text>
+                <Text dimColor backgroundColor={panelBackground}> complete  </Text>
+                <Text color="white" backgroundColor={panelBackground}>enter</Text>
+                <Text dimColor backgroundColor={panelBackground}> send</Text>
+              </Text>
+            )}
           </Box>
         </Box>
       </Box>

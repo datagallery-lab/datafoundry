@@ -51,6 +51,8 @@ type RuntimeEvent = { type?: string; [key: string]: unknown };
 const SCROLL_FRAME_MS = 16;
 const SCROLL_ROWS_PER_FRAME = 3;
 const MAX_PENDING_SCROLL_ROWS = 120;
+const CTRL_EXIT_PROMPT_DURATION_MS = 1000;
+type ClearInputDraft = () => boolean;
 
 const createThreadId = (): string => {
   try {
@@ -241,8 +243,10 @@ export const App: React.FC<AppProps> = ({
   const [retryCount, setRetryCount] = useState(0);
   const [controlsHeight, setControlsHeight] = useState(0);
   const [reportedInputBoxRows, setReportedInputBoxRows] = useState<number | null>(null);
+  const [ctrlCPressedOnce, setCtrlCPressedOnce] = useState(false);
   const chatAreaRef = useRef<ChatAreaRef>(null);
   const mainControlsRef = useRef<DOMElement | null>(null);
+  const ctrlCTimerRef = useRef<NodeJS.Timeout | null>(null);
   const activeTabRef = useRef(activeTab);
   const applyChatScrollDeltaRef = useRef<(delta: number) => void>(() => {});
   const startupResumeAttempted = useRef(false);
@@ -316,6 +320,54 @@ export const App: React.FC<AppProps> = ({
       ));
     }
   }, []);
+
+  const clearCtrlCExitTimer = useCallback(() => {
+    if (ctrlCTimerRef.current) {
+      clearTimeout(ctrlCTimerRef.current);
+      ctrlCTimerRef.current = null;
+    }
+  }, []);
+
+  const armCtrlCExit = useCallback(() => {
+    clearCtrlCExitTimer();
+    setCtrlCPressedOnce(true);
+    ctrlCTimerRef.current = setTimeout(() => {
+      setCtrlCPressedOnce(false);
+      ctrlCTimerRef.current = null;
+    }, CTRL_EXIT_PROMPT_DURATION_MS);
+  }, [clearCtrlCExitTimer]);
+
+  const exitApplication = useCallback(() => {
+    clearCtrlCExitTimer();
+    setCtrlCPressedOnce(false);
+    if ('dispose' in client && typeof client.dispose === 'function') {
+      client.dispose();
+    }
+    exit();
+  }, [clearCtrlCExitTimer, client, exit]);
+
+  const requestCtrlCExit = useCallback((clearInputDraft?: ClearInputDraft) => {
+    if (ctrlCPressedOnce) {
+      exitApplication();
+      return;
+    }
+
+    armCtrlCExit();
+
+    if (sessionPickerOpen) {
+      setSessionPickerOpen(false);
+      return;
+    }
+
+    if (skillPickerOpen) {
+      setSkillPickerOpen(false);
+      return;
+    }
+
+    if (clearInputDraft?.()) {
+      return;
+    }
+  }, [armCtrlCExit, ctrlCPressedOnce, exitApplication, sessionPickerOpen, skillPickerOpen]);
 
   useLayoutEffect(() => {
     const controlsNode = mainControlsRef.current;
@@ -457,6 +509,10 @@ export const App: React.FC<AppProps> = ({
     startupResumeAttempted.current = true;
     void restoreHistoricalSession(initialResume.sessionId, true);
   }, [initialResume?.enabled, initialResume?.sessionId, state.connectionStatus]);
+
+  useEffect(() => () => {
+    clearCtrlCExitTimer();
+  }, [clearCtrlCExitTimer]);
 
   async function restoreHistoricalSession(
     requestedSessionId?: string | undefined,
@@ -700,6 +756,13 @@ export const App: React.FC<AppProps> = ({
 
   // Handle global keyboard shortcuts
   useInput((input, key) => {
+    if (key.ctrl && input === 'c') {
+      if (pickerOpen || !inputFocused) {
+        requestCtrlCExit();
+      }
+      return;
+    }
+
     // Ignore input when typing in the input box
     if (pickerOpen || inputFocused) return;
 
@@ -798,10 +861,7 @@ export const App: React.FC<AppProps> = ({
             chatAreaRef.current?.reset();
             setActiveTab('chat');
           } else if (action === 'exit_application') {
-            if ('dispose' in client && typeof client.dispose === 'function') {
-              client.dispose();
-            }
-            exit();
+            exitApplication();
             return;
           } else if (action === 'switch_tab') {
             const tab = commandData.tab;
@@ -1354,6 +1414,8 @@ export const App: React.FC<AppProps> = ({
                           onFocusChange={setInputFocused}
                           onClearScreen={clearScreen}
                           onNewSession={startNewSession}
+                          onExitRequest={requestCtrlCExit}
+                          ctrlCExitPending={ctrlCPressedOnce}
                           disabled={inputDisabled}
                           commands={inputCommands}
                           modelName={modelName}
@@ -1460,6 +1522,8 @@ export const App: React.FC<AppProps> = ({
                   onFocusChange={setInputFocused}
                   onClearScreen={clearScreen}
                   onNewSession={startNewSession}
+                  onExitRequest={requestCtrlCExit}
+                  ctrlCExitPending={ctrlCPressedOnce}
                   onLayoutChange={requestControlsMeasurement}
                   disabled={inputDisabled}
                   commands={inputCommands}

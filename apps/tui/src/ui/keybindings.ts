@@ -176,7 +176,7 @@ export class CommandCompletion {
  */
 export const KEYBINDINGS: KeybindingAction[] = [
   // System shortcuts
-  { key: 'Ctrl+C', description: 'Exit application', category: 'system' },
+  { key: 'Ctrl+C', description: 'Clear input, press again to exit', category: 'system' },
   { key: 'Ctrl+L', description: 'Clear screen', category: 'system' },
 
   // Navigation shortcuts
@@ -237,7 +237,7 @@ export function getStatusBarShortcuts(): Array<{ key: string; action: string }> 
     { key: '↑/↓', action: 'History' },
     { key: 'Ctrl+N', action: 'New' },
     { key: 'Ctrl+L', action: 'Clear' },
-    { key: 'Ctrl+C', action: 'Exit' },
+    { key: 'Ctrl+C', action: 'Clear / Exit' },
   ];
 }
 

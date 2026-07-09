@@ -128,6 +128,7 @@ async function main(): Promise<void> {
     try {
       await withAlternateScreen(async () => {
         const instance = render(createAppElement(), {
+          exitOnCtrlC: false,
           incrementalRendering: true,
           maxFps: 60,
         });
