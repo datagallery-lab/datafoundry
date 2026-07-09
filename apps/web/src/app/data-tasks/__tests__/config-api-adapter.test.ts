@@ -335,6 +335,24 @@ describe("config api adapter", () => {
     expect(item.settings?.env).toContain("FOO");
   });
 
+  it("maps mcp tool manifest names for datalink detection", () => {
+    const item = mcpServerDtoToItem({
+      id: "datalink",
+      name: "datalink",
+      transport: "streamable-http",
+      serverUrl: "https://datalink.example/mcp",
+      toolManifest: [
+        { name: "datalink_show" },
+        { name: "datalink_explore" },
+        { name: "add_table" },
+      ],
+    });
+
+    expect(item.settings?.toolCount).toBe("3");
+    expect(item.settings?.toolNames).toContain("datalink_show");
+    expect(item.settings?.toolNames).toContain("add_table");
+  });
+
   it("builds skill resource binding bodies", () => {
     const item = {
       id: "sales-skill",
@@ -491,6 +509,67 @@ describe("config api adapter", () => {
     expect(list.nextCursor).toBe("cursor-2");
     expect(patched.sessionId).toBe("thread-1");
     expect(patched.titleSource).toBe("user");
+  });
+
+  it("calls datalink endpoints through the config client", async () => {
+    process.env.NEXT_PUBLIC_CONFIG_API_URL = "http://config.test";
+    const fetchMock = vi.fn().mockImplementation(() => new Response(JSON.stringify({
+      success: true,
+      data: {
+        servers: [{ id: "datalink", name: "datalink" }],
+        graph: { nodes: [], edges: [] },
+        server: { id: "datalink", name: "datalink" },
+        result: "ok",
+      },
+    }), { headers: { "Content-Type": "application/json" }, status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await configApi.listDatalinkServers();
+    await configApi.getDatalinkGraph("datalink");
+    await configApi.exploreDatalink("datalink", { query: "satscores", focus: "schema" });
+    await configApi.addDatalinkTable("datalink", { source: "/data/orders.csv", sourceType: "csv" });
+    await configApi.removeDatalinkTable("datalink", { tableId: "table:orders" });
+    await configApi.rebuildDatalink("datalink");
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "http://config.test/api/v1/datalink/servers",
+      expect.any(Object),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "http://config.test/api/v1/datalink/datalink/graph",
+      expect.any(Object),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      3,
+      "http://config.test/api/v1/datalink/datalink/explore",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ query: "satscores", focus: "schema" }),
+      }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      4,
+      "http://config.test/api/v1/datalink/datalink/tables",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ source: "/data/orders.csv", sourceType: "csv" }),
+      }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      5,
+      "http://config.test/api/v1/datalink/datalink/tables",
+      expect.objectContaining({
+        method: "DELETE",
+        body: JSON.stringify({ tableId: "table:orders" }),
+      }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      6,
+      "http://config.test/api/v1/datalink/datalink/rebuild",
+      expect.objectContaining({ method: "POST" }),
+    );
   });
 
   it("calls backend implemented data-task extension endpoints", async () => {

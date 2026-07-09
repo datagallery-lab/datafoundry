@@ -142,6 +142,10 @@ const WorkspaceFileAssetsPanel = nextDynamic(
   () => import("./components/task-console/WorkspaceFileAssetsPanel").then((m) => m.WorkspaceFileAssetsPanel),
   { ssr: false, loading: () => null },
 );
+const DataLinkPanel = nextDynamic(
+  () => import("./components/DataLinkPanel").then((m) => m.DataLinkPanel),
+  { ssr: false, loading: () => null },
+);
 const DatasourceSchemaPreviewPopover = nextDynamic(
   () => import("./components/SchemaBrowserPanel").then((m) => m.DatasourceSchemaPreviewPopover),
   { ssr: false, loading: () => null },
@@ -815,6 +819,7 @@ function DataTaskWorkspace({
     null,
   );
   const [workspaceFilesPanelOpen, setWorkspaceFilesPanelOpen] = useState(false);
+  const [dataLinkPanelOpen, setDataLinkPanelOpen] = useState(false);
   const [workspaceFileAssets, setWorkspaceFileAssets] = useState<FileAssetRefDto[]>([]);
   const [promotedArtifactIds, setPromotedArtifactIds] = useState<Set<string>>(
     () => new Set(),
@@ -890,7 +895,7 @@ function DataTaskWorkspace({
     setSelectedEvidenceRefs([]);
   }, []);
 
-  const sidePanelOpen = Boolean(configPanel) || workspaceFilesPanelOpen;
+  const sidePanelOpen = Boolean(configPanel) || workspaceFilesPanelOpen || dataLinkPanelOpen;
   const {
     containerRef: gridRef,
     viewportWidth: workspaceViewportWidth,
@@ -903,7 +908,7 @@ function DataTaskWorkspace({
     onResizeStart: onLeftPanelResizeStart,
     resetWidth: resetLeftPanelWidth,
   } = useLeftPanelResize({
-    enabled: !configPanel && !workspaceFilesPanelOpen && !userSidebarCollapsed,
+    enabled: !configPanel && !workspaceFilesPanelOpen && !dataLinkPanelOpen && !userSidebarCollapsed,
   });
 
   // Cap the right panel drag to what still fits *alongside the current left
@@ -922,7 +927,7 @@ function DataTaskWorkspace({
     onResizeStart: onRightPanelResizeStart,
     resetWidth: resetRightPanelWidth,
   } = usePanelResize({
-    enabled: !configPanel && !workspaceFilesPanelOpen,
+    enabled: !configPanel && !workspaceFilesPanelOpen && !dataLinkPanelOpen,
     maxWidth: rightPanelDockableMaxWidth,
   });
 
@@ -1003,16 +1008,28 @@ function DataTaskWorkspace({
 
   const openConfigPanel = useCallback((panel: WorkspaceConfigPanelKey) => {
     setWorkspaceFilesPanelOpen(false);
+    setDataLinkPanelOpen(false);
     setConfigPanel((current) => (current === panel ? null : panel));
   }, []);
 
   const openWorkspaceFilesPanel = useCallback(() => {
     setConfigPanel(null);
+    setDataLinkPanelOpen(false);
     setWorkspaceFilesPanelOpen((open) => !open);
   }, []);
 
   const closeWorkspaceFilesPanel = useCallback(() => {
     setWorkspaceFilesPanelOpen(false);
+  }, []);
+
+  const openDataLinkPanel = useCallback(() => {
+    setConfigPanel(null);
+    setWorkspaceFilesPanelOpen(false);
+    setDataLinkPanelOpen((open) => !open);
+  }, []);
+
+  const closeDataLinkPanel = useCallback(() => {
+    setDataLinkPanelOpen(false);
   }, []);
 
   useEffect(() => {
@@ -1321,6 +1338,7 @@ function DataTaskWorkspace({
     setSelection(null);
     setConfigPanel(null);
     setWorkspaceFilesPanelOpen(false);
+    setDataLinkPanelOpen(false);
     // A brand-new session starts with the task console closed; it auto-opens on
     // the first question (see applyFirstUserMessageTitle).
     setUserRightPanelOpen(false);
@@ -1364,6 +1382,7 @@ function DataTaskWorkspace({
     setIsTraceOpen(false);
     setConfigPanel(null);
     setWorkspaceFilesPanelOpen(false);
+    setDataLinkPanelOpen(false);
     clearDraftPromptRequest();
   }, [clearDraftPromptRequest]);
 
@@ -1767,6 +1786,7 @@ function DataTaskWorkspace({
       <SessionPane
         activeSessionId={activeSession?.id ?? null}
         activeConfigPanel={configPanel}
+        activeDataLinkPanel={dataLinkPanelOpen}
         activeFilesPanel={workspaceFilesPanelOpen}
         collapsed={sidebarCollapsed}
         leftPanelWidth={leftPanelWidth}
@@ -1781,6 +1801,7 @@ function DataTaskWorkspace({
         capabilitiesReady={capabilitiesReady}
         onCreateSession={createSession}
         onOpenConfigPanel={openConfigPanel}
+        onOpenDataLinkPanel={openDataLinkPanel}
         onOpenFilesPanel={openWorkspaceFilesPanel}
         onQueryChange={setQuery}
         onToggleCollapse={toggleSidebar}
@@ -1791,6 +1812,7 @@ function DataTaskWorkspace({
           setIsTraceOpen(false);
           setConfigPanel(null);
           setWorkspaceFilesPanelOpen(false);
+          setDataLinkPanelOpen(false);
           clearDraftPromptRequest();
         }}
         onRenameSession={renameSession}
@@ -1818,7 +1840,16 @@ function DataTaskWorkspace({
         }
       />
 
-      {workspaceFilesPanelOpen ? (
+      {dataLinkPanelOpen ? (
+        <DataLinkPanel
+          onBack={closeDataLinkPanel}
+          onOpenMcpSettings={() => {
+            setDataLinkPanelOpen(false);
+            setWorkspaceFilesPanelOpen(false);
+            setConfigPanel("mcp");
+          }}
+        />
+      ) : workspaceFilesPanelOpen ? (
         <WorkspaceFilesLibraryPanel
           onBack={closeWorkspaceFilesPanel}
           onFilesChange={setWorkspaceFileAssets}
@@ -4392,6 +4423,7 @@ function SessionListItem({
 type SessionPaneProps = {
   activeSessionId: string | null;
   activeConfigPanel: WorkspaceConfigPanelKey | null;
+  activeDataLinkPanel: boolean;
   activeFilesPanel: boolean;
   collapsed: boolean;
   leftPanelWidth: number;
@@ -4408,6 +4440,7 @@ type SessionPaneProps = {
   capabilitiesReady: boolean;
   onCreateSession: () => void;
   onOpenConfigPanel: (panel: WorkspaceConfigPanelKey) => void;
+  onOpenDataLinkPanel: () => void;
   onOpenFilesPanel: () => void;
   onQueryChange: (value: string) => void;
   onToggleCollapse: () => void;
@@ -4420,6 +4453,7 @@ type SessionPaneProps = {
 function SessionPane({
   activeSessionId,
   activeConfigPanel,
+  activeDataLinkPanel,
   activeFilesPanel,
   collapsed,
   leftPanelWidth,
@@ -4436,6 +4470,7 @@ function SessionPane({
   capabilitiesReady,
   onCreateSession,
   onOpenConfigPanel,
+  onOpenDataLinkPanel,
   onOpenFilesPanel,
   onQueryChange,
   onToggleCollapse,
@@ -4467,6 +4502,7 @@ function SessionPane({
             <SessionPaneContent
               activeSessionId={activeSessionId}
               activeConfigPanel={activeConfigPanel}
+              activeDataLinkPanel={activeDataLinkPanel}
               activeFilesPanel={activeFilesPanel}
               filteredSessions={filteredSessions}
               query={query}
@@ -4478,6 +4514,7 @@ function SessionPane({
               capabilitiesReady={capabilitiesReady}
               onCreateSession={onCreateSession}
               onOpenConfigPanel={onOpenConfigPanel}
+              onOpenDataLinkPanel={onOpenDataLinkPanel}
               onOpenFilesPanel={onOpenFilesPanel}
               onQueryChange={onQueryChange}
               onToggleCollapse={onToggleCollapse}
@@ -4516,6 +4553,7 @@ function SessionPane({
       <SessionPaneContent
         activeSessionId={activeSessionId}
         activeConfigPanel={activeConfigPanel}
+        activeDataLinkPanel={activeDataLinkPanel}
         activeFilesPanel={activeFilesPanel}
         filteredSessions={filteredSessions}
         query={query}
@@ -4527,6 +4565,7 @@ function SessionPane({
         capabilitiesReady={capabilitiesReady}
         onCreateSession={onCreateSession}
         onOpenConfigPanel={onOpenConfigPanel}
+        onOpenDataLinkPanel={onOpenDataLinkPanel}
         onOpenFilesPanel={onOpenFilesPanel}
         onQueryChange={onQueryChange}
         onToggleCollapse={onToggleCollapse}
@@ -4553,6 +4592,7 @@ type SessionPaneContentProps = Omit<
 function SessionPaneContent({
   activeSessionId,
   activeConfigPanel,
+  activeDataLinkPanel,
   activeFilesPanel,
   filteredSessions,
   query,
@@ -4564,6 +4604,7 @@ function SessionPaneContent({
   capabilitiesReady,
   onCreateSession,
   onOpenConfigPanel,
+  onOpenDataLinkPanel,
   onOpenFilesPanel,
   onQueryChange,
   onToggleCollapse,
@@ -4578,6 +4619,7 @@ function SessionPaneContent({
     workspaceConfig,
     workspaceFileCount,
     activeConfigPanel,
+    activeDataLinkPanel,
     activeFilesPanel,
     capabilitiesReady,
     supportsFiles: hasCapability("files"),
@@ -4589,6 +4631,10 @@ function SessionPaneContent({
   const handleResourceAction = (action: WorkspaceResourceNavAction) => {
     if (action.type === "assets") {
       onOpenFilesPanel();
+      return;
+    }
+    if (action.type === "datalink") {
+      onOpenDataLinkPanel();
       return;
     }
     onOpenConfigPanel(action.panel);
@@ -6276,6 +6322,24 @@ function WorkspaceResourceIcon({
       <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
         <path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v16H7a3 3 0 0 0-3 3V5.5Z" />
         <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" />
+      </svg>
+    );
+  }
+  if (icon === "graph") {
+    return (
+      <svg
+        viewBox="0 0 24 24"
+        className="h-3.5 w-3.5"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth={1.8}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      >
+        <circle cx="6" cy="7" r="2.5" />
+        <circle cx="18" cy="6" r="2.5" />
+        <circle cx="16" cy="18" r="2.5" />
+        <path d="m8.4 6.8 7.2-.6M7.7 9.1l6.7 7.1M17.5 8.4 16.4 15.5" />
       </svg>
     );
   }

@@ -632,8 +632,20 @@ const matchesMcpToolAllowlist = (
   if (!toolAllowlist || toolAllowlist.length === 0) {
     return true;
   }
-  const baseName = `mcp__${sanitizeMcpName(serverId)}__${sanitizeMcpName(toolName)}`;
-  return toolAllowlist.includes(toolName) || toolAllowlist.includes(baseName);
+  return mcpToolAllowlistCandidates(toolName).some((candidate) => {
+    const baseName = `mcp__${sanitizeMcpName(serverId)}__${sanitizeMcpName(candidate)}`;
+    return toolAllowlist.includes(candidate) || toolAllowlist.includes(baseName);
+  });
+};
+
+const mcpToolAllowlistCandidates = (toolName: string): string[] => {
+  if (toolName === "datalink_show" || toolName === "datagraph_show") {
+    return ["datalink_show", "datagraph_show"];
+  }
+  if (toolName === "datalink_explore" || toolName === "datagraph_explore") {
+    return ["datalink_explore", "datagraph_explore"];
+  }
+  return [toolName];
 };
 
 const resolveStdioCommand = (
