@@ -1,6 +1,6 @@
 import { MastraAgent } from "@ag-ui/mastra";
 import type { RunAgentInput } from "@ag-ui/client";
-import type { ArtifactService } from "@datafoundry/artifacts";
+import type { ArtifactService, SessionOutputService } from "@datafoundry/artifacts";
 import {
   createDataFoundry,
   createDataFoundryRunContext,
@@ -70,6 +70,7 @@ type CreateRunAgentAssemblyInput = {
   modelProvider: ResolvedRunConfig["modelProvider"];
   modelSettings?: ResolvedRunConfig["modelSettings"] | undefined;
   runContext: AgentRunContext;
+  sessionOutputService: SessionOutputService;
   selectedSkills: SkillRecord[];
   skillSelection: SkillSelectionResult;
   taskStateRuntime: TaskStateRuntime;
@@ -154,6 +155,7 @@ export const createRunAgentAssembly = async (
     ...(input.evidenceContextItems?.length ? { evidenceContextItems: input.evidenceContextItems } : {}),
     ...(input.longTermMemories.length > 0 ? { longTermMemory: { records: input.longTermMemories } } : {}),
     runContext: input.runContext,
+    sessionOutputService: input.sessionOutputService,
     selectedSkills: input.selectedSkills,
     skillSelection: input.skillSelection,
     taskStateRuntime: input.taskStateRuntime,

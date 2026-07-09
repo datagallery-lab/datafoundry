@@ -12,6 +12,9 @@ import { artifactRecordToSummary, type MetadataStore } from "@datafoundry/metada
 import { randomUUID } from "node:crypto";
 import { basename } from "node:path";
 
+export * from "./output-inclusion.js";
+export * from "./session-output-service.js";
+
 const resolveArtifactMimeType = (name: string, sourcePath: string): string => {
   const mimeFromName = mimeTypeForFilename(name);
   if (mimeFromName !== "application/octet-stream") {

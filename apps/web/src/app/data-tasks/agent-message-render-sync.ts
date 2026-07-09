@@ -15,6 +15,7 @@ function buildMessageSyncFingerprint(messages: MessageLike[]): string {
   return messages
     .map((message) => {
       const contentLength = messageTextContent(message.content).length;
+      const reasoningLength = reasoningContentLength(message.content);
       const toolCallCount = Array.isArray(message.toolCalls) ? message.toolCalls.length : 0;
       const toolArgsLength = Array.isArray(message.toolCalls)
         ? message.toolCalls.reduce<number>((sum, call) => {
@@ -31,9 +32,19 @@ function buildMessageSyncFingerprint(messages: MessageLike[]): string {
             return sum + args;
           }, 0)
         : 0;
-      return `${message.id ?? "?"}:${message.role ?? "?"}:${contentLength}:${toolCallCount}:${toolArgsLength}`;
+      return `${message.id ?? "?"}:${message.role ?? "?"}:${contentLength}:${reasoningLength}:${toolCallCount}:${toolArgsLength}`;
     })
     .join("|");
+}
+
+function reasoningContentLength(content: unknown): number {
+  if (!Array.isArray(content)) return 0;
+  return content.reduce((sum, part) => {
+    if (!part || typeof part !== "object" || !("type" in part)) return sum;
+    const typed = part as { type?: unknown; text?: unknown };
+    if (typed.type !== "reasoning" || typeof typed.text !== "string") return sum;
+    return sum + typed.text.trim().length;
+  }, 0);
 }
 
 type SyncSnapshot = {

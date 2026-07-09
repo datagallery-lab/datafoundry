@@ -16,6 +16,7 @@ storage/
 **/.cache/
 .codegraph/
 .cursor/
+.worktrees/
 .superpowers/
 .env
 .env.*

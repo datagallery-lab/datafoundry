@@ -1678,9 +1678,15 @@ const handleFileRequest = async (
  * `SessionArtifactsRestore` expects: stable `fileId` (nullable for pure-preview
  * table/chart), `downloadUrl` only when there is a backing file, parsed `preview_json`.
  */
-const sessionArtifactDto = (artifact: ArtifactRecord): Record<string, unknown> => {
+const sessionArtifactDto = (artifact: ArtifactRecord, context: Required<ConfigApiContext>): Record<string, unknown> => {
   const origin = artifactOriginFromMetadata(artifact.metadata_json);
   const storedPreview = parseStoredArtifactPreview(artifact.preview_json);
+  const meta = parseMetadataJson(artifact.metadata_json);
+  const logicalKey = typeof meta?.logical_key === "string" ? meta.logical_key : undefined;
+  const versions = context.metadataStore.artifactVersions.listByArtifact({
+    user_id: context.userId,
+    artifact_id: artifact.id
+  });
   return {
     id: artifact.id,
     type: artifact.type,
@@ -1697,7 +1703,9 @@ const sessionArtifactDto = (artifact: ArtifactRecord): Record<string, unknown> =
     ...(artifact.mime_type ? { mimeType: artifact.mime_type } : {}),
     preview_json: storedPreview === undefined ? null : storedPreview,
     preview_available: storedPreview !== undefined || Boolean(artifact.file_asset_ref_id),
-    createdAt: artifact.created_at
+    createdAt: artifact.created_at,
+    ...(logicalKey ? { logicalKey } : {}),
+    versionCount: versions.length
   };
 };
 
@@ -1708,25 +1716,27 @@ const sessionArtifactDto = (artifact: ArtifactRecord): Record<string, unknown> =
 const artifactOriginFromMetadata = (
   metadataJson: string | undefined
 ): { step_id?: string; tool_call_id?: string } => {
-  if (!metadataJson) {
-    return {};
-  }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(metadataJson);
-  } catch {
-    return {};
-  }
-  if (typeof parsed !== "object" || parsed === null) {
-    return {};
-  }
-  const record = parsed as Record<string, unknown>;
+  const record = parseMetadataJson(metadataJson);
+  if (!record) return {};
   const toolCallId = typeof record.tool_call_id === "string" ? record.tool_call_id : undefined;
   const stepId = typeof record.step_id === "string" ? record.step_id : undefined;
   return {
     ...(toolCallId ? { tool_call_id: toolCallId } : {}),
     ...(stepId ? { step_id: stepId } : {})
   };
+};
+
+const parseMetadataJson = (metadataJson: string | undefined): Record<string, unknown> | null => {
+  if (!metadataJson) return null;
+  try {
+    const parsed = JSON.parse(metadataJson);
+    if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>;
+    }
+  } catch {
+    // malformed JSON
+  }
+  return null;
 };
 
 const handleArtifactRequest = async (
@@ -1749,7 +1759,7 @@ const handleArtifactRequest = async (
       user_id: context.userId,
       session_id: sessionId
     });
-    return ok({ artifacts: records.map(sessionArtifactDto) });
+    return ok({ artifacts: records.map((a) => sessionArtifactDto(a, context)) });
   }
   // R-022: promote a file-type artifact into a cross-session workspace asset.
   if (segments[1] === "promote") {
@@ -1799,16 +1809,69 @@ const handleArtifactRequest = async (
     });
     return ok(artifactExportJobDto(job), 202);
   }
+  // Versions list: GET /api/v1/artifacts/:id/versions
+  if (segments[1] === "versions" && !segments[2]) {
+    if (request.method !== "GET") return methodNotAllowed();
+    const artifact = context.metadataStore.artifacts.get({ user_id: context.userId, artifact_id: id });
+    const versions = context.metadataStore.artifactVersions.listByArtifact({
+      user_id: context.userId,
+      artifact_id: artifact.id
+    });
+    return ok({
+      versions: versions.map((v) => ({
+        id: v.id,
+        version: v.version,
+        ...(v.file_asset_ref_id ? { fileId: v.file_asset_ref_id } : {}),
+        ...(v.file_asset_ref_id
+          ? { downloadUrl: `/api/v1/artifacts/${artifact.id}/versions/${v.id}/download` }
+          : {}),
+        createdAt: v.created_at
+      }))
+    });
+  }
+  // Version download: GET /api/v1/artifacts/:id/versions/:versionId/download
+  if (segments[1] === "versions" && segments[2] && segments[3] === "download") {
+    if (request.method !== "GET") return methodNotAllowed();
+    const versionId = segments[2];
+    const version = context.metadataStore.artifactVersions.get({
+      user_id: context.userId,
+      version_id: versionId
+    });
+    if (!version.file_asset_ref_id) {
+      throw new Error("VERSION_UNAVAILABLE");
+    }
+    const artifact = context.metadataStore.artifacts.get({ user_id: context.userId, artifact_id: id });
+    const file = context.fileAssetService.readRef({
+      user_id: context.userId,
+      workspace_id: context.workspaceId,
+      id: version.file_asset_ref_id
+    });
+    const filename = safeDownloadName(artifact.name, file.mimeType, artifact.type, artifact.mime_type);
+    return {
+      body: file.body,
+      headers: {
+        "Content-Disposition": `attachment; filename="${filename}"`,
+        "Content-Type": file.mimeType || "application/octet-stream"
+      },
+      status: 200
+    };
+  }
   if (request.method !== "GET") {
     return methodNotAllowed();
   }
   const artifact = context.metadataStore.artifacts.get({ user_id: context.userId, artifact_id: id });
   if (segments[1] === "preview") {
     const storedPreview = parseStoredArtifactPreview(artifact.preview_json);
-    if (storedPreview !== undefined) {
+    // Session-file ingest stores a metadata stub (path/mime/type) without body text.
+    // Treat that as missing so file-backed markdown/html/text still synthesize content.
+    if (isRenderableArtifactPreview(storedPreview, artifact.type)) {
       return ok(storedPreview);
     }
-    return ok(synthesizeArtifactPreviewFromFile(artifact, context));
+    const synthesized = synthesizeArtifactPreviewFromFile(artifact, context);
+    if (synthesized) {
+      return ok(synthesized);
+    }
+    return ok(storedPreview ?? null);
   }
   if (segments[1] === "content" || segments[1] === "download") {
     const requestUrl = new URL(request.url ?? "/", "http://127.0.0.1");
@@ -2545,7 +2608,7 @@ const synthesizeArtifactPreviewFromFile = (
       type: artifact.type,
       path: artifact.name,
       size: file.body.length,
-      tool: "publish_artifact"
+      tool: "session_output"
     };
   }
   const maxChars = 200_000;
@@ -2556,7 +2619,7 @@ const synthesizeArtifactPreviewFromFile = (
       content,
       path: artifact.name,
       size: file.body.length,
-      tool: "publish_artifact"
+      tool: "session_output"
     };
   }
   // table/chart without stored preview_json: still expose raw text so clients can fall back.
@@ -2565,13 +2628,13 @@ const synthesizeArtifactPreviewFromFile = (
     content,
     path: artifact.name,
     size: file.body.length,
-    tool: "publish_artifact"
+    tool: "session_output"
   };
 };
 
 /**
  * Returns a real preview payload when stored JSON is present and non-null.
- * Distinguishes missing / JSON `null` (common for publish_artifact) from usable data.
+ * Distinguishes missing / JSON `null` from usable data.
  */
 const parseStoredArtifactPreview = (previewJson: string | undefined): unknown | undefined => {
   if (!previewJson || !previewJson.trim() || previewJson.trim() === "null") {
@@ -2583,6 +2646,41 @@ const parseStoredArtifactPreview = (previewJson: string | undefined): unknown | 
   } catch {
     return undefined;
   }
+};
+
+/**
+ * True when stored preview already has enough payload for the UI to render.
+ * Session-output ingest writes a path/mime stub without `content` / table rows;
+ * those stubs must fall through to file synthesis.
+ */
+const isRenderableArtifactPreview = (preview: unknown, artifactType: string): boolean => {
+  if (preview === undefined || preview === null) {
+    return false;
+  }
+  if (typeof preview === "string") {
+    return preview.trim().length > 0;
+  }
+  if (typeof preview !== "object" || Array.isArray(preview)) {
+    return false;
+  }
+  const record = preview as Record<string, unknown>;
+  if (typeof record.content === "string" && record.content.length > 0) {
+    return true;
+  }
+  if (typeof record.body === "string" && record.body.length > 0) {
+    return true;
+  }
+  if (Array.isArray(record.columns) && Array.isArray(record.rows)) {
+    return true;
+  }
+  if (Array.isArray(record.points) || Array.isArray(record.series)) {
+    return true;
+  }
+  // Non-text file stubs (image/binary) are still useful as metadata-only previews.
+  if (artifactType === "image" || artifactType === "file") {
+    return typeof record.path === "string" || typeof record.file_id === "string";
+  }
+  return false;
 };
 
 const serializeArtifactPreview = (
@@ -3295,6 +3393,10 @@ const errorResponse = (error: unknown): ConfigApiResponse => {
   }
   if (message.startsWith("DATASOURCE_TEST_FAILED")) {
     return fail(422, "DATASOURCE_TEST_FAILED", message);
+  }
+  // Preview-only table/chart artifacts have no file_asset_ref_id and cannot be promoted.
+  if (message.startsWith("ARTIFACT_PROMOTE_NO_FILE")) {
+    return fail(422, "BAD_REQUEST", message);
   }
   if (message.startsWith("UNSUPPORTED_FILE_TYPE")) {
     return fail(415, "UNSUPPORTED_FILE_TYPE", message);

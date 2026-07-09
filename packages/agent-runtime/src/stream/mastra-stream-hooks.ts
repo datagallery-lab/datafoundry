@@ -14,6 +14,9 @@ const STEP_END_CHUNK_TYPES = new Set(["step-finish", "finish-step"]);
 /** Map Mastra data-* stream chunks to AG-UI CUSTOM events for persistence and UI. */
 export const createMastraStreamNormalizerHooks = (
   emitter: AgUiEventEmitter,
+  options: {
+    onWorkspaceMetadata?: (metadata: unknown) => Promise<void> | void;
+  } = {},
 ): MastraStreamNormalizerHooks => {
   const emittedStepUsageKeys = new Set<string>();
   let completedSteps = 0;
@@ -59,6 +62,9 @@ export const createMastraStreamNormalizerHooks = (
 
       if (type === "data-workspace-metadata") {
         emitter.emit(createCustomEvent("workspace.metadata", chunk.data));
+        void Promise.resolve(options.onWorkspaceMetadata?.(chunk.data)).catch((error) => {
+          console.warn("[data-foundry] workspace_metadata_hook_failed", error);
+        });
         return;
       }
 

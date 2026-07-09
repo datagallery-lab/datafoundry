@@ -34,7 +34,7 @@ describe("formatCollaborationResponseDisplay", () => {
   it("formats submit_plan approval", () => {
     expect(
       formatCollaborationResponseDisplay("submit_plan", { action: "approved" }),
-    ).toBe("已批准执行计划");
+    ).toBe("Plan approved");
   });
 
   it("formats submit_plan rejection with feedback", () => {
@@ -43,7 +43,7 @@ describe("formatCollaborationResponseDisplay", () => {
         action: "rejected",
         feedback: "需要调整计划",
       }),
-    ).toBe("已拒绝计划：需要调整计划");
+    ).toBe("Plan rejected: 需要调整计划");
   });
 
   it("preserves free-text ask_user answers", () => {
@@ -56,13 +56,13 @@ describe("formatCollaborationResponseDisplay", () => {
         { label: "Inspect schema", value: "schema" },
         { label: "执行 SQL", value: "sql" },
       ]),
-    ).toBe("Inspect schema、执行 SQL");
+    ).toBe("Inspect schema, 执行 SQL");
   });
 
   it("formats submit_plan rejection without feedback", () => {
     expect(
       formatCollaborationResponseDisplay("submit_plan", { action: "rejected" }),
-    ).toBe("已拒绝执行计划");
+    ).toBe("Plan rejected");
   });
 
   it("renders collaboration prompts as inline assistant-side records", () => {

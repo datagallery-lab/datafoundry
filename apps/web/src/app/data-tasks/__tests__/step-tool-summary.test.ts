@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
   buildCollapsedStepSummary,
+  buildStepToolSummaries,
   buildToolChipSummaries,
   stepElapsedLabel,
   truncateThinkingPreview,
 } from "../step-tool-summary";
+import { createInitialLiveRun } from "../live-run-state";
 
 describe("step-tool-summary", () => {
   it("shows thinking preview before tool summary when thinking exists", () => {
@@ -31,7 +33,7 @@ describe("step-tool-summary", () => {
     });
 
     expect(summary.thinkingPreview).toBeUndefined();
-    expect(summary.toolSummary).toBe("3 个工具并发 · 查看数据源 120ms · 检查 Schema Running · 生成查询 Failed");
+    expect(summary.toolSummary).toBe("3 tools in parallel · 查看数据源 120ms · 检查 Schema Running · 生成查询 Failed");
   });
 
   it("collapses extra chips into a +N item", () => {
@@ -72,5 +74,18 @@ describe("step-tool-summary", () => {
 
   it("truncates thinking preview to two compact lines", () => {
     expect(truncateThinkingPreview("第一行\n第二行\n第三行", 20)).toBe("第一行 第二行…");
+  });
+
+  it("prefers authoritative live run tool names over stale chat tool names", () => {
+    const summaries = buildStepToolSummaries({
+      toolCalls: [{ id: "call-ask-1", function: { name: "tool" } }],
+      liveRun: {
+        ...createInitialLiveRun(),
+        toolCalls: [{ id: "call-ask-1", name: "ask_user", status: "running" }],
+      },
+      isActive: true,
+    });
+
+    expect(summaries[0]?.label).toBe("Ask user");
   });
 });

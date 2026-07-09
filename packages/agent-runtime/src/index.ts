@@ -11,7 +11,7 @@ import { Mastra } from "@mastra/core/mastra";
 import { WorkingMemory } from "@mastra/core/processors";
 import { createSkillTools, createWorkspaceTools } from "@mastra/core/workspace";
 import type { Message } from "@ag-ui/core";
-import type { ArtifactService } from "@datafoundry/artifacts";
+import type { ArtifactService, SessionOutputService } from "@datafoundry/artifacts";
 import type { DataGateway } from "@datafoundry/data-gateway";
 import { type FileAssetService, fileAssetRefDto, mimeTypeForFilename } from "@datafoundry/files";
 import type { KnowledgeService } from "@datafoundry/knowledge";
@@ -61,6 +61,10 @@ import { GoalRuntimeAdapter, type GoalRequest } from "./memory/goal-runtime-adap
 import { createDataFoundryToolRegistry } from "./tools/data-tools.js";
 import { GovernedToolFactory } from "./tools/governed-tool-factory.js";
 import {
+  maybeIngestSessionFileOutput,
+  maybeIngestSessionFileToolResult
+} from "./tools/session-output-ingest.js";
+import {
   createRunWorkspace,
   resolveSkillCacheDir,
   resolveWorkspaceDir
@@ -69,7 +73,7 @@ import { createMastraStreamNormalizerHooks } from "./stream/mastra-stream-hooks.
 import { createTokenUsageCorrelationStore } from "./stream/token-usage-correlation.js";
 import { wrapAgentForAgUi } from "./stream/mastra-stream-normalizer.js";
 import type { AgentRunContext, AgentRunContextInput, AgUiEventEmitter } from "./types.js";
-import { createArtifactEvent, createCustomEvent } from "./events.js";
+import { createCustomEvent } from "./events.js";
 import { createTool, type ToolAction } from "@mastra/core/tools";
 import { z } from "zod";
 
@@ -111,7 +115,6 @@ export const STATIC_AGENT_TOOL_NAMES = [
   "list_files",
   "mkdir",
   "preview_table",
-  "publish_artifact",
   "promote_workspace_file",
   "list_workspace_files",
   "read_workspace_file",
@@ -204,6 +207,7 @@ export type CreateDataFoundryInput = {
   modelProvider: Exclude<ModelProvider, { kind: "mock" }>;
   runContext: AgentRunContext;
   mcpTools?: Record<string, ToolAction<any, any, any, any, any>>;
+  sessionOutputService?: SessionOutputService;
   mcpToolNames?: string[];
   selectedSkills?: SkillRecord[];
   skillSelection?: SkillSelectionResult;
@@ -310,9 +314,25 @@ export const createDataFoundry = async (
     runId: input.runContext.run_id,
     sessionId: input.runContext.session_id
   });
+  const onGovernedResultWithSessionOutput: typeof registry.onGovernedResult = async (governed) => {
+    await registry.onGovernedResult?.(governed);
+    if (!input.sessionOutputService) {
+      return;
+    }
+    await maybeIngestSessionFileToolResult({
+      toolName: governed.toolName,
+      ...(governed.toolCallId ? { toolCallId: governed.toolCallId } : {}),
+      ...(governed.toolInput !== undefined ? { toolInput: governed.toolInput } : {}),
+      ...(governed.rawResult !== undefined ? { rawResult: governed.rawResult } : {}),
+      sessionDir: runWorkspace.sessionDir,
+      sessionOutputService: input.sessionOutputService,
+      runContext: input.runContext,
+      emitter: input.emitter
+    });
+  };
   const governedToolFactory = new GovernedToolFactory(
     dispatcher,
-    registry.onGovernedResult,
+    onGovernedResultWithSessionOutput,
     registry.onGovernanceError,
     {
       emitter: input.emitter,
@@ -386,15 +406,6 @@ export const createDataFoundry = async (
         })
       }
     : {};
-  const artifactTools = input.artifactService
-    ? createArtifactTools({
-        ...(input.abortSignal ? { abortSignal: input.abortSignal } : {}),
-        artifactService: input.artifactService,
-        emitter: input.emitter,
-        runContext: input.runContext,
-        workspaceDir: runWorkspace.sessionDir
-      })
-    : {};
   const fileAssetTools = input.fileAssetService
     ? createFileAssetTools({
         ...(input.abortSignal ? { abortSignal: input.abortSignal } : {}),
@@ -405,10 +416,9 @@ export const createDataFoundry = async (
       })
     : {};
   // Workspace file tools (write_file / edit_file / execute_command, etc.) produce
-  // session-scoped files only. They are synced to downloadable/restorable file refs at
-  // run finalize (RunFinalizer.syncSessionOutputs) and surfaced via workspace.metadata
-  // events. Client-visible artifacts are produced exclusively by the explicit
-  // publish_artifact tool — writing a file no longer auto-creates an artifact.
+  // session-scoped files. Eligible write/edit outputs are auto-ingested into Session
+  // Outputs from governed tool results (and workspace.metadata when Mastra emits it);
+  // drafts/scripts remain workspace-only.
   const workspaceTools = await createWorkspaceTools(runWorkspace.workspace, {
     requestContext: {},
     workspace: runWorkspace.workspace
@@ -418,7 +428,6 @@ export const createDataFoundry = async (
   const dataToolsEnabled = (input.runContext.enabled_datasource_ids?.length ?? 0) > 0;
   const availableTools = {
     ...(dataToolsEnabled ? registry.mastraTools : {}),
-    ...artifactTools,
     ...fileAssetTools,
     ...knowledgeTools,
     ...taskTools,
@@ -471,7 +480,18 @@ export const createDataFoundry = async (
   });
   const agentForAgUi = wrapAgentForAgUi(
     agent,
-    createMastraStreamNormalizerHooks(input.emitter),
+    createMastraStreamNormalizerHooks(input.emitter, input.sessionOutputService
+      ? {
+          onWorkspaceMetadata: (metadata) =>
+            maybeIngestSessionFileOutput({
+              metadata,
+              emitter: input.emitter,
+              runContext: input.runContext,
+              sessionDir: runWorkspace.sessionDir,
+              sessionOutputService: input.sessionOutputService as SessionOutputService
+            })
+        }
+      : {}),
     { ...(input.abortSignal ? { abortSignal: input.abortSignal } : {}) },
   );
   const mastra = input.taskStateRuntime
@@ -585,7 +605,6 @@ type MaterializedWorkspaceAttachment = {
 const buildAgentInstructions = (input: AgentInstructionsInput): string => {
   const { runContext: context, collaborationToolsEnabled, commandExecutionEnabled, taskToolsEnabled } = input;
   const enabled = (name: string): boolean => input.toolNames.includes(name);
-  const publishArtifactEnabled = enabled("publish_artifact");
   const promoteWorkspaceFileEnabled = enabled("promote_workspace_file");
   const dataTools = ["list_data_sources", "inspect_schema", "preview_table", "run_sql_readonly"].filter(enabled);
   const toolGroups: string[] = dataTools.length > 0 ? [`Data tools: ${dataTools.join(", ")}.`] : [];
@@ -594,9 +613,6 @@ const buildAgentInstructions = (input: AgentInstructionsInput): string => {
   }
   if ((context.enabled_knowledge_ids?.length ?? 0) > 0 && enabled("retrieve_knowledge")) {
     toolGroups.push("Knowledge tools: retrieve_knowledge.");
-  }
-  if (publishArtifactEnabled) {
-    toolGroups.push("Artifact tools: publish_artifact.");
   }
   const workspaceAssetTools = ["list_workspace_files", "read_workspace_file", "promote_workspace_file"]
     .filter(enabled);
@@ -783,9 +799,6 @@ const buildAgentInstructions = (input: AgentInstructionsInput): string => {
       + "Prefer one focused query per datasource before refining."
   );
   if (commandExecutionEnabled) {
-    const artifactPublishPolicy = publishArtifactEnabled
-      ? "Call publish_artifact for files that should be exposed to the client as artifacts. "
-      : "Do not claim a file was exposed as a client-visible artifact unless a tool result confirms it. ";
     const workspacePromotionPolicy = promoteWorkspaceFileEnabled
       ? "Call promote_workspace_file only to lift a session workspace file into a cross-session reusable asset "
         + "(files in the same session are already retained across runs; do not promote merely to reuse within this "
@@ -795,9 +808,10 @@ const buildAgentInstructions = (input: AgentInstructionsInput): string => {
       "Persist derived artifacts in the workspace. When analysis produces exports, charts, or transformed datasets, "
         + "write them as files via write_file so they are retained with the session, rather than only echoing them in "
         + "the final message. "
-        + artifactPublishPolicy
+        + "Eligible reusable files (for example CSV, JSON, Markdown, HTML, PNG, SVG, XLSX) are automatically shown "
+        + "as Session Outputs after successful write_file/edit_file calls. "
         + "Do not invent download URLs, link text, or UI placement such as 'click the link below'; the client renders "
-        + "download controls from artifact events and file APIs. "
+        + "download controls from output events and file APIs. "
         + workspacePromotionPolicy
     );
     if (input.pythonRuntimeAvailable) {
@@ -806,10 +820,7 @@ const buildAgentInstructions = (input: AgentInstructionsInput): string => {
           + "`python3.12 <script>`. "
           + "Use pandas for tabular work, matplotlib with plt.savefig() for charts (no GUI display), and scikit-learn "
           + "for modeling. "
-          + (publishArtifactEnabled
-            ? "Export CSV/JSON/PNG artifacts to the session workspace and publish_artifact when the user "
-              + "should download results."
-            : "Export CSV/JSON/PNG files to the session workspace when the user should reuse results.")
+          + "Export CSV/JSON/PNG files to the session workspace when the user should reuse or download results."
       );
     }
   }
@@ -916,49 +927,6 @@ const materializeWorkspaceAttachments = (
     };
   });
 };
-
-const createArtifactTools = (input: {
-  abortSignal?: AbortSignal | undefined;
-  artifactService: ArtifactService;
-  emitter: AgUiEventEmitter;
-  runContext: AgentRunContext;
-  workspaceDir: string;
-}): Record<string, ReturnType<typeof createTool>> => ({
-  publish_artifact: createTool({
-    id: "publish_artifact",
-    description: "Publish a file from the current run workspace as a client-visible artifact.",
-    inputSchema: z.object({
-      path: z.string().min(1),
-      name: z.string().min(1).optional(),
-      type: z.enum(["table", "chart", "markdown", "html", "file", "image", "citation_bundle"]).default("file"),
-      preview: z.unknown().optional()
-    }),
-    execute: async (toolInput, options?: { agent?: { toolCallId?: string } }) => {
-      throwIfAborted(input.abortSignal);
-      const sourcePath = resolveWorkspaceRelativePath(input.workspaceDir, toolInput.path);
-      const name = toolInput.name ?? basename(sourcePath);
-      const requestedType = toolInput.type ?? "file";
-      const toolCallId = typeof options?.agent?.toolCallId === "string" && options.agent.toolCallId.length > 0
-        ? options.agent.toolCallId
-        : undefined;
-      const artifact = await input.artifactService.createArtifactFromFile({
-        user_id: input.runContext.user_id,
-        session_id: input.runContext.session_id,
-        run_id: input.runContext.run_id,
-        workspace_id: input.runContext.workspace_id ?? "default",
-        type: requestedType,
-        name,
-        source_path: sourcePath,
-        // R-018: record the producing tool call so the frontend links the artifact
-        // back to this publish_artifact call without heuristics.
-        ...(toolCallId ? { metadata: { tool_call_id: toolCallId } } : {}),
-        ...(toolInput.preview !== undefined ? { preview_json: toolInput.preview } : {})
-      });
-      input.emitter.emit(createArtifactEvent(artifact));
-      return artifact;
-    }
-  })
-});
 
 const createFileAssetTools = (input: {
   abortSignal?: AbortSignal | undefined;

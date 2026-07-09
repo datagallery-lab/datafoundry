@@ -52,6 +52,8 @@ type GovernedResultInput = {
   contextPackage: ContextPackage;
   rawResult: unknown;
   toolName: string;
+  toolCallId?: string;
+  toolInput?: unknown;
 };
 
 export type ToolRegistry = {

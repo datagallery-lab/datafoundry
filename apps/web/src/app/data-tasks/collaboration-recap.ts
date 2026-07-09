@@ -79,7 +79,13 @@ export function reconcileSuspendedLiveRunState(
   if (findPendingCollaborationToolCall(liveRun, responses, liveRun.runStatus)) {
     return liveRun;
   }
-  return { ...liveRun, runStatus: "completed" };
+  return {
+    ...liveRun,
+    runStatus: "completed",
+    toolCalls: liveRun.toolCalls.map((call) =>
+      call.status === "running" ? { ...call, status: "success" as const } : call,
+    ),
+  };
 }
 
 /** Resume gate for pending interactions restored purely from REST metadata. */

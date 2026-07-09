@@ -25,11 +25,8 @@ import {
   reconcileLiveRunArtifacts,
   reduceLiveRunEvent,
   type LiveRun,
-  type LiveWorkspaceMetadata,
-  type LiveSandboxOutput,
   type SessionUsageStats,
 } from "./live-run-state";
-import { parseToolResultRecord, toolResultObservationText } from "./tool-result-normalize";
 
 /** Pending HITL interaction restored from server conversation metadata. */
 export type RestoredPendingInteraction = {
@@ -95,7 +92,7 @@ export function hydrateSessionUsageFromConversation(
 
   const checkpoints = checkpointByRunId(dto);
   for (const segment of collectRestorableRunSegments(dto)) {
-    const status = hydratedSegmentStatus(segment, checkpoints.get(segment.runId));
+    const status = hydratedSegmentStatus(checkpoints.get(segment.runId));
     if (status === "suspended" || status === "running" || status === "idle" || status === "canceled") {
       continue;
     }
@@ -283,7 +280,7 @@ export function shouldHydrateLiveRunFromConversation(
   if (!latest) {
     return false;
   }
-  const expectedStatus = hydratedSegmentStatus(latest);
+  const expectedStatus = hydratedSegmentStatus(checkpointByRunId(dto).get(latest.runId));
   return state.runId !== latest.runId || state.runStatus !== expectedStatus;
 }
 
@@ -358,13 +355,6 @@ const RUN_SCOPED_RESTORABLE_CUSTOM_EVENTS = new Set([
   "token_usage.correlation",
   "workspace.metadata",
   "sandbox.output",
-]);
-
-const WORKSPACE_SIGNAL_TOOL_NAMES = new Set([
-  "write_file",
-  "edit_file",
-  "mkdir",
-  "execute_command",
 ]);
 
 type ChoiceOption = { label: string; value: string; description?: string };
@@ -524,6 +514,11 @@ function resolvePersistedMessageId(
   return entry?.messageId ?? entry?.id;
 }
 
+/**
+ * Legacy fallback for sessions whose TOOL_CALL_START.parentMessageId was never
+ * persisted as a conversation row. New runs should persist `kind: "tool_parent"`
+ * assistants on the backend; keep this path only for old data.
+ */
 export function syntheticToolParentMessageId(parentMessageId: string): string {
   return `restored-tool-parent:${parentMessageId}`;
 }
@@ -574,11 +569,6 @@ function insertSyntheticToolParentMessages(
     return messages;
   }
 
-  const firstAssistantIndex = messages.findIndex((message) => message.role === "assistant");
-  if (firstAssistantIndex < 0) {
-    return messages;
-  }
-
   const placeholders = [...orphanedParentIds]
     .map((parentMessageId) => ({
       parentMessageId,
@@ -587,19 +577,88 @@ function insertSyntheticToolParentMessages(
           .filter((toolCall) => toolCall.parentMessageId === parentMessageId)
           .map((toolCall) => toolCallSortKey(toolCall)),
       ),
+      message: {
+        id: syntheticToolParentMessageId(parentMessageId),
+        role: "assistant" as const,
+        content: "",
+      },
     }))
-    .sort((left, right) => left.minSeq - right.minSeq)
-    .map(({ parentMessageId }) => ({
-      id: syntheticToolParentMessageId(parentMessageId),
-      role: "assistant" as const,
-      content: "",
-    }));
+    .sort((left, right) => left.minSeq - right.minSeq);
 
-  return [
-    ...messages.slice(0, firstAssistantIndex),
-    ...placeholders,
-    ...messages.slice(firstAssistantIndex),
-  ];
+  let next = [...messages];
+  for (const placeholder of placeholders) {
+    const insertAt = orphanPlaceholderInsertIndex(
+      next,
+      sortedEntries,
+      toolCalls,
+      placeholder.minSeq,
+    );
+    next = [
+      ...next.slice(0, insertAt),
+      placeholder.message,
+      ...next.slice(insertAt),
+    ];
+  }
+  return next;
+}
+
+/**
+ * Place an orphan tool-parent placeholder where its callEventSeq belongs relative
+ * to persisted assistants that own tools. Avoids dumping every orphan before the
+ * first assistant (which scrambled write_file → publish_artifact order).
+ *
+ * Legacy only: new runs persist empty tool-parent rows; this reorders synthetic
+ * orphans for historical sessions that still lack those rows.
+ */
+function orphanPlaceholderInsertIndex(
+  messages: Message[],
+  sortedEntries: ConversationMessageDto[],
+  toolCalls: ConversationToolCallDto[],
+  orphanMinSeq: number,
+): number {
+  let insertAt = messages.length;
+  for (let index = 0; index < messages.length; index += 1) {
+    const message = messages[index];
+    if (!message || message.role !== "assistant") {
+      continue;
+    }
+    // Skip already-inserted synthetic parents when placing later orphans.
+    if (message.id.startsWith("restored-tool-parent:")) {
+      const ownedSeq = minToolSeqForMessageId(message.id, sortedEntries, toolCalls);
+      if (ownedSeq !== undefined && ownedSeq <= orphanMinSeq) {
+        insertAt = index + 1;
+      } else if (ownedSeq !== undefined && ownedSeq > orphanMinSeq) {
+        return index;
+      }
+      continue;
+    }
+    const ownedSeq = minToolSeqForMessageId(message.id, sortedEntries, toolCalls);
+    if (ownedSeq === undefined) {
+      continue;
+    }
+    if (ownedSeq > orphanMinSeq) {
+      return index;
+    }
+    insertAt = index + 1;
+  }
+  return insertAt;
+}
+
+function minToolSeqForMessageId(
+  messageId: string,
+  sortedEntries: ConversationMessageDto[],
+  toolCalls: ConversationToolCallDto[],
+): number | undefined {
+  let minSeq: number | undefined;
+  for (const toolCall of toolCalls) {
+    const ownerId = findAssistantMessageIdForToolCall(sortedEntries, toolCall);
+    if (ownerId !== messageId) {
+      continue;
+    }
+    const seq = toolCallSortKey(toolCall);
+    minSeq = minSeq === undefined ? seq : Math.min(minSeq, seq);
+  }
+  return minSeq;
 }
 
 function createRunFacts(dto: SessionConversationDto): {
@@ -866,7 +925,7 @@ function resolveToolCallAssistantMessageId(
 }
 
 function toRestoredToolCall(toolCall: ConversationToolCallDto): RestoredToolCall {
-  const toolName = resolveConversationToolName(toolCall);
+  const toolName = authoritativeToolName(toolCall);
   return {
     id: toolCall.toolCallId,
     type: "function",
@@ -988,10 +1047,19 @@ export function conversationToAgentMessages(
     if (!content && !assistantIdsToRestore.has(id)) {
       continue;
     }
+    const contentParts = entry.contentParts?.filter(
+      (part) =>
+        (part.type === "reasoning" || part.type === "text") &&
+        typeof part.text === "string" &&
+        part.text.trim().length > 0,
+    );
     messages.push({
       id,
       role: "assistant",
-      content,
+      content:
+        contentParts && contentParts.length > 0
+          ? contentParts.map((part) => ({ type: part.type, text: part.text }))
+          : content,
     });
   }
 
@@ -1024,7 +1092,7 @@ export function collaborationResponsesFromConversation(
   const records: Array<Omit<CollaborationResponseRecord, "id" | "createdAt">> = [];
 
   for (const toolCall of dto.toolCalls) {
-    const toolName = resolveCollaborationToolName(toolCall);
+    const toolName = authoritativeCollaborationToolName(toolCall);
     if (!toolName) {
       continue;
     }
@@ -1130,8 +1198,54 @@ function collectRestorableRunSegments(dto: SessionConversationDto): RestorableRu
     byRunId.set(toolCall.runId, existing);
   }
 
+  const checkpointRunIds = new Set((dto.checkpoints ?? []).map((checkpoint) => checkpoint.runId));
+  for (const checkpoint of dto.checkpoints ?? []) {
+    const order =
+      checkpoint.messageStartPosition ??
+      checkpoint.firstEventSeq ??
+      byRunId.get(checkpoint.runId)?.order ??
+      Number.MAX_SAFE_INTEGER;
+    const existing = byRunId.get(checkpoint.runId);
+    if (!existing) {
+      byRunId.set(checkpoint.runId, {
+        runId: checkpoint.runId,
+        order,
+        hasUser: false,
+        hasAssistant: false,
+        tools: [],
+      });
+      continue;
+    }
+    existing.order = Math.min(existing.order, order);
+  }
+
+  for (const ref of dto.runEventRefs) {
+    const order =
+      ref.firstSeq ??
+      byRunId.get(ref.runId)?.order ??
+      Number.MAX_SAFE_INTEGER;
+    const existing = byRunId.get(ref.runId);
+    if (!existing) {
+      byRunId.set(ref.runId, {
+        runId: ref.runId,
+        order,
+        hasUser: false,
+        hasAssistant: false,
+        tools: [],
+      });
+      continue;
+    }
+    existing.order = Math.min(existing.order, order);
+  }
+
   return [...byRunId.values()]
-    .filter((segment) => segment.hasUser || segment.hasAssistant || segment.tools.length > 0)
+    .filter(
+      (segment) =>
+        segment.hasUser ||
+        segment.hasAssistant ||
+        segment.tools.length > 0 ||
+        checkpointRunIds.has(segment.runId),
+    )
     .sort((left, right) => left.order - right.order)
     .map((segment) => ({
       ...segment,
@@ -1141,130 +1255,52 @@ function collectRestorableRunSegments(dto: SessionConversationDto): RestorableRu
     }));
 }
 
+/**
+ * Run status is now taken authoritatively from the backend checkpoint contract
+ * (config-api `runCheckpointDto`). Historical runs that predate the checkpoint
+ * contract fall back to "completed"; the frontend no longer guesses status from
+ * tool presence or the user/assistant message shape.
+ */
 function hydratedSegmentStatus(
-  segment: RestorableRunSegment,
   checkpoint?: ConversationCheckpointDto,
 ): LiveRun["runStatus"] {
-  const checkpointStatus = runStatusFromCheckpoint(checkpoint);
-  if (checkpointStatus) {
-    return checkpointStatus;
-  }
-  if (segment.tools.length > 0) {
-    return isPendingCollaborationRunEnd(segment.tools) ? "suspended" : "completed";
-  }
-  return segment.hasUser && !segment.hasAssistant ? "failed" : "completed";
+  return runStatusFromCheckpoint(checkpoint) ?? "completed";
 }
 
-function isSubmitPlanApprovalResult(result: string): boolean {
-  try {
-    const record = JSON.parse(result) as Record<string, unknown>;
-    if (typeof record.action === "string") {
-      return record.action === "approved" || record.action === "rejected";
-    }
-  } catch {
-    // not JSON
-  }
-  return /Plan (approved|rejected)/i.test(result);
+/**
+ * Authoritative tool name from the persisted tool-call contract. The backend emits
+ * the canonical Mastra tool name on TOOL_CALL_START/END/RESULT, so the frontend no
+ * longer infers ask_user vs submit_plan from args/result text.
+ */
+function authoritativeToolName(toolCall: ConversationToolCallDto): string {
+  return toolCall.toolName ?? toolCall.name ?? "tool";
 }
 
-function inferCollaborationToolNameFromToolCall(
+function authoritativeCollaborationToolName(
   toolCall: ConversationToolCallDto,
 ): CollaborationToolName | undefined {
-  const { plan, question, options } = readCollaborationArgs(toolCall);
-  if (plan) {
-    return "submit_plan";
-  }
-
-  const result = serializeToolCallResult(toolCall);
-  if (result && isSubmitPlanApprovalResult(result)) {
-    return "submit_plan";
-  }
-
-  if (question || options.length > 0) {
-    return "ask_user";
-  }
-
-  if (result) {
-    if (result.includes("mastra-collaboration") || result.includes("User answered")) {
-      return "ask_user";
-    }
-    try {
-      const parsed = JSON.parse(result) as { source?: string };
-      if (parsed.source === "mastra-collaboration") {
-        return "ask_user";
-      }
-    } catch {
-      // ignore malformed JSON
-    }
-  }
-
-  return undefined;
-}
-
-function resolveCollaborationToolName(
-  toolCall: ConversationToolCallDto,
-): CollaborationToolName | undefined {
-  const inferred = inferCollaborationToolNameFromToolCall(toolCall);
-  const direct = toolCall.toolName ?? toolCall.name;
-  if (direct && COLLABORATION_TOOL_NAMES.has(direct as CollaborationToolName)) {
-    if (direct === "ask_user" && inferred === "submit_plan") {
-      return "submit_plan";
-    }
-    return direct as CollaborationToolName;
-  }
-  if (inferred) {
-    return inferred;
-  }
-  const resolved = resolveConversationToolName(toolCall);
-  if (COLLABORATION_TOOL_NAMES.has(resolved as CollaborationToolName)) {
-    return resolved as CollaborationToolName;
-  }
-  return undefined;
-}
-
-function resolveConversationToolName(toolCall: ConversationToolCallDto): string {
-  const inferred = inferCollaborationToolNameFromToolCall(toolCall);
-  const direct = toolCall.toolName ?? toolCall.name;
-  if (direct && direct !== "tool" && direct !== "unknown") {
-    if (direct === "ask_user" && inferred === "submit_plan") {
-      return "submit_plan";
-    }
-    return direct;
-  }
-
-  if (inferred) {
-    return inferred;
-  }
-
-  const result = serializeToolCallResult(toolCall);
-  if (result) {
-    if (result.includes("mastra-collaboration") || result.includes("User answered")) {
-      return "ask_user";
-    }
-    try {
-      const parsed = JSON.parse(result) as { source?: string };
-      if (parsed.source === "mastra-collaboration") {
-        return "ask_user";
-      }
-    } catch {
-      // ignore malformed JSON
-    }
-  }
-
-  return direct ?? "tool";
+  const name = toolCall.toolName ?? toolCall.name;
+  return name && COLLABORATION_TOOL_NAMES.has(name as CollaborationToolName)
+    ? (name as CollaborationToolName)
+    : undefined;
 }
 
 function isPendingCollaborationRunEnd(tools: ConversationToolCallDto[]): boolean {
+  // R-018: authoritative "awaiting user" flag from the backend — if any tool call is
+  // flagged awaitingInteraction the run is suspended, no inference needed.
+  if (tools.some((tool) => tool.awaitingInteraction === true)) {
+    return true;
+  }
   const last = tools.at(-1);
   if (!last) return false;
-  const toolName = resolveCollaborationToolName(last);
+  const toolName = authoritativeCollaborationToolName(last);
   if (last.status === "pending") return true;
   if (!toolName) return false;
   return serializeToolCallResult(last) === undefined;
 }
 
 function applyConversationToolCall(state: LiveRun, toolCall: ConversationToolCallDto): LiveRun {
-  const toolName = resolveConversationToolName(toolCall);
+  const toolName = authoritativeToolName(toolCall);
   const toolCallId = toolCall.toolCallId;
   let next = reduceLiveRunEvent(state, {
     type: "TOOL_CALL_START",
@@ -1301,7 +1337,7 @@ function finalizeHydratedRunSegment(
   checkpoint: ConversationCheckpointDto | undefined,
 ): LiveRun {
   const checkpointStatus = runStatusFromCheckpoint(checkpoint);
-  if (checkpointStatus === "running" || checkpointStatus === "queued") {
+  if (checkpointStatus === "running") {
     return state;
   }
   if (checkpointStatus === "failed") {
@@ -1334,7 +1370,7 @@ function finalizeMessageOnlyHydratedRunSegment(
   dto: SessionConversationDto,
 ): LiveRun {
   const checkpointStatus = runStatusFromCheckpoint(checkpoint);
-  if (checkpointStatus === "running" || checkpointStatus === "queued") {
+  if (checkpointStatus === "running") {
     return state;
   }
   if (checkpointStatus === "suspended") {
@@ -1346,6 +1382,18 @@ function finalizeMessageOnlyHydratedRunSegment(
   if (checkpointStatus === "canceled") {
     return reduceLiveRunEvent(state, { type: "RUN_FINISHED", status: "canceled" });
   }
+  if (checkpointStatus === "failed") {
+    return reduceLiveRunEvent(state, {
+      type: "RUN_ERROR",
+      message: checkpoint?.errorMessage?.trim() || ORPHANED_RUN_ASSISTANT_PLACEHOLDER,
+    });
+  }
+  if (checkpointStatus === "completed") {
+    return reduceLiveRunEvent(state, { type: "RUN_FINISHED" });
+  }
+  // Legacy fallback: no checkpoint for a user-only segment. Prefer backend
+  // checkpoints (runs row / event-only / pending-interaction suspended). Remove
+  // once all terminal runs emit checkpoints.
   if (segment.hasUser && !segment.hasAssistant) {
     return reduceLiveRunEvent(state, {
       type: "RUN_ERROR",
@@ -1395,99 +1443,6 @@ function dtoWithRestorableEventsForRun(
       (event) => event.runId === runId,
     ),
   };
-}
-
-function workspacePathFromToolResult(toolName: string, result: string): string | undefined {
-  const text = result.trim();
-  if (!text) return undefined;
-  if (toolName === "write_file") {
-    const match = text.match(/\bto ([^\n]+)$/);
-    return match?.[1]?.trim();
-  }
-  if (toolName === "edit_file") {
-    const match = text.match(/\bin ([^\n(]+)/);
-    return match?.[1]?.trim();
-  }
-  if (toolName === "mkdir") {
-    const match = text.match(/(?:directory|dir) ([^\n]+)$/i);
-    return match?.[1]?.trim();
-  }
-  const record = parseToolResultRecord(result);
-  return typeof record?.path === "string" ? record.path : undefined;
-}
-
-function sandboxOutputKey(value: unknown): string | undefined {
-  const record = parseRecord(value);
-  const kind = typeof record?.kind === "string" ? record.kind : "stdout";
-  const text =
-    typeof record?.text === "string"
-      ? record.text.trim()
-      : typeof record?.output === "string"
-        ? record.output.trim()
-        : typeof record?.value === "string"
-          ? record.value.trim()
-          : undefined;
-  if (!text) return undefined;
-  return `${kind}:${text}`;
-}
-
-/** Synthesize workspace CUSTOM signals when restore lacks persisted CUSTOM events. */
-function deriveWorkspaceSignalsFromToolCalls(state: LiveRun): LiveRun {
-  const knownMetadataIds = new Set(
-    state.workspaceMetadata.map((entry) => entry.toolCallId).filter(Boolean),
-  );
-  const workspaceMetadata: LiveWorkspaceMetadata[] = [...state.workspaceMetadata];
-  const sandboxOutputs: LiveSandboxOutput[] = [...state.sandboxOutputs];
-  const knownSandboxOutputKeys = new Set(
-    sandboxOutputs
-      .map((output) => sandboxOutputKey(output.payload))
-      .filter((key): key is string => Boolean(key)),
-  );
-
-  for (const toolCall of state.toolCalls) {
-    if (toolCall.status !== "success" || !toolCall.result) continue;
-
-    if (
-      WORKSPACE_SIGNAL_TOOL_NAMES.has(toolCall.name) &&
-      toolCall.name !== "execute_command" &&
-      !knownMetadataIds.has(toolCall.id)
-    ) {
-      const path = workspacePathFromToolResult(toolCall.name, toolCall.result);
-      workspaceMetadata.push({
-        toolCallId: toolCall.id,
-        toolName: toolCall.name,
-        receivedAt: toolCall.finishedAtMs ?? toolCall.startedAtMs ?? Date.now(),
-        payload: {
-          status: "ready",
-          ...(path ? { path } : {}),
-          operation: toolCall.name,
-        },
-      });
-      knownMetadataIds.add(toolCall.id);
-    }
-
-    if (toolCall.name === "execute_command") {
-      const text = toolResultObservationText(toolCall.result).trim();
-      const key = text ? `stdout:${text}` : undefined;
-      if (text && key && !knownSandboxOutputKeys.has(key)) {
-        sandboxOutputs.push({
-          kind: "stdout",
-          receivedAt: toolCall.finishedAtMs ?? toolCall.startedAtMs ?? Date.now(),
-          payload: { kind: "stdout", text },
-        });
-        knownSandboxOutputKeys.add(key);
-      }
-    }
-  }
-
-  if (
-    workspaceMetadata.length === state.workspaceMetadata.length &&
-    sandboxOutputs.length === state.sandboxOutputs.length
-  ) {
-    return state;
-  }
-
-  return { ...state, workspaceMetadata, sandboxOutputs };
 }
 
 function mergePreservedLiveRunSessionData(previous: LiveRun, hydrated: LiveRun): LiveRun {
@@ -1548,13 +1503,17 @@ export function hydrateLiveRunFromConversation(
     next = applyHydratedRunCheckpointTiming(next, checkpoint);
   }
 
-  next = reconcileLiveRunArtifacts(mergePreservedLiveRunSessionData(state, next));
-  return deriveWorkspaceSignalsFromToolCalls(next);
+  // Workspace/sandbox signals come only from persisted workspace.metadata / sandbox.output
+  // CUSTOM events (replayed above). The frontend no longer synthesizes them from tool-result
+  // text — the backend is the authoritative source for these signals.
+  return reconcileLiveRunArtifacts(mergePreservedLiveRunSessionData(state, next));
 }
 
 /**
- * When pendingInteractions exist but toolCalls are not yet persisted, bootstrap a
- * minimal suspended LiveRun so HITL resume gates and the task console stay aligned.
+ * Legacy defense-in-depth: when pendingInteractions exist but toolCalls were not
+ * persisted (pre-HITL-atomic suspend), bootstrap a minimal suspended LiveRun.
+ * New suspends persist TOOL_CALL_START + synthesize missing toolCalls on read;
+ * keep this for old sessions only.
  */
 export function hydratePendingInteractionLiveRun(
   state: LiveRun,

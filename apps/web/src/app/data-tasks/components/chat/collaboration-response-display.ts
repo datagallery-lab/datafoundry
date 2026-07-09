@@ -26,14 +26,14 @@ export function formatCollaborationResponseDisplay(
   if (toolName === "submit_plan") {
     if (response && typeof response === "object") {
       const record = response as { action?: string; feedback?: string };
-      if (record.action === "approved") return "已批准执行计划";
+      if (record.action === "approved") return "Plan approved";
       if (record.action === "rejected") {
         return record.feedback?.trim()
-          ? `已拒绝计划：${record.feedback.trim()}`
-          : "已拒绝执行计划";
+          ? `Plan rejected: ${record.feedback.trim()}`
+          : "Plan rejected";
       }
     }
-    return "已提交计划审查";
+    return "Plan submitted for review";
   }
 
   if (typeof response === "string") {
@@ -50,7 +50,7 @@ export function formatCollaborationResponseDisplay(
         return matched?.label ?? value;
       })
       .filter(Boolean);
-    return labels.length > 0 ? labels.join("、") : "已提交回答";
+    return labels.length > 0 ? labels.join(", ") : "Response submitted";
   }
 
   if (typeof response === "number" || typeof response === "boolean") {
@@ -61,9 +61,9 @@ export function formatCollaborationResponseDisplay(
     try {
       return JSON.stringify(response);
     } catch {
-      return "已提交回答";
+      return "Response submitted";
     }
   }
 
-  return "已提交回答";
+  return "Response submitted";
 }

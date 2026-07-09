@@ -2,13 +2,23 @@
 
 import { useAgent, useCopilotChatConfiguration } from "@copilotkit/react-core/v2";
 import { useLayoutEffect, useRef } from "react";
-import { scrollCopilotChatToBottomWithRetries } from "../../chat-scroll";
+import {
+  restoreCopilotChatScrollTop,
+  restoreCopilotChatScrollTopWithRetries,
+  scrollCopilotChatToBottomWithRetries,
+} from "../../chat-scroll";
+import {
+  consumeConversationScrollIntent,
+  type ConversationScrollIntent,
+} from "../../conversation-branch-scroll";
 import { useConversationRestoreGate } from "../../use-data-foundry-run";
 
 /**
  * After a historical thread is restored (switch session or full page refresh),
  * CopilotKit's pin-to-bottom does not always follow batch-loaded messages.
- * Pin the chat viewport to the latest message once restore settles.
+ * Pin the chat viewport to the latest message once restore settles — unless the
+ * navigation came from the branch switcher, which restores the prior scrollTop
+ * and keeps autoScroll disabled so StickToBottom cannot fight the preserve.
  */
 export function SessionConversationScrollRestore({
   agentId,
@@ -22,6 +32,7 @@ export function SessionConversationScrollRestore({
   const prevRestoringRef = useRef(isRestoringConversation);
   const activeThreadRef = useRef<string | null>(null);
   const pendingScrollRef = useRef(false);
+  const pendingIntentRef = useRef<ConversationScrollIntent>({ kind: "bottom" });
   const cancelScrollRef = useRef<(() => void) | null>(null);
 
   useLayoutEffect(() => {
@@ -35,6 +46,7 @@ export function SessionConversationScrollRestore({
     if (activeThreadRef.current !== threadId) {
       activeThreadRef.current = threadId;
       pendingScrollRef.current = true;
+      pendingIntentRef.current = consumeConversationScrollIntent();
     }
 
     if (isRestoringConversation) {
@@ -47,8 +59,20 @@ export function SessionConversationScrollRestore({
       prevRestoringRef.current && !isRestoringConversation;
 
     if (messageCount > 0 && (restoreCompleted || pendingScrollRef.current)) {
-      cancelScrollRef.current = scrollCopilotChatToBottomWithRetries();
+      const intent = pendingIntentRef.current;
       pendingScrollRef.current = false;
+      pendingIntentRef.current = { kind: "bottom" };
+
+      if (intent.kind === "preserve") {
+        // Apply once synchronously before paint, then keep reinforcing while
+        // restored messages finish laying out.
+        restoreCopilotChatScrollTop(intent.scrollTop);
+        cancelScrollRef.current = restoreCopilotChatScrollTopWithRetries({
+          scrollTop: intent.scrollTop,
+        });
+      } else {
+        cancelScrollRef.current = scrollCopilotChatToBottomWithRetries();
+      }
     }
 
     prevRestoringRef.current = isRestoringConversation;

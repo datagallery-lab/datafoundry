@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { LoginClient } from "./login-client";
 
 export const metadata: Metadata = {
-  title: "登录",
+  title: "Sign in",
 };
 
 export default function LoginPage() {

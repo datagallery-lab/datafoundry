@@ -34,9 +34,9 @@ const schemaPreviewSource = () =>
 describe("session pane ui conventions", () => {
   it("names the collapsed sidebar as a workspace quick rail", () => {
     expect(getCollapsedWorkspaceRailCopy()).toEqual({
-      expandLabel: "展开工作区快捷栏",
-      railLabel: "工作区快捷栏",
-      sessionCountLabel: "会话数量",
+      expandLabel: "Expand workspace rail",
+      railLabel: "Workspace rail",
+      sessionCountLabel: "Sessions",
     });
   });
 

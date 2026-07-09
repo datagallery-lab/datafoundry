@@ -62,6 +62,25 @@ describe("assistant-thought-content", () => {
     ).toBe("inspect schema then query");
   });
 
+  it("uses folded reasoning parts as tool-step thinking without final text", () => {
+    const thought = "先检查 schema，再汇总 GMV。";
+    const messages = [
+      { id: "user-1", role: "user", content: "分析 GMV" },
+      {
+        id: "assistant-1",
+        role: "assistant",
+        content: [
+          { type: "reasoning", text: thought },
+          { type: "text", text: "查询完成。" },
+        ],
+        toolCalls: [{ id: "tc-1", function: { name: "run_sql_readonly" } }],
+      },
+    ];
+
+    expect(resolveToolStepThoughtContent(messages[1], messages)).toBe(thought);
+    expect(resolveAssistantThoughtContent(messages[1], messages)).toBe(thought);
+  });
+
   it("dedupes exact repeated assistant text", () => {
     const thought =
       "我需要分析不同品类的销售额数据。首先，让我查看可用的数据源，然后检查数据库模式以了解表结构。";

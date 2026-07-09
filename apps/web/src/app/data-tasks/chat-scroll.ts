@@ -66,6 +66,26 @@ export function findCopilotChatScrollContainer(
   return null;
 }
 
+function applyScrollTop(
+  container: HTMLElement,
+  top: number,
+  behavior: ScrollBehavior = "auto",
+) {
+  const previousScrollBehavior = container.style.scrollBehavior;
+  if (behavior === "auto") {
+    container.style.scrollBehavior = "auto";
+  }
+  const nextTop = Math.max(0, top);
+  container.scrollTop = nextTop;
+  container.scrollTo({
+    top: nextTop,
+    behavior,
+  });
+  if (behavior === "auto") {
+    container.style.scrollBehavior = previousScrollBehavior;
+  }
+}
+
 export function scrollCopilotChatToBottom(
   root: ParentNode = document,
   behavior: ScrollBehavior = "auto",
@@ -75,19 +95,62 @@ export function scrollCopilotChatToBottom(
     return false;
   }
 
-  const previousScrollBehavior = container.style.scrollBehavior;
-  if (behavior === "auto") {
-    container.style.scrollBehavior = "auto";
-  }
-  container.scrollTop = container.scrollHeight;
-  container.scrollTo({
-    top: container.scrollHeight,
-    behavior,
-  });
-  if (behavior === "auto") {
-    container.style.scrollBehavior = previousScrollBehavior;
-  }
+  applyScrollTop(container, container.scrollHeight, behavior);
   return true;
+}
+
+export function restoreCopilotChatScrollTop(
+  scrollTop: number,
+  root: ParentNode = document,
+  behavior: ScrollBehavior = "auto",
+): boolean {
+  const container = findCopilotChatScrollContainer(root);
+  if (!container) {
+    return false;
+  }
+
+  const maxScrollTop = Math.max(0, container.scrollHeight - container.clientHeight);
+  applyScrollTop(container, Math.min(Math.max(0, scrollTop), maxScrollTop), behavior);
+  return true;
+}
+
+export function restoreCopilotChatScrollTopWithRetries(input: {
+  scrollTop: number;
+  root?: ParentNode;
+  attempts?: number;
+  intervalMs?: number;
+  schedule?: (callback: () => void) => void;
+  delay?: (callback: () => void, intervalMs: number) => number;
+}): () => void {
+  const {
+    scrollTop,
+    root = document,
+    // Branch restores can keep laying out for a few hundred ms; keep re-applying.
+    attempts = 24,
+    intervalMs = 50,
+    schedule = (callback) => requestAnimationFrame(callback),
+    delay = (callback, waitMs) => window.setTimeout(callback, waitMs),
+  } = input;
+
+  let cancelled = false;
+  let attempt = 0;
+
+  const tick = () => {
+    if (cancelled) {
+      return;
+    }
+    restoreCopilotChatScrollTop(scrollTop, root, "auto");
+    attempt += 1;
+    if (attempt < attempts) {
+      delay(tick, intervalMs);
+    }
+  };
+
+  schedule(tick);
+
+  return () => {
+    cancelled = true;
+  };
 }
 
 export function scrollCopilotChatToBottomWithRetries(input?: {

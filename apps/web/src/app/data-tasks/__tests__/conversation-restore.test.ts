@@ -79,6 +79,56 @@ describe("conversationToAgentMessages", () => {
     ]);
   });
 
+  it("restores folded reasoning contentParts onto assistant messages", () => {
+    const dto: SessionConversationDto = {
+      sessionId: "thread-1",
+      messages: [
+        {
+          id: "m1",
+          runId: "run-1",
+          role: "user",
+          source: "client",
+          messageId: "msg-user-1",
+          contentText: "分析 GMV",
+          position: 1,
+          createdAt: "2026-07-09T10:00:01Z",
+        },
+        {
+          id: "m2",
+          runId: "run-1",
+          role: "assistant",
+          source: "agent",
+          messageId: "msg-assistant-1",
+          contentText: "先检查 schema。",
+          contentParts: [
+            { type: "reasoning", text: "先检查 schema。" },
+            { type: "text", text: "接下来查询订单表。" },
+          ],
+          position: 2,
+          createdAt: "2026-07-09T10:00:02Z",
+        },
+      ],
+      runEventRefs: [],
+      toolCalls: [],
+    };
+
+    expect(conversationToAgentMessages(dto)).toEqual([
+      {
+        id: "msg-user-1",
+        role: "user",
+        content: "分析 GMV",
+      },
+      {
+        id: "msg-assistant-1",
+        role: "assistant",
+        content: [
+          { type: "reasoning", text: "先检查 schema。" },
+          { type: "text", text: "接下来查询订单表。" },
+        ],
+      },
+    ]);
+  });
+
   it("falls back to entry id when messageId is missing", () => {
     const dto: SessionConversationDto = {
       sessionId: "thread-1",
@@ -527,6 +577,196 @@ describe("conversationToAgentMessages", () => {
     ).toBe("inspect_schema");
   });
 
+  it("links tools to persisted empty tool-parent rows without synthetic orphans", () => {
+    const dto: SessionConversationDto = {
+      sessionId: "thread-1",
+      messages: [
+        {
+          id: "m-user",
+          runId: "run-1",
+          role: "user",
+          source: "client",
+          messageId: "msg-user-1",
+          contentText: "写报告并发布",
+          position: 1,
+          createdAt: "2026-07-09T10:00:01Z",
+        },
+        {
+          id: "m-write",
+          runId: "run-1",
+          role: "assistant",
+          source: "agent",
+          messageId: "msg-write-parent",
+          contentText: "",
+          position: 2,
+          createdAt: "2026-07-09T10:00:02Z",
+        },
+        {
+          id: "m-publish",
+          runId: "run-1",
+          role: "assistant",
+          source: "agent",
+          messageId: "msg-publish-parent",
+          contentText: "",
+          position: 3,
+          createdAt: "2026-07-09T10:00:03Z",
+        },
+        {
+          id: "m-final",
+          runId: "run-1",
+          role: "assistant",
+          source: "agent",
+          messageId: "msg-final-answer",
+          contentText: "报告已发布。",
+          position: 4,
+          createdAt: "2026-07-09T10:00:04Z",
+        },
+      ],
+      runEventRefs: [],
+      toolCalls: [
+        {
+          runId: "run-1",
+          toolCallId: "tc-write",
+          status: "completed",
+          toolName: "write_file",
+          parentMessageId: "msg-write-parent",
+          callEventSeq: 10,
+        },
+        {
+          runId: "run-1",
+          toolCallId: "tc-publish",
+          status: "completed",
+          toolName: "publish_artifact",
+          parentMessageId: "msg-publish-parent",
+          callEventSeq: 20,
+        },
+      ],
+    };
+
+    const restored = conversationToAgentMessages(dto);
+    expect(restored.map((message) => message.id)).toEqual([
+      "msg-user-1",
+      "msg-write-parent",
+      "msg-publish-parent",
+      "msg-final-answer",
+    ]);
+    expect(restored.some((message) => message.id.startsWith("restored-tool-parent:"))).toBe(false);
+    expect(
+      restored.find((message) => message.id === "msg-write-parent")?.toolCalls?.[0]?.function.name,
+    ).toBe("write_file");
+    expect(
+      restored.find((message) => message.id === "msg-publish-parent")?.toolCalls?.[0]?.function.name,
+    ).toBe("publish_artifact");
+  });
+
+  it("inserts orphan parent placeholders by callEventSeq instead of before the first assistant", () => {
+    const dto: SessionConversationDto = {
+      sessionId: "thread-1",
+      messages: [
+        {
+          id: "m-user",
+          runId: "run-1",
+          role: "user",
+          source: "client",
+          messageId: "msg-user-1",
+          contentText: "对比两周 GMV 并输出报告",
+          position: 1,
+          createdAt: "2026-07-09T10:00:01Z",
+        },
+        {
+          id: "m-sql",
+          runId: "run-1",
+          role: "assistant",
+          source: "agent",
+          messageId: "msg-sql",
+          contentText: "先查两周汇总。",
+          position: 2,
+          createdAt: "2026-07-09T10:00:02Z",
+        },
+        {
+          id: "m-write",
+          runId: "run-1",
+          role: "assistant",
+          source: "agent",
+          messageId: "msg-write",
+          contentText: "开始写报告。",
+          position: 3,
+          createdAt: "2026-07-09T10:00:03Z",
+        },
+        {
+          id: "m-final",
+          runId: "run-1",
+          role: "assistant",
+          source: "agent",
+          messageId: "msg-final",
+          contentText: "报告已发布。",
+          position: 4,
+          createdAt: "2026-07-09T10:00:04Z",
+        },
+      ],
+      runEventRefs: [],
+      toolCalls: [
+        {
+          runId: "run-1",
+          toolCallId: "tc-schema",
+          status: "completed",
+          toolName: "inspect_schema",
+          parentMessageId: "msg-ephemeral-early",
+          callEventSeq: 8,
+        },
+        {
+          runId: "run-1",
+          toolCallId: "tc-sql",
+          status: "completed",
+          toolName: "run_sql_readonly",
+          parentMessageId: "msg-sql",
+          callEventSeq: 52,
+        },
+        {
+          runId: "run-1",
+          toolCallId: "tc-write",
+          status: "completed",
+          toolName: "write_file",
+          parentMessageId: "msg-write",
+          callEventSeq: 111,
+        },
+        {
+          runId: "run-1",
+          toolCallId: "tc-publish",
+          status: "completed",
+          toolName: "publish_artifact",
+          parentMessageId: "msg-ephemeral-publish",
+          callEventSeq: 119,
+        },
+      ],
+    };
+
+    const restored = conversationToAgentMessages(dto);
+    const assistantToolOrder = restored
+      .filter((message) => message.role === "assistant")
+      .flatMap((message) =>
+        (message.toolCalls ?? []).map((call) => call.function.name),
+      );
+
+    expect(assistantToolOrder).toEqual([
+      "inspect_schema",
+      "run_sql_readonly",
+      "write_file",
+      "publish_artifact",
+    ]);
+
+    const publishStepIndex = restored.findIndex((message) =>
+      message.toolCalls?.some((call) => call.id === "tc-publish"),
+    );
+    const writeStepIndex = restored.findIndex((message) =>
+      message.toolCalls?.some((call) => call.id === "tc-write"),
+    );
+    const finalIndex = restored.findIndex((message) => message.id === "msg-final");
+    expect(writeStepIndex).toBeGreaterThan(-1);
+    expect(publishStepIndex).toBeGreaterThan(writeStepIndex);
+    expect(publishStepIndex).toBeLessThan(finalIndex);
+  });
+
   it("restores empty assistant placeholders needed for collaboration tool anchoring", () => {
     const dto: SessionConversationDto = {
       sessionId: "thread-1",
@@ -637,7 +877,7 @@ describe("collaborationResponsesFromConversation", () => {
     ]);
   });
 
-  it("rebuilds ask_user records when persisted tool name is missing", () => {
+  it("rebuilds ask_user records from the authoritative tool name", () => {
     const dto: SessionConversationDto = {
       sessionId: "thread-1",
       messages: [
@@ -658,6 +898,7 @@ describe("collaborationResponsesFromConversation", () => {
           runId: "run-1",
           toolCallId: "tc-ask",
           status: "completed",
+          toolName: "ask_user",
           result: { content: "User answered: orders" },
         },
       ],
@@ -711,13 +952,13 @@ describe("collaborationResponsesFromConversation", () => {
         toolName: "submit_plan",
         question: "执行Plan approval",
         plan: "1. 查 schema\n2. 跑 SQL",
-        displayText: "已批准执行计划",
+        displayText: "Plan approved",
         assistantMessageId: "msg-assistant-1",
       },
     ]);
   });
 
-  it("rebuilds submit_plan when persisted tool name is mislabeled ask_user", () => {
+  it("rebuilds submit_plan approval from the authoritative tool name", () => {
     const dto: SessionConversationDto = {
       sessionId: "thread-1",
       messages: [
@@ -738,7 +979,7 @@ describe("collaborationResponsesFromConversation", () => {
           runId: "run-1",
           toolCallId: "tc-plan",
           status: "completed",
-          toolName: "ask_user",
+          toolName: "submit_plan",
           args: {
             title: "简单计划",
             plan: "步骤1：确认收到审批",
@@ -753,7 +994,7 @@ describe("collaborationResponsesFromConversation", () => {
         toolCallId: "tc-plan",
         toolName: "submit_plan",
         plan: "步骤1：确认收到审批",
-        displayText: "已批准执行计划",
+        displayText: "Plan approved",
       }),
     ]);
 
@@ -766,7 +1007,7 @@ describe("collaborationResponsesFromConversation", () => {
     expect(run.toolCalls.find((call) => call.id === "tc-plan")?.name).toBe("submit_plan");
   });
 
-  it("infers submit_plan from approval result when tool name is missing", () => {
+  it("rebuilds submit_plan approval from authoritative name and result", () => {
     const dto: SessionConversationDto = {
       sessionId: "thread-1",
       messages: [
@@ -787,6 +1028,7 @@ describe("collaborationResponsesFromConversation", () => {
           runId: "run-1",
           toolCallId: "tc-plan",
           status: "completed",
+          toolName: "submit_plan",
           resultPreview: JSON.stringify({
             action: "approved",
             content: "Plan approved",
@@ -1386,6 +1628,7 @@ describe("hydrateLiveRunFromConversation run ordering", () => {
           runId: "run-b",
           toolCallId: "tc-collab",
           status: "completed",
+          toolName: "ask_user",
           resultPreview: JSON.stringify({
             content: "User answered: yes",
             source: "mastra-collaboration",
@@ -1592,6 +1835,133 @@ describe("hydrateLiveRunFromConversation", () => {
     expect(run.runStatus).toBe("completed");
   });
 
+  it("restores a suspended run from the authoritative awaitingInteraction flag (R-018)", () => {
+    const dto: SessionConversationDto = {
+      sessionId: "thread-1",
+      messages: [],
+      runEventRefs: [],
+      toolCalls: [
+        {
+          runId: "run-1",
+          toolCallId: "tc-1",
+          status: "completed",
+          toolName: "list_data_sources",
+          callEventSeq: 1,
+        },
+        {
+          // Backend flags this HITL call as awaiting the user even though its status
+          // is not "pending" — the authoritative flag alone must drive suspension.
+          runId: "run-1",
+          toolCallId: "tc-plan",
+          status: "completed",
+          toolName: "submit_plan",
+          awaitingInteraction: true,
+          callEventSeq: 2,
+        },
+      ],
+    };
+
+    const run = hydrateLiveRunFromConversation(createInitialLiveRun(), dto);
+    expect(run.runStatus).toBe("suspended");
+  });
+
+  it("restores event-only completed checkpoints for user-only runs without assistant messages", () => {
+    const dto: SessionConversationDto = {
+      sessionId: "thread-1",
+      messages: [
+        {
+          id: "m-user-only",
+          runId: "run-event-only",
+          role: "user",
+          source: "client",
+          messageId: "msg-user-only",
+          contentText: "Analyze orders",
+          position: 1,
+          createdAt: "2026-06-25T10:00:01Z",
+        },
+      ],
+      runEventRefs: [{ runId: "run-event-only", eventCount: 8, firstSeq: 1, lastSeq: 8 }],
+      checkpoints: [
+        {
+          runId: "run-event-only",
+          status: "completed",
+          messageStartPosition: 1,
+          messageEndPosition: 1,
+          firstEventSeq: 1,
+          lastEventSeq: 8,
+          terminalEvent: "RUN_FINISHED",
+        },
+      ],
+      toolCalls: [],
+    };
+
+    const run = hydrateLiveRunFromConversation(createInitialLiveRun(), dto);
+    expect(run.runStatus).toBe("completed");
+    expect(run.errorMessage).toBeUndefined();
+  });
+
+  it("restores event-only failed checkpoints with authoritative error messages", () => {
+    const dto: SessionConversationDto = {
+      sessionId: "thread-1",
+      messages: [
+        {
+          id: "m-user-failed",
+          runId: "run-event-only-failed",
+          role: "user",
+          source: "client",
+          messageId: "msg-user-failed",
+          contentText: "Use a bad model",
+          position: 1,
+          createdAt: "2026-06-25T10:00:01Z",
+        },
+      ],
+      runEventRefs: [
+        { runId: "run-event-only-failed", eventCount: 3, firstSeq: 1, lastSeq: 3 },
+      ],
+      checkpoints: [
+        {
+          runId: "run-event-only-failed",
+          status: "failed",
+          messageStartPosition: 1,
+          messageEndPosition: 1,
+          firstEventSeq: 1,
+          lastEventSeq: 3,
+          terminalEvent: "RUN_ERROR",
+          errorMessage: "Model provider returned 503",
+        },
+      ],
+      toolCalls: [],
+    };
+
+    const run = hydrateLiveRunFromConversation(createInitialLiveRun(), dto);
+    expect(run.runStatus).toBe("failed");
+    expect(run.errorMessage).toBe("Model provider returned 503");
+  });
+
+  it("hydrates checkpoint-only event runs without persisted messages or tool calls", () => {
+    const dto: SessionConversationDto = {
+      sessionId: "thread-1",
+      messages: [],
+      runEventRefs: [{ runId: "run-events-only", eventCount: 2, firstSeq: 10, lastSeq: 11 }],
+      checkpoints: [
+        {
+          runId: "run-events-only",
+          status: "failed",
+          firstEventSeq: 10,
+          lastEventSeq: 11,
+          terminalEvent: "RUN_ERROR",
+          errorMessage: "Run terminated before assistant response",
+        },
+      ],
+      toolCalls: [],
+    };
+
+    const run = hydrateLiveRunFromConversation(createInitialLiveRun(), dto);
+    expect(run.runId).toBe("run-events-only");
+    expect(run.runStatus).toBe("failed");
+    expect(run.errorMessage).toBe("Run terminated before assistant response");
+  });
+
   it("preserves orphaned artifacts when re-hydrating tool calls", () => {
     const dto: SessionConversationDto = {
       sessionId: "thread-1",
@@ -1675,6 +2045,47 @@ describe("hydratePendingInteractionLiveRun", () => {
     expect(run.toolCalls).toEqual([
       expect.objectContaining({ id: "tc-ask", name: "ask_user", status: "running" }),
     ]);
+  });
+
+  it("does not need bootstrap when backend synthesizes awaitingInteraction toolCalls", () => {
+    const dto: SessionConversationDto = {
+      sessionId: "thread-1",
+      messages: [],
+      runEventRefs: [],
+      checkpoints: [{ runId: "run-1", status: "suspended" }],
+      toolCalls: [
+        {
+          runId: "run-1",
+          toolCallId: "tc-ask",
+          status: "pending",
+          toolName: "ask_user",
+          awaitingInteraction: true,
+        },
+      ],
+      pendingInteractions: [
+        {
+          interactionId: "int-1",
+          runId: "run-1",
+          toolCallId: "tc-ask",
+          toolName: "ask_user",
+        },
+      ],
+    };
+
+    const fromTools = hydrateLiveRunFromConversation(createInitialLiveRun(), dto);
+    expect(fromTools.runStatus).toBe("suspended");
+    expect(fromTools.toolCalls).toEqual([
+      expect.objectContaining({ id: "tc-ask", name: "ask_user" }),
+    ]);
+
+    const afterBootstrap = hydratePendingInteractionLiveRun(
+      fromTools,
+      "thread-1",
+      dto,
+      [],
+    );
+    expect(afterBootstrap.runStatus).toBe("suspended");
+    expect(afterBootstrap.toolCalls).toHaveLength(1);
   });
 });
 
@@ -1789,7 +2200,7 @@ describe("replayRestorableCustomEvents", () => {
 });
 
 describe("hydrateLiveRunFromConversation workspace signals", () => {
-  it("derives workspace metadata from restored write_file tool calls", () => {
+  it("restores workspace metadata from persisted workspace.metadata events", () => {
     const dto: SessionConversationDto = {
       sessionId: "thread-workspace",
       messages: [],
@@ -1802,6 +2213,14 @@ describe("hydrateLiveRunFromConversation workspace signals", () => {
           toolName: "write_file",
           callEventSeq: 1,
           resultPreview: "Wrote 128 bytes to reports/summary.md",
+        },
+      ],
+      restorableCustomEvents: [
+        {
+          runId: "run-1",
+          seq: 1,
+          name: "workspace.metadata",
+          value: { toolCallId: "tc-write", toolName: "write_file", path: "reports/summary.md" },
         },
       ],
     };
@@ -1885,7 +2304,7 @@ describe("hydrateLiveRunFromConversation workspace signals", () => {
     ]);
   });
 
-  it("derives sandbox outputs from every restored execute_command tool call", () => {
+  it("restores sandbox outputs from persisted sandbox.output events", () => {
     const dto: SessionConversationDto = {
       sessionId: "thread-sandbox-history",
       messages: [],
@@ -1908,12 +2327,27 @@ describe("hydrateLiveRunFromConversation workspace signals", () => {
           resultPreview: "second-ok\n",
         },
       ],
+      restorableCustomEvents: [
+        {
+          runId: "run-1",
+          seq: 1,
+          name: "sandbox.output",
+          value: { kind: "stdout", text: "first-ok" },
+        },
+        {
+          runId: "run-1",
+          seq: 2,
+          name: "sandbox.output",
+          value: { kind: "stdout", text: "second-ok" },
+        },
+      ],
     };
 
     const run = hydrateLiveRunFromConversation(createInitialLiveRun(), dto);
+    // The live reducer prepends sandbox outputs (newest-first); restore mirrors that order.
     expect(run.sandboxOutputs.map((output) => output.payload)).toEqual([
-      { kind: "stdout", text: "first-ok" },
       { kind: "stdout", text: "second-ok" },
+      { kind: "stdout", text: "first-ok" },
     ]);
   });
 });

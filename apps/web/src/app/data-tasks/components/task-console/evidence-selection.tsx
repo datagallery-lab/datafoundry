@@ -344,7 +344,7 @@ export function SelectableText({
   useDismissOnOutside(Boolean(anchor && quote), clear, containerRef);
 
   return (
-    <div ref={containerRef} onMouseUp={captureSelection}>
+    <div ref={containerRef} onMouseUp={captureSelection} className="min-w-0 w-full max-w-full">
       {children}
       {anchor && quote ? (
         <FloatingReferenceButton

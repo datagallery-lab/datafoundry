@@ -42,6 +42,9 @@ type SessionConfigBarProps = {
   trailing?: ReactNode;
 };
 
+/** Below this bar width, pills keep icons only (hide count annotations). */
+const SESSION_CONFIG_COMPACT_WIDTH = 420;
+
 export function SessionConfigBar({
   workspaceConfig,
   session,
@@ -51,11 +54,28 @@ export function SessionConfigBar({
   trailing,
 }: SessionConfigBarProps) {
   const [openPanel, setOpenPanel] = useState<SessionConfigPillKey | null>(null);
+  const [compact, setCompact] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
 
   const isInsideSessionConfigUi = useCallback((target: Node) => {
     if (rootRef.current?.contains(target)) return true;
     return (target as HTMLElement).closest?.(`[${SESSION_CONFIG_PORTAL_ATTR}]`) != null;
+  }, []);
+
+  useLayoutEffect(() => {
+    const node = rootRef.current;
+    if (!node || typeof ResizeObserver === "undefined") return;
+    const update = (width: number) => {
+      const nextCompact = width < SESSION_CONFIG_COMPACT_WIDTH;
+      setCompact((current) => (current === nextCompact ? current : nextCompact));
+    };
+    update(node.getBoundingClientRect().width);
+    const observer = new ResizeObserver((entries) => {
+      const width = entries[0]?.contentRect.width;
+      if (typeof width === "number") update(width);
+    });
+    observer.observe(node);
+    return () => observer.disconnect();
   }, []);
 
   useEffect(() => {
@@ -69,6 +89,10 @@ export function SessionConfigBar({
     return () => document.removeEventListener("mousedown", handlePointerDown);
   }, [isInsideSessionConfigUi, openPanel]);
 
+  const togglePanel = useCallback((key: SessionConfigPillKey) => {
+    setOpenPanel((current) => (current === key ? null : key));
+  }, []);
+
   const renderPill = (key: (typeof SESSION_CONFIG_PILLS)[number]) => {
     if (key === "agent-tools") {
       return (
@@ -77,9 +101,8 @@ export function SessionConfigBar({
           workspaceConfig={workspaceConfig}
           session={session}
           open={openPanel === key}
-          onToggleOpen={() =>
-            setOpenPanel((current) => (current === key ? null : key))
-          }
+          compact={compact}
+          onToggleOpen={() => togglePanel(key)}
           onToggleResource={onToggleSessionResource}
         />
       );
@@ -92,11 +115,10 @@ export function SessionConfigBar({
         items={workspaceConfig[key]}
         counts={sessionResourceCounts(workspaceConfig, key, session)}
         open={openPanel === key}
+        compact={compact}
         session={session}
         sessionStartedHints={sessionStartedHints}
-        onToggleOpen={() =>
-          setOpenPanel((current) => (current === key ? null : key))
-        }
+        onToggleOpen={() => togglePanel(key)}
         onToggleResource={(id) => onToggleSessionResource(key, id)}
       />
     );
@@ -105,19 +127,18 @@ export function SessionConfigBar({
   return (
     <div
       ref={rootRef}
-      className="relative flex w-full items-center justify-between gap-2 px-3 pb-1.5 pt-1"
+      className="relative flex w-full min-w-0 items-center gap-2 px-3 pb-1.5 pt-1"
       data-testid="session-config-bar"
+      data-compact={compact ? "true" : "false"}
     >
       {leading ? (
         <div className="flex shrink-0 items-center self-center">{leading}</div>
       ) : null}
-      <div
-        className="flex min-w-0 flex-1 flex-nowrap items-center gap-1.5 overflow-visible"
-      >
+      <div className="flex min-w-0 flex-1 flex-nowrap items-center gap-1 overflow-hidden">
         {SESSION_CONFIG_PILLS.map((key) => renderPill(key))}
       </div>
       {trailing ? (
-        <div className="flex shrink-0 items-center gap-1">{trailing}</div>
+        <div className="flex min-w-0 shrink items-center justify-end gap-1">{trailing}</div>
       ) : null}
     </div>
   );
@@ -205,6 +226,7 @@ function SessionConfigPill({
   items,
   counts,
   open,
+  compact = false,
   session,
   sessionStartedHints,
   onToggleOpen,
@@ -215,6 +237,7 @@ function SessionConfigPill({
   items: WorkspaceConfigItem[];
   counts: { enabled: number; total: number };
   open: boolean;
+  compact?: boolean;
   session: ChatSession | null;
   sessionStartedHints?: SessionStartedHints;
   onToggleOpen: () => void;
@@ -225,6 +248,7 @@ function SessionConfigPill({
   const appearance = PER_RUN_MENTION_APPEARANCE[kind];
   const label = SESSION_RESOURCE_LABEL[kind];
   const locked = isSessionResourceKindLocked(session, kind, sessionStartedHints);
+  const countLabel = `${counts.enabled}/${counts.total}`;
 
   const setRefs = useCallback(
     (node: HTMLDivElement | null) => {
@@ -240,14 +264,16 @@ function SessionConfigPill({
         type="button"
         aria-haspopup="listbox"
         aria-expanded={open}
-        aria-label={`${label} session settings`}
+        aria-label={`${label} session settings, ${countLabel}`}
+        title={`${label}: ${countLabel}`}
         onClick={onToggleOpen}
         className={[
-          "inline-flex items-center gap-1.5 rounded-full border px-2 py-1 text-xs font-medium transition",
+          "inline-flex items-center rounded-full border text-xs font-medium transition",
+          compact ? "gap-1 px-1.5 py-1" : "gap-1.5 px-2 py-1",
           open ? appearance.pillOpen : appearance.pill,
         ].join(" ")}
       >
-        <ChevronUpIcon open={open} />
+        {compact ? null : <ChevronUpIcon open={open} />}
         <span
           className={[
             "inline-flex h-4 w-4 items-center justify-center rounded-md",
@@ -257,9 +283,7 @@ function SessionConfigPill({
         >
           <ResourceKindIcon kind={kind} className="h-3 w-3" />
         </span>
-        <span className="opacity-70">
-          {counts.enabled}/{counts.total}
-        </span>
+        {compact ? null : <span className="opacity-70">{countLabel}</span>}
         {locked ? <LockIcon /> : null}
       </button>
 
@@ -280,12 +304,14 @@ function AgentToolsPill({
   workspaceConfig,
   session,
   open,
+  compact = false,
   onToggleOpen,
   onToggleResource,
 }: {
   workspaceConfig: WorkspaceConfigStore;
   session: ChatSession | null;
   open: boolean;
+  compact?: boolean;
   onToggleOpen: () => void;
   onToggleResource: (kind: PerRunMentionKind, id: string) => void;
 }) {
@@ -294,6 +320,7 @@ function AgentToolsPill({
   const skillCounts = sessionResourceCounts(workspaceConfig, "skill", session);
   const enabled = mcpCounts.enabled + skillCounts.enabled;
   const total = mcpCounts.total + skillCounts.total;
+  const countLabel = `${enabled}/${total}`;
   const appearance = PER_RUN_MENTION_APPEARANCE.mcp;
 
   return (
@@ -302,14 +329,16 @@ function AgentToolsPill({
         type="button"
         aria-haspopup="listbox"
         aria-expanded={open}
-        aria-label="Agent Tools session settings"
+        aria-label={`Agent Tools session settings, ${countLabel}`}
+        title={`Agent Tools: ${countLabel}`}
         onClick={onToggleOpen}
         className={[
-          "inline-flex items-center gap-1.5 rounded-full border px-2 py-1 text-xs font-medium transition",
+          "inline-flex items-center rounded-full border text-xs font-medium transition",
+          compact ? "gap-1 px-1.5 py-1" : "gap-1.5 px-2 py-1",
           open ? appearance.pillOpen : appearance.pill,
         ].join(" ")}
       >
-        <ChevronUpIcon open={open} />
+        {compact ? null : <ChevronUpIcon open={open} />}
         <span
           className={[
             "inline-flex h-4 w-4 items-center justify-center rounded-md",
@@ -319,9 +348,7 @@ function AgentToolsPill({
         >
           <AgentToolsIcon />
         </span>
-        <span className="opacity-70">
-          {enabled}/{total}
-        </span>
+        {compact ? null : <span className="opacity-70">{countLabel}</span>}
       </button>
 
       <AnchoredPortal anchorRef={anchorRef} open={open} minWidth={280}>

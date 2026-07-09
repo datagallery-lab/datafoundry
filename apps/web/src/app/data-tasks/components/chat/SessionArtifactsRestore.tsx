@@ -50,7 +50,18 @@ export function SessionArtifactsRestore({
                     file_id: artifact.fileId,
                     download_url: artifact.downloadUrl,
                     preview_json: artifact.preview_json,
-                    preview_available: artifact.preview_json !== undefined,
+                    preview_available:
+                      artifact.preview_json !== undefined && artifact.preview_json !== null
+                        ? true
+                        : Boolean(artifact.fileId),
+                    // R-018: authoritative origin so the artifact links to its tool call
+                    // without heuristics.
+                    ...(artifact.toolCallId ? { tool_call_id: artifact.toolCallId } : {}),
+                    ...(artifact.stepId ? { step_id: artifact.stepId } : {}),
+                    ...(artifact.runId ? { run_id: artifact.runId } : {}),
+                    ...(artifact.logicalKey ? { logical_key: artifact.logicalKey } : {}),
+                    ...(artifact.versionCount !== undefined ? { version: artifact.versionCount } : {}),
+                    ...(artifact.createdAt ? { created_at: artifact.createdAt } : {}),
                   },
                 }),
               base,

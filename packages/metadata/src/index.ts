@@ -282,6 +282,17 @@ export type ArtifactRecord = {
   created_at: string;
 };
 
+export type ArtifactVersionRecord = {
+  id: string;
+  user_id: string;
+  artifact_id: string;
+  version: number;
+  file_asset_ref_id?: string;
+  preview_json?: string;
+  content_hash?: string;
+  created_at: string;
+};
+
 export type FileAssetRecord = {
   id: string;
   sha256: string;
@@ -483,6 +494,15 @@ export type CreateArtifactInput = {
   metadata_json?: unknown;
 };
 
+export type CreateArtifactVersionInput = {
+  id: string;
+  user_id: string;
+  artifact_id: string;
+  file_asset_ref_id?: string;
+  preview_json?: unknown;
+  content_hash?: string;
+};
+
 export type CreateFileAssetInput = {
   id: string;
   sha256: string;
@@ -550,6 +570,7 @@ export class MetadataStore {
   readonly authAuditEvents: AuthAuditEventRepository;
   readonly authSessions: AuthSessionRepository;
   readonly authTokens: AuthTokenRepository;
+  readonly artifactVersions: ArtifactVersionRepository;
   readonly artifacts: ArtifactRepository;
   readonly configJobs: ConfigJobRepository;
   readonly configResources: ConfigResourceRepository;
@@ -589,6 +610,7 @@ export class MetadataStore {
     this.conversationMessages = new ConversationMessageRepository(db);
     this.conversationSummaries = new ConversationSummaryRepository(db);
     this.artifacts = new ArtifactRepository(db);
+    this.artifactVersions = new ArtifactVersionRepository(db);
     this.configJobs = new ConfigJobRepository(db);
     this.configResources = new ConfigResourceRepository(db);
     this.checkpoints = new CheckpointRepository(db);
@@ -2196,6 +2218,59 @@ export class ArtifactRepository {
     return artifact;
   }
 
+  findBySessionLogicalKey(input: { user_id: string; session_id: string; logical_key: string }): Optional<ArtifactRecord> {
+    const records = this.listBySession({
+      user_id: input.user_id,
+      session_id: input.session_id
+    });
+    return records.find((record) => {
+      if (!record.metadata_json) {
+        return false;
+      }
+      try {
+        const metadata = JSON.parse(record.metadata_json) as unknown;
+        return isRecord(metadata) && metadata.logical_key === input.logical_key;
+      } catch {
+        return false;
+      }
+    });
+  }
+
+  updateFileAssetRef(input: {
+    user_id: string;
+    artifact_id: string;
+    run_id: string;
+    type: ArtifactType;
+    name: string;
+    mime_type?: string;
+    file_asset_ref_id: string;
+    preview_json?: unknown;
+    metadata_json?: unknown;
+  }): ArtifactRecord {
+    this.db.prepare(`
+      UPDATE artifacts
+      SET run_id = ?,
+        type = ?,
+        name = ?,
+        mime_type = ?,
+        file_asset_ref_id = ?,
+        preview_json = ?,
+        metadata_json = ?
+      WHERE user_id = ? AND id = ?
+    `).run(
+      input.run_id,
+      input.type,
+      input.name,
+      input.mime_type ?? null,
+      input.file_asset_ref_id,
+      input.preview_json === undefined ? null : JSON.stringify(input.preview_json),
+      input.metadata_json === undefined ? null : JSON.stringify(input.metadata_json),
+      input.user_id,
+      input.artifact_id
+    );
+    return this.get({ user_id: input.user_id, artifact_id: input.artifact_id });
+  }
+
   listByRun(input: { user_id: string; run_id: string }): ArtifactRecord[] {
     return this.db
       .prepare("SELECT * FROM artifacts WHERE user_id = ? AND run_id = ? ORDER BY created_at ASC")
@@ -2209,6 +2284,57 @@ export class ArtifactRepository {
       .prepare("SELECT * FROM artifacts WHERE user_id = ? AND session_id = ? ORDER BY created_at ASC")
       .all(input.user_id, input.session_id)
       .map(mapRequiredArtifactRow);
+  }
+}
+
+export class ArtifactVersionRepository {
+  constructor(private readonly db: DatabaseSync) {}
+
+  create(input: CreateArtifactVersionInput): ArtifactVersionRecord {
+    const createdAt = new Date().toISOString();
+    const row = this.db.prepare(`
+      SELECT COALESCE(MAX(version), 0) + 1 AS next_version
+      FROM artifact_versions
+      WHERE user_id = ? AND artifact_id = ?
+    `).get(input.user_id, input.artifact_id);
+    if (!isRecord(row) || typeof row.next_version !== "number") {
+      throw new Error(`Unable to allocate artifact version for artifact: ${input.artifact_id}`);
+    }
+    this.db.prepare(`
+      INSERT INTO artifact_versions (
+        id, user_id, artifact_id, version, file_asset_ref_id, preview_json, content_hash, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      input.id,
+      input.user_id,
+      input.artifact_id,
+      row.next_version,
+      input.file_asset_ref_id ?? null,
+      input.preview_json === undefined ? null : JSON.stringify(input.preview_json),
+      input.content_hash ?? null,
+      createdAt
+    );
+    return this.get({ user_id: input.user_id, version_id: input.id });
+  }
+
+  get(input: { user_id: string; version_id: string }): ArtifactVersionRecord {
+    const version = mapArtifactVersionRow(
+      this.db.prepare("SELECT * FROM artifact_versions WHERE user_id = ? AND id = ?")
+        .get(input.user_id, input.version_id)
+    );
+    if (!version) {
+      throw new Error(`Artifact version not found: ${input.version_id}`);
+    }
+    return version;
+  }
+
+  listByArtifact(input: { user_id: string; artifact_id: string }): ArtifactVersionRecord[] {
+    return this.db.prepare(`
+      SELECT *
+      FROM artifact_versions
+      WHERE user_id = ? AND artifact_id = ?
+      ORDER BY version ASC
+    `).all(input.user_id, input.artifact_id).map(mapRequiredArtifactVersionRow);
   }
 }
 
@@ -3039,6 +3165,9 @@ const runMigrations = (db: DatabaseSync): void => {
   runSchemaMigration(db, "0012_session_branch_checkpoints", "Ensure checkpoint branch target column", () => {
     ensureSessionBranchCheckpointColumn(db);
   });
+  runSchemaMigration(db, "0013_artifact_versions", "Ensure artifact version history schema", () => {
+    initializeArtifactVersionSchema(db);
+  });
 };
 
 const initializeSchemaMigrationTable = (db: DatabaseSync): void => {
@@ -3247,6 +3376,26 @@ const initializeSessionBranchSchema = (db: DatabaseSync): void => {
     );
     CREATE INDEX IF NOT EXISTS idx_session_branches_parent_fork
       ON session_branches(user_id, parent_session_id, fork_run_id, created_at);
+  `);
+};
+
+const initializeArtifactVersionSchema = (db: DatabaseSync): void => {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS artifact_versions (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      artifact_id TEXT NOT NULL,
+      version INTEGER NOT NULL,
+      file_asset_ref_id TEXT,
+      preview_json TEXT,
+      content_hash TEXT,
+      created_at TEXT NOT NULL,
+      UNIQUE (user_id, artifact_id, version),
+      FOREIGN KEY (artifact_id) REFERENCES artifacts(id),
+      FOREIGN KEY (file_asset_ref_id) REFERENCES file_asset_refs(id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_artifact_versions_artifact
+      ON artifact_versions(user_id, artifact_id, version);
   `);
 };
 
@@ -4111,6 +4260,25 @@ const mapArtifactRow = (row: unknown): Optional<ArtifactRecord> => {
   };
 };
 
+const mapArtifactVersionRow = (row: unknown): Optional<ArtifactVersionRecord> => {
+  if (!isRecord(row)) {
+    return undefined;
+  }
+  const fileAssetRefId = optionalString(row.file_asset_ref_id);
+  const previewJson = optionalString(row.preview_json);
+  const contentHash = optionalString(row.content_hash);
+  return {
+    id: requiredString(row, "id"),
+    user_id: requiredString(row, "user_id"),
+    artifact_id: requiredString(row, "artifact_id"),
+    version: requiredNumber(row, "version"),
+    ...(fileAssetRefId ? { file_asset_ref_id: fileAssetRefId } : {}),
+    ...(previewJson ? { preview_json: previewJson } : {}),
+    ...(contentHash ? { content_hash: contentHash } : {}),
+    created_at: requiredString(row, "created_at")
+  };
+};
+
 const mapFileAssetRow = (row: unknown): Optional<FileAssetRecord> => {
   if (!isRecord(row)) {
     return undefined;
@@ -4200,4 +4368,14 @@ const mapRequiredArtifactRow = (row: unknown): ArtifactRecord => {
   }
 
   return artifact;
+};
+
+const mapRequiredArtifactVersionRow = (row: unknown): ArtifactVersionRecord => {
+  const version = mapArtifactVersionRow(row);
+
+  if (!version) {
+    throw new Error("Invalid artifact version row");
+  }
+
+  return version;
 };

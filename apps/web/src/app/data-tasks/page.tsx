@@ -86,6 +86,7 @@ import {
   reasoningMessageAbsorbedByFollowingToolStep,
   resolveToolStepThoughtContent,
 } from "./assistant-thought-content";
+import { createChatTextareaKeyDownHandler } from "./chat-textarea-submit";
 import {
   isDisplayableToolName,
   resolveCollaborationCompletedStepLabel,
@@ -283,6 +284,11 @@ import {
   buildDatasourceSettingsForType,
   summarizeDatasourceConnection,
 } from "./datasource-metadata";
+import { findCopilotChatScrollContainer } from "./chat-scroll";
+import {
+  setConversationScrollIntent,
+  useChatAutoScrollMode,
+} from "./conversation-branch-scroll";
 import { useConversationBranchSnapshot } from "./conversation-branch-store";
 import { resolveUserMessageBranchState } from "./conversation-branches";
 import {
@@ -490,6 +496,7 @@ function StableDataTaskChatInput({
   }, [bindings.stopActiveChatRunRef, inputProps.onStop]);
 
   const handleSubmitMessage = (value: string) => {
+    setDraftText("");
     const forwardedProps = bindings.getRunForwardedProps();
     if (agent) {
       const blockReason = resolveSendBlockReason(
@@ -614,6 +621,7 @@ function StableDataTaskChatInput({
     <DataTaskChatInput
       {...inputProps}
       {...bindings}
+      value={draftText}
       attachmentsApi={attachmentsApi}
       onChange={handleInputChange}
       onSubmitMessage={handleSubmitMessage}
@@ -1357,7 +1365,16 @@ function DataTaskWorkspace({
       });
   }, []);
 
-  const switchConversationBranch = useCallback((sessionId: string) => {
+  const switchConversationBranch = useCallback((
+    sessionId: string,
+    options?: { preserveScroll?: boolean },
+  ) => {
+    if (options?.preserveScroll) {
+      const scrollTop = findCopilotChatScrollContainer()?.scrollTop ?? 0;
+      setConversationScrollIntent({ kind: "preserve", scrollTop });
+    } else {
+      setConversationScrollIntent({ kind: "bottom" });
+    }
     setActiveSessionId(sessionId);
     setSelection(null);
     setArtifactFocusId(null);
@@ -1785,6 +1802,7 @@ function DataTaskWorkspace({
         onQueryChange={setQuery}
         onToggleCollapse={toggleSidebar}
         onSelectSession={(sessionId) => {
+          setConversationScrollIntent({ kind: "bottom" });
           setActiveSessionId(sessionId);
           setSelection(null);
           setArtifactFocusId(null);
@@ -2687,7 +2705,7 @@ async function waitForAgentIdle(
 
 type ConversationBranchActions = {
   onCreateBranchRewrite: (request: BranchRewriteRequest) => Promise<void>;
-  onSwitchBranch: (sessionId: string) => void;
+  onSwitchBranch: (sessionId: string, options?: { preserveScroll?: boolean }) => void;
 };
 
 /** Hide reasoning bubbles that belong inside the next tool step card. */
@@ -2799,6 +2817,9 @@ function StepUserMessage(props: CopilotChatUserMessageProps) {
             <textarea
               value={draft}
               onChange={(event) => setDraft(event.target.value)}
+              onKeyDown={createChatTextareaKeyDownHandler(() => {
+                void submitRewrite();
+              })}
               className="min-h-16 w-full resize-none rounded-xl border border-transparent bg-transparent p-0 text-base leading-7 text-foreground outline-none transition-colors placeholder:text-muted-light"
               disabled={busy}
             />
@@ -2852,7 +2873,11 @@ function StepUserMessage(props: CopilotChatUserMessageProps) {
                 title="Previous branch"
                 aria-label="Previous branch"
                 onClick={() => {
-                  if (branchState.previousSessionId) branchActions?.onSwitchBranch(branchState.previousSessionId);
+                  if (branchState.previousSessionId) {
+                    branchActions?.onSwitchBranch(branchState.previousSessionId, {
+                      preserveScroll: true,
+                    });
+                  }
                 }}
               >
                 <ChevronIcon direction="left" />
@@ -2866,7 +2891,11 @@ function StepUserMessage(props: CopilotChatUserMessageProps) {
                 title="Next branch"
                 aria-label="Next branch"
                 onClick={() => {
-                  if (branchState.nextSessionId) branchActions?.onSwitchBranch(branchState.nextSessionId);
+                  if (branchState.nextSessionId) {
+                    branchActions?.onSwitchBranch(branchState.nextSessionId, {
+                      preserveScroll: true,
+                    });
+                  }
                 }}
               >
                 <ChevronIcon direction="right" />
@@ -6424,6 +6453,7 @@ function SessionChatRuntime({
   const agentId = dataTaskSessionAgentId(threadId);
   const { liveRun } = useLiveRun(threadId);
   const liveRunStatus = liveRun.runStatus;
+  const autoScrollMode = useChatAutoScrollMode();
 
   return (
     <ChatRunStatusContext.Provider value={liveRunStatus}>
@@ -6483,7 +6513,7 @@ function SessionChatRuntime({
           threadId={threadId}
           key={`copilot-chat-${threadId}`}
           welcomeScreen={false}
-          autoScroll="pin-to-bottom"
+          autoScroll={autoScrollMode}
           intelligenceIndicator={{ className: "chat-intelligence-indicator" }}
           messageView={{
             userMessage: StepUserMessage as typeof CopilotChatUserMessage,
