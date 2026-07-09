@@ -62,6 +62,8 @@ export const createToolCallResult = (
 export const createArtifactEvent = (artifact: ArtifactSummary & {
   download_url?: string;
   file_id?: string;
+  logical_key?: string;
+  version?: number;
 }): BaseEvent =>
   createCustomEvent("artifact", {
     id: artifact.id,
@@ -75,7 +77,9 @@ export const createArtifactEvent = (artifact: ArtifactSummary & {
     ...(artifact.file_id ? { file_id: artifact.file_id } : {}),
     ...(artifact.run_id ? { run_id: artifact.run_id } : {}),
     ...(artifact.tool_call_id ? { tool_call_id: artifact.tool_call_id } : {}),
-    ...(artifact.step_id ? { step_id: artifact.step_id } : {})
+    ...(artifact.step_id ? { step_id: artifact.step_id } : {}),
+    ...(artifact.logical_key ? { logical_key: artifact.logical_key } : {}),
+    ...(artifact.version !== undefined ? { version: artifact.version } : {})
   });
 
 const artifactEventSummary = (artifact: ArtifactSummary): string => {

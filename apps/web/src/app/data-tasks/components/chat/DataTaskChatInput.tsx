@@ -34,6 +34,7 @@ import { evidenceChipLabel, evidenceChipTooltip } from "../../evidence";
 import { useDataTaskChatInputBindings } from "./DataTaskChatInputBindingsContext";
 import type { ChatSession, WorkspaceConfigStore } from "../../data-task-state";
 import type { QueuedChatPrompt } from "./queued-chat-runs";
+import { createChatTextareaKeyDownCaptureHandler } from "../../chat-textarea-submit";
 
 type DataTaskChatInputProps = CopilotChatInputProps & {
   llmOptions: WorkspaceConfigItem[];
@@ -300,6 +301,18 @@ function DataTaskChatInputLayout({
     textarea.setSelectionRange(end, end);
   };
 
+  const handleTextAreaKeyDownCapture = createChatTextareaKeyDownCaptureHandler(
+    () => {
+      const root = attachmentsApi.containerRef.current?.closest(
+        '[data-testid="copilot-chat-input"]',
+      );
+      const sendButton = root?.querySelector<HTMLButtonElement>(
+        '[data-testid="copilot-send-button"]',
+      );
+      sendButton?.click();
+    },
+  );
+
   const handleTextAreaMouseDown = (
     event: React.MouseEvent<HTMLDivElement>,
   ) => {
@@ -390,6 +403,7 @@ function DataTaskChatInputLayout({
                     onClear={onClearEvidenceRefs}
                   />
                   <div
+                    onKeyDownCapture={handleTextAreaKeyDownCapture}
                     className={[
                       "w-full cursor-text",
                       "[&_[data-testid=copilot-chat-textarea]]:block",
@@ -445,7 +459,7 @@ function DataTaskChatInputLayout({
                     onActiveLlmChange={onActiveLlmChange}
                     onOpenLlmConfig={onOpenLlmConfig}
                   />
-                  {sendButton}
+                  <div className="shrink-0">{sendButton}</div>
                 </>
               }
             />
@@ -737,7 +751,7 @@ function ChatModelPicker({
   }, [open]);
 
   return (
-    <div ref={rootRef} data-guide-id="model-picker" className="relative">
+    <div ref={rootRef} data-guide-id="model-picker" className="relative min-w-0 max-w-[min(168px,42vw)]">
       <button
         type="button"
         aria-haspopup="listbox"
@@ -745,11 +759,11 @@ function ChatModelPicker({
         title={
           activeUnavailable
             ? "This model has not passed a connection test"
-            : "Switch model"
+            : label
         }
         onClick={() => setOpen((value) => !value)}
         className={[
-          "chat-model-picker flex max-w-[168px] cursor-pointer items-center gap-0.5 px-1 py-1 text-xs font-medium transition-colors duration-200",
+          "chat-model-picker flex w-full min-w-0 cursor-pointer items-center gap-0.5 px-1 py-1 text-xs font-medium transition-colors duration-200",
           open ? "text-primary" : "text-foreground hover:text-primary",
         ].join(" ")}
       >
@@ -759,7 +773,7 @@ function ChatModelPicker({
             aria-hidden
           />
         ) : null}
-        <span className="truncate">{label}</span>
+        <span className="min-w-0 truncate">{label}</span>
         <ChevronDownIcon open={open} />
       </button>
 

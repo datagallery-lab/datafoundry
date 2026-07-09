@@ -2,6 +2,7 @@ import type {
   ApiResult,
   ArtifactExportFormat,
   ArtifactDto,
+  ArtifactVersionDto,
   BackendCapabilitiesResponse,
   DatalinkGraphResponseDto,
   DatalinkServersResponseDto,
@@ -624,6 +625,26 @@ export const configApi = {
     return requestEnvelope<FileAssetRefDto>(`/api/v1/artifacts/${encodeURIComponent(id)}/promote`, {
       method: "POST",
     });
+  },
+
+  listArtifactVersions(id: string): Promise<{ versions: ArtifactVersionDto[] }> {
+    return requestEnvelope<{ versions: ArtifactVersionDto[] }>(
+      `/api/v1/artifacts/${encodeURIComponent(id)}/versions`
+    );
+  },
+
+  async downloadArtifactVersion(
+    id: string,
+    versionId: string,
+  ): Promise<{ blob: Blob; filename: string }> {
+    const response = await requestRaw(
+      `/api/v1/artifacts/${encodeURIComponent(id)}/versions/${encodeURIComponent(versionId)}/download`
+    );
+    const disposition = response.headers.get("Content-Disposition") ?? "";
+    const match = /filename="([^"]+)"/u.exec(disposition);
+    const filename = match?.[1] ?? `artifact-version-${versionId}`;
+    const blob = await response.blob();
+    return { blob, filename };
   },
 
   exportArtifact(

@@ -23,6 +23,7 @@ export type {
   ApiErrorCode,
   ArtifactExportFormat,
   ArtifactDto,
+  ArtifactVersionDto,
   BackendCapabilitiesResponse,
   ConversationMessageDto,
   ConversationRunEventRefDto,

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   accumulateSessionUsage,
   artifactDetailFromPreview,
@@ -15,6 +15,7 @@ import {
   resolveTokenUsageForEvent,
   resolveWorkspaceMetadataForToolCall,
   reduceLiveRunEvent,
+  shouldSkipAgUiReplayDuringRestore,
 } from "../live-run-state";
 
 describe("live run state reducer", () => {
@@ -27,7 +28,7 @@ describe("live run state reducer", () => {
       replace: true,
       content: {
         tasks: [
-          { id: "schema", title: "检查数据源 schema", status: "pending" },
+          { id: "schema", title: "Inspect data source schema", status: "pending" },
           { id: "sql", title: "Generate and run read-only SQL", status: "pending" },
         ],
       },
@@ -41,7 +42,7 @@ describe("live run state reducer", () => {
     });
 
     expect(updated.plan).toEqual([
-      { id: "schema", title: "检查数据源 schema", status: "pending" },
+      { id: "schema", title: "Inspect data source schema", status: "pending" },
       { id: "sql", title: "Generate and run read-only SQL", status: "running" },
     ]);
   });
@@ -315,6 +316,36 @@ describe("live run state reducer", () => {
         content: "# Hello",
       }),
     ).toBe(false);
+  });
+
+  it("requests preview fetch for file-backed markdown reports without preview_json", () => {
+    const artifact = {
+      previewAvailable: false,
+      fileId: "file-1",
+      type: "report" as const,
+      kind: "memo" as const,
+      title: "GMV report",
+      id: "artifact-md-1",
+    };
+    expect(artifactDetailNeedsPreviewFetch(artifact, undefined)).toBe(true);
+  });
+
+  it("parses synthesized markdown preview envelopes from file-backed artifacts", () => {
+    const artifact = {
+      type: "report" as const,
+      kind: "memo" as const,
+      title: "GMV与订单数周度对比报告",
+    };
+    expect(
+      artifactDetailFromPreview(artifact, {
+        type: "markdown",
+        content: "# GMV 对比\n\n本周上涨。",
+        path: "reports/gmv.md",
+      }),
+    ).toEqual({
+      type: "report",
+      sections: [{ heading: "Preview", body: "# GMV 对比\n\n本周上涨。" }],
+    });
   });
 
   it("merges fetched file preview content into existing file detail", () => {
@@ -1095,6 +1126,158 @@ describe("live run state reducer", () => {
     expect(replayed.runStatus).toBe("completed");
   });
 
+  it("preserves tool success when TOOL_CALL_RESULT arrives before START/END", () => {
+    let run = createInitialLiveRun();
+    run = reduceLiveRunEvent(run, { type: "RUN_STARTED" });
+    run = reduceLiveRunEvent(run, {
+      type: "TOOL_CALL_RESULT",
+      toolCallId: "tc-out-of-order",
+      toolCallName: "inspect_schema",
+      result: JSON.stringify({ tables: [{ name: "orders", columns: [] }] }),
+    });
+    run = reduceLiveRunEvent(run, {
+      type: "TOOL_CALL_START",
+      toolCallId: "tc-out-of-order",
+      toolCallName: "inspect_schema",
+    });
+    run = reduceLiveRunEvent(run, {
+      type: "TOOL_CALL_END",
+      toolCallId: "tc-out-of-order",
+      toolCallName: "inspect_schema",
+    });
+
+    expect(run.toolCalls[0]?.status).toBe("success");
+  });
+
+  describe("tool e2e duration idempotency", () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-07-09T04:00:00.000Z"));
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("does not refresh finishedAtMs when TOOL_CALL_RESULT is replayed", () => {
+      let run = createInitialLiveRun();
+      run = reduceLiveRunEvent(run, { type: "RUN_STARTED" });
+      run = reduceLiveRunEvent(run, {
+        type: "TOOL_CALL_START",
+        toolCallId: "tc-write",
+        toolCallName: "write_file",
+      });
+      vi.setSystemTime(new Date("2026-07-09T04:00:00.023Z"));
+      run = reduceLiveRunEvent(run, {
+        type: "TOOL_CALL_RESULT",
+        toolCallId: "tc-write",
+        toolCallName: "write_file",
+        result: JSON.stringify({ path: "report.txt", size: 12 }),
+      });
+
+      const startedAtMs = run.toolCalls[0]?.startedAtMs;
+      const finishedAtMs = run.toolCalls[0]?.finishedAtMs;
+      expect(startedAtMs).toBe(Date.parse("2026-07-09T04:00:00.000Z"));
+      expect(finishedAtMs).toBe(Date.parse("2026-07-09T04:00:00.023Z"));
+      expect((finishedAtMs ?? 0) - (startedAtMs ?? 0)).toBe(23);
+
+      // Session switch-back: AG-UI replays RESULT much later.
+      vi.setSystemTime(new Date("2026-07-09T04:00:45.000Z"));
+      const replayed = reduceLiveRunEvent(run, {
+        type: "TOOL_CALL_RESULT",
+        toolCallId: "tc-write",
+        toolCallName: "write_file",
+        result: JSON.stringify({ path: "report.txt", size: 12 }),
+      });
+
+      expect(replayed.toolCalls[0]?.startedAtMs).toBe(startedAtMs);
+      expect(replayed.toolCalls[0]?.finishedAtMs).toBe(finishedAtMs);
+      expect(
+        (replayed.toolCalls[0]?.finishedAtMs ?? 0) - (replayed.toolCalls[0]?.startedAtMs ?? 0),
+      ).toBe(23);
+    });
+
+    it("skips completed-tool AG-UI replay while restoring conversation", () => {
+      let run = createInitialLiveRun();
+      run = reduceLiveRunEvent(run, { type: "RUN_STARTED" });
+      run = reduceLiveRunEvent(run, {
+        type: "TOOL_CALL_START",
+        toolCallId: "tc-sql",
+        toolCallName: "run_sql_readonly",
+      });
+      vi.setSystemTime(new Date("2026-07-09T04:00:00.040Z"));
+      run = reduceLiveRunEvent(run, {
+        type: "TOOL_CALL_RESULT",
+        toolCallId: "tc-sql",
+        toolCallName: "run_sql_readonly",
+        result: JSON.stringify({ row_count: 1 }),
+      });
+
+      expect(
+        shouldSkipAgUiReplayDuringRestore(run, {
+          type: "TOOL_CALL_RESULT",
+          toolCallId: "tc-sql",
+        }),
+      ).toBe(true);
+      expect(
+        shouldSkipAgUiReplayDuringRestore(run, {
+          type: "TOOL_CALL_END",
+          toolCallId: "tc-sql",
+        }),
+      ).toBe(true);
+      expect(
+        shouldSkipAgUiReplayDuringRestore(run, {
+          type: "RUN_FINISHED",
+        }),
+      ).toBe(true);
+      expect(
+        shouldSkipAgUiReplayDuringRestore(run, {
+          type: "TOOL_CALL_START",
+          toolCallId: "tc-new",
+          toolCallName: "inspect_schema",
+        }),
+      ).toBe(false);
+    });
+  });
+
+  it("finalizes running tool calls when STATE_DELTA completes before RUN_FINISHED", () => {
+    let run = createInitialLiveRun();
+    run = reduceLiveRunEvent(run, { type: "RUN_STARTED" });
+    run = reduceLiveRunEvent(run, {
+      type: "TOOL_CALL_START",
+      toolCallId: "tc-inspect",
+      toolCallName: "inspect_schema",
+    });
+    run = reduceLiveRunEvent(run, {
+      type: "TOOL_CALL_END",
+      toolCallId: "tc-inspect",
+      toolCallName: "inspect_schema",
+    });
+    run = reduceLiveRunEvent(run, {
+      type: "TOOL_CALL_START",
+      toolCallId: "tc-sql",
+      toolCallName: "run_sql_readonly",
+    });
+    run = reduceLiveRunEvent(run, {
+      type: "TOOL_CALL_RESULT",
+      toolCallId: "tc-sql",
+      toolCallName: "run_sql_readonly",
+      result: JSON.stringify({ row_count: 2 }),
+    });
+    expect(run.toolCalls.find((call) => call.id === "tc-inspect")?.status).toBe("running");
+
+    run = reduceLiveRunEvent(run, {
+      type: "STATE_DELTA",
+      delta: [{ op: "replace", path: "/runStatus", value: "completed" }],
+    });
+    expect(run.runStatus).toBe("completed");
+    expect(run.toolCalls.find((call) => call.id === "tc-inspect")?.status).toBe("success");
+
+    run = reduceLiveRunEvent(run, { type: "RUN_FINISHED" });
+    expect(run.runStatus).toBe("completed");
+    expect(run.toolCalls.every((call) => call.status !== "running")).toBe(true);
+  });
+
   it("does not append duplicate archived segments when RUN_STARTED replays without new tools", () => {
     let run = createInitialLiveRun();
     run = reduceLiveRunEvent(run, { type: "RUN_STARTED" });
@@ -1368,6 +1551,105 @@ describe("live run state reducer", () => {
     });
   });
 
+  it("keeps a later ACTIVITY STEP as its own orphan until its TOOL_CALL_START arrives", () => {
+    let run = createInitialLiveRun();
+    run = reduceLiveRunEvent(run, { type: "RUN_STARTED" });
+    run = reduceLiveRunEvent(run, {
+      type: "TOOL_CALL_START",
+      toolCallId: "call_sql_1",
+      toolCallName: "run_sql_readonly",
+    });
+    run = reduceLiveRunEvent(run, {
+      type: "ACTIVITY_SNAPSHOT",
+      activityType: "STEP",
+      content: {
+        step_id: "sql-1",
+        title: "Run read-only SQL",
+        tool_name: "run_sql_readonly",
+        status: "completed",
+        sql: "SELECT 1",
+      },
+    });
+    run = reduceLiveRunEvent(run, {
+      type: "TOOL_CALL_RESULT",
+      toolCallId: "call_sql_1",
+      toolCallName: "run_sql_readonly",
+      result: JSON.stringify({ row_count: 1, elapsed_ms: 2 }),
+    });
+
+    // Next SQL ACTIVITY arrives before its tool envelope — must not overwrite sql-1.
+    run = reduceLiveRunEvent(run, {
+      type: "ACTIVITY_SNAPSHOT",
+      activityType: "STEP",
+      content: {
+        step_id: "sql-2",
+        title: "Run read-only SQL",
+        tool_name: "run_sql_readonly",
+        status: "completed",
+        sql: "SELECT 2",
+      },
+    });
+    expect(run.events.map((event) => event.id).sort()).toEqual(["call_sql_1", "sql-2"]);
+    expect(run.events.find((event) => event.id === "call_sql_1")?.payload).toMatchObject({
+      sql: "SELECT 1",
+    });
+    expect(run.events.find((event) => event.id === "sql-2")?.payload).toMatchObject({
+      sql: "SELECT 2",
+    });
+
+    run = reduceLiveRunEvent(run, {
+      type: "TOOL_CALL_START",
+      toolCallId: "call_sql_2",
+      toolCallName: "run_sql_readonly",
+      args: { sql: "SELECT 2" },
+    });
+    expect(run.events.map((event) => event.id).sort()).toEqual(["call_sql_1", "call_sql_2"]);
+    expect(run.toolCalls.map((call) => call.stepId)).toEqual(["sql-1", "sql-2"]);
+  });
+
+  it("absorbs ACTIVITY STEP events created before TOOL_CALL_START into the tool call id", () => {
+    let run = createInitialLiveRun();
+    run = reduceLiveRunEvent(run, { type: "RUN_STARTED" });
+    // Backend emits ACTIVITY before the AG-UI tool-call envelope (real event order).
+    run = reduceLiveRunEvent(run, {
+      type: "ACTIVITY_SNAPSHOT",
+      activityType: "STEP",
+      content: {
+        step_id: "schema-d2d92392",
+        title: "Inspect data source schema",
+        tool_name: "inspect_schema",
+        status: "completed",
+        content: {
+          tables: [{ name: "orders", columns: [{ name: "id", type: "TEXT" }] }],
+        },
+      },
+    });
+    run = reduceLiveRunEvent(run, {
+      type: "TOOL_CALL_START",
+      toolCallId: "call_inspect_1",
+      toolCallName: "inspect_schema",
+    });
+    run = reduceLiveRunEvent(run, {
+      type: "TOOL_CALL_RESULT",
+      toolCallId: "call_inspect_1",
+      toolCallName: "inspect_schema",
+      result: JSON.stringify({
+        tables: [{ name: "orders", columns: [{ name: "id", type: "TEXT" }] }],
+      }),
+    });
+
+    expect(run.events.map((event) => event.id)).toEqual(["call_inspect_1"]);
+    expect(run.events[0]).toMatchObject({
+      id: "call_inspect_1",
+      stepId: "schema-d2d92392",
+      toolName: "inspect_schema",
+    });
+    expect(run.toolCalls[0]).toMatchObject({
+      id: "call_inspect_1",
+      stepId: "schema-d2d92392",
+    });
+  });
+
   it("applies token_usage.correlation to attach step_id for detail matching", () => {
     let run = createInitialLiveRun();
     run = reduceLiveRunEvent(run, { type: "RUN_STARTED" });
@@ -1381,7 +1663,7 @@ describe("live run state reducer", () => {
       activityType: "STEP",
       content: {
         step_id: "sql-1",
-        title: "执行只读 SQL",
+        title: "Run read-only SQL",
         tool_name: "run_sql_readonly",
         status: "running",
       },
@@ -1522,7 +1804,7 @@ describe("live run state reducer", () => {
       activityType: "STEP",
       content: {
         step_id: "sql-1",
-        title: "执行只读 SQL",
+        title: "Run read-only SQL",
         tool_name: "run_sql_readonly",
         status: "completed",
         output_type: "table",
@@ -1593,7 +1875,7 @@ describe("live run state reducer", () => {
       messageId: "run-1:activity:step:sql-1",
       content: {
         step_id: "sql-1",
-        title: "执行只读 SQL",
+        title: "Run read-only SQL",
         tool_name: "run_sql_readonly",
         status: "failed",
         sql: "SELECT 1",
@@ -1618,6 +1900,57 @@ describe("live run state reducer", () => {
       stepId: "sql-1",
       status: "failed",
     });
+  });
+
+  it("links an artifact to its authoritative tool_call_id, ignoring heuristics (R-018)", () => {
+    let run = createInitialLiveRun();
+    run = reduceLiveRunEvent(run, { type: "RUN_STARTED" });
+
+    // Two successful SQL calls with the SAME row_count so heuristics would be ambiguous.
+    run = reduceLiveRunEvent(run, {
+      type: "TOOL_CALL_START",
+      toolCallId: "tool-sql-1",
+      toolCallName: "run_sql_readonly",
+      args: { sql: "SELECT * FROM a" },
+    });
+    run = reduceLiveRunEvent(run, {
+      type: "TOOL_CALL_RESULT",
+      toolCallId: "tool-sql-1",
+      toolCallName: "run_sql_readonly",
+      result: JSON.stringify({ audit_log_id: "audit-1", row_count: 5, elapsed_ms: 3 }),
+    });
+    run = reduceLiveRunEvent(run, {
+      type: "TOOL_CALL_START",
+      toolCallId: "tool-sql-2",
+      toolCallName: "run_sql_readonly",
+      args: { sql: "SELECT * FROM b" },
+    });
+    run = reduceLiveRunEvent(run, {
+      type: "TOOL_CALL_RESULT",
+      toolCallId: "tool-sql-2",
+      toolCallName: "run_sql_readonly",
+      result: JSON.stringify({ audit_log_id: "audit-2", row_count: 5, elapsed_ms: 3 }),
+    });
+
+    // Artifact carries the authoritative producing tool_call_id (the SECOND call).
+    run = reduceLiveRunEvent(run, {
+      type: "CUSTOM",
+      name: "artifact",
+      value: {
+        id: "artifact-authoritative",
+        type: "table",
+        name: "SQL result audit-2",
+        tool_call_id: "tool-sql-2",
+        preview_json: { audit_log_id: "audit-2", row_count: 5 },
+      },
+    });
+
+    expect(run.artifacts[0]?.createdByEventId).toBe("tool-sql-2");
+    expect(run.artifacts[0]?.createdByToolCallId).toBe("tool-sql-2");
+    expect(run.events.find((event) => event.id === "tool-sql-2")?.artifactIds).toEqual([
+      "artifact-authoritative",
+    ]);
+    expect(run.events.find((event) => event.id === "tool-sql-1")?.artifactIds).toBeUndefined();
   });
 
   it("does not link sql artifact to a failed tool call when artifact arrives after failure", () => {
@@ -1826,5 +2159,110 @@ describe("live run state reducer", () => {
       toolName: "ask_user",
       title: "Ask user",
     });
+  });
+
+  it("replaces existing artifact when same id arrives again (session output upsert)", () => {
+    let run = createInitialLiveRun();
+    run = reduceLiveRunEvent(run, {
+      type: "CUSTOM",
+      name: "artifact",
+      value: {
+        id: "artifact-session-1",
+        type: "markdown",
+        name: "report.md",
+        file_id: "file-1",
+        download_url: "/api/v1/artifacts/artifact-session-1/download",
+        logical_key: "session_file:reports/report.md",
+        version: 1,
+        created_at: "2026-07-09T10:00:00.000Z",
+      },
+    });
+    expect(run.artifacts).toHaveLength(1);
+    expect(run.artifacts[0]).toMatchObject({
+      id: "artifact-session-1",
+      version: "v1",
+      versionCount: 1,
+      recordedAtMs: Date.parse("2026-07-09T10:00:00.000Z"),
+    });
+
+    run = reduceLiveRunEvent(run, {
+      type: "CUSTOM",
+      name: "artifact",
+      value: {
+        id: "artifact-session-1",
+        type: "markdown",
+        name: "report.md",
+        file_id: "file-2",
+        download_url: "/api/v1/artifacts/artifact-session-1/download",
+        logical_key: "session_file:reports/report.md",
+        version: 2,
+        created_at: "2026-07-09T11:00:00.000Z",
+      },
+    });
+    expect(run.artifacts).toHaveLength(1);
+    expect(run.artifacts[0]).toMatchObject({
+      id: "artifact-session-1",
+      logicalKey: "session_file:reports/report.md",
+      version: "v2",
+      versionCount: 2,
+      // First recorded time is preserved so Outputs sort stays stable.
+      recordedAtMs: Date.parse("2026-07-09T10:00:00.000Z"),
+    });
+  });
+
+  it("appends new artifacts in arrival order for oldest-first Outputs", () => {
+    let run = createInitialLiveRun();
+    run = reduceLiveRunEvent(run, {
+      type: "CUSTOM",
+      name: "artifact",
+      value: {
+        id: "artifact-a",
+        type: "table",
+        name: "first",
+        created_at: "2026-07-09T09:00:00.000Z",
+      },
+    });
+    run = reduceLiveRunEvent(run, {
+      type: "CUSTOM",
+      name: "artifact",
+      value: {
+        id: "artifact-b",
+        type: "markdown",
+        name: "second",
+        created_at: "2026-07-09T10:00:00.000Z",
+      },
+    });
+    expect(run.artifacts.map((artifact) => artifact.id)).toEqual(["artifact-a", "artifact-b"]);
+  });
+
+  it("links session-output artifact to write_file tool via tool_call_id", () => {
+    let run = createInitialLiveRun();
+    run = reduceLiveRunEvent(run, {
+      type: "TOOL_CALL_START",
+      toolCallId: "call-write-1",
+      toolCallName: "write_file",
+    });
+    run = reduceLiveRunEvent(run, {
+      type: "TOOL_CALL_RESULT",
+      toolCallId: "call-write-1",
+      toolCallName: "write_file",
+      result: JSON.stringify({ observation: "Wrote report.md" }),
+    });
+    run = reduceLiveRunEvent(run, {
+      type: "CUSTOM",
+      name: "artifact",
+      value: {
+        id: "artifact-md-1",
+        type: "markdown",
+        name: "report.md",
+        file_id: "file-1",
+        download_url: "/api/v1/artifacts/artifact-md-1/download",
+        logical_key: "session_file:reports/report.md",
+        version: 1,
+        tool_call_id: "call-write-1",
+      },
+    });
+    expect(run.artifacts[0]?.createdByEventId).toBe("call-write-1");
+    expect(run.events.find((e) => e.id === "call-write-1")?.artifactIds).toContain("artifact-md-1");
   });
 });

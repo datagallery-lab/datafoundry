@@ -262,6 +262,41 @@ describe("resolveStepAssistantFlags", () => {
     expect(flags.isFinalAnswer).toBe(false);
   });
 
+  it("recognizes collaboration steps when chat tool names are stale but live run is authoritative", () => {
+    const messages = [
+      { id: "user-1", role: "user", content: "question" },
+      {
+        id: "assistant-ask",
+        role: "assistant",
+        content: "",
+        toolCalls: [{ id: "tc-ask", function: { name: "tool" } }],
+      },
+    ];
+    const liveRun = {
+      ...createInitialLiveRun(),
+      toolCalls: [
+        {
+          id: "tc-ask",
+          name: "ask_user",
+          status: "running" as const,
+          startedAtMs: 1,
+        },
+      ],
+    };
+    const flags = resolveStepAssistantFlags({
+      message: messages[1],
+      messages,
+      content: "",
+      isRunning: true,
+      liveRunStatus: "suspended",
+      liveRun,
+      collaborationResponses: [],
+    });
+
+    expect(flags.isCollaborationStep).toBe(true);
+    expect(flags.isWaitingForUser).toBe(true);
+  });
+
   it("does not infer collaboration on a preamble when a later message already answered HITL", () => {
     const messages = [
       { id: "assistant-preamble", role: "assistant", content: "我先提交计划。" },

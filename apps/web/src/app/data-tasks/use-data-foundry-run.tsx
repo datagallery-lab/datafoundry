@@ -26,6 +26,7 @@ import {
   deriveSegmentRunUsage,
   reduceLiveRunEvent,
   shouldIgnoreIncomingRunError,
+  shouldSkipAgUiReplayDuringRestore,
   type LiveRun,
   type LiveRunStatus,
   type SessionUsageStats,
@@ -84,16 +85,6 @@ function resolveStateAction<T>(current: T, action: SetStateAction<T>): T {
 
 function normalizeUserQuestion(text: string): string | undefined {
   return normalizeUserQuestionText(text);
-}
-
-function isRunBoundaryReplayEvent(event: BaseEvent): boolean {
-  const type = (event as { type?: string }).type;
-  return (
-    type === "RUN_STARTED" ||
-    type === "RUN_FINISHED" ||
-    type === "RUN_ERROR" ||
-    type === "STATE_SNAPSHOT"
-  );
 }
 
 function extractLatestUserQuestion(messages: unknown): string | undefined {
@@ -359,10 +350,13 @@ export function LiveRunEventSubscriber({
       if (!threadId) {
         return;
       }
-      if (isRestoringConversationRef.current && isRunBoundaryReplayEvent(event)) {
-        return;
-      }
       setLiveRunForThread(threadId, (current) => {
+        if (
+          isRestoringConversationRef.current &&
+          shouldSkipAgUiReplayDuringRestore(current, event as { type?: string; [key: string]: unknown })
+        ) {
+          return current;
+        }
         const next = reduceLiveRunEvent(current, event);
         const reconciled =
           event.type === "RUN_FINISHED" || event.type === "STATE_SNAPSHOT"

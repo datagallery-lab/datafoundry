@@ -56,6 +56,40 @@ export function messageTextContent(content: unknown): string {
     .trim();
 }
 
+/** Reasoning-only text from CopilotKit / restored content parts. */
+export function messageReasoningContent(content: unknown): string {
+  if (!Array.isArray(content)) return "";
+  return content
+    .map((part) => {
+      if (!part || typeof part !== "object" || !("type" in part)) return "";
+      const typed = part as { type?: unknown; text?: unknown };
+      if (typed.type === "reasoning" && typeof typed.text === "string") return typed.text;
+      return "";
+    })
+    .filter((text) => text.trim().length > 0)
+    .join("\n\n")
+    .trim();
+}
+
+/** Visible assistant text parts only (excludes reasoning). */
+export function messageVisibleTextContent(content: unknown): string {
+  if (typeof content === "string") return content.trim();
+  if (!Array.isArray(content)) return "";
+  const hasTypedParts = content.some(
+    (part) => part && typeof part === "object" && "type" in part,
+  );
+  if (!hasTypedParts) return "";
+  return content
+    .map((part) => {
+      if (!part || typeof part !== "object" || !("type" in part)) return "";
+      const typed = part as { type?: unknown; text?: unknown };
+      if (typed.type === "text" && typeof typed.text === "string") return typed.text;
+      return "";
+    })
+    .join("")
+    .trim();
+}
+
 /** Some thinking models emit the same block twice in one assistant message. */
 export function dedupeRepeatedText(text: string): string {
   const trimmed = text.trim();
@@ -233,6 +267,11 @@ export function resolveAssistantThoughtContent(
   message: MessageLike,
   messages: MessageLike[],
 ): string {
+  const foldedReasoning = messageReasoningContent(message.content);
+  if (foldedReasoning && hasMeaningfulText(foldedReasoning)) {
+    return foldedReasoning;
+  }
+
   const assistantText = messageTextContent(message.content);
   const messageIndex = messages.findIndex((item) => item.id === message.id);
 
@@ -304,7 +343,13 @@ export function resolveToolStepThoughtContent(
   messages: MessageLike[],
 ): string {
   const source = resolveMessageFromTimeline(message, messages);
-  const inline = stripTrivialText(dedupeRepeatedText(messageTextContent(source.content)));
+  const foldedReasoning = messageReasoningContent(source.content);
+  const textOnly = messageVisibleTextContent(source.content);
+  const inline = stripTrivialText(
+    dedupeRepeatedText(
+      foldedReasoning || textOnly || messageTextContent(source.content),
+    ),
+  );
   if (messageToolCallCount(source) === 0) {
     return resolveAssistantThoughtContent(source, messages) || inline;
   }
@@ -328,7 +373,10 @@ export function resolveToolStepThoughtContent(
     }
     if (candidate?.role === "assistant") {
       if (messageToolCallCount(candidate) > 0) break;
-      const text = dedupeRepeatedText(messageTextContent(candidate.content));
+      const text = dedupeRepeatedText(
+        messageReasoningContent(candidate.content) ||
+          messageTextContent(candidate.content),
+      );
       if (text && hasMeaningfulText(text)) parts.unshift(text);
       continue;
     }
@@ -339,7 +387,11 @@ export function resolveToolStepThoughtContent(
       hasMeaningfulText,
     ),
   );
-  if (inline) parts.push(inline);
+  if (foldedReasoning && hasMeaningfulText(foldedReasoning)) {
+    parts.push(foldedReasoning);
+  } else if (inline) {
+    parts.push(inline);
+  }
 
   return dedupeThoughtParts(parts).join("\n\n").trim();
 }

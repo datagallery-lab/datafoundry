@@ -31,7 +31,7 @@ export function buildStepToolSummaries(input: {
           : "success";
       return {
         id,
-        label: toolDisplayTitle(call.function?.name ?? liveCall?.name),
+        label: toolDisplayTitle(liveCall?.name ?? call.function?.name),
         status,
         durationLabel: liveCall
           ? stepElapsedLabel(liveCall)
@@ -112,7 +112,7 @@ function formatToolSummary(
   if (tools.length === 0) return "No tool calls";
   const prefix =
     options.includeConcurrencyPrefix && tools.length > 1
-      ? `${tools.length} 个工具并发 · `
+      ? `${tools.length} tools in parallel · `
       : "";
   return `${prefix}${tools
     .map((tool) => [tool.label, tool.durationLabel].filter(Boolean).join(" "))

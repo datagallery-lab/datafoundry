@@ -22,6 +22,7 @@
     "@types/react": "19.1.8",
     "@types/react-dom": "19.1.6",
     "tailwindcss": "4.1.11",
-    "vitest": "^3.2.6"
+    "vitest": "^3.2.6",
+    "happy-dom": "^20.10.6"
   }
 }

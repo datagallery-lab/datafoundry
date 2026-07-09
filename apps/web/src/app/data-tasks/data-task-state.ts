@@ -83,7 +83,6 @@ const toolDisplayTitles: Record<string, string> = {
   mkdir: "Create directory",
   file_stat: "Get file info",
   execute_command: "Run command",
-  publish_artifact: "Publish output",
   promote_workspace_file: "Promote workspace file",
   task_write: "Write task plan",
   task_update: "Update task",
@@ -154,11 +153,20 @@ export interface DataArtifact {
   /** Workspace-relative source path used for artifact de-duplication and restore linking. */
   sourcePath?: string;
   createdByEventId?: string;
+  /**
+   * Authoritative producing tool_call_id from the backend artifact contract (R-018).
+   * When present it is the sole source of truth for linking; no heuristics are used.
+   */
+  createdByToolCallId?: string;
   detail?: ArtifactDetail;
   /** When true, full preview can be fetched via artifact REST API. */
   previewAvailable?: boolean;
   /** Milliseconds since epoch when the artifact event was received. */
   recordedAtMs?: number;
+  /** Logical key for session-file outputs (`session_file:<path>`). Present when artifact was auto-ingested. */
+  logicalKey?: string;
+  /** Latest version number. Present when emitted by auto-ingest or loaded via restore API. */
+  versionCount?: number;
 }
 
 export interface TimelineStep {

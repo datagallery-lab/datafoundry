@@ -18,12 +18,16 @@ export type GovernedToolObservationHandler = (input: {
   contextPackage: ContextPackage;
   rawResult: unknown;
   toolName: string;
+  toolCallId?: string;
+  toolInput?: unknown;
 }) => void | Promise<void>;
 
 export type GovernedToolErrorHandler = (input: {
   error: unknown;
   rawResult: unknown;
   toolName: string;
+  toolCallId?: string;
+  toolInput?: unknown;
 }) => void | Promise<void>;
 
 export type GovernedToolFactoryOptions = {
@@ -70,6 +74,7 @@ export class GovernedToolFactory {
       execute: async (...args: any[]): Promise<unknown> => {
         const options = args[1] as MastraToolExecuteOptions | undefined;
         const toolCallId = toolCallIdFromOptions(options);
+        const toolInput = args[0];
         try {
           const rawResult = await execute(...args);
           if (rawResult === undefined) {
@@ -77,11 +82,23 @@ export class GovernedToolFactory {
           }
           const contextPackage = this.dispatcher.dispatch(toolName, rawResult);
           const observation = toolObservationModelFromPackage(contextPackage);
-          await this.onResult?.({ contextPackage, rawResult, toolName });
+          await this.onResult?.({
+            contextPackage,
+            rawResult,
+            toolName,
+            ...(toolCallId ? { toolCallId } : {}),
+            ...(toolInput !== undefined ? { toolInput } : {})
+          });
           this.emitToolCallResult(toolCallId, toolName, serializeToolResultContent(observation));
           return observation;
         } catch (error) {
-          await this.onError?.({ error, rawResult: undefined, toolName });
+          await this.onError?.({
+            error,
+            rawResult: undefined,
+            toolName,
+            ...(toolCallId ? { toolCallId } : {}),
+            ...(toolInput !== undefined ? { toolInput } : {})
+          });
           this.emitToolCallResult(
             toolCallId,
             toolName,

@@ -319,6 +319,7 @@ export type ConversationMessageDto = {
   source: "agent" | "client";
   messageId?: string;
   contentText: string;
+  contentParts?: Array<{ type: "reasoning" | "text"; text: string }>;
   evidenceRefs?: EvidenceRef[];
   position: number;
   createdAt: string;
@@ -347,9 +348,14 @@ export type ConversationCheckpointDto = {
   messageEndPosition?: number;
   firstEventSeq?: number;
   lastEventSeq?: number;
-  startedAt: string;
+  /** Absent for legacy event-only runs that have no `runs` row. */
+  startedAt?: string;
   finishedAt?: string;
   errorMessage?: string;
+  /** Canonical terminal event name for the run status ("RUN_FINISHED" | "RUN_ERROR"). */
+  terminalEvent?: "RUN_FINISHED" | "RUN_ERROR";
+  /** Authoritative ids of artifacts produced by this run (R-018). */
+  artifactIds?: string[];
 };
 
 export type ConversationBranchDto = {
@@ -508,6 +514,8 @@ export type ConversationToolCallDto = {
   id?: string;
   toolCallId: string;
   status: "completed" | "failed" | "pending";
+  /** Authoritative "run is suspended waiting on this HITL tool" flag (R-018). */
+  awaitingInteraction?: boolean;
   name?: string;
   toolName?: string;
   args?: unknown;
@@ -663,8 +671,26 @@ export type ArtifactDto = {
   name?: string;
   fileId?: string;
   downloadUrl?: string;
-  preview_json?: Record<string, unknown>;
+  preview_json?: Record<string, unknown> | null;
+  /** True when preview_json exists or a file-backed preview can be synthesized. */
+  preview_available?: boolean;
   mimeType?: string;
   metadata?: Record<string, unknown>;
   createdAt?: string;
+  /** For session-file outputs: `session_file:<path>`. */
+  logicalKey?: string;
+  /** Number of stored versions. 0 when no version records exist (legacy artifacts). */
+  versionCount?: number;
+  /** Authoritative origin (R-018): the producing run / tool call / step. */
+  runId?: string;
+  toolCallId?: string;
+  stepId?: string;
+};
+
+export type ArtifactVersionDto = {
+  id: string;
+  version: number;
+  fileId?: string;
+  downloadUrl?: string;
+  createdAt: string;
 };

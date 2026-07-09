@@ -121,6 +121,7 @@ export type ToolName =
   | "profile_dataset"
   | "generate_report"
   | "export_artifact"
+  /** @deprecated Runtime no longer registers this tool; eligible files are auto-ingested as Session Outputs. */
   | "publish_artifact"
   | "promote_workspace_file"
   | "list_workspace_files"
@@ -193,6 +194,7 @@ export type ExportArtifactToolInput = {
   format?: "json" | "csv" | "html" | "md" | "png";
 };
 
+/** @deprecated Runtime no longer registers this tool; eligible files are auto-ingested as Session Outputs. */
 export type PublishArtifactToolInput = {
   path: string;
   name?: string;
@@ -226,6 +228,7 @@ export type ToolInputMap = {
   profile_dataset: ProfileDatasetToolInput;
   generate_report: GenerateReportToolInput;
   export_artifact: ExportArtifactToolInput;
+  /** @deprecated Runtime no longer registers this tool; eligible files are auto-ingested as Session Outputs. */
   publish_artifact: PublishArtifactToolInput;
   promote_workspace_file: PromoteWorkspaceFileToolInput;
   list_workspace_files: ListWorkspaceFilesToolInput;

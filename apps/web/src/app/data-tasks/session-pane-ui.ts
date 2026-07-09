@@ -122,9 +122,9 @@ export function getWorkspaceResourceNavGroups({
 
 export function getCollapsedWorkspaceRailCopy() {
   return {
-    expandLabel: "展开工作区快捷栏",
-    railLabel: "工作区快捷栏",
-    sessionCountLabel: "会话数量",
+    expandLabel: "Expand workspace rail",
+    railLabel: "Workspace rail",
+    sessionCountLabel: "Sessions",
   } as const;
 }
 

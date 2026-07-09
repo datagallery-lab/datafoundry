@@ -423,15 +423,14 @@ export function reduceLiveRunEvent(state: LiveRun, event: AgUiLikeEvent): LiveRu
       };
     case "RUN_FINISHED":
       if (state.runStatus === "completed" || state.runStatus === "canceled") {
-        return state;
+        // STATE_DELTA may mark the run completed before RUN_FINISHED; still finalize
+        // any tool calls left at "running" (e.g. TOOL_CALL_END without RESULT).
+        return applyTerminalRunStatus(state, state.runStatus);
       }
       if (stringValue(event.status) === "cancelled" || stringValue(event.status) === "canceled") {
-        return {
-          ...state,
-          runStatus: "canceled",
+        return applyTerminalRunStatus(state, "canceled", {
           runFinishedAt: Date.now(),
-          toolCalls: finalizeRunningToolCalls(state.toolCalls, "failed"),
-        };
+        });
       }
       if (state.runStatus === "suspended") {
         return {
@@ -439,9 +438,7 @@ export function reduceLiveRunEvent(state: LiveRun, event: AgUiLikeEvent): LiveRu
           runFinishedAt: Date.now(),
         };
       }
-      return {
-        ...state,
-        runStatus: "completed",
+      return applyTerminalRunStatus(state, "completed", {
         runFinishedAt: Date.now(),
         errorMessage: undefined,
         plan: state.plan.map((task) =>
@@ -449,19 +446,15 @@ export function reduceLiveRunEvent(state: LiveRun, event: AgUiLikeEvent): LiveRu
             ? { ...task, status: "completed" }
             : task,
         ),
-        toolCalls: finalizeRunningToolCalls(state.toolCalls, "success"),
-      };
+      });
     case "RUN_ERROR":
       if (shouldIgnoreStaleRunError(state, event)) {
         return state;
       }
-      return {
-        ...state,
-        runStatus: "failed",
+      return applyTerminalRunStatus(state, "failed", {
         runFinishedAt: Date.now(),
         errorMessage: formatRunErrorMessage(stringValue(event.message) ?? undefined),
-        toolCalls: finalizeRunningToolCalls(state.toolCalls, "failed"),
-      };
+      });
     case "STATE_SNAPSHOT":
       return reduceStateSnapshot(state, event);
     case "STATE_DELTA":
@@ -483,6 +476,32 @@ export function reduceLiveRunEvent(state: LiveRun, event: AgUiLikeEvent): LiveRu
 }
 
 const TERMINAL_RUN_STATUSES = new Set<LiveRunStatus>(["completed", "failed", "canceled"]);
+
+function terminalToolCallStatus(
+  runStatus: LiveRunStatus,
+): LiveToolCallRecord["status"] | undefined {
+  if (runStatus === "completed") return "success";
+  if (runStatus === "failed" || runStatus === "canceled") return "failed";
+  return undefined;
+}
+
+function applyTerminalRunStatus(
+  state: LiveRun,
+  runStatus: LiveRunStatus,
+  extra: Partial<LiveRun> = {},
+): LiveRun {
+  const finalToolStatus = terminalToolCallStatus(runStatus);
+  const toolCalls =
+    finalToolStatus !== undefined
+      ? finalizeRunningToolCalls(state.toolCalls, finalToolStatus)
+      : state.toolCalls;
+  return {
+    ...state,
+    runStatus,
+    ...(toolCalls !== state.toolCalls ? { toolCalls } : {}),
+    ...extra,
+  };
+}
 
 function shouldIgnoreStaleRunStatusSnapshot(
   current: LiveRunStatus,
@@ -514,6 +533,43 @@ export function shouldIgnoreIncomingRunError(state: LiveRun): boolean {
   return state.runStatus === "completed" || state.runStatus === "canceled";
 }
 
+/**
+ * While REST-hydrating a conversation, AG-UI may replay historical events.
+ * Dual-channel coordination (not a backend gap): skip run-boundary events always,
+ * and skip tool events for tools that are already terminal with a finish timestamp
+ * (avoids e2e duration inflation on session switch).
+ */
+export function shouldSkipAgUiReplayDuringRestore(
+  state: LiveRun,
+  event: AgUiLikeEvent,
+): boolean {
+  const type = stringValue(event.type);
+  if (
+    type === "RUN_STARTED" ||
+    type === "RUN_FINISHED" ||
+    type === "RUN_ERROR" ||
+    type === "STATE_SNAPSHOT"
+  ) {
+    return true;
+  }
+
+  if (
+    type !== "TOOL_CALL_START" &&
+    type !== "TOOL_CALL_ARGS" &&
+    type !== "TOOL_CALL_END" &&
+    type !== "TOOL_CALL_RESULT"
+  ) {
+    return false;
+  }
+
+  const toolCallId = stringValue(event.toolCallId);
+  if (!toolCallId) return false;
+  const existing = state.toolCalls.find((item) => item.id === toolCallId);
+  if (!existing) return false;
+  const terminal = existing.status === "success" || existing.status === "failed";
+  return terminal && existing.finishedAtMs !== undefined;
+}
+
 function reduceStateSnapshot(state: LiveRun, event: AgUiLikeEvent): LiveRun {
   const snapshot = recordValue(event.snapshot);
   const status = liveStatusFromValue(snapshot?.runStatus);
@@ -540,7 +596,10 @@ function reduceStateDelta(state: LiveRun, event: AgUiLikeEvent): LiveRun {
         status &&
         !shouldIgnoreStaleRunStatusSnapshot(next.runStatus, status)
       ) {
-        next = { ...next, runStatus: status };
+        next =
+          terminalToolCallStatus(status) !== undefined
+            ? applyTerminalRunStatus(next, status)
+            : { ...next, runStatus: status };
       }
     }
     if (op.path === "/runId" || op.path === "/run_id") {
@@ -641,10 +700,54 @@ function reduceActivityDelta(state: LiveRun, event: AgUiLikeEvent): LiveRun {
   return { ...state, plan: applyPlanPatch(state.plan, patch) };
 }
 
+/**
+ * When ACTIVITY_SNAPSHOT STEP arrives before TOOL_CALL_START, the timeline event
+ * is keyed by step_id (no toolCall yet). On TOOL_CALL_START, re-key that orphan
+ * to toolCallId and attach stepId on the tool record.
+ */
+function absorbOrphanActivityForToolCall(
+  state: LiveRun,
+  toolCallId: string,
+  toolName: string,
+): LiveRun {
+  const toolCall = state.toolCalls.find((call) => call.id === toolCallId);
+  if (!toolCall || toolCall.stepId) {
+    return state;
+  }
+
+  const orphan = state.events.find(
+    (event) =>
+      event.id !== toolCallId &&
+      event.toolName === toolName &&
+      Boolean(event.stepId) &&
+      !state.toolCalls.some((call) => call.id === event.id || call.stepId === event.stepId),
+  );
+  if (!orphan?.stepId) {
+    return state;
+  }
+
+  const mergedEvent: TimelineEvent = {
+    ...orphan,
+    id: toolCallId,
+  };
+  const events = [
+    ...state.events.filter((event) => event.id !== orphan.id && event.id !== toolCallId),
+    mergedEvent,
+  ];
+
+  return {
+    ...state,
+    events,
+    toolCalls: state.toolCalls.map((call) =>
+      call.id === toolCallId ? { ...call, stepId: orphan.stepId } : call,
+    ),
+  };
+}
+
 function reduceToolEvent(state: LiveRun, event: AgUiLikeEvent): LiveRun {
   const id = stringValue(event.toolCallId) ?? `${state.events.length + 1}`;
   const existing = state.toolCalls.find((item) => item.id === id);
-  const existingEvent = state.events.find((item) => item.id === id);
+  let existingEvent = state.events.find((item) => item.id === id);
   const toolName = resolveIncomingToolName(event, existing, existingEvent);
   const eventType = stringValue(event.type);
   const effectiveToolName =
@@ -660,15 +763,32 @@ function reduceToolEvent(state: LiveRun, event: AgUiLikeEvent): LiveRun {
     nextState = upsertToolCallRecord(nextState, {
       id,
       name: effectiveToolName,
-      status: "running",
-      startedAtMs: Date.now(),
+      status:
+        existing?.status === "success" || existing?.status === "failed"
+          ? existing.status
+          : "running",
+      startedAtMs: existing?.startedAtMs ?? Date.now(),
     });
+    // ACTIVITY_SNAPSHOT STEP often arrives before the AG-UI tool envelope and is
+    // stored under step_id. Fold that orphan into this toolCallId so Trace does
+    // not keep a duplicate event-only card (especially after a later RUN_STARTED).
+    nextState = absorbOrphanActivityForToolCall(nextState, id, effectiveToolName);
+    existingEvent = nextState.events.find((item) => item.id === id);
   } else if (eventType === "TOOL_CALL_END") {
+    const resolvedStatus =
+      existing?.status === "failed"
+        ? "failed"
+        : existing?.status === "success" || existing?.result
+          ? "success"
+          : "running";
     nextState = upsertToolCallRecord(nextState, {
       id,
       name: effectiveToolName,
-      status: existing?.status === "failed" ? "failed" : "running",
+      status: resolvedStatus,
       startedAtMs: existing?.startedAtMs ?? Date.now(),
+      ...(resolvedStatus === "success" && !existing?.finishedAtMs
+        ? { finishedAtMs: Date.now() }
+        : {}),
     });
   } else if (eventType === "TOOL_CALL_RESULT") {
     const parsed = parseResultObject(resultPayload);
@@ -678,7 +798,9 @@ function reduceToolEvent(state: LiveRun, event: AgUiLikeEvent): LiveRun {
       name: effectiveToolName,
       status: failed ? "failed" : "success",
       startedAtMs: existing?.startedAtMs ?? Date.now(),
-      finishedAtMs: Date.now(),
+      // Dual-channel: AG-UI replay must not refresh wall-clock finish time (e2e inflation).
+      // Optional later: persist tool startedAt/finishedAt on ConversationToolCallDto.
+      finishedAtMs: existing?.finishedAtMs ?? Date.now(),
       ...(resultPayload ? { result: resultPayload } : {}),
     });
   }
@@ -696,7 +818,7 @@ function reduceToolEvent(state: LiveRun, event: AgUiLikeEvent): LiveRun {
     "";
 
   if (kind === "query") {
-    const existing = nextState.events.find((item) => item.id === id);
+    const existing = nextState.events.find((item) => item.id === id) ?? existingEvent;
     const parsed = parseResultObject(result);
     const toolCall = nextState.toolCalls.find((item) => item.id === id);
     const failed =
@@ -706,6 +828,9 @@ function reduceToolEvent(state: LiveRun, event: AgUiLikeEvent): LiveRun {
       existing?.activityStatus === "failed";
     const rowCount = failed ? (numberValue(parsed?.row_count) ?? 0) : (numberValue(parsed?.row_count) ?? 0);
     const elapsedMs = failed ? (numberValue(parsed?.elapsed_ms) ?? 0) : (numberValue(parsed?.elapsed_ms) ?? 0);
+    const existingPayload = existing?.payload as
+      | { scannedRows?: number; durationMs?: number }
+      | undefined;
     return finalizeToolEventState(
       upsertTimelineEvent(nextState, {
         id,
@@ -717,12 +842,12 @@ function reduceToolEvent(state: LiveRun, event: AgUiLikeEvent): LiveRun {
         payload: {
           question: "",
           sql: sql || extractSql(existing),
-          scannedRows: rowCount,
-          durationMs: elapsedMs,
+          scannedRows: rowCount || existingPayload?.scannedRows || 0,
+          durationMs: elapsedMs || existingPayload?.durationMs || 0,
         },
-        ...(existingEvent?.artifactIds ? { artifactIds: existingEvent.artifactIds } : {}),
-        ...(existingEvent?.stepId ? { stepId: existingEvent.stepId } : {}),
-        ...(existingEvent?.activityStatus ? { activityStatus: existingEvent.activityStatus } : {}),
+        ...(existing?.artifactIds ? { artifactIds: existing.artifactIds } : {}),
+        ...(existing?.stepId ? { stepId: existing.stepId } : {}),
+        ...(existing?.activityStatus ? { activityStatus: existing.activityStatus } : {}),
       }),
       eventType,
     );
@@ -730,7 +855,13 @@ function reduceToolEvent(state: LiveRun, event: AgUiLikeEvent): LiveRun {
 
   if (kind === "inspect") {
     const parsedSchema = parseResultObject(result);
-    const tables = parseSchemaTables(parsedSchema);
+    const tablesFromResult = parseSchemaTables(parsedSchema);
+    const existing = nextState.events.find((item) => item.id === id) ?? existingEvent;
+    const existingTables =
+      existing?.kind === "inspect"
+        ? ((existing.payload as { tables?: SchemaTable[] } | undefined)?.tables ?? [])
+        : [];
+    const tables = tablesFromResult.length > 0 ? tablesFromResult : existingTables;
     return finalizeToolEventState(
       upsertTimelineEvent(nextState, {
         id,
@@ -740,9 +871,9 @@ function reduceToolEvent(state: LiveRun, event: AgUiLikeEvent): LiveRun {
         summary: summarizeSchemaResult(result, tables, event.type),
         thought: "Agent checks the data source structure before drawing conclusions from uncertain fields.",
         payload: { tables },
-        ...(existingEvent?.artifactIds ? { artifactIds: existingEvent.artifactIds } : {}),
-        ...(existingEvent?.stepId ? { stepId: existingEvent.stepId } : {}),
-        ...(existingEvent?.activityStatus ? { activityStatus: existingEvent.activityStatus } : {}),
+        ...(existing?.artifactIds ? { artifactIds: existing.artifactIds } : {}),
+        ...(existing?.stepId ? { stepId: existing.stepId } : {}),
+        ...(existing?.activityStatus ? { activityStatus: existing.activityStatus } : {}),
       }),
       eventType,
     );
@@ -871,13 +1002,19 @@ function reduceCustomEvent(state: LiveRun, event: AgUiLikeEvent): LiveRun {
     if (shouldDropIncomingDuplicateArtifact(state.artifacts, artifact)) {
       return state;
     }
+    // Keep the first recorded time on upsert so Outputs sort stays stable across versions.
+    const previous = state.artifacts.find((item) => item.id === artifact.id);
+    const nextArtifact =
+      previous?.recordedAtMs !== undefined
+        ? { ...artifact, recordedAtMs: previous.recordedAtMs }
+        : artifact;
     let nextState: LiveRun = {
       ...state,
       artifacts: [
-        artifact,
         ...state.artifacts.filter((item) =>
-          item.id !== artifact.id && !isDuplicateReportForFileArtifact(artifact, item),
+          item.id !== nextArtifact.id && !isDuplicateReportForFileArtifact(nextArtifact, item),
         ),
+        nextArtifact,
       ],
     };
     if (linkedTool) {
@@ -1335,10 +1472,11 @@ function chartTypeValue(value: unknown): Extract<ArtifactDetail, { type: "chart"
 }
 
 export function artifactDetailNeedsPreviewFetch(
-  artifact: Pick<DataArtifact, "previewAvailable">,
+  artifact: Pick<DataArtifact, "previewAvailable" | "fileId" | "type">,
   detail: ArtifactDetail | undefined,
 ): boolean {
-  if (!artifact.previewAvailable) return false;
+  const fileBacked = Boolean(artifact.fileId);
+  if (!artifact.previewAvailable && !fileBacked) return false;
   if (!detail) return true;
   if (detail.type === "file" && !detail.content) return true;
   if (detail.type === "report") {
@@ -1523,22 +1661,46 @@ function parseArtifactFromCustom(value: Record<string, unknown>): DataArtifact {
         : `File ${filePath}`);
   }
 
+  const versionNumber = numberValue(value.version);
+  const versionLabel =
+    stringValue(value.version) ??
+    (versionNumber !== undefined ? `v${versionNumber}` : "v1");
+  const createdByToolCallId = stringValue(value.tool_call_id);
+  const createdAtMs = timestampMsFromUnknown(
+    value.created_at ?? value.createdAt ?? value.recorded_at_ms ?? value.recordedAtMs,
+  );
+
   return {
     id,
     title,
     kind,
     type,
     summary: summary ?? "Output returned by the backend through an AG-UI artifact event.",
-    version: stringValue(value.version) ?? "v1",
+    version: versionLabel,
     ...(fileId ? { fileId } : {}),
     ...(downloadUrl ? { downloadUrl } : {}),
     ...(sourcePath ? { sourcePath } : {}),
+    ...(createdByToolCallId ? { createdByToolCallId } : {}),
     detail,
     previewAvailable:
       value.preview_available === true ||
+      Boolean(fileId) ||
       (preview !== undefined && preview !== null),
-    recordedAtMs: Date.now(),
+    recordedAtMs: createdAtMs ?? Date.now(),
+    ...(stringValue(value.logical_key) ? { logicalKey: stringValue(value.logical_key) } : {}),
+    ...(versionNumber !== undefined ? { versionCount: versionNumber } : {})
   };
+}
+
+function timestampMsFromUnknown(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === "string" && value.length > 0) {
+    const parsed = Date.parse(value);
+    return Number.isFinite(parsed) ? parsed : undefined;
+  }
+  return undefined;
 }
 
 function shouldDropIncomingDuplicateArtifact(
@@ -1756,6 +1918,7 @@ function artifactValueFromDataArtifact(artifact: DataArtifact): Record<string, u
   };
   if (artifact.fileId) value.file_id = artifact.fileId;
   if (artifact.downloadUrl) value.download_url = artifact.downloadUrl;
+  if (artifact.createdByToolCallId) value.tool_call_id = artifact.createdByToolCallId;
 
   if (artifact.detail?.type === "dataset") {
     value.type = "table";
@@ -1800,6 +1963,16 @@ function findArtifactSourceTool(
 ): LiveToolCallRecord | undefined {
   const value = artifactValue ?? artifactValueFromDataArtifact(artifact);
 
+  // R-018 / session-output: authoritative tool_call_id is the sole source of truth.
+  // Prefer DataArtifact.createdByToolCallId, then event value; never fall back to
+  // heuristics when an id is present (avoids row_count / path collisions).
+  const authoritativeToolCallId =
+    artifact.createdByToolCallId ?? stringValue(value.tool_call_id);
+  if (authoritativeToolCallId) {
+    return state.toolCalls.find((tool) => tool.id === authoritativeToolCallId);
+  }
+
+  // Legacy heuristics for artifacts that predate metadata_json.tool_call_id.
   if (artifact.type === "file" || artifact.kind === "file") {
     return findFileToolForArtifact(state, value);
   }
@@ -2048,7 +2221,9 @@ export function findCorrelatedToolCall(
   if (runningUnlinked) return runningUnlinked;
   const unlinked = sameName.find((call) => !call.stepId);
   if (unlinked) return unlinked;
-  return sameName.at(-1);
+  // Do not fall back to an already-linked same-name tool: ACTIVITY often arrives
+  // before the next TOOL_CALL_START and must stay as a step_id orphan until then.
+  return undefined;
 }
 
 export function resolveToolCallForEvent(
@@ -2369,7 +2544,7 @@ function numberValue(value: unknown): number | undefined {
 }
 
 function currentTime(): string {
-  return new Intl.DateTimeFormat("zh-CN", {
+  return new Intl.DateTimeFormat("en-US", {
     hour: "2-digit",
     minute: "2-digit",
     hour12: false,

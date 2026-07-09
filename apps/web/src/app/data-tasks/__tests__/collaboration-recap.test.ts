@@ -33,7 +33,7 @@ describe("shouldShowCollaborationRecap", () => {
       toolName: "submit_plan" as const,
       question: "执行Plan approval",
       plan: "## Step 1",
-      displayText: "已批准执行计划",
+      displayText: "Plan approved",
       createdAt: 1,
     };
     const message = {
@@ -250,6 +250,11 @@ describe("reconcileSuspendedLiveRunState", () => {
     };
 
     expect(reconcileSuspendedLiveRunState(liveRun, [baseAskResponse]).runStatus).toBe("completed");
+    expect(
+      reconcileSuspendedLiveRunState(liveRun, [baseAskResponse]).toolCalls.every(
+        (call) => call.status !== "running",
+      ),
+    ).toBe(true);
   });
 
   it("keeps suspended status while collaboration is still pending", () => {

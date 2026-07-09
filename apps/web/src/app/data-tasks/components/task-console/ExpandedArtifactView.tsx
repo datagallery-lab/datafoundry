@@ -318,11 +318,11 @@ function ExpandedArtifactBody({
 
   return (
     <SelectableText onReference={onReferenceSelection}>
-      <div className="grid gap-4">
+      <div className="grid min-w-0 gap-4">
         {detail.sections.map((section) => (
-          <div key={section.heading}>
+          <div key={section.heading} className="min-w-0">
             <div className={sectionLabelClass}>{section.heading}</div>
-            <div className="mt-1 text-xs leading-5 text-muted">
+            <div className="mt-1 min-w-0 text-xs leading-5 text-muted">
               <ArtifactMarkdownPreview content={section.body} bare />
             </div>
           </div>

@@ -168,7 +168,7 @@ try {
     throw new Error("Text assistant rows from reasoning runs must remain in model history");
   }
 
-  // Tool-only parents (write_file / publish_artifact style) must persist by message_id.
+  // Tool-only parents (write_file / edit_file style) must persist by message_id.
   const toolParentSessionId = "conversation-memory-tool-parent-session";
   const toolParentRunId = "conversation-memory-run-tool-parent";
   store.sessions.create({
@@ -209,9 +209,9 @@ try {
   });
   toolParentObserver.observe({
     type: EventType.TOOL_CALL_START,
-    toolCallId: "publish-artifact-call",
-    toolCallName: "publish_artifact",
-    parentMessageId: "msg-publish-parent"
+    toolCallId: "edit-file-call",
+    toolCallName: "edit_file",
+    parentMessageId: "msg-edit-parent"
   });
   toolParentObserver.observe({
     type: EventType.TEXT_MESSAGE_CHUNK,
@@ -222,11 +222,11 @@ try {
   const toolParentRecords = await toolParentObserver.flushCompleted();
   const uniqueToolParentMessageIds = [...new Set(toolParentRecords.map((record) => record.message_id))];
   const writeParent = toolParentRecords.find((record) => record.message_id === "msg-write-parent");
-  const publishParent = toolParentRecords.find((record) => record.message_id === "msg-publish-parent");
+  const editParent = toolParentRecords.find((record) => record.message_id === "msg-edit-parent");
   const finalAnswer = toolParentRecords.find((record) => record.message_id === "msg-final-answer");
-  if (!writeParent || !publishParent) {
+  if (!writeParent || !editParent) {
     throw new Error(
-      `Expected empty tool-parent rows for write/publish, got message_ids=${uniqueToolParentMessageIds.join(",")}`
+      `Expected empty tool-parent rows for write/edit, got message_ids=${uniqueToolParentMessageIds.join(",")}`
     );
   }
   if (uniqueToolParentMessageIds.length !== toolParentRecords.length) {
@@ -240,13 +240,13 @@ try {
     throw new Error("Expected final text assistant row after tool-parent persist");
   }
   const writeParentJson = JSON.parse(writeParent.content_json);
-  const publishParentJson = JSON.parse(publishParent.content_json);
-  if (writeParentJson.kind !== "tool_parent" || publishParentJson.kind !== "tool_parent") {
+  const editParentJson = JSON.parse(editParent.content_json);
+  if (writeParentJson.kind !== "tool_parent" || editParentJson.kind !== "tool_parent") {
     throw new Error(
-      `Expected kind=tool_parent on empty parents, got write=${writeParent.content_json} publish=${publishParent.content_json}`
+      `Expected kind=tool_parent on empty parents, got write=${writeParent.content_json} edit=${editParent.content_json}`
     );
   }
-  if (writeParent.content_text !== "" || publishParent.content_text !== "") {
+  if (writeParent.content_text !== "" || editParent.content_text !== "") {
     throw new Error("Empty tool-parent content_text must be empty string");
   }
   const toolParentHistory = buildConversationMemoryMessages({
@@ -266,7 +266,7 @@ try {
       context: []
     }
   });
-  if (toolParentHistory.some((message) => message.id.includes("msg-write-parent") || message.id.includes("msg-publish-parent"))) {
+  if (toolParentHistory.some((message) => message.id.includes("msg-write-parent") || message.id.includes("msg-edit-parent"))) {
     throw new Error("Empty tool-parent rows must not appear in model history by message id");
   }
   if (
@@ -287,7 +287,7 @@ try {
       .map((record) => record.message_id)
       .filter(Boolean)
   );
-  for (const parentId of ["msg-write-parent", "msg-publish-parent"]) {
+  for (const parentId of ["msg-write-parent", "msg-edit-parent"]) {
     if (!persistedMessageIds.has(parentId)) {
       throw new Error(`Expected persisted message_id=${parentId} so restore has zero orphans`);
     }

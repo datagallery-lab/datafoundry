@@ -13,7 +13,7 @@ import {
   type AgentMemoryMode,
   type TaskStateRuntime
 } from "@datafoundry/agent-runtime";
-import { LocalArtifactService } from "@datafoundry/artifacts";
+import { LocalArtifactService, SessionOutputService } from "@datafoundry/artifacts";
 import { type MeResponse, createEnvConfig, createErrorResult, createSuccessResult } from "@datafoundry/contracts";
 import { LocalDataGateway, createDemoDuckDbConfig } from "@datafoundry/data-gateway";
 import { LocalFileAssetService } from "@datafoundry/files";
@@ -179,6 +179,7 @@ export const createServer = async (options: CreateServerOptions = {}): Promise<S
     workspaceId: DEFAULT_WORKSPACE_ID
   }, fileAssetService);
   const artifactService = new LocalArtifactService(metadataStore, fileAssetService);
+  const sessionOutputService = new SessionOutputService(metadataStore, fileAssetService);
   const knowledgeService = new LocalKnowledgeService(metadataStore, {
     embedding: {
       provider: envConfig.embedding.provider,
@@ -269,6 +270,7 @@ export const createServer = async (options: CreateServerOptions = {}): Promise<S
           metadataStore,
           dataGateway,
           artifactService,
+          sessionOutputService,
           fileAssetService,
           knowledgeService,
           taskStateRuntime,
@@ -319,6 +321,7 @@ export const createServer = async (options: CreateServerOptions = {}): Promise<S
 
 type HandleCopilotKitRequestInput = {
   artifactService: LocalArtifactService;
+  sessionOutputService: SessionOutputService;
   conversationMemoryMode: AgentMemoryMode;
   request: IncomingMessage;
   response: ServerResponse;
@@ -339,6 +342,7 @@ const handleCopilotKitRequest = async ({
   metadataStore,
   dataGateway,
   artifactService,
+  sessionOutputService,
   fileAssetService,
   conversationMemoryMode,
   knowledgeService,
@@ -353,6 +357,7 @@ const handleCopilotKitRequest = async ({
       dataFoundry: new DataFoundryAgUiAgent({
         dataGateway,
         artifactService,
+        sessionOutputService,
         fileAssetService,
         conversationMemoryMode,
         knowledgeService,
@@ -386,6 +391,7 @@ const handleCopilotKitRequest = async ({
 
 type DataFoundryAgUiAgentInput = {
   artifactService: LocalArtifactService;
+  sessionOutputService: SessionOutputService;
   conversationMemoryMode: AgentMemoryMode;
   dataGateway: LocalDataGateway;
   defaultDatasourceId: string;
@@ -585,6 +591,7 @@ class DataFoundryAgUiAgent extends AbstractAgent {
           contextPackageRecorder,
           dataGateway: this.input.dataGateway,
           artifactService: this.input.artifactService,
+          sessionOutputService: this.input.sessionOutputService,
           effectiveRunConfig,
           ...(evidenceContext.items.length ? { evidenceContextItems: evidenceContext.items } : {}),
           fileAssetService: this.input.fileAssetService,

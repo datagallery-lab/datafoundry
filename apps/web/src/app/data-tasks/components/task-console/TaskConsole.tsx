@@ -20,6 +20,7 @@ import type {
   TimelineEvent,
 } from "../../data-task-state";
 import type { JobDto } from "../../../../lib/config-api";
+import { configApi } from "../../../../lib/config-api";
 import { dataStepKindForTool, dataStepLabel, hasCapability, toolDisplayTitle } from "../../data-task-state";
 import { artifactExportClient } from "../../artifact-export-client";
 import {
@@ -836,6 +837,17 @@ function TraceDagEntry({ onOpenTrace }: { onOpenTrace: () => void }) {
 }
 
 // Section 4: Outputs — static peek per card; open the peer page to read/reference.
+type OutputsSortOrder = "oldest" | "newest";
+
+function compareOutputsByTime(left: DataArtifact, right: DataArtifact): number {
+  const leftMs = left.recordedAtMs ?? Number.POSITIVE_INFINITY;
+  const rightMs = right.recordedAtMs ?? Number.POSITIVE_INFINITY;
+  if (leftMs !== rightMs) {
+    return leftMs - rightMs;
+  }
+  return left.id.localeCompare(right.id);
+}
+
 function DeliverablesZone({
   artifacts,
   events,
@@ -856,9 +868,40 @@ function DeliverablesZone({
   promotedArtifactIds?: ReadonlySet<string>;
 }) {
   const exportReady = hasCapability("artifact.export");
+  const [sortOrder, setSortOrder] = useState<OutputsSortOrder>("oldest");
+  const sortedArtifacts = useMemo(() => {
+    const next = [...artifacts].sort(compareOutputsByTime);
+    return sortOrder === "oldest" ? next : next.reverse();
+  }, [artifacts, sortOrder]);
   const badge = artifacts.length > 0 ? (
-    <span className="tabular rounded-full bg-primary-light/15 px-1.5 text-[10px] font-bold leading-4 text-primary">
-      {artifacts.length}
+    <span className="flex items-center gap-2">
+      <span className="inline-flex overflow-hidden rounded-md border border-border bg-surface text-[10px] font-semibold leading-4 text-muted">
+        <button
+          type="button"
+          aria-pressed={sortOrder === "oldest"}
+          onClick={() => setSortOrder("oldest")}
+          className={[
+            "px-1.5 py-0.5 transition-colors",
+            sortOrder === "oldest" ? "bg-primary-light/15 text-primary" : "hover:text-foreground",
+          ].join(" ")}
+        >
+          Oldest
+        </button>
+        <button
+          type="button"
+          aria-pressed={sortOrder === "newest"}
+          onClick={() => setSortOrder("newest")}
+          className={[
+            "border-l border-border px-1.5 py-0.5 transition-colors",
+            sortOrder === "newest" ? "bg-primary-light/15 text-primary" : "hover:text-foreground",
+          ].join(" ")}
+        >
+          Newest
+        </button>
+      </span>
+      <span className="tabular rounded-full bg-primary-light/15 px-1.5 text-[10px] font-bold leading-4 text-primary">
+        {artifacts.length}
+      </span>
     </span>
   ) : null;
 
@@ -872,7 +915,7 @@ function DeliverablesZone({
           />
         ) : (
           <div className="grid gap-3">
-            {artifacts.map((artifact) => {
+            {sortedArtifacts.map((artifact) => {
               const sourceEvent = artifact.createdByEventId
                 ? events.find((event) => event.id === artifact.createdByEventId) ?? null
                 : null;
@@ -927,10 +970,13 @@ function ArtifactCard({
   const { busy, error, setError, downloadWhole, downloadFormat, exportJob } =
     useArtifactExportActions(onArtifactExportJob);
   const [promoting, setPromoting] = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
   const promoteReady = hasCapability("artifact.promote");
   const canMention = artifact.detail?.type === "file" && Boolean(artifact.detail.path);
   const formatExport = canFormatExport(artifact);
   const downloadBusy = busy !== null;
+  const isSessionOutput = Boolean(artifact.logicalKey?.startsWith("session_file:"));
+  const hasHistory = isSessionOutput && Boolean(artifact.versionCount && artifact.versionCount > 1);
 
   const handlePromote = async () => {
     if (!onPromoteArtifact || promoted || promoting) return;
@@ -939,7 +985,7 @@ function ArtifactCard({
     try {
       await onPromoteArtifact(artifact);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to add to workspace");
+      setError(err instanceof Error ? err.message : "Failed to add to project");
     } finally {
       setPromoting(false);
     }
@@ -956,7 +1002,7 @@ function ArtifactCard({
   if (promoteReady && onPromoteArtifact) {
     overflowItems.push({
       key: "promote",
-      label: promoted ? "Added to workspace" : promoting ? "Adding…" : "Add to workspace",
+      label: promoted ? "Added to project" : promoting ? "Adding…" : "Add to project",
       disabled: promoted || promoting,
       onSelect: () => {
         void handlePromote();
@@ -1009,6 +1055,9 @@ function ArtifactCard({
           {error}
         </p>
       ) : null}
+      {showHistory ? (
+        <ArtifactVersionHistory artifactId={artifact.id} onClose={() => setShowHistory(false)} />
+      ) : null}
       <div className="flex flex-wrap items-center justify-end gap-2 rounded-b-xl border-t border-border bg-surface px-3 py-2">
         <button
           type="button"
@@ -1019,6 +1068,16 @@ function ArtifactCard({
         >
           Open
         </button>
+        {hasHistory && exportReady ? (
+          <button
+            type="button"
+            onClick={() => setShowHistory((v) => !v)}
+            className={`${btnSecondaryClass}`}
+            title="View version history"
+          >
+            {showHistory ? "Hide history" : `History (${artifact.versionCount})`}
+          </button>
+        ) : null}
         {exportReady ? (
           formatExport ? (
             <ActionMenu
@@ -1054,6 +1113,94 @@ function ArtifactCard({
           />
         ) : null}
       </div>
+    </div>
+  );
+}
+
+function ArtifactVersionHistory({
+  artifactId,
+  onClose,
+}: {
+  artifactId: string;
+  onClose: () => void;
+}) {
+  const [versions, setVersions] = useState<Array<{
+    id: string;
+    version: number;
+    fileId?: string;
+    downloadUrl?: string;
+    createdAt: string;
+  }> | null>(null);
+  const [downloadingId, setDownloadingId] = useState<string | null>(null);
+  const [fetchError, setFetchError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setVersions(null);
+    setFetchError(null);
+    void configApi.listArtifactVersions(artifactId)
+      .then((res) => setVersions(res.versions))
+      .catch(() => setFetchError("Failed to load version history"));
+  }, [artifactId]);
+
+  const handleDownload = async (versionId: string) => {
+    if (downloadingId) return;
+    setDownloadingId(versionId);
+    try {
+      const { blob, filename } = await configApi.downloadArtifactVersion(artifactId, versionId);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch {
+      // silent
+    } finally {
+      setDownloadingId(null);
+    }
+  };
+
+  return (
+    <div className="border-t border-border bg-surface-subtle px-3 py-2">
+      <div className="mb-1 flex items-center justify-between">
+        <span className="text-[11px] font-medium text-muted">Version history</span>
+        <button
+          type="button"
+          onClick={onClose}
+          className="text-[11px] text-muted-light hover:text-foreground"
+        >
+          Close
+        </button>
+      </div>
+      {fetchError ? (
+        <p className="text-[11px] text-step-error">{fetchError}</p>
+      ) : versions === null ? (
+        <p className="text-[11px] text-muted-light">Loading…</p>
+      ) : versions.length === 0 ? (
+        <p className="text-[11px] text-muted-light">No versions yet</p>
+      ) : (
+        <ul className="space-y-1">
+          {[...versions].reverse().map((v) => (
+            <li key={v.id} className="flex items-center justify-between gap-2">
+              <span className="text-[11px] text-muted">
+                v{v.version} · {new Date(v.createdAt).toLocaleString()}
+              </span>
+              {v.fileId ? (
+                <button
+                  type="button"
+                  disabled={downloadingId === v.id}
+                  onClick={() => void handleDownload(v.id)}
+                  className={`text-[11px] ${btnGhostClass} disabled:opacity-50`}
+                >
+                  {downloadingId === v.id ? "Downloading…" : "Download"}
+                </button>
+              ) : (
+                <span className="text-[11px] text-muted-light">No file</span>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   );
 }

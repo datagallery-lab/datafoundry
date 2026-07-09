@@ -18,7 +18,6 @@ allowed-tools:
   - read_file
   - write_file
   - list_files
-  - publish_artifact
 denied-tools: []
 user-invocable: true
 ---

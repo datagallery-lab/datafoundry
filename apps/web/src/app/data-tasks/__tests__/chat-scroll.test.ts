@@ -1,9 +1,17 @@
 import { describe, expect, it } from "vitest";
 import {
   findCopilotChatScrollContainer,
+  restoreCopilotChatScrollTop,
+  restoreCopilotChatScrollTopWithRetries,
   scrollCopilotChatToBottom,
   scrollCopilotChatToBottomWithRetries,
 } from "../chat-scroll";
+import {
+  consumeConversationScrollIntent,
+  isChatAutoScrollLockedNone,
+  peekConversationScrollIntent,
+  setConversationScrollIntent,
+} from "../conversation-branch-scroll";
 
 function createScrollFixture() {
   const content = {
@@ -129,5 +137,70 @@ describe("chat scroll helpers", () => {
     expect(calls).toEqual([10, 10]);
     expect(scroll.scrollTop).toBe(scroll.scrollHeight);
     cancel();
+  });
+
+  it("restores a preserved scrollTop after branch switching", () => {
+    const { root, scroll } = createScrollFixture();
+    Object.assign(scroll, {
+      scrollTop: 0,
+      clientHeight: 300,
+      scrollHeight: 900,
+    });
+
+    expect(restoreCopilotChatScrollTop(240, root)).toBe(true);
+    expect(scroll.scrollTop).toBe(240);
+  });
+
+  it("clamps preserved scrollTop to the new content height", () => {
+    const { root, scroll } = createScrollFixture();
+    Object.assign(scroll, {
+      scrollTop: 0,
+      clientHeight: 300,
+      scrollHeight: 400,
+    });
+
+    expect(restoreCopilotChatScrollTop(900, root)).toBe(true);
+    expect(scroll.scrollTop).toBe(100);
+  });
+
+  it("retries restoring scrollTop until attempts are exhausted", () => {
+    const { root, scroll } = createScrollFixture();
+    Object.assign(scroll, {
+      scrollTop: 0,
+      clientHeight: 300,
+      scrollHeight: 900,
+    });
+    const calls: number[] = [];
+
+    const cancel = restoreCopilotChatScrollTopWithRetries({
+      scrollTop: 180,
+      root,
+      attempts: 3,
+      intervalMs: 10,
+      schedule: (callback) => {
+        callback();
+        return 0;
+      },
+      delay: (callback, waitMs) => {
+        calls.push(waitMs);
+        callback();
+        return calls.length;
+      },
+    });
+
+    expect(calls).toEqual([10, 10]);
+    expect(scroll.scrollTop).toBe(180);
+    cancel();
+  });
+
+  it("tracks preserve scroll intent and locks autoScroll off StickToBottom", () => {
+    setConversationScrollIntent({ kind: "bottom" });
+    expect(peekConversationScrollIntent()).toEqual({ kind: "bottom" });
+    expect(isChatAutoScrollLockedNone()).toBe(false);
+    setConversationScrollIntent({ kind: "preserve", scrollTop: 180 });
+    expect(isChatAutoScrollLockedNone()).toBe(true);
+    expect(consumeConversationScrollIntent()).toEqual({ kind: "preserve", scrollTop: 180 });
+    expect(peekConversationScrollIntent()).toEqual({ kind: "bottom" });
+    expect(isChatAutoScrollLockedNone()).toBe(true);
   });
 });

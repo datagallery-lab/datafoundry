@@ -129,7 +129,7 @@ describe("buildTraceTimeline", () => {
       messageId: "run-1:activity:step:sql-1",
       content: {
         step_id: "sql-1",
-        title: "执行只读 SQL",
+        title: "Run read-only SQL",
         tool_name: "run_sql_readonly",
         status: "failed",
         sql: "SELECT 1",
@@ -142,6 +142,82 @@ describe("buildTraceTimeline", () => {
       summary: "Failed.",
       toolStatus: "failed",
     });
+  });
+
+  it("does not append orphan ACTIVITY STEP cards after a later run starts", () => {
+    let run = createInitialLiveRun();
+    run = reduceLiveRunEvent(run, { type: "RUN_STARTED", runId: "run-1" });
+    // ACTIVITY arrives before TOOL_CALL (production ordering) and must be absorbed.
+    run = reduceLiveRunEvent(run, {
+      type: "ACTIVITY_SNAPSHOT",
+      activityType: "STEP",
+      content: {
+        step_id: "schema-orphan",
+        title: "Inspect data source schema",
+        tool_name: "inspect_schema",
+        status: "completed",
+        content: {
+          tables: [{ name: "orders", columns: [{ name: "id", type: "TEXT" }] }],
+        },
+      },
+    });
+    run = reduceLiveRunEvent(run, {
+      type: "TOOL_CALL_START",
+      toolCallId: "call_inspect",
+      toolCallName: "inspect_schema",
+    });
+    run = reduceLiveRunEvent(run, {
+      type: "TOOL_CALL_RESULT",
+      toolCallId: "call_inspect",
+      toolCallName: "inspect_schema",
+      result: JSON.stringify({
+        tables: [{ name: "orders", columns: [{ name: "id", type: "TEXT" }] }],
+      }),
+    });
+    run = reduceLiveRunEvent(run, {
+      type: "ACTIVITY_SNAPSHOT",
+      activityType: "STEP",
+      content: {
+        step_id: "sql-1",
+        title: "Run read-only SQL",
+        tool_name: "run_sql_readonly",
+        status: "completed",
+        sql: "WITH monthly_sales AS (\n  SELECT 1\n)\nSELECT * FROM monthly_sales",
+      },
+    });
+    run = reduceLiveRunEvent(run, {
+      type: "TOOL_CALL_START",
+      toolCallId: "call_sql",
+      toolCallName: "run_sql_readonly",
+      args: { sql: "WITH monthly_sales AS (\n  SELECT 1\n)\nSELECT * FROM monthly_sales" },
+    });
+    run = reduceLiveRunEvent(run, {
+      type: "TOOL_CALL_RESULT",
+      toolCallId: "call_sql",
+      toolCallName: "run_sql_readonly",
+      result: JSON.stringify({ row_count: 1, elapsed_ms: 5 }),
+    });
+    run = reduceLiveRunEvent(run, { type: "RUN_FINISHED" });
+    run = reduceLiveRunEvent(run, { type: "RUN_STARTED", runId: "run-2" });
+    run = reduceLiveRunEvent(run, { type: "RUN_FINISHED" });
+
+    const entries = buildTraceTimeline(run);
+    const toolEntries = entries.filter((entry) => entry.kind === "tool");
+    expect(toolEntries).toHaveLength(2);
+    expect(toolEntries.map((entry) => entry.toolCallId).sort()).toEqual([
+      "call_inspect",
+      "call_sql",
+    ]);
+
+    const lastToolIndex = Math.max(
+      ...entries
+        .map((entry, index) => (entry.kind === "tool" ? index : -1))
+        .filter((index) => index >= 0),
+    );
+    const secondRunStart = entries.findIndex((entry) => entry.id === "run-started-current");
+    expect(secondRunStart).toBeGreaterThan(lastToolIndex);
+    expect(entries.some((entry) => entry.id === "event-schema-orphan")).toBe(false);
+    expect(entries.some((entry) => entry.id === "event-sql-1")).toBe(false);
   });
 
   it("shows run suspended instead of finished after ask_user suspension", () => {

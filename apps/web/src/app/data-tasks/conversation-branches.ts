@@ -17,6 +17,13 @@ const ACTIVE_RUN_STATUSES = new Set<ConversationCheckpointDto["status"]>([
   "suspended",
 ]);
 
+type BranchForkMeta = Pick<
+  ConversationBranchDto,
+  "forkCheckpointId" | "forkMessageEndPosition" | "forkRunId" | "sessionId"
+> & {
+  isOriginal?: boolean;
+};
+
 export type UserMessageBranchState = {
   branchable: boolean;
   currentIndex: number;
@@ -48,6 +55,7 @@ export function resolveUserMessageBranchState(input: {
   const options = branchOptionsForRun(
     input.conversation,
     checkpoint.runId,
+    userMessage,
     input.activeSessionId,
   );
   const matchedIndex = options.findIndex((option) => option.sessionId === input.activeSessionId);
@@ -99,28 +107,10 @@ function findCheckpointForMessage(
   });
 }
 
-function resolveForkRunIdForBranchOptions(
+function branchesForForkRun(
   conversation: SessionConversationDto,
-  runId: string,
-  activeSessionId?: string | null,
-): string {
-  const branches = conversation.branches ?? [];
-  if (branches.some((branch) => branch.forkRunId === runId && !branch.forkCheckpointId)) {
-    return runId;
-  }
-  if (!activeSessionId) {
-    return runId;
-  }
-  const activeBranch = branches.find((branch) => branch.sessionId === activeSessionId);
-  return activeBranch && !activeBranch.forkCheckpointId ? activeBranch.forkRunId : runId;
-}
-
-function branchOptionsForRun(
-  conversation: SessionConversationDto,
-  runId: string,
-  activeSessionId?: string | null,
+  forkRunId: string,
 ): ConversationBranchDto[] {
-  const forkRunId = resolveForkRunIdForBranchOptions(conversation, runId, activeSessionId);
   const branches = (conversation.branches ?? []).filter((branch) =>
     branch.forkRunId === forkRunId && !branch.forkCheckpointId
   );
@@ -132,4 +122,74 @@ function branchOptionsForRun(
     left.createdAt.localeCompare(right.createdAt) ||
     left.sessionId.localeCompare(right.sessionId)
   );
+}
+
+function isSameUserMessage(
+  left: ConversationMessageDto,
+  right: ConversationMessageDto,
+): boolean {
+  return left.id === right.id ||
+    (!!left.messageId && left.messageId === right.messageId);
+}
+
+function resolveActiveChildBranch(
+  conversation: SessionConversationDto,
+  activeSessionId: string,
+): BranchForkMeta | undefined {
+  const lineageBranch = conversation.branch;
+  if (
+    lineageBranch &&
+    lineageBranch.sessionId === activeSessionId &&
+    !lineageBranch.forkCheckpointId
+  ) {
+    return lineageBranch;
+  }
+  // Prefer the real child option; never the synthetic isOriginal parent entry.
+  return (conversation.branches ?? []).find((branch) =>
+    branch.sessionId === activeSessionId &&
+    !branch.isOriginal &&
+    !branch.forkCheckpointId
+  );
+}
+
+/**
+ * On a child branch session the rewritten user turn gets a new run id, so it no
+ * longer matches `forkRunId`. Only the first user message after the fork boundary
+ * should inherit that fork's sibling switcher — later turns must not.
+ *
+ * Conversation message `position` values are the API's visible 1..n order for the
+ * active lineage; `forkMessageEndPosition` is the last parent-prefix position in
+ * that same visible sequence when the parent prefix is present.
+ */
+function isActiveBranchForkPointMessage(
+  conversation: SessionConversationDto,
+  message: ConversationMessageDto,
+  activeBranch: BranchForkMeta,
+): boolean {
+  const forkPoint = conversation.messages
+    .filter((entry) =>
+      entry.role === "user" && entry.position > activeBranch.forkMessageEndPosition
+    )
+    .sort((left, right) => left.position - right.position)[0];
+  return !!forkPoint && isSameUserMessage(forkPoint, message);
+}
+
+function branchOptionsForRun(
+  conversation: SessionConversationDto,
+  runId: string,
+  message: ConversationMessageDto,
+  activeSessionId?: string | null,
+): ConversationBranchDto[] {
+  const direct = branchesForForkRun(conversation, runId);
+  if (direct.length > 0) {
+    return direct;
+  }
+  if (!activeSessionId) {
+    return [];
+  }
+  const activeBranch = resolveActiveChildBranch(conversation, activeSessionId);
+  if (!activeBranch || !isActiveBranchForkPointMessage(conversation, message, activeBranch)) {
+    return [];
+  }
+  return branchesForForkRun(conversation, activeBranch.forkRunId);
 }

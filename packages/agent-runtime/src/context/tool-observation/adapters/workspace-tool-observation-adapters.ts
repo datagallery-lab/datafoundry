@@ -94,15 +94,6 @@ export class ExecuteCommandToolObservationAdapter extends BaseToolObservationAda
   }
 }
 
-export class PublishArtifactToolObservationAdapter extends BaseToolObservationAdapter {
-  readonly toolName = "publish_artifact";
-  readonly resultType = "artifact-publish";
-
-  protected project(raw: unknown): unknown {
-    return pickFields(raw, ["id", "type", "name", "file_id", "download_url"]);
-  }
-}
-
 export class PromoteWorkspaceFileToolObservationAdapter extends BaseToolObservationAdapter {
   readonly toolName = "promote_workspace_file";
   readonly resultType = "workspace-file-promote";
