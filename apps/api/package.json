@@ -21,6 +21,7 @@
     "@datafoundry/knowledge": "0.1.0",
     "@datafoundry/metadata": "0.1.0",
     "@datafoundry/skills": "0.1.0",
+    "@mastra/core": "^1.46.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "argon2": "^0.44.0",
     "busboy": "^1.6.0",

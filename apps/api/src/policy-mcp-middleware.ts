@@ -16,10 +16,17 @@ import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { randomUUID } from "node:crypto";
 import { Observable } from "rxjs";
 
+export type PolicyMcpToolConfig = {
+  description?: string | undefined;
+  inputSchema?: unknown;
+  name: string;
+};
+
 export type PolicyMcpClientConfig = {
   serverId: string;
   timeoutMs?: number;
   toolAllowlist?: string[];
+  tools?: PolicyMcpToolConfig[];
 } & (
   | {
       headers?: Record<string, string>;
@@ -65,7 +72,9 @@ export class PolicyMcpMiddleware extends Middleware {
     super();
     this.mcpServers = mcpServers;
     const maxIterations = options.maxIterations ?? DEFAULT_MAX_ITERATIONS;
-    this.maxIterations = Number.isFinite(maxIterations) ? Math.max(1, Math.floor(maxIterations)) : DEFAULT_MAX_ITERATIONS;
+    this.maxIterations = Number.isFinite(maxIterations)
+      ? Math.max(1, Math.floor(maxIterations))
+      : DEFAULT_MAX_ITERATIONS;
   }
 
   run(input: RunAgentInput, next: AbstractAgent): Observable<BaseEvent> {
@@ -280,21 +289,7 @@ export class PolicyMcpMiddleware extends Middleware {
     } catch {
       console.warn(`[PolicyMcpMiddleware] Malformed JSON arguments for ${resolved.originalName}; using empty args.`);
     }
-    let client: Client | undefined;
-    try {
-      client = await this.connect(resolved.serverConfig);
-      const result = await withTimeout(
-        client.callTool({ name: resolved.originalName, arguments: args }),
-        resolved.serverConfig.timeoutMs ?? DEFAULT_MCP_TIMEOUT_MS,
-        `callTool:${resolved.serverConfig.serverId}:${resolved.originalName}`
-      );
-      return stringifyMcpResult(result);
-    } catch (error) {
-      console.error(`[PolicyMcpMiddleware] Tool execution failed for ${resolved.originalName}:`, error);
-      return `Error executing tool ${resolved.originalName}: ${String(error)}`;
-    } finally {
-      await closeClient(client);
-    }
+    return callPolicyMcpTool(resolved.serverConfig, resolved.originalName, args);
   }
 
   private async connect(serverConfig: PolicyMcpClientConfig): Promise<Client> {
@@ -321,6 +316,35 @@ const createTransport = (serverConfig: PolicyMcpClientConfig): Transport => {
     : new StreamableHTTPClientTransport(new URL(serverConfig.url), requestOptions)) as unknown as Transport;
 };
 
+export const callPolicyMcpTool = async (
+  serverConfig: PolicyMcpClientConfig,
+  toolName: string,
+  args: Record<string, unknown>
+): Promise<string> => {
+  let client: Client | undefined;
+  try {
+    client = await connectPolicyMcpClient(serverConfig);
+    const result = await withTimeout(
+      client.callTool({ name: toolName, arguments: args }),
+      serverConfig.timeoutMs ?? DEFAULT_MCP_TIMEOUT_MS,
+      `callTool:${serverConfig.serverId}:${toolName}`
+    );
+    return stringifyMcpResult(result);
+  } catch (error) {
+    console.error(`[PolicyMcpMiddleware] Tool execution failed for ${toolName}:`, error);
+    return `Error executing tool ${toolName}: ${String(error)}`;
+  } finally {
+    await closeClient(client);
+  }
+};
+
+export const connectPolicyMcpClient = async (serverConfig: PolicyMcpClientConfig): Promise<Client> => {
+  const client = new Client({ name: "open-data-foundry-mcp-policy", version: "0.1.0" });
+  const transport = createTransport(serverConfig);
+  await client.connect(transport);
+  return client;
+};
+
 const openToolCalls = (messages: Message[]): ToolCall[] => {
   const toolCalls: ToolCall[] = [];
   const completed = new Set<string>();
@@ -344,18 +368,13 @@ const matchesToolAllowlist = (serverConfig: PolicyMcpClientConfig, toolName: str
 };
 
 const resolveMcpToolName = (serverId: string, toolName: string, usedNames: Set<string>): string => {
-  const baseName = `mcp__${sanitizeMcpName(serverId)}__${sanitizeMcpName(toolName)}`;
-  let candidate = baseName.slice(0, MAX_TOOL_NAME_LENGTH);
-  if (!usedNames.has(candidate)) {
-    return candidate;
+  if (toolName.length === 0 || toolName.length > MAX_TOOL_NAME_LENGTH || !/^[a-zA-Z0-9_-]+$/u.test(toolName)) {
+    throw new Error(`MCP_TOOL_NAME_INVALID:${serverId}:${toolName}`);
   }
-  for (let suffix = 1; ; suffix += 1) {
-    const marker = `_${suffix}`;
-    candidate = `${baseName.slice(0, MAX_TOOL_NAME_LENGTH - marker.length)}${marker}`;
-    if (!usedNames.has(candidate)) {
-      return candidate;
-    }
+  if (usedNames.has(toolName)) {
+    throw new Error(`MCP_TOOL_NAME_CONFLICT:${serverId}:${toolName}`);
   }
+  return toolName;
 };
 
 const stringifyMcpResult = (result: unknown): string => {

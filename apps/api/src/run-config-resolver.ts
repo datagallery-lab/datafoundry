@@ -2,6 +2,7 @@ import type { RunAgentInput } from "@ag-ui/client";
 import {
   createModelProviderFromEnv,
   createModelProviderFromProfile,
+  STATIC_AGENT_TOOL_NAMES,
   type AgentModelContextProfile
 } from "@datafoundry/agent-runtime";
 import type { MetadataStore } from "@datafoundry/metadata";
@@ -11,7 +12,7 @@ import {
   type SkillSelectionResult
 } from "@datafoundry/skills";
 
-import type { PolicyMcpClientConfig } from "./policy-mcp-middleware.js";
+import type { PolicyMcpClientConfig, PolicyMcpToolConfig } from "./policy-mcp-middleware.js";
 
 import { resolveEffectiveRunConfig, type EffectiveRunConfig } from "./run-input.js";
 
@@ -36,6 +37,7 @@ export type ResolvedRunConfig = {
 export type McpRuntime = {
   servers: PolicyMcpClientConfig[];
   toolNames: string[];
+  toolNamesByServerId: Record<string, string[]>;
   skipped?: { id: string; reason: string }[];
 };
 
@@ -64,6 +66,7 @@ export const resolveRunConfig = (input: ResolveRunConfigInput): ResolvedRunConfi
     userInput: input.userInput,
     workspaceId: input.workspaceId
   });
+  const skillDefaultMcpServerIds = unique(skillSelection.selectedSkills.flatMap((skill) => skill.defaultMcpIds));
   applySkillResourceBindings({
     config: effectiveRunConfig,
     explicitRunConfig: explicitRunConfigKeys(input.runInput),
@@ -125,7 +128,10 @@ export const resolveRunConfig = (input: ResolveRunConfigInput): ResolvedRunConfi
       }))
     ];
   }
-  enforceSkillMcpPolicy(skillSelection.effectiveToolPolicy.allowedTools, mcpRuntime.toolNames);
+  enforceSkillMcpPolicy(
+    skillSelection.effectiveToolPolicy.allowedTools,
+    skillDefaultMcpServerIds.flatMap((id) => mcpRuntime.toolNamesByServerId[id] ?? [])
+  );
 
   return {
     effectiveRunConfig,
@@ -310,8 +316,20 @@ const validateEffectiveResources = (
   // R-020: non-skill resources with default_enabled=false are silently dropped (not thrown).
   // Each dropped ID is removed from its enabled set and recorded for run.config.resolved.
   const disabledByPolicy: { kind: "knowledge-base" | "mcp-server" | "model-profile"; id: string }[] = [];
-  const droppedKb = validateConfigIds(metadataStore, userId, workspaceId, "knowledge-base", config.enabledKnowledgeIds).dropped;
-  const droppedMcp = validateConfigIds(metadataStore, userId, workspaceId, "mcp-server", config.enabledMcpServerIds).dropped;
+  const droppedKb = validateConfigIds(
+    metadataStore,
+    userId,
+    workspaceId,
+    "knowledge-base",
+    config.enabledKnowledgeIds
+  ).dropped;
+  const droppedMcp = validateConfigIds(
+    metadataStore,
+    userId,
+    workspaceId,
+    "mcp-server",
+    config.enabledMcpServerIds
+  ).dropped;
   // Skills keep fail-closed semantics (status disabled/archived throws inside validateConfigIds).
   validateConfigIds(metadataStore, userId, workspaceId, "skill", [...config.enabledSkillIds, ...config.skillIds]);
   if (config.activeSkillId) {
@@ -426,7 +444,8 @@ const resolveReasoningModel = (
     user_id: userId,
     kind: "model-profile"
   });
-  return booleanRecordValue(profile.payload, "reasoningModel") ?? booleanRecordValue(profile.payload, "reasoning_model");
+  return booleanRecordValue(profile.payload, "reasoningModel")
+    ?? booleanRecordValue(profile.payload, "reasoning_model");
 };
 
 const resolveRunTimeoutMs = (
@@ -444,7 +463,8 @@ const resolveRunTimeoutMs = (
     user_id: userId,
     kind: "model-profile"
   });
-  const timeoutMs = numericRecordValue(profile.payload, "timeoutMs") ?? numericRecordValue(profile.payload, "timeout_ms");
+  const timeoutMs = numericRecordValue(profile.payload, "timeoutMs")
+    ?? numericRecordValue(profile.payload, "timeout_ms");
   return timeoutMs !== undefined ? Math.max(1000, Math.min(10 * 60 * 1000, Math.floor(timeoutMs))) : undefined;
 };
 
@@ -454,22 +474,23 @@ const resolveMcpRuntime = (
   userId: string,
   workspaceId: string
 ): McpRuntime => {
-  const usedNames = new Set<string>();
+  const usedNames = new Set<string>(STATIC_AGENT_TOOL_NAMES);
   const toolNames: string[] = [];
+  const toolNamesByServerId: Record<string, string[]> = {};
   const servers: PolicyMcpClientConfig[] = [];
   const skipped: { id: string; reason: string }[] = [];
   for (const id of serverIds) {
     try {
-      servers.push(
-        buildMcpServerConfig({
-          id,
-          metadataStore,
-          usedNames,
-          toolNames,
-          userId,
-          workspaceId
-        })
-      );
+      const startIndex = toolNames.length;
+      servers.push(buildMcpServerConfig({
+        id,
+        metadataStore,
+        usedNames,
+        toolNames,
+        userId,
+        workspaceId
+      }));
+      toolNamesByServerId[id] = toolNames.slice(startIndex);
     } catch (error) {
       skipped.push({
         id,
@@ -480,6 +501,7 @@ const resolveMcpRuntime = (
   return {
     servers,
     toolNames,
+    toolNamesByServerId,
     ...(skipped.length > 0 ? { skipped } : {})
   };
 };
@@ -513,6 +535,7 @@ const buildMcpServerConfig = (input: {
   }
   const toolAllowlist = stringArrayRecordValue(resource.payload, "toolAllowlist")
     ?? csvRecordValue(resource.payload, "toolAllowlist");
+  const tools: PolicyMcpToolConfig[] = [];
   manifest.forEach((tool) => {
     if (!isRecord(tool) || typeof tool.name !== "string") {
       throw new Error(`MCP_TOOL_MANIFEST_INVALID:${id}`);
@@ -520,24 +543,29 @@ const buildMcpServerConfig = (input: {
     if (!matchesMcpToolAllowlist(id, tool.name, toolAllowlist)) {
       return;
     }
-    const baseName = `mcp__${sanitizeMcpName(id)}__${sanitizeMcpName(tool.name)}`;
-    let resolved = baseName.slice(0, 64);
-    let suffix = 1;
-    while (usedNames.has(resolved)) {
-      const marker = `_${suffix}`;
-      resolved = `${baseName.slice(0, 64 - marker.length)}${marker}`;
-      suffix += 1;
+    if (!isValidAgentToolName(tool.name)) {
+      throw new Error(`MCP_TOOL_NAME_INVALID:${id}:${tool.name}`);
     }
-    usedNames.add(resolved);
-    toolNames.push(resolved);
+    if (usedNames.has(tool.name)) {
+      throw new Error(`MCP_TOOL_NAME_CONFLICT:${id}:${tool.name}`);
+    }
+    usedNames.add(tool.name);
+    toolNames.push(tool.name);
+    tools.push({
+      name: tool.name,
+      ...(typeof tool.description === "string" ? { description: tool.description } : {}),
+      ...(tool.inputSchema !== undefined ? { inputSchema: tool.inputSchema } : {})
+    });
   });
   const secret = resource.secret_ref
     ? metadataStore.secrets.get({ ref: resource.secret_ref, workspace_id: workspaceId, user_id: userId })
     : {};
   const headers = resolveMcpHeaders(resource.payload, secret);
-  const timeoutMs = numericRecordValue(resource.payload, "timeoutMs") ?? numericRecordValue(resource.payload, "timeout_ms");
+  const timeoutMs = numericRecordValue(resource.payload, "timeoutMs")
+    ?? numericRecordValue(resource.payload, "timeout_ms");
   const common = {
     serverId: id,
+    tools,
     ...(toolAllowlist && toolAllowlist.length > 0 ? { toolAllowlist } : {}),
     ...(timeoutMs !== undefined ? { timeoutMs: Math.max(1000, Math.min(10 * 60 * 1000, Math.floor(timeoutMs))) } : {})
   };
@@ -555,11 +583,9 @@ const buildMcpServerConfig = (input: {
     };
   }
   return {
+    ...common,
     type: transport === "streamable-http" ? "http" : "sse",
     url: urlOrCommand,
-    serverId: id,
-    ...(toolAllowlist && toolAllowlist.length > 0 ? { toolAllowlist } : {}),
-    ...(timeoutMs !== undefined ? { timeoutMs: Math.max(1000, Math.min(10 * 60 * 1000, Math.floor(timeoutMs))) } : {}),
     ...(Object.keys(headers).length > 0 ? { headers } : {})
   };
 };
@@ -594,6 +620,9 @@ const enforceSkillMcpPolicy = (
 };
 
 const sanitizeMcpName = (value: string): string => value.replace(/[^a-zA-Z0-9_-]/gu, "_");
+
+const isValidAgentToolName = (value: string): boolean =>
+  value.length > 0 && value.length <= 64 && /^[a-zA-Z0-9_-]+$/u.test(value);
 
 const matchesMcpToolAllowlist = (
   serverId: string,

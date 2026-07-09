@@ -818,7 +818,11 @@ const saveDatasourceInTransaction = (
       ...(secretRef ? { secret_ref: secretRef } : {})
     });
   } else if (body.clearCredentials === true && secretRef) {
-    context.metadataStore.secrets.delete({ ref: secretRef, workspace_id: context.workspaceId, user_id: context.userId });
+    context.metadataStore.secrets.delete({
+      ref: secretRef,
+      workspace_id: context.workspaceId,
+      user_id: context.userId
+    });
     secretRef = undefined;
   }
   const policy = recordValue(body.queryPolicy) ?? recordValue(inputConfig.queryPolicy);
@@ -1349,7 +1353,11 @@ const handleJobRequest = (
     })));
   }
   if (request.method === "POST" && segments[1] === "cancel") {
-    const current = context.metadataStore.configJobs.get({ id, workspace_id: context.workspaceId, user_id: context.userId });
+    const current = context.metadataStore.configJobs.get({
+      id,
+      workspace_id: context.workspaceId,
+      user_id: context.userId
+    });
     if (current.status !== "queued" && current.status !== "running") {
       return ok(artifactExportJobDto(current));
     }
@@ -1411,8 +1419,12 @@ const handleQueryHistoryRequest = async (
       user_id: context.userId,
       workspace_id: context.workspaceId,
       limit,
-      ...(requestUrl.searchParams.get("sessionId") ? { session_id: requestUrl.searchParams.get("sessionId") ?? "" } : {}),
-      ...(requestUrl.searchParams.get("session_id") ? { session_id: requestUrl.searchParams.get("session_id") ?? "" } : {}),
+      ...(requestUrl.searchParams.get("sessionId")
+        ? { session_id: requestUrl.searchParams.get("sessionId") ?? "" }
+        : {}),
+      ...(requestUrl.searchParams.get("session_id")
+        ? { session_id: requestUrl.searchParams.get("session_id") ?? "" }
+        : {}),
       ...(requestUrl.searchParams.get("datasourceId")
         ? { datasource_id: requestUrl.searchParams.get("datasourceId") ?? "" }
         : {}),
@@ -1901,7 +1913,9 @@ const sessionListDto = (session: SessionRecord): Record<string, unknown> => ({
   lastMessageAt: session.last_message_at ?? session.updated_at
 });
 
-const sessionBranchCreatedDto = (input: { branch: SessionBranchRecord; session: SessionRecord }): Record<string, unknown> => ({
+const sessionBranchCreatedDto = (
+  input: { branch: SessionBranchRecord; session: SessionRecord }
+): Record<string, unknown> => ({
   ...sessionBranchDto(input.branch, input.session),
   session: sessionListDto(input.session)
 });
@@ -2900,9 +2914,15 @@ const numberFromEnv = (name: string, fallback: number): number => {
 
 const mimeTypeForPath = (path: string): string => {
   const extension = path.toLowerCase().split(".").pop();
-  return ({ csv: "text/csv; charset=utf-8", json: "application/json; charset=utf-8", md: "text/markdown; charset=utf-8",
-    png: "image/png", svg: "image/svg+xml", txt: "text/plain; charset=utf-8" } as Record<string, string>)[extension ?? ""]
-    ?? "application/octet-stream";
+  const mimeTypes: Record<string, string> = {
+    csv: "text/csv; charset=utf-8",
+    json: "application/json; charset=utf-8",
+    md: "text/markdown; charset=utf-8",
+    png: "image/png",
+    svg: "image/svg+xml",
+    txt: "text/plain; charset=utf-8"
+  };
+  return mimeTypes[extension ?? ""] ?? "application/octet-stream";
 };
 
 const handleWorkspaceConfigPatch = async (
@@ -3103,7 +3123,10 @@ const skillUploadBody = async (
   const upload = await readMultipartUpload(request);
   const parsed = await parseSkillPackage(upload.file);
   const knownTools = new Set<string>(STATIC_AGENT_TOOL_NAMES);
-  const unknownTools = parsed.allowedTools.filter((tool) => !knownTools.has(tool) && !tool.startsWith("mcp__"));
+  for (const toolName of skillUploadMcpToolNames(upload.fields, context)) {
+    knownTools.add(toolName);
+  }
+  const unknownTools = parsed.allowedTools.filter((tool) => !knownTools.has(tool) && !isLegacyMcpToolName(tool));
   if (unknownTools.length > 0) {
     throw new Error(`SKILL_ALLOWED_TOOL_UNKNOWN:${unknownTools.join(",")}`);
   }
@@ -3156,6 +3179,38 @@ const skillUploadBody = async (
     status: "valid"
   };
 };
+
+const skillUploadMcpToolNames = (
+  fields: Record<string, string>,
+  context: Required<ConfigApiContext>
+): string[] => {
+  const serverIds = csvStringValue(fields.defaultMcpIds ?? fields.default_mcp_ids);
+  const names: string[] = [];
+  for (const serverId of serverIds) {
+    const resource = context.metadataStore.configResources.get({
+      id: serverId,
+      workspace_id: context.workspaceId,
+      user_id: context.userId,
+      kind: "mcp-server"
+    });
+    const manifest = resource.payload.toolManifest;
+    const allowlist = mcpToolAllowlistValue(resource.payload.toolAllowlist);
+    if (!Array.isArray(manifest)) {
+      continue;
+    }
+    for (const tool of manifest) {
+      if (!isRecord(tool) || typeof tool.name !== "string") {
+        continue;
+      }
+      if (matchesMcpToolAllowlist(resource.id, tool.name, allowlist)) {
+        names.push(tool.name);
+      }
+    }
+  }
+  return names;
+};
+
+const isLegacyMcpToolName = (toolName: string): boolean => toolName.startsWith("mcp__");
 
 const resolveConfigSkillCacheDir = (context: Required<ConfigApiContext>): string => {
   const workspaceRoot = process.env.WORKSPACE_ROOT ?? join(process.env.STORAGE_ROOT_DIR ?? "storage", "workspaces");
@@ -3266,13 +3321,17 @@ const messageOf = (value: unknown): string => value instanceof Error ? value.mes
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null;
 const recordValue = (value: unknown): Record<string, unknown> | undefined => isRecord(value) ? value : undefined;
 const arrayValue = (value: unknown): unknown[] | undefined => Array.isArray(value) ? value : undefined;
-const stringValue = (value: unknown): string | undefined => typeof value === "string" && value.trim() ? value.trim() : undefined;
-const numberValue = (value: unknown): number | undefined => typeof value === "number" && Number.isFinite(value) ? value : undefined;
+const stringValue = (value: unknown): string | undefined =>
+  typeof value === "string" && value.trim() ? value.trim() : undefined;
+const numberValue = (value: unknown): number | undefined =>
+  typeof value === "number" && Number.isFinite(value) ? value : undefined;
 const booleanValue = (value: unknown, fallback: boolean): boolean => typeof value === "boolean" ? value : fallback;
 const clampInteger = (value: number, min: number, max: number, fallback: number): number =>
   Number.isInteger(value) ? Math.min(max, Math.max(min, value)) : fallback;
 const stringArrayValue = (value: unknown): string[] =>
-  Array.isArray(value) ? value.filter((item): item is string => typeof item === "string" && item.trim().length > 0) : [];
+  Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+    : [];
 const evidenceRefsFromUnknown = (value: unknown): EvidenceRef[] => {
   if (!Array.isArray(value)) {
     return [];

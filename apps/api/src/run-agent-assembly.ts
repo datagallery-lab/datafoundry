@@ -20,7 +20,7 @@ import type { LongTermMemoryRecord } from "@datafoundry/metadata";
 import type { SkillRecord, SkillSelectionResult } from "@datafoundry/skills";
 
 import type { InteractionResume } from "./interaction-runtime-adapter.js";
-import { PolicyMcpMiddleware } from "./policy-mcp-middleware.js";
+import { createPolicyMcpTools } from "./policy-mcp-tools.js";
 import type { McpRuntime, ResolvedRunConfig } from "./run-config-resolver.js";
 import type { EffectiveRunConfig } from "./run-input.js";
 
@@ -126,6 +126,7 @@ export const createRunAgentContext = (input: CreateRunAgentContextInput): AgentR
 export const createRunAgentAssembly = async (
   input: CreateRunAgentAssemblyInput
 ): Promise<RunAgentAssembly> => {
+  const mcpTools = createPolicyMcpTools(input.mcpRuntime.servers);
   const {
     agent,
     commandExecutionEnabled,
@@ -144,6 +145,7 @@ export const createRunAgentAssembly = async (
     ...(input.initialContextPackage ? { initialContextPackage: input.initialContextPackage } : {}),
     knowledgeService: input.knowledgeService,
     ...(input.mcpRuntime.toolNames.length > 0 ? { mcpToolNames: input.mcpRuntime.toolNames } : {}),
+    ...(Object.keys(mcpTools).length > 0 ? { mcpTools } : {}),
     emitter: input.emitter,
     messages: input.messages,
     ...(input.modelContextProfile ? { modelContextProfile: input.modelContextProfile } : {}),
@@ -165,9 +167,6 @@ export const createRunAgentAssembly = async (
     agent,
     resourceId: input.userId
   });
-  if (input.mcpRuntime.servers.length > 0) {
-    mastraAgent.use(new PolicyMcpMiddleware(input.mcpRuntime.servers, { maxIterations: 8 }));
-  }
 
   return {
     destroyWorkspace,
