@@ -58,7 +58,7 @@ import { RunConfigurationPanel } from "./RunConfigurationPanel";
 import { TraceList } from "./TraceList";
 import { ArtifactMarkdownPreview } from "./ArtifactMarkdownPreview";
 import { ActionMenu, type ActionMenuItem } from "./ActionMenu";
-import { IconDots } from "./console-icons";
+import { IconDots, IconOpen } from "./console-icons";
 import { canFormatExport, useArtifactExportActions } from "../../artifact-actions";
 import {
   consoleCodeBlockBaseClass,
@@ -801,19 +801,9 @@ function EvidenceZone({
 }) {
   return (
     <div className="grid gap-4">
+      <TraceDagEntry onOpenTrace={onOpenTrace} />
       <RunConfigurationPanel liveRun={liveRun} />
-      <ConsoleSection
-        title="Data trail"
-        badge={
-          <button
-            type="button"
-            onClick={onOpenTrace}
-            className={btnSecondaryClass}
-          >
-            Open full screen
-          </button>
-        }
-      >
+      <ConsoleSection title="Data trail">
         <TraceList
           artifacts={artifacts}
           liveRun={liveRun}
@@ -822,6 +812,26 @@ function EvidenceZone({
         />
       </ConsoleSection>
     </div>
+  );
+}
+
+function TraceDagEntry({ onOpenTrace }: { onOpenTrace: () => void }) {
+  return (
+    <section className="rounded-lg border border-border bg-surface-subtle p-3">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="min-w-0">
+          <h3 className={panelTitleClass}>Trace DAG</h3>
+        </div>
+        <button
+          type="button"
+          onClick={onOpenTrace}
+          className={`inline-flex items-center gap-2 ${btnPrimaryClass}`}
+        >
+          <IconOpen className="h-4 w-4" />
+          Open Trace DAG
+        </button>
+      </div>
+    </section>
   );
 }
 

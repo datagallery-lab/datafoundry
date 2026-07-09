@@ -19,7 +19,10 @@ import type { RuntimeContextRunScope } from "../../source/runtime-context-source
 import type { ToolObservationDispatcher } from "../../tool-observation/tool-observation-dispatcher.js";
 import type { TaskStateRuntime } from "../../../memory/task-state-runtime.js";
 import type { ContextProtocolEventSink } from "../context-protocol-event-sink.js";
-import { MastraContextBudgetProcessor } from "./mastra-context-budget-processor.js";
+import {
+  MastraContextBudgetProcessor,
+  type ContextPackageRecorder
+} from "./mastra-context-budget-processor.js";
 import { MastraContextProtocolAdapter } from "./mastra-context-protocol-adapter.js";
 import { MastraContextRuntimeSourceProcessor } from "./mastra-context-runtime-source-processor.js";
 import { MastraCustomDataPartFilterProcessor } from "./mastra-custom-data-part-filter-processor.js";
@@ -39,6 +42,7 @@ export type MastraContextCompilationOptions = {
 export type CreateMastraContextProcessorBoundaryInput = {
   additionalRuntimeSources?: CreateDefaultRuntimeContextSourceRegistryInput["additionalSources"];
   contextCompilation?: MastraContextCompilationOptions;
+  contextPackageRecorder?: ContextPackageRecorder;
   dispatcher: ToolObservationDispatcher;
   eventSink: ContextProtocolEventSink;
   longTermMemory?: CreateDefaultRuntimeContextSourceRegistryInput["longTermMemory"];
@@ -93,6 +97,7 @@ export const createMastraContextProcessorBoundary = (
       })
     : undefined;
   const contextBudgetProcessor = new MastraContextBudgetProcessor({
+    ...(input.contextPackageRecorder ? { contextPackageRecorder: input.contextPackageRecorder } : {}),
     eventSink: input.eventSink,
     materializer: new ContextPromptMaterializer({
       ...(input.contextCompilation?.sourceMaterializer

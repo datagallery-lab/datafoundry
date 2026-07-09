@@ -844,6 +844,8 @@ function DataTaskWorkspace({
     setDraftPromptRequest(null);
   }, []);
   const [pendingBranchRun, setPendingBranchRun] = useState<PendingBranchRun | null>(null);
+  const [pendingCheckpointResume, setPendingCheckpointResume] =
+    useState<PendingCheckpointResume | null>(null);
   const stopActiveChatRunRef = useRef<(() => void) | undefined>(undefined);
   const [chatColumnWidth, setChatColumnWidth] = useState(1280);
   const [layoutHydrated, setLayoutHydrated] = useState(false);
@@ -1377,6 +1379,22 @@ function DataTaskWorkspace({
     switchConversationBranch(branchSession.id);
   }, [activeThreadId, switchConversationBranch]);
 
+  const createCheckpointBranch = useCallback(async (checkpointId: string) => {
+    if (!activeThreadId) return;
+    const created = await configApi.createSessionBranch(activeThreadId, { checkpointId });
+    const branchSession = serverSessionDtoToChatSession(created.session);
+    setSessions((current) => {
+      const withoutDuplicate = current.filter((session) => session.id !== branchSession.id);
+      return sortChatSessions([branchSession, ...withoutDuplicate]);
+    });
+    setPendingCheckpointResume({ sessionId: branchSession.threadId, checkpointId });
+    switchConversationBranch(branchSession.id);
+    setDraftPromptRequest((current) => ({
+      id: (current?.id ?? 0) + 1,
+      text: "",
+    }));
+  }, [activeThreadId, switchConversationBranch]);
+
   const deleteSession = useCallback(
     (sessionId: string) => {
       setSessions((current) => {
@@ -1440,6 +1458,13 @@ function DataTaskWorkspace({
     );
   }, [activeSessionId, rightPanelDismissedSessions, openTaskConsole]);
 
+  const handleUserMessageSubmitted = useCallback((text: string) => {
+    applyFirstUserMessageTitle(text);
+    setPendingCheckpointResume((current) =>
+      current?.sessionId === activeThreadId ? null : current,
+    );
+  }, [activeThreadId, applyFirstUserMessageTitle]);
+
   const agentContext = useMemo<JsonSerializable>(
     () =>
       JSON.parse(
@@ -1489,9 +1514,14 @@ function DataTaskWorkspace({
     ],
   );
 
+  const activeCheckpointResumeId =
+    pendingCheckpointResume && pendingCheckpointResume.sessionId === activeThreadId
+      ? pendingCheckpointResume.checkpointId
+      : undefined;
+
   const runForwardedProps = useMemo(
-    () => buildRunForwardedProps(activeDatasourceId, runConfigPayload),
-    [activeDatasourceId, runConfigPayload],
+    () => buildRunForwardedProps(activeDatasourceId, runConfigPayload, activeCheckpointResumeId),
+    [activeCheckpointResumeId, activeDatasourceId, runConfigPayload],
   );
 
   const runConfigInputsRef = useRef({
@@ -1504,6 +1534,8 @@ function DataTaskWorkspace({
     activeDatasourceId,
     defaultDatasourceId,
     runDefaultsActiveDatasourceId: runDefaults?.activeDatasourceId,
+    activeThreadId,
+    pendingCheckpointResume,
   });
   runConfigInputsRef.current = {
     workspaceConfig,
@@ -1515,6 +1547,8 @@ function DataTaskWorkspace({
     activeDatasourceId,
     defaultDatasourceId,
     runDefaultsActiveDatasourceId: runDefaults?.activeDatasourceId,
+    activeThreadId,
+    pendingCheckpointResume,
   };
 
   const getRunForwardedProps = useCallback(() => {
@@ -1528,7 +1562,11 @@ function DataTaskWorkspace({
       perRunFiles: inputs.perRunFiles,
       evidenceRefs: inputs.selectedEvidenceRefs,
     });
-    return buildRunForwardedProps(inputs.activeDatasourceId, runConfig);
+    const checkpointId =
+      inputs.pendingCheckpointResume?.sessionId === inputs.activeThreadId
+        ? inputs.pendingCheckpointResume.checkpointId
+        : undefined;
+    return buildRunForwardedProps(inputs.activeDatasourceId, runConfig, checkpointId);
   }, []);
 
   useLayoutEffect(() => {
@@ -1582,7 +1620,7 @@ function DataTaskWorkspace({
       agentId: activeAgentId,
       activeThreadId: activeThreadId ?? null,
       capabilitiesReady,
-      onUserMessageSubmitted: applyFirstUserMessageTitle,
+      onUserMessageSubmitted: handleUserMessageSubmitted,
       liveRunStatus: liveRun.runStatus,
       liveRunRunId: liveRun.runId ?? null,
       onCancelRun: cancelCurrentRun,
@@ -1599,7 +1637,7 @@ function DataTaskWorkspace({
       capabilitiesReady,
       draftPromptRequest,
       consumeDraftPromptRequest,
-      applyFirstUserMessageTitle,
+      handleUserMessageSubmitted,
       cancelCurrentRun,
       stopActiveRun,
       chatColumnWidth,
@@ -1880,7 +1918,7 @@ function DataTaskWorkspace({
         pendingBranchRun={pendingBranchRun}
         onPendingBranchRunDispatched={() => setPendingBranchRun(null)}
         getRunForwardedProps={getRunForwardedProps}
-        onUserMessageSubmitted={applyFirstUserMessageTitle}
+        onUserMessageSubmitted={handleUserMessageSubmitted}
       />
       </div>
       </ToolGroupSelectionContext.Provider>
@@ -1973,8 +2011,10 @@ function DataTaskWorkspace({
       <TraceOverlay
         artifacts={visibleArtifacts}
         liveRun={liveRun}
+        sessionId={activeThreadId ?? undefined}
         isOpen={isTraceOpen}
         onClose={() => setIsTraceOpen(false)}
+        onCreateCheckpointBranch={createCheckpointBranch}
         onSelectArtifact={(artifactId) => {
           setArtifactFocusId(artifactId);
           openTaskConsole();
@@ -2627,6 +2667,11 @@ type BranchRewriteRequest = {
 type PendingBranchRun = {
   sessionId: string;
   text: string;
+};
+
+type PendingCheckpointResume = {
+  checkpointId: string;
+  sessionId: string;
 };
 
 async function waitForAgentIdle(

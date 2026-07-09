@@ -24,6 +24,7 @@ import type {
   SessionListResponseDto,
   SessionTitleDto,
   SkillDto,
+  TraceDagDto,
   WorkspaceConfigDto,
 } from "./types";
 import { ConfigApiError as ConfigApiErrorClass } from "./types";
@@ -298,7 +299,20 @@ export const configApi = {
     );
   },
 
-  createSessionBranch(sessionId: string, input: { runId: string; title?: string }): Promise<SessionBranchDto> {
+  getSessionTraceDag(sessionId: string, limit?: number): Promise<TraceDagDto> {
+    const params = new URLSearchParams();
+    if (limit !== undefined) {
+      params.set("limit", String(limit));
+    }
+    return requestEnvelope<TraceDagDto>(
+      `/api/v1/sessions/${encodeURIComponent(sessionId)}/trace-dag${queryString(params)}`,
+    );
+  },
+
+  createSessionBranch(
+    sessionId: string,
+    input: { checkpointId?: string; runId?: string; title?: string },
+  ): Promise<SessionBranchDto> {
     return requestEnvelope<SessionBranchDto>(`/api/v1/sessions/${encodeURIComponent(sessionId)}/branches`, {
       method: "POST",
       body: JSON.stringify(input),

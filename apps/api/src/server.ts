@@ -47,9 +47,12 @@ import {
   resolvePasswordSessionIdentity,
   sendAuthError
 } from "./auth/routes.js";
+import { createMetadataContextPackageRecorder } from "./context-package-recorder.js";
 import { persistCurrentUserMessage } from "./conversation-memory.js";
 import { resolveEvidenceReferenceContext } from "./evidence-reference-context.js";
 import { createRunAgentAssembly, createRunAgentContext } from "./run-agent-assembly.js";
+import { RunCheckpointProjector } from "./run-checkpoint-projector.js";
+import { resolveCheckpointResumeSeed, type CheckpointResumeSeed } from "./run-checkpoint-resume.js";
 import { resolveRunConfig } from "./run-config-resolver.js";
 import { resolveRunIdentity } from "./run-identity-orchestrator.js";
 import { createRunMemoryAssembly } from "./run-memory-assembly.js";
@@ -485,6 +488,29 @@ class DataFoundryAgUiAgent extends AbstractAgent {
           return;
         }
         const { isResume, selectedDatasourceId } = identity;
+        let checkpointResumeSeed: CheckpointResumeSeed | undefined;
+        try {
+          checkpointResumeSeed = resolveCheckpointResumeSeed({
+            metadataStore: this.input.metadataStore,
+            runInput: normalizedRunInput,
+            sessionId,
+            userId: this.input.user.id
+          });
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          persistEarlyFailedUserMessage({
+            errorMessage: message,
+            isResume: Boolean(interactionResume),
+            metadataStore: this.input.metadataStore,
+            runId,
+            runInput: normalizedRunInput,
+            sessionId,
+            userId: this.input.user.id,
+            userInput
+          });
+          emitEarlyRunFailure(subscriber, runId, message);
+          return;
+        }
 
         const memoryAssembly = await createRunMemoryAssembly({
           conversationMemoryMode: this.input.conversationMemoryMode,
@@ -526,6 +552,13 @@ class DataFoundryAgUiAgent extends AbstractAgent {
         });
         const taskPlanProjector = new TaskPlanProjector(runContext);
         const toolCallResultBridge = new ToolCallResultBridge();
+        const checkpointProjector = new RunCheckpointProjector(this.input.metadataStore, this.input.user.id);
+        const contextPackageRecorder = createMetadataContextPackageRecorder({
+          metadataStore: this.input.metadataStore,
+          runId,
+          sessionId,
+          userId: this.input.user.id
+        });
         const runAbortController = new AbortController();
         const interactionRuntime = new InteractionRuntimeAdapter(
           this.input.metadataStore,
@@ -534,6 +567,7 @@ class DataFoundryAgUiAgent extends AbstractAgent {
           runId
         );
         const eventPipeline = new RunEventPipeline({
+          checkpointProjector,
           conversationMemoryObserver,
           runEventWriter,
           runId,
@@ -548,6 +582,7 @@ class DataFoundryAgUiAgent extends AbstractAgent {
         };
         const agentAssembly = await createRunAgentAssembly({
           abortSignal: runAbortController.signal,
+          contextPackageRecorder,
           dataGateway: this.input.dataGateway,
           artifactService: this.input.artifactService,
           effectiveRunConfig,
@@ -555,6 +590,7 @@ class DataFoundryAgUiAgent extends AbstractAgent {
           fileAssetService: this.input.fileAssetService,
           emitter: { emit },
           ...(effectiveRunConfig.goal ? { goal: effectiveRunConfig.goal } : {}),
+          ...(checkpointResumeSeed ? { initialContextPackage: checkpointResumeSeed.contextPackage } : {}),
           ...(interactionResume ? { interactionResume } : {}),
           knowledgeService: this.input.knowledgeService,
           longTermMemories,

@@ -105,14 +105,14 @@ function resolveForkRunIdForBranchOptions(
   activeSessionId?: string | null,
 ): string {
   const branches = conversation.branches ?? [];
-  if (branches.some((branch) => branch.forkRunId === runId)) {
+  if (branches.some((branch) => branch.forkRunId === runId && !branch.forkCheckpointId)) {
     return runId;
   }
   if (!activeSessionId) {
     return runId;
   }
   const activeBranch = branches.find((branch) => branch.sessionId === activeSessionId);
-  return activeBranch?.forkRunId ?? runId;
+  return activeBranch && !activeBranch.forkCheckpointId ? activeBranch.forkRunId : runId;
 }
 
 function branchOptionsForRun(
@@ -121,7 +121,9 @@ function branchOptionsForRun(
   activeSessionId?: string | null,
 ): ConversationBranchDto[] {
   const forkRunId = resolveForkRunIdForBranchOptions(conversation, runId, activeSessionId);
-  const branches = (conversation.branches ?? []).filter((branch) => branch.forkRunId === forkRunId);
+  const branches = (conversation.branches ?? []).filter((branch) =>
+    branch.forkRunId === forkRunId && !branch.forkCheckpointId
+  );
   if (branches.length === 0) {
     return [];
   }

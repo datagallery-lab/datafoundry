@@ -307,6 +307,7 @@ export type ConversationBranchDto = {
   parentSessionId: string;
   rootSessionId: string;
   forkRunId: string;
+  forkCheckpointId?: string;
   forkMessageEndPosition: number;
   isOriginal?: boolean;
   createdAt: string;
@@ -320,10 +321,135 @@ export type SessionBranchDto = {
   parentSessionId: string;
   rootSessionId: string;
   forkRunId: string;
+  forkCheckpointId?: string;
   forkMessageEndPosition: number;
   createdAt: string;
   title?: string;
   session: SessionListItemDto;
+};
+
+export type ContextCheckpointDto = {
+  id: string;
+  sessionId: string;
+  runId: string;
+  branchId: string;
+  eventSeq: number;
+  contextPackageId: string;
+  contextPackageRevision: number;
+  kind: "context-compiled" | "run-terminal" | "tool-result";
+  status: "stable" | "failed" | "terminal";
+  label: string;
+  contextPlanId?: string;
+  parentCheckpointId?: string;
+  stepNumber?: number;
+  stepId?: string;
+  toolCallId?: string;
+  messagePosition?: number;
+  createdAt: string;
+};
+
+export type TraceDagNodeKind =
+  | "artifact"
+  | "branch"
+  | "context"
+  | "run-start"
+  | "run-terminal"
+  | "tool"
+  | "user-turn";
+
+export type TraceDagContextDetailDto = {
+  type: "context";
+  assistantOutput?: string;
+  budgetTokens?: number;
+  decisions?: unknown[];
+  inputBudget?: number;
+  model?: string;
+  modelProfileId?: string;
+  omittedGroupIds?: string[];
+  omittedSources?: unknown[];
+  packageId?: string;
+  packageRevision?: number;
+  planId?: string;
+  promptTokens?: number;
+  reasoning?: string;
+  remainingTokens?: number;
+  selectedGroupIds?: string[];
+  selectedSources?: unknown[];
+  stepNumber?: number;
+  tokenReport?: unknown;
+  totalTokens?: number;
+};
+
+export type TraceDagToolDetailDto = {
+  type: "tool";
+  arguments?: unknown;
+  argumentsText?: string;
+  result?: unknown;
+  resultText?: string;
+  toolName?: string;
+};
+
+export type TraceDagArtifactDetailDto = {
+  type: "artifact";
+  artifactType?: string;
+  mimeType?: string;
+  name?: string;
+  preview?: unknown;
+};
+
+export type TraceDagTerminalDetailDto = {
+  type: "terminal";
+  error?: string;
+  message?: string;
+};
+
+export type TraceDagNodeDetailDto =
+  | TraceDagArtifactDetailDto
+  | TraceDagContextDetailDto
+  | TraceDagTerminalDetailDto
+  | TraceDagToolDetailDto;
+
+export type TraceDagNodeDto = {
+  id: string;
+  kind: TraceDagNodeKind;
+  label: string;
+  artifactId?: string;
+  checkpointId?: string;
+  checkpointKind?: ContextCheckpointDto["kind"];
+  checkpointStatus?: ContextCheckpointDto["status"];
+  createdAt?: string;
+  eventSeq?: number;
+  messageId?: string;
+  messagePosition?: number;
+  prominent?: boolean;
+  rollbackable?: boolean;
+  runId?: string;
+  sessionId?: string;
+  status?: string;
+  summary?: string;
+  toolCallId?: string;
+  detail?: TraceDagNodeDetailDto;
+};
+
+export type TraceDagEdgeKind =
+  | "branches_from"
+  | "continues_to"
+  | "emits"
+  | "produces_artifact"
+  | "starts_run";
+
+export type TraceDagEdgeDto = {
+  id: string;
+  source: string;
+  target: string;
+  kind: TraceDagEdgeKind;
+  label?: string;
+};
+
+export type TraceDagDto = {
+  sessionId: string;
+  nodes: TraceDagNodeDto[];
+  edges: TraceDagEdgeDto[];
 };
 
 export type ConversationToolCallDto = {

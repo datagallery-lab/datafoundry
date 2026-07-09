@@ -13,6 +13,7 @@ export type MastraContextCompiledEventPayload = {
   decisions: ContextDecision[];
   omitted_group_ids: string[];
   omitted_sources: ReturnType<typeof createSourceEventEntries>;
+  package_id: string;
   package_revision: number;
   plan_id: string;
   selected_group_ids: string[];
@@ -34,6 +35,7 @@ export const createMastraContextCompiledEventPayload = (
   plan: ContextPlan,
   modelName?: string
 ): MastraContextCompiledEventPayload => ({
+  package_id: contextPackage.packageId,
   package_revision: plan.packageRevision,
   plan_id: plan.planId,
   step_number: plan.stepNumber,

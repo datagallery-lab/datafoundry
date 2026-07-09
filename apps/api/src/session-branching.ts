@@ -1,4 +1,5 @@
 import type {
+  CheckpointRecord,
   ConversationMessageRecord,
   ConversationSummaryRecord,
   MetadataStore,
@@ -9,6 +10,7 @@ import type {
 import { randomUUID } from "node:crypto";
 
 const BRANCHABLE_RUN_STATUSES = new Set<RunRecord["status"]>(["completed", "failed", "canceled"]);
+const BRANCHABLE_CHECKPOINT_STATUSES = new Set<CheckpointRecord["status"]>(["stable", "terminal"]);
 
 export type VisibleConversationSegment = {
   sessionId: string;
@@ -22,6 +24,7 @@ export type SessionLineage = {
 
 export type ConversationBranchOption = {
   createdAt: string;
+  forkCheckpointId?: string;
   forkMessageEndPosition: number;
   forkRunId: string;
   isOriginal: boolean;
@@ -79,8 +82,9 @@ export function latestVisibleConversationSummary(input: {
 
 export function createSessionBranch(input: {
   activeSessionId: string;
+  checkpointId?: string;
   metadataStore: MetadataStore;
-  runId: string;
+  runId?: string;
   title?: string;
   userId: string;
 }): CreatedSessionBranch {
@@ -89,21 +93,36 @@ export function createSessionBranch(input: {
     sessionId: input.activeSessionId,
     userId: input.userId
   });
-  const run = input.metadataStore.runs.get({ user_id: input.userId, run_id: input.runId });
+  if (input.runId && input.checkpointId) {
+    throw new Error("BRANCH_TARGET_AMBIGUOUS");
+  }
+  if (!input.runId && !input.checkpointId) {
+    throw new Error("BRANCH_TARGET_REQUIRED");
+  }
+
+  const target = resolveBranchTarget({
+    activeLineage,
+    checkpointId: input.checkpointId,
+    metadataStore: input.metadataStore,
+    runId: input.runId,
+    userId: input.userId
+  });
+  const run = target.run;
   const visibleSessionIds = new Set(activeLineage.segments.map((segment) => segment.sessionId));
   if (!visibleSessionIds.has(run.session_id)) {
-    throw new Error(`RUN_NOT_VISIBLE:${input.runId}`);
+    throw new Error(`RUN_NOT_VISIBLE:${run.id}`);
   }
   if (!BRANCHABLE_RUN_STATUSES.has(run.status)) {
-    throw new Error(`RUN_NOT_BRANCHABLE:${input.runId}:${run.status}`);
+    throw new Error(`RUN_NOT_BRANCHABLE:${run.id}:${run.status}`);
   }
 
   const runMessages = input.metadataStore.conversationMessages.listBySessionRange({
     user_id: input.userId,
     session_id: run.session_id
   }).filter((message) => message.run_id === run.id);
-  const positions = runMessages.map((message) => message.position);
-  const forkMessageEndPosition = positions.length > 0 ? Math.min(...positions) - 1 : 0;
+  const forkMessageEndPosition = target.checkpoint
+    ? checkpointForkMessageEndPosition(target.checkpoint, runMessages)
+    : runRewriteForkMessageEndPosition(runMessages);
   const parentLineage = resolveSessionLineage({
     metadataStore: input.metadataStore,
     sessionId: run.session_id,
@@ -130,9 +149,62 @@ export function createSessionBranch(input: {
     parent_session_id: run.session_id,
     root_session_id: parentRootSessionId,
     fork_run_id: run.id,
+    ...(target.checkpoint ? { fork_checkpoint_id: target.checkpoint.id } : {}),
     fork_message_end_position: Math.max(0, forkMessageEndPosition)
   });
   return { branch, session };
+}
+
+function resolveBranchTarget(input: {
+  activeLineage: SessionLineage;
+  checkpointId?: string | undefined;
+  metadataStore: MetadataStore;
+  runId?: string | undefined;
+  userId: string;
+}): { checkpoint?: CheckpointRecord; run: RunRecord } {
+  if (!input.checkpointId) {
+    if (!input.runId) {
+      throw new Error("BRANCH_TARGET_REQUIRED");
+    }
+    return {
+      run: input.metadataStore.runs.get({ user_id: input.userId, run_id: input.runId })
+    };
+  }
+
+  const checkpoint = input.metadataStore.checkpoints.get({
+    user_id: input.userId,
+    checkpoint_id: input.checkpointId
+  });
+  if (!BRANCHABLE_CHECKPOINT_STATUSES.has(checkpoint.status)) {
+    throw new Error(`CHECKPOINT_NOT_BRANCHABLE:${checkpoint.id}:${checkpoint.status}`);
+  }
+  const run = input.metadataStore.runs.get({ user_id: input.userId, run_id: checkpoint.run_id });
+  const visibleSessionIds = new Set(input.activeLineage.segments.map((segment) => segment.sessionId));
+  if (!visibleSessionIds.has(checkpoint.session_id)) {
+    throw new Error(`CHECKPOINT_NOT_VISIBLE:${checkpoint.id}`);
+  }
+  return { checkpoint, run };
+}
+
+function runRewriteForkMessageEndPosition(runMessages: ConversationMessageRecord[]): number {
+  const positions = runMessages.map((message) => message.position);
+  return positions.length > 0 ? Math.min(...positions) - 1 : 0;
+}
+
+function checkpointForkMessageEndPosition(
+  checkpoint: CheckpointRecord,
+  runMessages: ConversationMessageRecord[]
+): number {
+  if (checkpoint.message_position !== undefined) {
+    return checkpoint.message_position;
+  }
+  const userPositions = runMessages
+    .filter((message) => message.role === "user")
+    .map((message) => message.position);
+  if (userPositions.length > 0) {
+    return Math.min(...userPositions);
+  }
+  return runRewriteForkMessageEndPosition(runMessages);
 }
 
 export function listConversationBranchOptions(input: {
@@ -154,8 +226,9 @@ export function listConversationBranchOptions(input: {
     if (!child) {
       continue;
     }
-    branchByKey.set(branchOptionKey(branch.child_session_id, branch.fork_run_id), {
+    branchByKey.set(branchOptionKey(branch.child_session_id, branch.fork_run_id, branch.fork_checkpoint_id), {
       createdAt: branch.created_at,
+      ...(branch.fork_checkpoint_id ? { forkCheckpointId: branch.fork_checkpoint_id } : {}),
       forkMessageEndPosition: branch.fork_message_end_position,
       forkRunId: branch.fork_run_id,
       isOriginal: false,
@@ -169,16 +242,20 @@ export function listConversationBranchOptions(input: {
   if (activeBranch) {
     const activeSession = safeGetSession(input.metadataStore, input.userId, activeBranch.child_session_id);
     if (activeSession) {
-      branchByKey.set(branchOptionKey(activeBranch.child_session_id, activeBranch.fork_run_id), {
-        createdAt: activeBranch.created_at,
-        forkMessageEndPosition: activeBranch.fork_message_end_position,
-        forkRunId: activeBranch.fork_run_id,
-        isOriginal: false,
-        parentSessionId: activeBranch.parent_session_id,
-        rootSessionId: activeBranch.root_session_id,
-        sessionId: activeBranch.child_session_id,
-        ...(activeSession.title ? { title: activeSession.title } : {})
-      });
+      branchByKey.set(
+        branchOptionKey(activeBranch.child_session_id, activeBranch.fork_run_id, activeBranch.fork_checkpoint_id),
+        {
+          createdAt: activeBranch.created_at,
+          ...(activeBranch.fork_checkpoint_id ? { forkCheckpointId: activeBranch.fork_checkpoint_id } : {}),
+          forkMessageEndPosition: activeBranch.fork_message_end_position,
+          forkRunId: activeBranch.fork_run_id,
+          isOriginal: false,
+          parentSessionId: activeBranch.parent_session_id,
+          rootSessionId: activeBranch.root_session_id,
+          sessionId: activeBranch.child_session_id,
+          ...(activeSession.title ? { title: activeSession.title } : {})
+        }
+      );
     }
   }
 
@@ -188,8 +265,9 @@ export function listConversationBranchOptions(input: {
     if (!parent) {
       continue;
     }
-    originalForks.set(`${option.parentSessionId}:${option.forkRunId}`, {
+    originalForks.set(branchOptionKey(option.parentSessionId, option.forkRunId, option.forkCheckpointId), {
       createdAt: parent.created_at,
+      ...(option.forkCheckpointId ? { forkCheckpointId: option.forkCheckpointId } : {}),
       forkMessageEndPosition: option.forkMessageEndPosition,
       forkRunId: option.forkRunId,
       isOriginal: true,
@@ -283,6 +361,6 @@ function safeGetSession(
   }
 }
 
-function branchOptionKey(sessionId: string, forkRunId: string): string {
-  return `${sessionId}:${forkRunId}`;
+function branchOptionKey(sessionId: string, forkRunId: string, forkCheckpointId?: string): string {
+  return `${sessionId}:${forkRunId}:${forkCheckpointId ?? ""}`;
 }

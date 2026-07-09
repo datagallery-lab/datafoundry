@@ -1,7 +1,9 @@
 import type { ProcessInputStepArgs, ProcessInputStepResult, Processor } from "@mastra/core/processors";
 
+import type { ContextPackage } from "../../inventory/context-package.js";
 import { ContextPackageBuilder } from "../../inventory/context-package-builder.js";
 import type { ContextItem } from "../../inventory/context-item.js";
+import type { ContextPlan } from "../../inventory/context-plan.js";
 import type { ContextRunState } from "../../inventory/context-run-state.js";
 import { ContextSourcePolicy } from "../../policy/context-source-policy.js";
 import { isContextSourceOmissionDecision } from "../../policy/context-source-policy.js";
@@ -24,6 +26,7 @@ import { applyMastraPromptSnapshot } from "./mastra-prompt-snapshot-applicator.j
 import type { MastraToolObservationRouter } from "./mastra-tool-observation-router.js";
 
 export type MastraContextBudgetProcessorOptions = {
+  contextPackageRecorder?: ContextPackageRecorder;
   eventSink: ContextProtocolEventSink;
   materializer?: ContextPromptMaterializer;
   modelName: string | undefined;
@@ -32,6 +35,10 @@ export type MastraContextBudgetProcessorOptions = {
   runState: ContextRunState;
   sourcePolicy?: ContextSourcePolicy;
   toolObservationRouter?: MastraToolObservationRouter;
+};
+
+export type ContextPackageRecorder = {
+  record(input: { contextPackage: ContextPackage; plan: ContextPlan }): void;
 };
 
 export class MastraContextBudgetProcessor implements Processor<"context-budget"> {
@@ -90,6 +97,10 @@ export class MastraContextBudgetProcessor implements Processor<"context-budget">
       tokenReport: result.plan.tokenReport
     });
     this.options.runState.recordPlan(result.plan);
+    this.options.contextPackageRecorder?.record({
+      contextPackage,
+      plan: result.plan
+    });
     this.options.eventSink.emitContextEvent(
       "context.compiled",
       createMastraContextCompiledEventPayload(contextPackage, result.plan, this.options.modelName)

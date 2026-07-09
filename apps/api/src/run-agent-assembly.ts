@@ -7,6 +7,8 @@ import {
   type AgentRunContext,
   type AgentContextItem,
   type AgUiEventEmitter,
+  type ContextPackage,
+  type ContextPackageRecorder,
   type GoalRuntimeAdapter,
   type TaskStateRuntime,
   type WorkspaceAttachment
@@ -54,9 +56,11 @@ type CreateRunAgentAssemblyInput = {
   dataGateway: DataGateway;
   effectiveRunConfig: EffectiveRunConfig;
   emitter: AgUiEventEmitter;
+  contextPackageRecorder?: ContextPackageRecorder;
   evidenceContextItems?: AgentContextItem[] | undefined;
   fileAssetService: FileAssetService;
   goal?: EffectiveRunConfig["goal"] | undefined;
+  initialContextPackage?: ContextPackage | undefined;
   interactionResume?: InteractionResume | undefined;
   knowledgeService: KnowledgeService;
   longTermMemories: LongTermMemoryRecord[];
@@ -134,8 +138,10 @@ export const createRunAgentAssembly = async (
   } = await createDataFoundry({
     ...(input.abortSignal ? { abortSignal: input.abortSignal } : {}),
     artifactService: input.artifactService,
+    ...(input.contextPackageRecorder ? { contextPackageRecorder: input.contextPackageRecorder } : {}),
     dataGateway: input.dataGateway,
     fileAssetService: input.fileAssetService,
+    ...(input.initialContextPackage ? { initialContextPackage: input.initialContextPackage } : {}),
     knowledgeService: input.knowledgeService,
     ...(input.mcpRuntime.toolNames.length > 0 ? { mcpToolNames: input.mcpRuntime.toolNames } : {}),
     emitter: input.emitter,

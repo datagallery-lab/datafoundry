@@ -28,6 +28,7 @@ export type {
   ConversationRunEventRefDto,
   ConversationSummaryDto,
   ConversationToolCallDto,
+  ContextCheckpointDto,
   DatasourceDto,
   DatasourceSchemaDto,
   DatasourceSchemaTableDto,
@@ -53,5 +54,10 @@ export type {
   SessionListResponseDto,
   SessionTitleDto,
   SkillDto,
+  TraceDagDto,
+  TraceDagEdgeDto,
+  TraceDagEdgeKind,
+  TraceDagNodeDto,
+  TraceDagNodeKind,
   WorkspaceConfigDto,
 } from "./types";

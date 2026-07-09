@@ -2610,6 +2610,8 @@ export function buildRunConfig(
 }
 
 export type RunForwardedProps = {
+  checkpointId?: string;
+  checkpoint_id?: string;
   datasourceId?: string;
   run_config: RunConfigPayload;
 };
@@ -2618,8 +2620,10 @@ export type RunForwardedProps = {
 export function buildRunForwardedProps(
   datasourceId: string | undefined,
   runConfig: RunConfigPayload,
+  checkpointId?: string,
 ): RunForwardedProps {
   return {
+    ...(checkpointId ? { checkpointId, checkpoint_id: checkpointId } : {}),
     ...(datasourceId ? { datasourceId } : {}),
     run_config: runConfig,
   };
@@ -2648,6 +2652,8 @@ export function buildAgentRunStatePatch(
   const { errorMessage: _errorMessage, runStatus: _runStatus, ...rest } = prev;
   return {
     ...rest,
+    ...(forwardedProps.checkpointId ? { checkpointId: forwardedProps.checkpointId } : {}),
+    ...(forwardedProps.checkpoint_id ? { checkpoint_id: forwardedProps.checkpoint_id } : {}),
     ...(forwardedProps.datasourceId ? { datasourceId: forwardedProps.datasourceId } : {}),
     run_config: forwardedProps.run_config,
   };

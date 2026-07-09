@@ -111,6 +111,7 @@ export type SessionBranchRecord = {
   parent_session_id: string;
   root_session_id: string;
   fork_run_id: string;
+  fork_checkpoint_id?: string;
   fork_message_end_position: number;
   created_at: string;
 };
@@ -229,6 +230,43 @@ export type LongTermMemoryRecord = {
   last_accessed_at?: string;
 };
 
+export type ContextPackageSnapshotRecord = {
+  id: string;
+  user_id: string;
+  session_id: string;
+  run_id: string;
+  package_id: string;
+  revision: number;
+  payload_json: string;
+  plan_json?: string;
+  created_at: string;
+};
+
+export type CheckpointKind = "context-compiled" | "run-terminal" | "tool-result";
+
+export type CheckpointStatus = "stable" | "failed" | "terminal";
+
+export type CheckpointRecord = {
+  id: string;
+  user_id: string;
+  session_id: string;
+  run_id: string;
+  branch_id: string;
+  event_seq: number;
+  context_package_id: string;
+  context_package_revision: number;
+  kind: CheckpointKind;
+  status: CheckpointStatus;
+  label: string;
+  context_plan_id?: string;
+  parent_checkpoint_id?: string;
+  step_number?: number;
+  step_id?: string;
+  tool_call_id?: string;
+  message_position?: number;
+  created_at: string;
+};
+
 export type ArtifactRecord = {
   id: string;
   user_id: string;
@@ -327,6 +365,7 @@ export type CreateSessionBranchInput = {
   parent_session_id: string;
   root_session_id: string;
   fork_run_id: string;
+  fork_checkpoint_id?: string;
   fork_message_end_position: number;
 };
 
@@ -390,6 +429,36 @@ export type CreateLongTermMemoryInput = {
   datasource_id?: string;
   source?: string;
   source_run_id?: string;
+};
+
+export type CreateContextPackageSnapshotInput = {
+  user_id: string;
+  session_id: string;
+  run_id: string;
+  package_id: string;
+  revision: number;
+  payload: unknown;
+  plan?: unknown;
+};
+
+export type CreateCheckpointInput = {
+  id: string;
+  user_id: string;
+  session_id: string;
+  run_id: string;
+  branch_id?: string;
+  event_seq: number;
+  context_package_id: string;
+  context_package_revision: number;
+  kind: CheckpointKind;
+  status: CheckpointStatus;
+  label: string;
+  context_plan_id?: string;
+  parent_checkpoint_id?: string;
+  step_number?: number;
+  step_id?: string;
+  tool_call_id?: string;
+  message_position?: number;
 };
 
 export type ListRelevantLongTermMemoriesInput = {
@@ -484,8 +553,10 @@ export class MetadataStore {
   readonly artifacts: ArtifactRepository;
   readonly configJobs: ConfigJobRepository;
   readonly configResources: ConfigResourceRepository;
+  readonly checkpoints: CheckpointRepository;
   readonly conversationMessages: ConversationMessageRepository;
   readonly conversationSummaries: ConversationSummaryRepository;
+  readonly contextPackageSnapshots: ContextPackageSnapshotRepository;
   readonly dataSources: DataSourceRepository;
   readonly fileAssetRefs: FileAssetRefRepository;
   readonly fileAssets: FileAssetRepository;
@@ -520,6 +591,8 @@ export class MetadataStore {
     this.artifacts = new ArtifactRepository(db);
     this.configJobs = new ConfigJobRepository(db);
     this.configResources = new ConfigResourceRepository(db);
+    this.checkpoints = new CheckpointRepository(db);
+    this.contextPackageSnapshots = new ContextPackageSnapshotRepository(db);
     this.dataSources = new DataSourceRepository(db);
     this.fileAssets = new FileAssetRepository(db);
     this.fileAssetRefs = new FileAssetRefRepository(db);
@@ -1145,8 +1218,8 @@ export class SessionBranchRepository {
     this.db.prepare(`
       INSERT INTO session_branches (
         id, user_id, child_session_id, parent_session_id, root_session_id,
-        fork_run_id, fork_message_end_position, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        fork_run_id, fork_checkpoint_id, fork_message_end_position, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       input.id,
       input.user_id,
@@ -1154,6 +1227,7 @@ export class SessionBranchRepository {
       input.parent_session_id,
       input.root_session_id,
       input.fork_run_id,
+      input.fork_checkpoint_id ?? null,
       input.fork_message_end_position,
       createdAt
     );
@@ -1907,6 +1981,175 @@ export class LongTermMemoryRepository {
   }
 }
 
+export class ContextPackageSnapshotRepository {
+  constructor(private readonly db: DatabaseSync) {}
+
+  create(input: CreateContextPackageSnapshotInput): ContextPackageSnapshotRecord {
+    const createdAt = new Date().toISOString();
+    const id = contextPackageSnapshotId(input.package_id, input.revision);
+
+    this.db
+      .prepare(
+        `
+        INSERT INTO context_package_snapshots (
+          id, user_id, session_id, run_id, package_id, revision, payload_json, plan_json, created_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(user_id, id) DO UPDATE SET
+          payload_json = excluded.payload_json,
+          plan_json = excluded.plan_json
+      `
+      )
+      .run(
+        id,
+        input.user_id,
+        input.session_id,
+        input.run_id,
+        input.package_id,
+        input.revision,
+        JSON.stringify(input.payload),
+        input.plan === undefined ? null : JSON.stringify(input.plan),
+        createdAt
+      );
+
+    return this.get({ user_id: input.user_id, id });
+  }
+
+  find(input: { user_id: string; id: string }): Optional<ContextPackageSnapshotRecord> {
+    return mapContextPackageSnapshotRow(
+      this.db
+        .prepare("SELECT * FROM context_package_snapshots WHERE user_id = ? AND id = ?")
+        .get(input.user_id, input.id)
+    );
+  }
+
+  findByPackageRevision(input: {
+    user_id: string;
+    package_id: string;
+    revision: number;
+  }): Optional<ContextPackageSnapshotRecord> {
+    return this.find({
+      user_id: input.user_id,
+      id: contextPackageSnapshotId(input.package_id, input.revision)
+    });
+  }
+
+  get(input: { user_id: string; id: string }): ContextPackageSnapshotRecord {
+    const snapshot = this.find(input);
+    if (!snapshot) {
+      throw new Error(`Context package snapshot not found: ${input.id}`);
+    }
+    return snapshot;
+  }
+
+  latestByRun(input: { user_id: string; run_id: string }): Optional<ContextPackageSnapshotRecord> {
+    return mapContextPackageSnapshotRow(
+      this.db
+        .prepare(
+          `
+          SELECT *
+          FROM context_package_snapshots
+          WHERE user_id = ? AND run_id = ?
+          ORDER BY revision DESC, created_at DESC
+          LIMIT 1
+        `
+        )
+        .get(input.user_id, input.run_id)
+    );
+  }
+}
+
+export class CheckpointRepository {
+  constructor(private readonly db: DatabaseSync) {}
+
+  create(input: CreateCheckpointInput): CheckpointRecord {
+    const createdAt = new Date().toISOString();
+
+    this.db
+      .prepare(
+        `
+        INSERT INTO checkpoints (
+          id, user_id, session_id, run_id, branch_id, event_seq, context_package_id,
+          context_package_revision, context_plan_id, kind, status, label, parent_checkpoint_id,
+          step_number, step_id, tool_call_id, message_position, created_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(user_id, id) DO NOTHING
+      `
+      )
+      .run(
+        input.id,
+        input.user_id,
+        input.session_id,
+        input.run_id,
+        input.branch_id ?? "main",
+        input.event_seq,
+        input.context_package_id,
+        input.context_package_revision,
+        input.context_plan_id ?? null,
+        input.kind,
+        input.status,
+        input.label,
+        input.parent_checkpoint_id ?? null,
+        input.step_number ?? null,
+        input.step_id ?? null,
+        input.tool_call_id ?? null,
+        input.message_position ?? null,
+        createdAt
+      );
+
+    return this.get({ user_id: input.user_id, checkpoint_id: input.id });
+  }
+
+  find(input: { user_id: string; checkpoint_id: string }): Optional<CheckpointRecord> {
+    return mapCheckpointRow(
+      this.db
+        .prepare("SELECT * FROM checkpoints WHERE user_id = ? AND id = ?")
+        .get(input.user_id, input.checkpoint_id)
+    );
+  }
+
+  get(input: { user_id: string; checkpoint_id: string }): CheckpointRecord {
+    const checkpoint = this.find(input);
+    if (!checkpoint) {
+      throw new Error(`Checkpoint not found: ${input.checkpoint_id}`);
+    }
+    return checkpoint;
+  }
+
+  latestByRun(input: { user_id: string; run_id: string }): Optional<CheckpointRecord> {
+    return mapCheckpointRow(
+      this.db
+        .prepare(
+          `
+          SELECT *
+          FROM checkpoints
+          WHERE user_id = ? AND run_id = ?
+          ORDER BY event_seq DESC
+          LIMIT 1
+        `
+        )
+        .get(input.user_id, input.run_id)
+    );
+  }
+
+  listBySession(input: { user_id: string; session_id: string; limit?: number }): CheckpointRecord[] {
+    const limit = input.limit ?? 200;
+    return this.db
+      .prepare(
+        `
+        SELECT *
+        FROM checkpoints
+        WHERE user_id = ? AND session_id = ?
+        ORDER BY created_at ASC, event_seq ASC
+        LIMIT ?
+      `
+      )
+      .all(input.user_id, input.session_id, limit)
+      .map(mapRequiredCheckpointRow);
+  }
+}
+
 export class ArtifactRepository {
   constructor(private readonly db: DatabaseSync) {}
 
@@ -2449,6 +2692,7 @@ const runMigrations = (db: DatabaseSync): void => {
       parent_session_id TEXT NOT NULL,
       root_session_id TEXT NOT NULL,
       fork_run_id TEXT NOT NULL,
+      fork_checkpoint_id TEXT,
       fork_message_end_position INTEGER NOT NULL,
       created_at TEXT NOT NULL,
       PRIMARY KEY (user_id, id),
@@ -2589,6 +2833,55 @@ const runMigrations = (db: DatabaseSync): void => {
       ON long_term_memories(user_id, session_id, status, updated_at);
     CREATE INDEX IF NOT EXISTS idx_long_term_memories_user_datasource
       ON long_term_memories(user_id, datasource_id, status, updated_at);
+
+    CREATE TABLE IF NOT EXISTS context_package_snapshots (
+      id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      session_id TEXT NOT NULL,
+      run_id TEXT NOT NULL,
+      package_id TEXT NOT NULL,
+      revision INTEGER NOT NULL,
+      payload_json TEXT NOT NULL,
+      plan_json TEXT,
+      created_at TEXT NOT NULL,
+      PRIMARY KEY (user_id, id),
+      UNIQUE (user_id, package_id, revision),
+      FOREIGN KEY (user_id, session_id) REFERENCES sessions(user_id, id),
+      FOREIGN KEY (user_id, run_id) REFERENCES runs(user_id, id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_context_package_snapshots_user_run
+      ON context_package_snapshots(user_id, run_id, revision);
+
+    CREATE TABLE IF NOT EXISTS checkpoints (
+      id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      session_id TEXT NOT NULL,
+      run_id TEXT NOT NULL,
+      branch_id TEXT NOT NULL,
+      event_seq INTEGER NOT NULL,
+      context_package_id TEXT NOT NULL,
+      context_package_revision INTEGER NOT NULL,
+      context_plan_id TEXT,
+      kind TEXT NOT NULL,
+      status TEXT NOT NULL,
+      label TEXT NOT NULL,
+      parent_checkpoint_id TEXT,
+      step_number INTEGER,
+      step_id TEXT,
+      tool_call_id TEXT,
+      message_position INTEGER,
+      created_at TEXT NOT NULL,
+      PRIMARY KEY (user_id, id),
+      UNIQUE (user_id, run_id, event_seq, kind),
+      FOREIGN KEY (user_id, session_id) REFERENCES sessions(user_id, id),
+      FOREIGN KEY (user_id, run_id) REFERENCES runs(user_id, id),
+      FOREIGN KEY (user_id, context_package_id) REFERENCES context_package_snapshots(user_id, id),
+      FOREIGN KEY (user_id, parent_checkpoint_id) REFERENCES checkpoints(user_id, id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_checkpoints_user_session
+      ON checkpoints(user_id, session_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_checkpoints_user_run
+      ON checkpoints(user_id, run_id, event_seq);
 
     CREATE TABLE IF NOT EXISTS file_assets (
       id TEXT PRIMARY KEY,
@@ -2743,6 +3036,9 @@ const runMigrations = (db: DatabaseSync): void => {
   runSchemaMigration(db, "0011_session_branches", "Ensure conversation branch lineage schema", () => {
     initializeSessionBranchSchema(db);
   });
+  runSchemaMigration(db, "0012_session_branch_checkpoints", "Ensure checkpoint branch target column", () => {
+    ensureSessionBranchCheckpointColumn(db);
+  });
 };
 
 const initializeSchemaMigrationTable = (db: DatabaseSync): void => {
@@ -2828,6 +3124,14 @@ const ensureInteractionInterruptEventColumn = (db: DatabaseSync): void => {
   if (!hasColumn) {
     db.exec("ALTER TABLE interactions ADD COLUMN interrupt_event_json TEXT");
   }
+};
+
+const ensureSessionBranchCheckpointColumn = (db: DatabaseSync): void => {
+  ensureColumn(db, "session_branches", "fork_checkpoint_id", "TEXT");
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_session_branches_parent_checkpoint
+      ON session_branches(user_id, parent_session_id, fork_checkpoint_id, created_at);
+  `);
 };
 
 const initializeAuthSchema = (db: DatabaseSync): void => {
@@ -2931,6 +3235,7 @@ const initializeSessionBranchSchema = (db: DatabaseSync): void => {
       parent_session_id TEXT NOT NULL,
       root_session_id TEXT NOT NULL,
       fork_run_id TEXT NOT NULL,
+      fork_checkpoint_id TEXT,
       fork_message_end_position INTEGER NOT NULL,
       created_at TEXT NOT NULL,
       PRIMARY KEY (user_id, id),
@@ -3223,6 +3528,8 @@ const optionalString = (value: unknown): Optional<string> => (typeof value === "
 
 const optionalNumber = (value: unknown): Optional<number> => (typeof value === "number" ? value : undefined);
 
+const contextPackageSnapshotId = (packageId: string, revision: number): string => `${packageId}:${revision}`;
+
 const clampConfidence = (value: number): number => Math.max(0, Math.min(1, value));
 
 const createLongTermMemoryHash = (input: CreateLongTermMemoryInput): string =>
@@ -3482,6 +3789,7 @@ const mapSessionBranchRow = (row: unknown): Optional<SessionBranchRecord> => {
   if (!isRecord(row)) {
     return undefined;
   }
+  const forkCheckpointId = optionalString(row.fork_checkpoint_id);
   return {
     id: requiredString(row, "id"),
     user_id: requiredString(row, "user_id"),
@@ -3489,6 +3797,7 @@ const mapSessionBranchRow = (row: unknown): Optional<SessionBranchRecord> => {
     parent_session_id: requiredString(row, "parent_session_id"),
     root_session_id: requiredString(row, "root_session_id"),
     fork_run_id: requiredString(row, "fork_run_id"),
+    ...(forkCheckpointId ? { fork_checkpoint_id: forkCheckpointId } : {}),
     fork_message_end_position: requiredNumber(row, "fork_message_end_position"),
     created_at: requiredString(row, "created_at")
   };
@@ -3713,6 +4022,66 @@ const mapRequiredLongTermMemoryRow = (row: unknown): LongTermMemoryRecord => {
   }
 
   return memory;
+};
+
+const mapContextPackageSnapshotRow = (row: unknown): Optional<ContextPackageSnapshotRecord> => {
+  if (!isRecord(row)) {
+    return undefined;
+  }
+
+  const planJson = optionalString(row.plan_json);
+  return {
+    id: requiredString(row, "id"),
+    user_id: requiredString(row, "user_id"),
+    session_id: requiredString(row, "session_id"),
+    run_id: requiredString(row, "run_id"),
+    package_id: requiredString(row, "package_id"),
+    revision: requiredNumber(row, "revision"),
+    payload_json: requiredString(row, "payload_json"),
+    ...(planJson ? { plan_json: planJson } : {}),
+    created_at: requiredString(row, "created_at")
+  };
+};
+
+const mapCheckpointRow = (row: unknown): Optional<CheckpointRecord> => {
+  if (!isRecord(row)) {
+    return undefined;
+  }
+
+  const contextPlanId = optionalString(row.context_plan_id);
+  const parentCheckpointId = optionalString(row.parent_checkpoint_id);
+  const stepNumber = optionalNumber(row.step_number);
+  const stepId = optionalString(row.step_id);
+  const toolCallId = optionalString(row.tool_call_id);
+  const messagePosition = optionalNumber(row.message_position);
+  return {
+    id: requiredString(row, "id"),
+    user_id: requiredString(row, "user_id"),
+    session_id: requiredString(row, "session_id"),
+    run_id: requiredString(row, "run_id"),
+    branch_id: requiredString(row, "branch_id"),
+    event_seq: requiredNumber(row, "event_seq"),
+    context_package_id: requiredString(row, "context_package_id"),
+    context_package_revision: requiredNumber(row, "context_package_revision"),
+    kind: requiredString(row, "kind") as CheckpointKind,
+    status: requiredString(row, "status") as CheckpointStatus,
+    label: requiredString(row, "label"),
+    ...(contextPlanId ? { context_plan_id: contextPlanId } : {}),
+    ...(parentCheckpointId ? { parent_checkpoint_id: parentCheckpointId } : {}),
+    ...(stepNumber !== undefined ? { step_number: stepNumber } : {}),
+    ...(stepId ? { step_id: stepId } : {}),
+    ...(toolCallId ? { tool_call_id: toolCallId } : {}),
+    ...(messagePosition !== undefined ? { message_position: messagePosition } : {}),
+    created_at: requiredString(row, "created_at")
+  };
+};
+
+const mapRequiredCheckpointRow = (row: unknown): CheckpointRecord => {
+  const checkpoint = mapCheckpointRow(row);
+  if (!checkpoint) {
+    throw new Error("Invalid checkpoint row");
+  }
+  return checkpoint;
 };
 
 const mapArtifactRow = (row: unknown): Optional<ArtifactRecord> => {
