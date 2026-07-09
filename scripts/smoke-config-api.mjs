@@ -548,7 +548,10 @@ try {
       "branch table answer"
     ]
   );
-  assert.equal(branchConversation.body.data.messages.some((message) => message.contentText === "original chart answer"), false);
+  assert.equal(
+    branchConversation.body.data.messages.some((message) => message.contentText === "original chart answer"),
+    false
+  );
   assert.equal(branchConversation.body.data.branch.parentSessionId, conversationSessionId);
   assert.equal(
     branchConversation.body.data.branches.some((branch) =>
@@ -752,9 +755,36 @@ try {
   });
   assert.equal(search.body.data[0].filename, "metrics.md");
 
+  const mcpConfig = await requestJson("/api/v1/mcp-servers", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      id: "smoke-mcp",
+      name: "Smoke MCP",
+      transport: "streamable-http",
+      serverUrl: `http://127.0.0.1:${mcpAddress.port}`,
+      toolAllowlist: ["echo"],
+      timeoutMs: 5000
+    })
+  });
+  assert.equal(mcpConfig.response.status, 201);
+  assert.deepEqual(mcpConfig.body.data.toolAllowlist, ["echo"]);
+  assert.equal(mcpConfig.body.data.timeoutMs, 5000);
+  const mcpTest = await requestJson("/api/v1/mcp-servers/smoke-mcp/test", { method: "POST" });
+  assert.equal(mcpTest.body.data.toolCount, 1);
+  const mcpTools = await requestJson("/api/v1/mcp-servers/smoke-mcp/tools");
+  assert.equal(mcpTools.body.data.length, 1);
+  assert.equal(mcpTools.body.data[0].name, "echo");
+
   const skillForm = new FormData();
   skillForm.set("file", new Blob([
-    "---\nname: Smoke Skill\ndescription: Smoke skill package\nversion: 1.0.0\nallowed-tools: [inspect_schema, mcp__smoke-mcp__echo]\n---\nInspect schema first.\n"
+    "---\n",
+    "name: Smoke Skill\n",
+    "description: Smoke skill package\n",
+    "version: 1.0.0\n",
+    "allowed-tools: [inspect_schema, echo]\n",
+    "---\n",
+    "Inspect schema first.\n"
   ], { type: "text/markdown" }), "SKILL.md");
   skillForm.set("defaultDbIds", "local-sqlite");
   skillForm.set("defaultKbIds", "metrics-docs");
@@ -765,7 +795,7 @@ try {
   assert.equal(skill.body.data.validationStatus, "valid");
   assert.equal("packageContent" in skill.body.data, false);
   assert.equal(typeof skill.body.data.packageFileRefId, "string");
-  assert.deepEqual(skill.body.data.allowedTools, ["inspect_schema", "mcp__smoke-mcp__echo"]);
+  assert.deepEqual(skill.body.data.allowedTools, ["inspect_schema", "echo"]);
   assert.deepEqual(skill.body.data.defaultDbIds, ["local-sqlite"]);
   assert.deepEqual(skill.body.data.defaultKbIds, ["metrics-docs"]);
   assert.deepEqual(skill.body.data.defaultMcpIds, ["smoke-mcp"]);
@@ -788,27 +818,6 @@ try {
   assert.equal(skillSelection.response.status, 200);
   assert.equal(skillSelection.body.data.skills.some((item) => item.id === skill.body.data.id), true);
   assert.equal(skillSelection.body.data.effectivePolicy.allowedTools.includes("inspect_schema"), true);
-
-  const mcpConfig = await requestJson("/api/v1/mcp-servers", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      id: "smoke-mcp",
-      name: "Smoke MCP",
-      transport: "streamable-http",
-      serverUrl: `http://127.0.0.1:${mcpAddress.port}`,
-      toolAllowlist: ["echo"],
-      timeoutMs: 5000
-    })
-  });
-  assert.equal(mcpConfig.response.status, 201);
-  assert.deepEqual(mcpConfig.body.data.toolAllowlist, ["echo"]);
-  assert.equal(mcpConfig.body.data.timeoutMs, 5000);
-  const mcpTest = await requestJson("/api/v1/mcp-servers/smoke-mcp/test", { method: "POST" });
-  assert.equal(mcpTest.body.data.toolCount, 1);
-  const mcpTools = await requestJson("/api/v1/mcp-servers/smoke-mcp/tools");
-  assert.equal(mcpTools.body.data.length, 1);
-  assert.equal(mcpTools.body.data[0].name, "echo");
 
   const modelProfile = await requestJson("/api/v1/model-profiles", {
     method: "POST",
@@ -913,7 +922,7 @@ try {
   assert(skillBoundRun.effectiveRunConfig.enabledDatasourceIds.includes("local-sqlite"));
   assert(skillBoundRun.effectiveRunConfig.enabledKnowledgeIds.includes("metrics-docs"));
   assert(skillBoundRun.effectiveRunConfig.enabledMcpServerIds.includes("smoke-mcp"));
-  assert.deepEqual(skillBoundRun.mcpRuntime.toolNames, ["mcp__smoke-mcp__echo"]);
+  assert.deepEqual(skillBoundRun.mcpRuntime.toolNames, ["echo"]);
   assert.equal(skillBoundRun.mcpRuntime.servers[0]?.timeoutMs, 5000);
   assert.deepEqual(skillBoundRun.mcpRuntime.servers[0]?.toolAllowlist, ["echo"]);
   const currentMetricsDocsResource = metadataStore.configResources.get({
@@ -934,8 +943,14 @@ try {
     user_id: "dev-user",
     kind: "model-profile"
   });
-  assert.equal(skillBoundRun.effectiveRunConfig.resourceRevisions["datasource:local-sqlite"], sampleDisabledPatch.body.data.revision);
-  assert.equal(skillBoundRun.effectiveRunConfig.resourceRevisions["knowledge-base:metrics-docs"], currentMetricsDocsResource.revision);
+  assert.equal(
+    skillBoundRun.effectiveRunConfig.resourceRevisions["datasource:local-sqlite"],
+    sampleDisabledPatch.body.data.revision
+  );
+  assert.equal(
+    skillBoundRun.effectiveRunConfig.resourceRevisions["knowledge-base:metrics-docs"],
+    currentMetricsDocsResource.revision
+  );
   assert.equal(skillBoundRun.effectiveRunConfig.resourceRevisions["mcp-server:smoke-mcp"], currentMcpResource.revision);
   assert.equal(
     skillBoundRun.effectiveRunConfig.resourceRevisions["model-profile:smoke-openai-compatible"],
@@ -1089,7 +1104,8 @@ try {
   }), /SECRET_NOT_FOUND/u);
 
   console.log(
-    "Config API smoke OK: secrets, datasource/types/policies, chat upload, conversation, revision, KB, MCP, model profile, skill binding, defaults, artifact, tombstone"
+    "Config API smoke OK: secrets, datasource/types/policies, chat upload, conversation, revision, "
+      + "KB, MCP, model profile, skill binding, defaults, artifact, tombstone"
   );
 } finally {
   await closeHttpServer(server);

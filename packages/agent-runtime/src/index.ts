@@ -70,7 +70,7 @@ import { createTokenUsageCorrelationStore } from "./stream/token-usage-correlati
 import { wrapAgentForAgUi } from "./stream/mastra-stream-normalizer.js";
 import type { AgentRunContext, AgentRunContextInput, AgUiEventEmitter } from "./types.js";
 import { createArtifactEvent, createCustomEvent } from "./events.js";
-import { createTool } from "@mastra/core/tools";
+import { createTool, type ToolAction } from "@mastra/core/tools";
 import { z } from "zod";
 
 export type { AgentRunContext, AgentRunContextInput, AgUiEventEmitter } from "./types.js";
@@ -203,6 +203,7 @@ export type CreateDataFoundryInput = {
   knowledgeService?: KnowledgeService;
   modelProvider: Exclude<ModelProvider, { kind: "mock" }>;
   runContext: AgentRunContext;
+  mcpTools?: Record<string, ToolAction<any, any, any, any, any>>;
   mcpToolNames?: string[];
   selectedSkills?: SkillRecord[];
   skillSelection?: SkillSelectionResult;
@@ -425,7 +426,11 @@ export const createDataFoundry = async (
     ...workspaceTools,
     ...skillTools
   };
-  const selectedTools = selectToolsByPolicy(availableTools, input.skillSelection);
+  const selectedPolicyTools = selectToolsByPolicy(availableTools, input.skillSelection);
+  const selectedTools = {
+    ...selectedPolicyTools,
+    ...(input.mcpTools ?? {})
+  };
   const tools = governedToolFactory.governTools(selectedTools);
   const agent = new Agent({
     id: "data-foundry",
@@ -438,6 +443,7 @@ export const createDataFoundry = async (
       selectedSkills: input.selectedSkills ?? [],
       taskToolsEnabled: Boolean(input.taskStateRuntime),
       toolNames: Object.keys(selectedTools),
+      mcpToolNames: input.mcpToolNames ?? [],
       workspaceAttachments
     }),
     model: input.modelProvider.model as never,
@@ -563,6 +569,8 @@ type AgentInstructionsInput = {
   /** builtin task_* 工具是否启用（取决于是否注入 taskStateRuntime）。 */
   taskToolsEnabled: boolean;
   toolNames: string[];
+  /** MCP tools injected through AG-UI clientTools for this run. */
+  mcpToolNames: string[];
   workspaceAttachments: MaterializedWorkspaceAttachment[];
 };
 
@@ -581,6 +589,9 @@ const buildAgentInstructions = (input: AgentInstructionsInput): string => {
   const promoteWorkspaceFileEnabled = enabled("promote_workspace_file");
   const dataTools = ["list_data_sources", "inspect_schema", "preview_table", "run_sql_readonly"].filter(enabled);
   const toolGroups: string[] = dataTools.length > 0 ? [`Data tools: ${dataTools.join(", ")}.`] : [];
+  if (input.mcpToolNames.length > 0) {
+    toolGroups.push(`MCP tools: ${input.mcpToolNames.join(", ")}.`);
+  }
   if ((context.enabled_knowledge_ids?.length ?? 0) > 0 && enabled("retrieve_knowledge")) {
     toolGroups.push("Knowledge tools: retrieve_knowledge.");
   }
@@ -711,6 +722,12 @@ const buildAgentInstructions = (input: AgentInstructionsInput): string => {
         + "Use submit_plan when explicit user approval is required before implementation; both tools suspend the run."
     );
   }
+  if (input.mcpToolNames.length > 0) {
+    policies.push(
+      "MCP tools are enabled for this run. Use the exact MCP tool names listed above when the user asks for MCP, "
+        + "datagraph, graph exploration, or a tool whose description directly matches the task."
+    );
+  }
   if (skillTools.length > 0) {
     const selectedSkillHint = input.selectedSkills.length > 0
       ? ` Prioritize the selected skills listed in the prompt: ${
@@ -813,7 +830,8 @@ const buildAgentInstructions = (input: AgentInstructionsInput): string => {
 Default datasource: "${context.selected_datasource_id ?? ""}".
 You may query any datasource in the list above by passing its id to a data tool's datasource_id argument.
 Never reference a datasource id outside this list; the tool rejects it with DATASOURCE_NOT_SELECTED.`
-    : `No datasources are enabled this run. Answer general questions directly. Do not call data tools unless the user enables a datasource.`;
+    : "No datasources are enabled this run. Answer general questions directly. "
+      + "Do not call data tools unless the user enables a datasource.";
 
   return `
 You are a general-purpose data agent. Analyze data by calling tools. Never invent schema, rows, SQL results,
