@@ -17,24 +17,32 @@ export const ToolTraceList: React.FC<ToolTraceListProps> = ({
   // Get status icon for tool call
   const getToolIcon = (status: LiveToolCallRecord['status']) => {
     switch (status) {
+      case 'pending':
+        return '○';
       case 'running':
         return '◐';
       case 'success':
         return '✓';
       case 'failed':
         return '✖';
+      case 'cancelled':
+        return '⊘';
     }
   };
 
   // Get status color for tool call
   const getToolColor = (status: LiveToolCallRecord['status']): string => {
     switch (status) {
+      case 'pending':
+        return 'gray';
       case 'running':
         return 'yellow';
       case 'success':
         return 'green';
       case 'failed':
         return 'red';
+      case 'cancelled':
+        return 'yellow';
       default:
         return 'gray';
     }

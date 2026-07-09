@@ -5,9 +5,10 @@ import { TableView } from './components/TableView.js';
 
 interface ArtifactCardProps {
   artifact: DataArtifact;
+  keyboardActive?: boolean;
 }
 
-export const ArtifactCard: React.FC<ArtifactCardProps> = ({ artifact }) => {
+export const ArtifactCard: React.FC<ArtifactCardProps> = ({ artifact, keyboardActive = false }) => {
   // Get artifact icon based on kind
   const getArtifactIcon = (kind: DataArtifact['kind']) => {
     switch (kind) {
@@ -66,8 +67,9 @@ export const ArtifactCard: React.FC<ArtifactCardProps> = ({ artifact }) => {
             <TableView
               columns={artifact.detail.columns}
               rows={artifact.detail.rows}
-              pageSize={10}
-              showPagination={artifact.detail.rows.length > 10}
+              pageSize={12}
+              showPagination={artifact.detail.rows.length > 12}
+              enableKeyboardNav={keyboardActive}
             />
           </Box>
         );

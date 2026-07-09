@@ -88,7 +88,7 @@ const emitEarlyRunFailure = (
 ): void => {
   const timestamp = Date.now();
   subscriber.next({ type: EventType.RUN_STARTED, runId, timestamp });
-  subscriber.next(createRunStatusDelta("failed", message));
+  subscriber.next(createRunStatusDelta("failed", { errorMessage: message, runId }));
   subscriber.next({ type: EventType.RUN_ERROR, message, timestamp });
   subscriber.complete();
 };

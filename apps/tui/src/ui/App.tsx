@@ -1,25 +1,26 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { Box, Text, useApp, useInput, useStdin, useStdout } from 'ink';
+import React, { useState, useEffect, useLayoutEffect, useMemo, useRef, useCallback } from 'react';
+import { Box, Text, useApp, useInput, useStdin, measureElement, type DOMElement } from 'ink';
 import { randomUUID } from 'node:crypto';
 import { StatusFooter } from './Header.js';
-import { ChatArea, countChatLines } from './ChatArea.js';
-import { OutputsView } from './OutputsView.js';
+import { ChatArea, type ChatAreaRef } from './ChatArea.js';
+import { OutputsScreen } from './OutputsView.js';
 import { ActivityPanel } from './ActivityPanel.js';
-import { InputBox } from './InputBox.js';
-import { WorkspaceFrame, chatViewportRows } from './workspace-layout.js';
-import { KeybindingsHelp } from './KeybindingsHelp.js';
+import { EnhancedInputBox } from './components/EnhancedInputBox.js';
+import { QueuedPromptDisplay } from './components/QueuedPromptDisplay.js';
+import { WorkspaceFrame, availableContentRows, estimateControlsRows } from './workspace-layout.js';
+import { useTerminalSize } from './use-terminal-size.js';
 import { SessionPicker } from './SessionPicker.js';
 import { ResourcePicker, type ResourcePickerItem } from './ResourcePicker.js';
 import { HomeSplash } from './HomeSplash.js';
-import { DEFAULT_COMMANDS, getStatusBarShortcuts } from './keybindings.js';
+import { DEFAULT_COMMANDS } from './keybindings.js';
 import { AssistantTextStreamBuffer, type AssistantTextFlush } from './assistant-stream-buffer.js';
-import { wheelScrollDelta } from '../input/mouse-wheel.js';
-import { ScrollAnchor } from './timeline/scroll-anchor.js';
+import { createWheelScrollDecoder } from '../input/mouse-wheel.js';
 import {
   restoreSessionConversation,
   store,
   type TuiAppState,
 } from '../state/index.js';
+import { runIdFromEvent } from '../state/live-run-state.js';
 import {
   persistWorkspaceConfig,
   type WorkspaceConfigItem,
@@ -41,11 +42,16 @@ interface AppProps {
   } | undefined;
 }
 
-type TabType = 'chat' | 'stats' | 'config' | 'outputs';
 type CommandNotice = {
   message: string;
   kind: 'info' | 'error';
 };
+type RuntimeEvent = { type?: string; [key: string]: unknown };
+const SCROLL_FRAME_MS = 16;
+const SCROLL_ROWS_PER_FRAME = 3;
+const MAX_PENDING_SCROLL_ROWS = 120;
+const CTRL_EXIT_PROMPT_DURATION_MS = 1000;
+type ClearInputDraft = () => boolean;
 
 const createThreadId = (): string => {
   try {
@@ -209,9 +215,8 @@ export const App: React.FC<AppProps> = ({
 }) => {
   const { exit } = useApp();
   const { stdin } = useStdin();
-  const { stdout } = useStdout();
+  const { columns: terminalColumns, rows: terminalRows } = useTerminalSize();
   const [state, setState] = useState<TuiAppState>(store.getState());
-  const [activeTab, setActiveTab] = useState<TabType>('chat');
   const [inputFocused, setInputFocused] = useState(false);
   const [commandNotice, setCommandNotice] = useState<CommandNotice | null>(null);
   const [activeDatasourceId, setActiveDatasourceId] = useState<string | undefined>(
@@ -224,6 +229,8 @@ export const App: React.FC<AppProps> = ({
   const [pickerSessions, setPickerSessions] = useState<SessionListItem[]>([]);
   const [pickerLoading, setPickerLoading] = useState(false);
   const [pickerError, setPickerError] = useState<string | undefined>(undefined);
+  const [resumeLoadingSessionId, setResumeLoadingSessionId] = useState<string | null>(null);
+  const [outputsOpen, setOutputsOpen] = useState(false);
   const [skillPickerOpen, setSkillPickerOpen] = useState(false);
   const [skillPickerItems, setSkillPickerItems] = useState<ResourcePickerItem[]>([]);
   const [skillShortcutItems, setSkillShortcutItems] = useState<ResourcePickerItem[]>(
@@ -233,11 +240,18 @@ export const App: React.FC<AppProps> = ({
   const [skillPickerError, setSkillPickerError] = useState<string | undefined>(undefined);
   const [skillPickerWarning, setSkillPickerWarning] = useState<string | undefined>(undefined);
   const [retryCount, setRetryCount] = useState(0);
-  const [chatScrollbackRows, setChatScrollbackRows] = useState(0);
-  const scrollAnchor = useRef(new ScrollAnchor());
+  const [controlsHeight, setControlsHeight] = useState(0);
+  const [reportedInputBoxRows, setReportedInputBoxRows] = useState<number | null>(null);
+  const [ctrlCPressedOnce, setCtrlCPressedOnce] = useState(false);
+  const chatAreaRef = useRef<ChatAreaRef>(null);
+  const mainControlsRef = useRef<DOMElement | null>(null);
+  const ctrlCTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const applyChatScrollDeltaRef = useRef<(delta: number) => void>(() => {});
   const startupResumeAttempted = useRef(false);
-  const terminalRows = stdout.rows ?? 40;
-  const terminalColumns = stdout.columns ?? 100;
+  const queuedPromptsRef = useRef<string[]>([]);
+  const drainingQueuedPromptRef = useRef(false);
+  const handleAgentQueryRef = useRef<((input: string) => Promise<void>) | null>(null);
+  const [queuedPrompts, setQueuedPrompts] = useState<string[]>([]);
   const modelName = resolveModelName(state);
   const directory = formatDirectory(process.env.PWD || process.cwd());
   const startup = {
@@ -248,21 +262,48 @@ export const App: React.FC<AppProps> = ({
     directory,
   };
   const visibleMessages = state.messages;
-  const transcriptStartup = state.messages.length === 0 ? startup : undefined;
-  const chatViewportRowCount = chatViewportRows(terminalRows, {
+  const isRestoringSession = resumeLoadingSessionId !== null;
+  const showLiveActivity = false;
+  const isHomeScreen = visibleMessages.length === 0
+    && state.messages.length === 0
+    && !commandNotice
+    && queuedPrompts.length === 0
+    && !isRestoringSession
+    && !showLiveActivity;
+  const transcriptStartup = state.messages.length === 0
+    && !commandNotice
+    && queuedPrompts.length === 0
+    && !isRestoringSession
+    ? startup
+    : undefined;
+  const pickerOpen = sessionPickerOpen || skillPickerOpen || outputsOpen;
+  const controlsLayoutKey = [
+    'chat',
+    isHomeScreen ? 'home' : 'workspace',
+    pickerOpen ? 'picker-open' : 'picker-closed',
+    commandNotice ? `${commandNotice.kind}:${commandNotice.message}` : 'clean',
+    terminalColumns,
+    terminalRows,
+    reportedInputBoxRows ?? 'input-unknown',
+    queuedPrompts.length,
+    state.connectionStatus,
+    state.runStatus,
+    modelName,
+    directory,
+    activeDatasourceId ?? 'no-datasource',
+    activeSkillId ?? 'no-skill',
+  ].join('\u0000');
+  const estimatedControlsRowCount = estimateControlsRows({
     commandNotice: Boolean(commandNotice),
-    activeTab,
+    queuedPromptCount: queuedPrompts.length,
+    activeTab: 'chat',
+    homeScreen: isHomeScreen,
+    inputBoxRows: reportedInputBoxRows ?? undefined,
   });
-  const chatContentRows = countChatLines({
-    messages: visibleMessages,
-    artifacts: state.artifacts,
-    toolCalls: state.toolCalls,
-    totalMessageCount: state.messages.length,
-    columns: terminalColumns,
-    startup: transcriptStartup,
-  });
-  const maxChatScrollbackRows = Math.max(0, chatContentRows - chatViewportRowCount);
-  const pickerOpen = sessionPickerOpen || skillPickerOpen;
+  const controlsRowCountForViewport = Math.max(estimatedControlsRowCount, controlsHeight);
+  const scrollableRowCount = availableContentRows(terminalRows, controlsRowCountForViewport);
+  const chatViewportRowCount = scrollableRowCount;
+  const inputDisabled = isRestoringSession;
   const inputCommands = useMemo(
     () => uniqueStrings([
       ...DEFAULT_COMMANDS,
@@ -270,6 +311,96 @@ export const App: React.FC<AppProps> = ({
     ]),
     [skillShortcutItems],
   );
+
+  const requestControlsMeasurement = useCallback((inputBoxRows?: number) => {
+    if (typeof inputBoxRows === 'number') {
+      const nextRows = Math.max(0, Math.ceil(inputBoxRows));
+      setReportedInputBoxRows((current) => (
+        current === nextRows ? current : nextRows
+      ));
+    }
+  }, []);
+
+  const clearCtrlCExitTimer = useCallback(() => {
+    if (ctrlCTimerRef.current) {
+      clearTimeout(ctrlCTimerRef.current);
+      ctrlCTimerRef.current = null;
+    }
+  }, []);
+
+  const armCtrlCExit = useCallback(() => {
+    clearCtrlCExitTimer();
+    setCtrlCPressedOnce(true);
+    ctrlCTimerRef.current = setTimeout(() => {
+      setCtrlCPressedOnce(false);
+      ctrlCTimerRef.current = null;
+    }, CTRL_EXIT_PROMPT_DURATION_MS);
+  }, [clearCtrlCExitTimer]);
+
+  const exitApplication = useCallback(() => {
+    clearCtrlCExitTimer();
+    setCtrlCPressedOnce(false);
+    if ('dispose' in client && typeof client.dispose === 'function') {
+      client.dispose();
+    }
+    exit();
+  }, [clearCtrlCExitTimer, client, exit]);
+
+  const clearQueuedPrompts = useCallback((): void => {
+    queuedPromptsRef.current = [];
+    setQueuedPrompts([]);
+  }, []);
+
+  const popAllQueuedPrompts = useCallback((): string | null => {
+    const currentPrompts = queuedPromptsRef.current;
+    if (currentPrompts.length === 0) return null;
+    queuedPromptsRef.current = [];
+    setQueuedPrompts([]);
+    setCommandNotice(null);
+    return currentPrompts.join('\n\n');
+  }, []);
+
+  const enqueueAgentQuery = useCallback((input: string): void => {
+    const nextPrompts = [...queuedPromptsRef.current, input];
+    queuedPromptsRef.current = nextPrompts;
+    setQueuedPrompts(nextPrompts);
+    store.clearInputBuffer();
+    setCommandNotice(null);
+  }, []);
+
+  const requestCtrlCExit = useCallback((clearInputDraft?: ClearInputDraft) => {
+    if (ctrlCPressedOnce) {
+      exitApplication();
+      return;
+    }
+
+    armCtrlCExit();
+
+    if (sessionPickerOpen) {
+      setSessionPickerOpen(false);
+      return;
+    }
+
+    if (skillPickerOpen) {
+      setSkillPickerOpen(false);
+      return;
+    }
+
+    if (clearInputDraft?.()) {
+      return;
+    }
+  }, [armCtrlCExit, ctrlCPressedOnce, exitApplication, sessionPickerOpen, skillPickerOpen]);
+
+  useLayoutEffect(() => {
+    const controlsNode = mainControlsRef.current;
+    if (!controlsNode) {
+      setControlsHeight((current) => (current === 0 ? current : 0));
+      return;
+    }
+
+    const nextRows = Math.max(0, Math.ceil(measureElement(controlsNode).height));
+    setControlsHeight((current) => (current === nextRows ? current : nextRows));
+  }, [controlsLayoutKey]);
 
   useEffect(() => {
     if (!activeDatasourceId) {
@@ -280,22 +411,18 @@ export const App: React.FC<AppProps> = ({
     }
   }, [activeDatasourceId, activeSkillId, state.workspaceConfig]);
 
-  const clampChatScrollback = (value: number): number => {
-    return Math.max(0, Math.min(maxChatScrollbackRows, value));
-  };
-
   const scrollChatBy = (delta: number): void => {
-    if (activeTab !== 'chat' || delta === 0) return;
-    setChatScrollbackRows((current) => {
-      const next = clampChatScrollback(current + delta);
-      scrollAnchor.current.handleUserScroll(next);
-      return next;
-    });
+    if (delta === 0) return;
+    chatAreaRef.current?.scrollBy(delta);
   };
 
   const jumpToLatest = (): void => {
-    scrollAnchor.current.jumpToLatest();
-    setChatScrollbackRows(0);
+    chatAreaRef.current?.scrollToBottom();
+  };
+
+  applyChatScrollDeltaRef.current = (delta: number): void => {
+    if (delta === 0) return;
+    chatAreaRef.current?.scrollBy(delta);
   };
 
   // Subscribe to state changes
@@ -335,25 +462,54 @@ export const App: React.FC<AppProps> = ({
   }, [configClient, state.workspaceConfig.skill, activeSkillId]);
 
   useEffect(() => {
-    setChatScrollbackRows((current) => {
-      const adjustedScrollback = scrollAnchor.current.handleContentGrowth(chatContentRows, current);
-      return clampChatScrollback(adjustedScrollback);
-    });
-  }, [chatContentRows, maxChatScrollbackRows]);
+    const decoder = createWheelScrollDecoder();
+    let pendingRows = 0;
+    let timer: ReturnType<typeof setTimeout> | null = null;
 
-  useEffect(() => {
-    const onData = (chunk: Buffer | string) => {
-      const delta = wheelScrollDelta(chunk.toString());
-      if (delta !== 0) {
-        scrollChatBy(delta);
+    function schedule(): void {
+      if (timer !== null) return;
+      timer = setTimeout(flush, SCROLL_FRAME_MS);
+    }
+
+    function flush(): void {
+      timer = null;
+
+      if (pendingRows === 0) return;
+      const direction = Math.sign(pendingRows);
+      const rows = Math.min(Math.abs(pendingRows), SCROLL_ROWS_PER_FRAME);
+      const delta = direction * rows;
+
+      pendingRows -= delta;
+      applyChatScrollDeltaRef.current(delta);
+
+      if (pendingRows !== 0) {
+        schedule();
       }
+    }
+
+    const onData = (chunk: Buffer | string) => {
+      const deltas = decoder.push(chunk.toString());
+      if (deltas.length === 0) return;
+
+      for (const delta of deltas) {
+        pendingRows = Math.max(
+          -MAX_PENDING_SCROLL_ROWS,
+          Math.min(MAX_PENDING_SCROLL_ROWS, pendingRows + delta),
+        );
+      }
+
+      schedule();
     };
 
     stdin.prependListener('data', onData);
     return () => {
       stdin.off('data', onData);
+      decoder.reset();
+      if (timer !== null) {
+        clearTimeout(timer);
+      }
     };
-  }, [stdin, activeTab, maxChatScrollbackRows]);
+  }, [stdin]);
 
   // Initialize connection monitoring if client supports it
   useEffect(() => {
@@ -375,11 +531,16 @@ export const App: React.FC<AppProps> = ({
     void restoreHistoricalSession(initialResume.sessionId, true);
   }, [initialResume?.enabled, initialResume?.sessionId, state.connectionStatus]);
 
+  useEffect(() => () => {
+    clearCtrlCExitTimer();
+  }, [clearCtrlCExitTimer]);
+
   async function restoreHistoricalSession(
     requestedSessionId?: string | undefined,
     startup = false,
   ): Promise<void> {
     if (store.getState().runStatus === 'running') {
+      setResumeLoadingSessionId(null);
       setCommandNotice({
         kind: 'error',
         message: 'Cannot resume another session while a run is active.',
@@ -388,6 +549,7 @@ export const App: React.FC<AppProps> = ({
     }
 
     if (!configClient) {
+      setResumeLoadingSessionId(null);
       setCommandNotice({
         kind: 'error',
         message: 'Session resume requires a live backend; it is not available in demo mode.',
@@ -395,6 +557,7 @@ export const App: React.FC<AppProps> = ({
       return;
     }
 
+    setResumeLoadingSessionId(requestedSessionId ?? 'latest');
     setCommandNotice({
       kind: 'info',
       message: requestedSessionId
@@ -418,10 +581,9 @@ export const App: React.FC<AppProps> = ({
 
       const conversation = await configClient.getSessionConversation(sessionId);
       const restored = restoreSessionConversation(conversation);
+      clearQueuedPrompts();
       store.restoreSession(restored);
-      scrollAnchor.current.reset();
-      setActiveTab('chat');
-      setChatScrollbackRows(0);
+      chatAreaRef.current?.reset();
       setCommandNotice({
         kind: 'info',
         message: `Resumed session ${restored.title ? `"${restored.title}" ` : ''}(${restored.threadId}).`,
@@ -431,6 +593,8 @@ export const App: React.FC<AppProps> = ({
         kind: 'error',
         message: `Resume failed: ${formatSessionApiError(error)}`,
       });
+    } finally {
+      setResumeLoadingSessionId(null);
     }
   }
 
@@ -600,46 +764,58 @@ export const App: React.FC<AppProps> = ({
     }
   }
 
+  const clearScreen = (): void => {
+    store.clearMessages();
+    chatAreaRef.current?.reset();
+  };
+
+  const startNewSession = (): void => {
+    clearQueuedPrompts();
+    store.startNewSession(createThreadId());
+    chatAreaRef.current?.reset();
+  };
+
   // Handle global keyboard shortcuts
   useInput((input, key) => {
+    if (key.ctrl && input === 'c') {
+      if (pickerOpen || !inputFocused) {
+        requestCtrlCExit();
+      }
+      return;
+    }
+
     // Ignore input when typing in the input box
     if (pickerOpen || inputFocused) return;
 
-    if (activeTab === 'chat' && key.pageUp) {
+    if (key.pageUp) {
       scrollChatBy(Math.max(3, Math.floor(chatViewportRowCount * 0.8)));
       return;
     }
 
-    if (activeTab === 'chat' && key.pageDown) {
+    if (key.pageDown) {
       scrollChatBy(-Math.max(3, Math.floor(chatViewportRowCount * 0.8)));
       return;
     }
 
-    if (activeTab === 'chat' && key.home) {
-      scrollAnchor.current.handleUserScroll(maxChatScrollbackRows);
-      setChatScrollbackRows(maxChatScrollbackRows);
+    if (key.home) {
+      chatAreaRef.current?.scrollToTop();
       return;
     }
 
-    if (activeTab === 'chat' && key.end) {
+    if (key.end) {
       jumpToLatest();
       return;
     }
 
     // Ctrl+L - Clear screen (reset chat messages)
     if (key.ctrl && input === 'l') {
-      store.clearMessages();
-      scrollAnchor.current.reset();
-      setChatScrollbackRows(0);
+      clearScreen();
       return;
     }
 
     // Ctrl+N - New session (reset and create new thread)
     if (key.ctrl && input === 'n') {
-      store.startNewSession(createThreadId());
-      scrollAnchor.current.reset();
-      setActiveTab('chat');
-      setChatScrollbackRows(0);
+      startNewSession();
       return;
     }
 
@@ -655,6 +831,11 @@ export const App: React.FC<AppProps> = ({
     if (commandProcessor.isCommand(trimmedInput)) {
       // Handle command execution
       await handleCommandExecution(trimmedInput);
+      return;
+    }
+
+    if (store.getState().runStatus === 'running' || drainingQueuedPromptRef.current) {
+      enqueueAgentQuery(trimmedInput);
       return;
     }
 
@@ -691,7 +872,6 @@ export const App: React.FC<AppProps> = ({
         if (result.data && typeof result.data === 'object') {
           const commandData = result.data as {
             action?: string;
-            tab?: unknown;
             sessionId?: unknown;
             datasourceId?: unknown;
             skillId?: unknown;
@@ -700,24 +880,17 @@ export const App: React.FC<AppProps> = ({
 
           if (action === 'clear_history') {
             store.clearMessages();
-            scrollAnchor.current.reset();
-            setChatScrollbackRows(0);
+            chatAreaRef.current?.reset();
           } else if (action === 'reset_session') {
+            clearQueuedPrompts();
             store.startNewSession(createThreadId());
-            scrollAnchor.current.reset();
-            setActiveTab('chat');
-            setChatScrollbackRows(0);
+            chatAreaRef.current?.reset();
           } else if (action === 'exit_application') {
-            if ('dispose' in client && typeof client.dispose === 'function') {
-              client.dispose();
-            }
-            exit();
+            exitApplication();
             return;
-          } else if (action === 'switch_tab') {
-            const tab = commandData.tab;
-            if (tab === 'chat' || tab === 'stats' || tab === 'config' || tab === 'outputs') {
-              setActiveTab(tab);
-            }
+          } else if (action === 'open_outputs') {
+            setOutputsOpen(true);
+            return;
           } else if (action === 'resume_session') {
             const sessionId = typeof commandData.sessionId === 'string'
               ? commandData.sessionId
@@ -764,8 +937,7 @@ export const App: React.FC<AppProps> = ({
     store.clearInputBuffer();
     // Reset after the message enters history so the startup banner no longer
     // contributes to the viewport slice.
-    scrollAnchor.current.jumpToLatest();
-    setChatScrollbackRows(0);
+    chatAreaRef.current?.scrollToBottom();
 
     // Prepare stable run input material. Retry attempts should not append
     // duplicate chat messages or send retry UI text back as model history.
@@ -827,9 +999,42 @@ export const App: React.FC<AppProps> = ({
     const runAttempt = async (attempt: number): Promise<void> => {
       const runInput = createRunInput();
       const runId = runInput.runId;
+      const acceptedRunIds = new Set<string>([runId]);
 
       // Set run status to running
-      store.handleLiveRunEvent({ type: 'RUN_STARTED' });
+      store.handleLiveRunEvent({ type: 'RUN_STARTED', runId });
+
+      const isCurrentRun = () => {
+        const currentRunId = store.getState().runId;
+        return currentRunId !== undefined && acceptedRunIds.has(currentRunId);
+      };
+      const currentAttemptRunId = () => {
+        const currentRunId = store.getState().runId;
+        return currentRunId !== undefined && acceptedRunIds.has(currentRunId)
+          ? currentRunId
+          : runId;
+      };
+      const shouldHandleRunEvent = (event?: RuntimeEvent) => {
+        if (!isCurrentRun()) return false;
+
+        const eventRunId = event ? runIdFromEvent(event) : undefined;
+        if (!eventRunId) return true;
+        if (acceptedRunIds.has(eventRunId)) return true;
+
+        // A backend may normalize the run id for resume/canonical identity.
+        // While this attempt is still current, treat the first new run id from
+        // this stream as an alias so later terminal events are not dropped.
+        acceptedRunIds.add(eventRunId);
+        return true;
+      };
+      const storeCurrentRunEvent = (event: RuntimeEvent) => {
+        store.handleLiveRunEvent({ ...event, _clientRunId: currentAttemptRunId() });
+      };
+      const handleCurrentRunEvent = (event: RuntimeEvent) => {
+        if (shouldHandleRunEvent(event)) {
+          storeCurrentRunEvent(event);
+        }
+      };
 
       if (attempt === 0) {
         store.addAssistantMessage('', true);
@@ -841,7 +1046,7 @@ export const App: React.FC<AppProps> = ({
       let textFlushTimer: ReturnType<typeof setTimeout> | undefined;
 
       const applyTextFlush = (flush: AssistantTextFlush | null) => {
-        if (!flush) return;
+        if (!flush || !isCurrentRun()) return;
         if (flush.type === 'text') {
           store.updateAssistantMessage(flush.content, flush.isStreaming);
         } else {
@@ -874,6 +1079,11 @@ export const App: React.FC<AppProps> = ({
       try {
         // Stream events from the agent
         for await (const event of client.runAgent(runInput)) {
+          const runtimeEvent = event as RuntimeEvent;
+          if (!shouldHandleRunEvent(runtimeEvent)) {
+            continue;
+          }
+
           // Handle specific event types for message streaming
           if (event.type === 'TEXT_MESSAGE_CONTENT' || event.type === 'TEXT_MESSAGE_CHUNK') {
             const delta = (event as { delta?: unknown }).delta;
@@ -892,11 +1102,12 @@ export const App: React.FC<AppProps> = ({
             flushTextBuffer(false);
           } else if (event.type === 'RUN_FINISHED') {
             flushTextBuffer(false);
-            store.handleLiveRunEvent(event as { type?: string; [key: string]: unknown });
+            storeCurrentRunEvent(runtimeEvent);
           } else if (event.type === 'RUN_ERROR') {
             flushTextBuffer();
             const message = (event as { message?: unknown }).message;
             const errorMessage = typeof message === 'string' ? message : 'Agent run failed';
+            storeCurrentRunEvent(runtimeEvent);
 
             // Classify and log the error
             const classifiedError = classifyError(new Error(errorMessage));
@@ -907,19 +1118,22 @@ export const App: React.FC<AppProps> = ({
             store.updateAssistantMessage(`Error: ${friendlyMessage}`, false);
           } else if (event.type === 'TOOL_CALL_START') {
             startNextTextSegment();
-            store.handleLiveRunEvent(event as { type?: string; [key: string]: unknown });
+            storeCurrentRunEvent(runtimeEvent);
           } else {
             // Feed non-text events into the state reducer. Text chunks are
             // rendered through the buffered assistant message path above.
-            store.handleLiveRunEvent(event as { type?: string; [key: string]: unknown });
+            storeCurrentRunEvent(runtimeEvent);
           }
         }
         flushTextBuffer(false);
+        if (!isCurrentRun()) {
+          return;
+        }
 
         // Ensure run is marked as finished
         const finalState = store.getState();
         if (finalState.runStatus === 'running') {
-          store.handleLiveRunEvent({ type: 'RUN_FINISHED' });
+          handleCurrentRunEvent({ type: 'RUN_FINISHED', runId: currentAttemptRunId() });
         }
 
         // Clear any previous errors on success
@@ -927,6 +1141,9 @@ export const App: React.FC<AppProps> = ({
         setRetryCount(0);
       } catch (error) {
         flushTextBuffer();
+        if (!isCurrentRun()) {
+          return;
+        }
 
         // Classify the error
         const classifiedError = classifyError(error);
@@ -966,7 +1183,9 @@ export const App: React.FC<AppProps> = ({
           // Non-retryable or max retries reached
           store.handleLiveRunEvent({
             type: 'RUN_ERROR',
+            runId: currentAttemptRunId(),
             message: friendlyMessage,
+            _clientRunId: currentAttemptRunId(),
           });
 
           // Add error message to chat with category indicator
@@ -990,6 +1209,37 @@ export const App: React.FC<AppProps> = ({
 
     await runAttempt(0);
   };
+
+  useEffect(() => {
+    handleAgentQueryRef.current = handleAgentQuery;
+  });
+
+  useEffect(() => {
+    if (drainingQueuedPromptRef.current) return;
+    if (isRestoringSession || state.runStatus === 'running') return;
+
+    const runQueuedPrompt = handleAgentQueryRef.current;
+    if (!runQueuedPrompt) return;
+
+    const [nextPrompt, ...remainingPrompts] = queuedPromptsRef.current;
+    if (!nextPrompt) return;
+
+    queuedPromptsRef.current = remainingPrompts;
+    setQueuedPrompts(remainingPrompts);
+    setCommandNotice(null);
+
+    drainingQueuedPromptRef.current = true;
+    void (async () => {
+      try {
+        await runQueuedPrompt(nextPrompt);
+      } finally {
+        drainingQueuedPromptRef.current = false;
+        if (queuedPromptsRef.current.length > 0 && store.getState().runStatus !== 'running') {
+          setQueuedPrompts([...queuedPromptsRef.current]);
+        }
+      }
+    })();
+  }, [isRestoringSession, queuedPrompts, state.runStatus]);
 
   // Handle input change (no-op - InputBox manages its own local state)
   const handleInputChange = (value: string) => {
@@ -1017,132 +1267,26 @@ export const App: React.FC<AppProps> = ({
         toolCalls: [],
         events: [],
       };
-  const showLiveActivity = false;
-  const isHomeScreen = activeTab === 'chat'
-    && visibleMessages.length === 0
-    && state.messages.length === 0
-    && !commandNotice
-    && !showLiveActivity;
-
-  // Render tab navigation
-  const renderTabs = () => {
-    const tabs: Array<{ key: TabType; label: string }> = [
-      { key: 'chat', label: 'Chat' },
-      { key: 'stats', label: 'Stats' },
-      { key: 'config', label: 'Config' },
-      { key: 'outputs', label: 'Outputs' },
-    ];
-
-    return (
-      <Box marginBottom={0}>
-        {tabs.map((tab, index) => (
-          <React.Fragment key={tab.key}>
-            {index > 0 && <Text color="gray"> | </Text>}
-            <Text
-              color={activeTab === tab.key ? 'cyan' : 'white'}
-              bold={activeTab === tab.key}
-              dimColor={activeTab !== tab.key}
-            >
-              {tab.label}
-            </Text>
-          </React.Fragment>
-        ))}
-      </Box>
-    );
-  };
-
-  // Render stats panel content
-  const renderStatsPanel = () => {
-    const messageCount = state.messages.length;
-    const userMessages = state.messages.filter(m => m.role === 'user').length;
-    const assistantMessages = state.messages.filter(m => m.role === 'assistant').length;
-    const toolCallCount = state.toolCalls.length;
-    const eventCount = state.events.length;
-    const errorLogs = errorLogger.getRecentLogs(5);
-
-    return (
-      <Box flexDirection="column" paddingX={2}>
-        <Text bold color="cyan">Session Statistics</Text>
-        <Text> </Text>
-        <Text>Total Messages: {messageCount}</Text>
-        <Text>User Messages: {userMessages}</Text>
-        <Text>Assistant Messages: {assistantMessages}</Text>
-        <Text>Tool Calls: {toolCallCount}</Text>
-        <Text>Events: {eventCount}</Text>
-        <Text> </Text>
-        <Text bold color="yellow">Connection</Text>
-        <Text>Status: {state.connectionStatus}</Text>
-        <Text>Run Status: {state.runStatus}</Text>
-        {state.lastError && (
-          <>
-            <Text> </Text>
-            <Text bold color="red">Last Error</Text>
-            <Text color="red">{state.lastError}</Text>
-          </>
-        )}
-        {errorLogs.length > 0 && (
-          <>
-            <Text> </Text>
-            <Text bold color="red">Recent Errors</Text>
-            {errorLogs.map((log, idx) => (
-              <Box key={idx} flexDirection="column" marginTop={1}>
-                <Text dimColor>
-                  {log.timestamp.toLocaleTimeString()} - {log.error.category}
-                </Text>
-                <Text color="red">{log.error.userMessage}</Text>
-              </Box>
-            ))}
-          </>
-        )}
-      </Box>
-    );
-  };
-
-  // Render config panel content
-  const renderConfigPanel = () => {
-    return (
-      <Box flexDirection="column" paddingX={2}>
-        <Text bold color="cyan">Configuration</Text>
-        <Text> </Text>
-        <Text>Thread ID: {state.threadId || 'Not set'}</Text>
-        {activeDatasourceId && <Text>Datasource ID: {activeDatasourceId}</Text>}
-        {activeSkillId && <Text>Skill ID: {activeSkillId}</Text>}
-        <Text> </Text>
-        <Text bold color="yellow">Settings</Text>
-        <Text dimColor>No configurable settings yet</Text>
-        <Text> </Text>
-        <KeybindingsHelp compact />
-      </Box>
-    );
-  };
-
-  // Render status bar with shortcuts
-  const renderStatusBar = () => {
-    const shortcuts = getStatusBarShortcuts();
-
-    return (
-      <Box
-        borderStyle="single"
-        borderColor="gray"
-        paddingX={1}
-        marginTop={1}
-      >
-        <Text dimColor>
-          {shortcuts.map(s => `${s.key}: ${s.action}`).join(' | ')}
-        </Text>
-      </Box>
-    );
-  };
+  const showResumeLoading = isRestoringSession && state.messages.length === 0;
 
   return (
     <>
       {sessionPickerOpen ? (
-        <Box flexDirection="column">
+        <Box
+          flexDirection="column"
+          minHeight={terminalRows}
+          width={terminalColumns}
+          overflowY="hidden"
+          paddingX={1}
+        >
           <SessionPicker
             sessions={pickerSessions}
             loading={pickerLoading}
             error={pickerError}
+            columns={Math.max(20, terminalColumns - 2)}
+            rows={terminalRows}
             onSelect={(sessionId) => {
+              setResumeLoadingSessionId(sessionId);
               setSessionPickerOpen(false);
               void restoreHistoricalSession(sessionId);
             }}
@@ -1152,7 +1296,13 @@ export const App: React.FC<AppProps> = ({
           />
         </Box>
       ) : skillPickerOpen ? (
-        <Box flexDirection="column">
+        <Box
+          flexDirection="column"
+          minHeight={terminalRows}
+          width={terminalColumns}
+          overflowY="hidden"
+          paddingX={1}
+        >
           <ResourcePicker
             title="Select a skill"
             items={skillPickerItems}
@@ -1173,47 +1323,100 @@ export const App: React.FC<AppProps> = ({
             }}
           />
         </Box>
+      ) : outputsOpen ? (
+        <Box
+          flexDirection="column"
+          minHeight={terminalRows}
+          width={terminalColumns}
+          overflowY="hidden"
+          paddingX={1}
+        >
+          <OutputsScreen
+            artifacts={visibleArtifacts}
+            events={state.events}
+            columns={Math.max(20, terminalColumns - 2)}
+            rows={terminalRows}
+            onCancel={() => {
+              setOutputsOpen(false);
+            }}
+          />
+        </Box>
       ) : (
         <WorkspaceFrame
           rows={terminalRows}
+          columns={terminalColumns}
+          scrollableRows={scrollableRowCount}
           scrollable={
-            <Box flexDirection="row" flexGrow={1} overflowY="hidden">
-              {activeTab === 'chat' ? (
-                isHomeScreen ? (
-                  <Box flexDirection="column" flexGrow={1} paddingX={1} overflowY="hidden">
+            <Box
+              flexDirection="row"
+              height={scrollableRowCount}
+              width={terminalColumns}
+              flexShrink={0}
+              overflowY="hidden"
+            >
+              {isHomeScreen ? (
+                  <Box
+                    flexDirection="column"
+                    height={scrollableRowCount}
+                    width="100%"
+                    flexShrink={0}
+                    overflowY="hidden"
+                  >
                     <HomeSplash
-                      rows={Math.max(12, terminalRows - 1)}
+                      rows={scrollableRowCount}
                       columns={terminalColumns}
                       startup={startup}
-                      input={(
-                        <InputBox
+                      input={(promptWidth) => (
+                        <EnhancedInputBox
                           onChange={handleInputChange}
                           onSubmit={handleSubmit}
-                          disabled={state.connectionStatus !== 'connected' || state.runStatus === 'running'}
+                          onFocusChange={setInputFocused}
+                          onClearScreen={clearScreen}
+                          onNewSession={startNewSession}
+                          onExitRequest={requestCtrlCExit}
+                          onRestoreQueuedMessages={popAllQueuedPrompts}
+                          ctrlCExitPending={ctrlCPressedOnce}
+                          disabled={inputDisabled}
                           commands={inputCommands}
                           modelName={modelName}
                           datasourceId={activeDatasourceId}
                           skillId={activeSkillId}
+                          inputWidth={promptWidth}
                         />
                       )}
                     />
                   </Box>
-                ) : (
+              ) : showResumeLoading ? (
+                  <Box
+                    flexDirection="column"
+                    flexGrow={1}
+                    paddingX={1}
+                    overflowY="hidden"
+                    justifyContent="center"
+                  >
+                    <Text color="cyan">
+                      {resumeLoadingSessionId === 'latest'
+                        ? 'Loading latest session...'
+                        : `Loading session ${resumeLoadingSessionId}...`}
+                    </Text>
+                  </Box>
+              ) : (
                   <>
                     <Box
                       flexDirection="column"
                       width={showLiveActivity ? `${chatWidth}%` : '100%'}
-                      flexGrow={1}
+                      height={scrollableRowCount}
+                      flexShrink={0}
                       paddingX={1}
                       overflowY="hidden"
                     >
                       <ChatArea
+                        ref={chatAreaRef}
                         messages={visibleMessages}
                         artifacts={visibleArtifacts}
                         totalMessageCount={state.messages.length}
                         toolCalls={state.toolCalls}
                         viewportRows={chatViewportRowCount}
-                        scrollbackRows={chatScrollbackRows}
                         columns={terminalColumns}
                         startup={transcriptStartup}
                       />
@@ -1235,29 +1438,11 @@ export const App: React.FC<AppProps> = ({
                       </Box>
                     )}
                   </>
-                )
-              ) : activeTab === 'stats' ? (
-                <Box flexDirection="column" flexGrow={1} overflowY="hidden">
-                  {renderStatsPanel()}
-                </Box>
-              ) : activeTab === 'config' ? (
-                <Box flexDirection="column" flexGrow={1} overflowY="hidden">
-                  {renderConfigPanel()}
-                </Box>
-              ) : (
-                <Box flexDirection="column" flexGrow={1} overflowY="hidden">
-                  <OutputsView
-                    artifacts={visibleArtifacts}
-                    events={state.events}
-                  />
-                </Box>
               )}
             </Box>
           }
           bottom={
-            <>
-              {activeTab !== 'chat' && renderStatusBar()}
-
+            <Box ref={mainControlsRef} flexDirection="column" flexShrink={0}>
               {commandNotice && (
                 <Box paddingX={1} flexShrink={0}>
                   <Text color={commandNotice.kind === 'error' ? 'red' : 'cyan'}>
@@ -1266,25 +1451,31 @@ export const App: React.FC<AppProps> = ({
                 </Box>
               )}
 
-              {activeTab !== 'chat' && (
-                <Box paddingX={1}>
-                  {renderTabs()}
-                </Box>
+              {queuedPrompts.length > 0 && (
+                <QueuedPromptDisplay prompts={queuedPrompts} />
               )}
 
               {!isHomeScreen && (
-                <InputBox
+                <EnhancedInputBox
                   onChange={handleInputChange}
                   onSubmit={handleSubmit}
-                  disabled={state.connectionStatus !== 'connected' || state.runStatus === 'running'}
+                  onFocusChange={setInputFocused}
+                  onClearScreen={clearScreen}
+                  onNewSession={startNewSession}
+                  onExitRequest={requestCtrlCExit}
+                  onRestoreQueuedMessages={popAllQueuedPrompts}
+                  ctrlCExitPending={ctrlCPressedOnce}
+                  onLayoutChange={requestControlsMeasurement}
+                  disabled={inputDisabled}
                   commands={inputCommands}
                   modelName={modelName}
                   datasourceId={activeDatasourceId}
                   skillId={activeSkillId}
+                  inputWidth={terminalColumns}
                 />
               )}
 
-              {(isHomeScreen || activeTab !== 'chat') && (
+              {isHomeScreen && (
                 <StatusFooter
                   connectionStatus={state.connectionStatus}
                   runStatus={state.runStatus}
@@ -1292,7 +1483,7 @@ export const App: React.FC<AppProps> = ({
                   directory={directory}
                 />
               )}
-            </>
+            </Box>
           }
         />
       )}

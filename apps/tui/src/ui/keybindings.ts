@@ -176,11 +176,8 @@ export class CommandCompletion {
  */
 export const KEYBINDINGS: KeybindingAction[] = [
   // System shortcuts
-  { key: 'Ctrl+C', description: 'Exit application', category: 'system' },
+  { key: 'Ctrl+C', description: 'Clear input, press again to exit', category: 'system' },
   { key: 'Ctrl+L', description: 'Clear screen', category: 'system' },
-
-  // Navigation shortcuts
-  { key: '/tab', description: 'Switch tab', category: 'navigation' },
 
   // Session shortcuts
   { key: 'Ctrl+N', description: 'New session', category: 'session' },
@@ -220,8 +217,12 @@ export function getKeybindingsHelp(): string {
   ];
 
   return categories
-    .map(({ title, category }) => {
-      const bindings = getKeybindingsByCategory(category);
+    .map(({ title, category }) => ({
+      title,
+      bindings: getKeybindingsByCategory(category),
+    }))
+    .filter(({ bindings }) => bindings.length > 0)
+    .map(({ title, bindings }) => {
       const lines = bindings.map(kb => `  ${formatKeybinding(kb)}`);
       return `${title}:\n${lines.join('\n')}`;
     })
@@ -233,11 +234,10 @@ export function getKeybindingsHelp(): string {
  */
 export function getStatusBarShortcuts(): Array<{ key: string; action: string }> {
   return [
-    { key: '/tab', action: 'Switch' },
     { key: '↑/↓', action: 'History' },
     { key: 'Ctrl+N', action: 'New' },
     { key: 'Ctrl+L', action: 'Clear' },
-    { key: 'Ctrl+C', action: 'Exit' },
+    { key: 'Ctrl+C', action: 'Clear / Exit' },
   ];
 }
 
@@ -245,13 +245,6 @@ export function getStatusBarShortcuts(): Array<{ key: string; action: string }> 
  * Default command suggestions
  */
 export const DEFAULT_COMMANDS = [
-  '/tab chat',
-  '/tab stats',
-  '/tab config',
-  '/tab outputs',
-  '/chat',
-  '/stats',
-  '/config',
   '/outputs',
   '/datasource',
   '/datasource list',

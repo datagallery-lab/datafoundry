@@ -83,7 +83,7 @@ See [Web workbench guide](guides/web-workbench.md).
 
 The TUI suits remote servers and terminal workflows:
 
-- Chat, Stats, Config, and Outputs views.
+- Chat-first terminal UI with a separate `/outputs` page.
 - `/datasource` to select a data source.
 - `/skill` to select a Skill.
 - `/resume` to restore server session history.

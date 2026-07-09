@@ -415,7 +415,7 @@ export const FullKeybindingsDemo: React.FC = () => {
 
       <Box borderStyle="single" borderColor="gray" paddingX={1}>
         <Text dimColor>
-          Mode: {mode} | Ctrl+H: Help | Ctrl+L: Clear | Ctrl+C: Exit
+          Mode: {mode} | Ctrl+H: Help | Ctrl+L: Clear | Ctrl+C: Clear/Exit
         </Text>
       </Box>
     </Box>

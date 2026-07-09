@@ -83,7 +83,7 @@ Web 工作台适合本地演示和日常分析：
 
 TUI 适合远程服务器和终端工作流：
 
-- 支持 Chat、Stats、Config、Outputs 视图。
+- 支持以 Chat 为主界面的终端 UI，并提供独立 `/outputs` 页面。
 - 支持 `/datasource` 选择数据源。
 - 支持 `/skill` 选择 Skill。
 - 支持 `/resume` 恢复服务端历史会话。

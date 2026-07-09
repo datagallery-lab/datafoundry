@@ -1,7 +1,9 @@
 const ENTER_ALTERNATE_SCREEN = "\u001B[?1049h\u001B[H";
 const LEAVE_ALTERNATE_SCREEN = "\u001B[?1049l";
-const ENABLE_MOUSE_TRACKING = "\u001B[?1006h\u001B[?1000h";
-const DISABLE_MOUSE_TRACKING = "\u001B[?1000l\u001B[?1006l";
+const CLEAR_SCREEN = "\u001B[2J\u001B[H";
+const HIDE_CURSOR = "\u001B[?25l";
+const ENABLE_MOUSE_TRACKING = "\u001B[?1002h\u001B[?1006h";
+const DISABLE_MOUSE_TRACKING = "\u001B[?1006l\u001B[?1002l";
 const SHOW_CURSOR = "\u001B[?25h";
 
 export type TerminalScreenOutput = Pick<NodeJS.WriteStream, "write"> & {
@@ -24,7 +26,7 @@ export function enterAlternateScreen(
   }
 
   let active = true;
-  output.write(ENTER_ALTERNATE_SCREEN + ENABLE_MOUSE_TRACKING);
+  output.write(ENTER_ALTERNATE_SCREEN + CLEAR_SCREEN + HIDE_CURSOR + ENABLE_MOUSE_TRACKING);
 
   const writeLeaveSequence = () => {
     if (!active) return;

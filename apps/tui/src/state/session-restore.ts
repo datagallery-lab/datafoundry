@@ -118,14 +118,26 @@ function buildAssistantRunBlock(
     // The run produced tool calls but no surviving assistant text; still render
     // the tool calls so the turn is not dropped.
     for (const toolCall of runToolCalls) {
-      elements.push({ type: "tool_call", toolCallId: toolCall.toolCallId, timestamp });
+      elements.push({
+        type: "tool_call",
+        toolCallId: toolCall.toolCallId,
+        timestamp,
+        runId,
+        toolCall: conversationToolCallToLiveRecord(toolCall),
+      });
     }
   } else {
     const toolsBySegment = assignToolCallsToSegments(segments, runToolCalls);
     segments.forEach((segment, segmentIndex) => {
       elements.push({ type: "text", content: segment.content, timestamp });
       for (const toolCall of toolsBySegment[segmentIndex] ?? []) {
-        elements.push({ type: "tool_call", toolCallId: toolCall.toolCallId, timestamp });
+        elements.push({
+          type: "tool_call",
+          toolCallId: toolCall.toolCallId,
+          timestamp,
+          runId,
+          toolCall: conversationToolCallToLiveRecord(toolCall),
+        });
       }
     });
   }
@@ -233,28 +245,31 @@ export function conversationToToolCalls(
 ): LiveToolCallRecord[] {
   return [...toolCalls]
     .sort((left, right) => toolCallSortKey(left) - toolCallSortKey(right))
-    .map((toolCall) => {
-      const now = Date.now();
-      const status = toolCall.status === "completed"
-        ? "success"
-        : toolCall.status === "failed"
-          ? "failed"
-          : "running";
-      const result = serializeToolCallResult(toolCall);
-      const record: LiveToolCallRecord = {
-        id: toolCall.toolCallId,
-        name: toolCall.toolName ?? toolCall.name ?? "tool",
-        status,
-        startedAtMs: now,
-      };
-      if (status !== "running") {
-        record.finishedAtMs = now;
-      }
-      if (result !== undefined) {
-        record.result = result;
-      }
-      return record;
-    });
+    .map(conversationToolCallToLiveRecord);
+}
+
+function conversationToolCallToLiveRecord(toolCall: ConversationToolCall): LiveToolCallRecord {
+  const now = Date.now();
+  const status = toolCall.status === "completed"
+    ? "success"
+    : toolCall.status === "failed"
+      ? "failed"
+      : "pending";
+  const result = serializeToolCallResult(toolCall);
+  const record: LiveToolCallRecord = {
+    id: toolCall.toolCallId,
+    name: toolCall.toolName ?? toolCall.name ?? "tool",
+    status,
+    runId: toolCall.runId,
+    startedAtMs: now,
+  };
+  if (status !== "pending") {
+    record.finishedAtMs = now;
+  }
+  if (result !== undefined) {
+    record.result = result;
+  }
+  return record;
 }
 
 function groupToolCallsByRun(

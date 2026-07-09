@@ -1,4 +1,5 @@
 import type { DisplayMessage, TuiSessionState, MessageElement } from "./tui-state.js";
+import type { LiveToolCallRecord } from "./live-run-state.js";
 
 /**
  * Add a user message to the chat history
@@ -233,26 +234,39 @@ export function updateLastAssistantMessage(
 export function insertToolCallIntoLastMessage(
   state: TuiSessionState,
   toolCallId: string,
+  toolCall?: LiveToolCallRecord | undefined,
+  runId?: string | undefined,
 ): TuiSessionState {
   const messages = [...state.messages];
   const lastIndex = messages.length - 1;
+  const elementRunId = runId ?? state.runId;
 
   if (lastIndex >= 0) {
     const lastMsg = messages[lastIndex];
     if (lastMsg && lastMsg.role === "assistant") {
       if (lastMsg.elements.some((element) =>
-        element.type === 'tool_call' && element.toolCallId === toolCallId
+        element.type === 'tool_call' &&
+        element.toolCallId === toolCallId &&
+        (elementRunId === undefined ||
+          element.runId === undefined ||
+          element.runId === elementRunId)
       )) {
         return state;
       }
 
       const now = Date.now();
+      const scopedToolCall =
+        toolCall && elementRunId && toolCall.runId !== elementRunId
+          ? { ...toolCall, runId: elementRunId }
+          : toolCall;
       const elements = [
         ...lastMsg.elements,
         {
           type: 'tool_call' as const,
           toolCallId,
           timestamp: now,
+          ...(elementRunId ? { runId: elementRunId } : {}),
+          ...(scopedToolCall ? { toolCall: scopedToolCall } : {}),
         },
       ];
 
@@ -267,6 +281,61 @@ export function insertToolCallIntoLastMessage(
     ...state,
     messages,
   };
+}
+
+/**
+ * Keep tool call snapshots embedded in assistant messages fresh so historical
+ * messages can still render after the current LiveRun toolCalls array resets.
+ */
+export function updateToolCallInMessages(
+  state: TuiSessionState,
+  toolCall: LiveToolCallRecord,
+  runId?: string | undefined,
+  previousRunId?: string | undefined,
+): TuiSessionState {
+  let changed = false;
+  const scopedToolCall =
+    runId && toolCall.runId !== runId ? { ...toolCall, runId } : toolCall;
+  const messages = state.messages.map((message) => {
+    let messageChanged = false;
+    const elements = message.elements.map((element): MessageElement => {
+      if (
+        element.type !== 'tool_call' ||
+        element.toolCallId !== toolCall.id
+      ) {
+        return element;
+      }
+
+      const runIdMismatch =
+        runId !== undefined &&
+        element.runId !== undefined &&
+        element.runId !== runId;
+      if (
+        runIdMismatch &&
+        (previousRunId === undefined || element.runId !== previousRunId)
+      ) {
+        return element;
+      }
+
+      messageChanged = true;
+      return {
+        ...element,
+        ...(runId ? { runId } : {}),
+        toolCall: scopedToolCall,
+      };
+    });
+
+    if (!messageChanged) {
+      return message;
+    }
+    changed = true;
+    return {
+      ...message,
+      elements,
+    };
+  });
+
+  return changed ? { ...state, messages } : state;
 }
 
 /**

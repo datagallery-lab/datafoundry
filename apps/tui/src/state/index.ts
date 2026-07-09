@@ -2,6 +2,7 @@
 export type {
   LiveRun,
   LiveRunStatus,
+  LiveToolCallStatus,
   LivePlanTask,
   LiveTaskStatus,
   LiveAudit,
@@ -17,6 +18,7 @@ export {
   createInitialLiveRun,
   createInitialSessionUsage,
   reduceLiveRunEvent,
+  isTerminalToolCallStatus,
   deriveRunUsage,
   accumulateSessionUsage,
   deriveLiveSessionView,
@@ -50,6 +52,7 @@ export {
   updateLastAssistantMessage,
   appendToLastAssistantMessage,
   insertToolCallIntoLastMessage,
+  updateToolCallInMessages,
   finalizeLastAssistantMessage,
   clearMessages,
   getRecentMessages,

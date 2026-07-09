@@ -7,7 +7,7 @@ interface HomeSplashProps {
   rows: number;
   columns: number;
   startup: StartupInfo;
-  input: React.ReactNode;
+  input: React.ReactNode | ((width: number) => React.ReactNode);
 }
 
 const WORDMARK = [
@@ -63,7 +63,7 @@ export function HomeSplash({ rows, columns, startup, input }: HomeSplashProps) {
 
         <Box height={1} />
         <Box width={promptWidth} flexDirection="column">
-          {input}
+          {typeof input === 'function' ? input(promptWidth) : input}
         </Box>
 
         <Box height={1} />

@@ -38,7 +38,7 @@ export class RunFinalizer {
       run_id: this.input.runId,
       status: "suspended"
     });
-    this.input.emit(createRunStatusDelta("suspended"));
+    this.input.emit(createRunStatusDelta("suspended", { runId: this.input.runId }));
   }
 
   async cancel(input: { interactionResolvedEvent: BaseEvent; terminalEvent: BaseEvent }): Promise<void> {
@@ -48,7 +48,7 @@ export class RunFinalizer {
       run_id: this.input.runId,
       status: "canceled"
     });
-    this.input.emit(createRunStatusDelta("canceled"));
+    this.input.emit(createRunStatusDelta("canceled", { runId: this.input.runId }));
     await this.input.destroyWorkspace().catch(() => undefined);
     this.input.emit(input.terminalEvent);
   }
@@ -62,7 +62,10 @@ export class RunFinalizer {
       status: "canceled",
       ...(input.reason ? { error_message: input.reason } : {})
     });
-    this.input.emit(createRunStatusDelta("canceled", input.reason));
+    this.input.emit(createRunStatusDelta("canceled", {
+      errorMessage: input.reason,
+      runId: this.input.runId
+    }));
     await this.input.destroyWorkspace().catch(() => undefined);
     this.input.emit(input.terminalEvent);
   }
@@ -87,7 +90,7 @@ export class RunFinalizer {
       run_id: this.input.runId,
       status: "completed"
     });
-    this.input.emit(createRunStatusDelta("completed"));
+    this.input.emit(createRunStatusDelta("completed", { runId: this.input.runId }));
     await this.input.destroyWorkspace().catch(() => undefined);
     this.input.emit(input.terminalEvent);
   }
@@ -100,7 +103,10 @@ export class RunFinalizer {
       status: "failed",
       error_message: input.errorMessage
     });
-    this.input.emit(createRunStatusDelta("failed", input.errorMessage));
+    this.input.emit(createRunStatusDelta("failed", {
+      errorMessage: input.errorMessage,
+      runId: this.input.runId
+    }));
     void this.input.destroyWorkspace().catch(() => undefined);
     this.input.emit(input.terminalEvent);
   }
@@ -192,15 +198,16 @@ export class RunFinalizer {
 
 export const createRunStatusDelta = (
   status: RunStatus,
-  errorMessage?: string
+  options: { errorMessage?: string | undefined; runId?: string | undefined } = {}
 ): BaseEvent => ({
   type: EventType.STATE_DELTA,
+  ...(options.runId ? { runId: options.runId } : {}),
   delta: [
     { op: "add", path: "/runStatus", value: status },
-    ...(errorMessage ? [{ op: "add", path: "/errorMessage", value: errorMessage }] : [])
+    ...(options.errorMessage ? [{ op: "add", path: "/errorMessage", value: options.errorMessage }] : [])
   ],
   timestamp: Date.now()
-});
+} as BaseEvent);
 
 const DEFAULT_MEMORY_EXTRACTION_TIMEOUT_MS = 2000;
 

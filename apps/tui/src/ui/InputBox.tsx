@@ -13,6 +13,8 @@ interface InputBoxProps {
   modelName?: string | undefined;
   datasourceId?: string | undefined;
   skillId?: string | undefined;
+  onExitRequest?: (clearInputDraft: () => boolean) => void;
+  ctrlCExitPending?: boolean | undefined;
 }
 
 export const InputBox: React.FC<InputBoxProps> = ({
@@ -25,6 +27,8 @@ export const InputBox: React.FC<InputBoxProps> = ({
   modelName,
   datasourceId,
   skillId,
+  onExitRequest,
+  ctrlCExitPending = false,
 }) => {
   const [localValue, setLocalValue] = useState('');
   const [completionHint, setCompletionHint] = useState<string>('');
@@ -128,8 +132,26 @@ export const InputBox: React.FC<InputBoxProps> = ({
         return;
       }
 
-      // Handle Ctrl+C (let ink handle it)
+      // Ctrl+C follows qwen-code behavior: clear a draft first, then let the
+      // application-level double-press exit state decide whether to quit.
       if (key.ctrl && input === 'c') {
+        if (onExitRequest) {
+          onExitRequest(() => {
+            if (localValue.length === 0) {
+              return false;
+            }
+            setLocalValue('');
+            onChange('');
+            setCompletionHint('');
+            completionRef.current.reset();
+            return true;
+          });
+        } else if (localValue.length > 0) {
+          setLocalValue('');
+          onChange('');
+          setCompletionHint('');
+          completionRef.current.reset();
+        }
         return;
       }
 
@@ -213,12 +235,18 @@ export const InputBox: React.FC<InputBoxProps> = ({
                 {metaParts.join(' · ')}
               </Text>
             </Text>
-            <Text backgroundColor={panelBackground}>
-              <Text color="white" backgroundColor={panelBackground}>tab</Text>
-              <Text dimColor backgroundColor={panelBackground}> complete  </Text>
-              <Text color="white" backgroundColor={panelBackground}>enter</Text>
-              <Text dimColor backgroundColor={panelBackground}> send</Text>
-            </Text>
+            {ctrlCExitPending ? (
+              <Text color="yellow" backgroundColor={panelBackground} wrap="truncate-end">
+                Press Ctrl+C again to exit.
+              </Text>
+            ) : (
+              <Text backgroundColor={panelBackground}>
+                <Text color="white" backgroundColor={panelBackground}>tab</Text>
+                <Text dimColor backgroundColor={panelBackground}> complete  </Text>
+                <Text color="white" backgroundColor={panelBackground}>enter</Text>
+                <Text dimColor backgroundColor={panelBackground}> send</Text>
+              </Text>
+            )}
           </Box>
         </Box>
       </Box>

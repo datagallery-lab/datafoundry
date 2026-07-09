@@ -9,7 +9,13 @@
  */
 import { buildChatLines, countChatLines, chatContentWidth } from './dist/ui/transcript-lines.js';
 import { textWidth, wrapToWidth, truncateToWidth } from './dist/ui/text-width.js';
-import { chatViewportRows } from './dist/ui/workspace-layout.js';
+import { availableContentRows, estimateControlsRows } from './dist/ui/workspace-layout.js';
+import {
+  createWheelScrollDecoder,
+  wheelScrollDelta,
+  wheelScrollDeltas,
+  WHEEL_LINES_PER_TICK,
+} from './dist/input/mouse-wheel.js';
 import type { DisplayMessage, LiveToolCallRecord, MessageElement } from './dist/state/index.js';
 
 let failures = 0;
@@ -28,6 +34,10 @@ function eq<T>(actual: T, expected: T): boolean {
 
 function visualLineText(line: { node: unknown }): string {
   return reactNodeText(line.node);
+}
+
+function unindentedLineText(line: { node: unknown }): string {
+  return visualLineText(line).trimStart();
 }
 
 function reactNodeText(node: unknown): string {
@@ -101,10 +111,34 @@ check(eq(wrapToWidth('hello world', 5), ['hello', 'world']), 'wrap breaks at spa
 check(wrapToWidth('', 10).length === 1, 'empty line still yields one row');
 check(textWidth(truncateToWidth('中文测试内容很长', 5)) <= 5, 'truncate fits within width');
 
-// --- layout constants (unchanged) ---
+// --- layout helpers ---
 check(chatContentWidth(120) === 116, 'content width is columns - 4');
-check(chatViewportRows(40, { commandNotice: false, activeTab: 'chat' }) === 36, 'chat viewport for 40 rows is 36');
-check(chatViewportRows(40, { commandNotice: true, activeTab: 'chat' }) === 35, 'chat viewport with notice is 35');
+check(estimateControlsRows({ commandNotice: false, activeTab: 'chat' }) === 5, 'controls estimate matches empty enhanced input height');
+check(estimateControlsRows({ commandNotice: true, activeTab: 'chat' }) === 6, 'controls estimate includes command notice');
+check(estimateControlsRows({ commandNotice: false, activeTab: 'chat', inputBoxRows: 9 }) === 9, 'controls estimate follows expanded input height');
+check(estimateControlsRows({ commandNotice: true, activeTab: 'chat', inputBoxRows: 9 }) === 10, 'controls estimate combines notice and expanded input height');
+check(estimateControlsRows({ commandNotice: false, activeTab: 'chat', homeScreen: true }) === 1, 'home controls estimate only reserves status footer');
+check(availableContentRows(40, 5) === 35, 'content viewport subtracts measured controls rows');
+check(availableContentRows(40, 9) === 31, 'content viewport shrinks when measured input grows');
+check(availableContentRows(8, 12) === 0, 'content viewport can collapse instead of overlapping controls');
+
+// --- mouse wheel parsing ---
+const ESC = '\u001B';
+const wheelBurst = `${ESC}[<64;10;2M${ESC}[<65;10;3M${ESC}[<64;10;4M`;
+check(
+  eq(wheelScrollDeltas(wheelBurst), [WHEEL_LINES_PER_TICK, -WHEEL_LINES_PER_TICK, WHEEL_LINES_PER_TICK]),
+  'wheel parser returns one delta per SGR wheel event',
+);
+check(
+  wheelScrollDelta(wheelBurst) === WHEEL_LINES_PER_TICK,
+  'legacy wheel delta helper still returns the summed delta',
+);
+const wheelDecoder = createWheelScrollDecoder();
+check(wheelDecoder.push(`${ESC}[<64;10`).length === 0, 'wheel decoder buffers split SGR sequences');
+check(
+  eq(wheelDecoder.push(`;2M${ESC}[<65;10;3M`), [WHEEL_LINES_PER_TICK, -WHEEL_LINES_PER_TICK]),
+  'wheel decoder reassembles split SGR sequences before emitting deltas',
+);
 
 // --- startup banner ---
 const startupLines = buildChatLines({
@@ -130,14 +164,14 @@ check(
 // --- exact line counts ---
 const columns = 120;
 check(
-  countChatLines({ messages: [textMessage('m1', 'hello')], artifacts: [], columns }) === 3,
-  'short message = header + 1 line + trailing blank (3 rows)',
+  countChatLines({ messages: [textMessage('m1', 'hello')], artifacts: [], columns }) === 5,
+  'short message = top padding + header + 1 line + trailing blank (5 rows)',
 );
 
 // bodyWidth = 116 - 2 = 114 -> 57 CJK chars per row -> 60 chars wrap to 2 rows.
 check(
-  countChatLines({ messages: [textMessage('m2', '中'.repeat(60))], artifacts: [], columns }) === 4,
-  '60 CJK chars wrap to 2 rows (header + 2 + blank = 4)',
+  countChatLines({ messages: [textMessage('m2', '中'.repeat(60))], artifacts: [], columns }) === 6,
+  '60 CJK chars wrap to 2 rows (top padding + header + 2 + blank = 6)',
 );
 
 // The previous length-based estimate would have counted this as a single row,
@@ -162,7 +196,7 @@ const tableRows = buildChatLines({
   columns: 40,
 })
   .filter((line) => line.key.startsWith('m:tbl:e0:k0:'))
-  .map(visualLineText);
+  .map(unindentedLineText);
 
 check(tableRows[0]?.startsWith('┌') === true && tableRows[0]?.endsWith('┐') === true, 'markdown table has a closed top border');
 check(tableRows[1]?.startsWith('│') === true && tableRows[1]?.endsWith('│') === true, 'markdown table header has side borders');
@@ -181,7 +215,7 @@ const tallTableRows = buildChatLines({
   columns,
 })
   .filter((line) => line.key.startsWith('m:talltbl:e0:k0:'))
-  .map(visualLineText);
+  .map(unindentedLineText);
 check(
   tallTableRows.some((row) => row.startsWith('│') && row.endsWith('│') && row.includes('more rows')),
   'markdown table overflow notice stays inside table borders',
@@ -198,7 +232,7 @@ const wideTableRows = buildChatLines({
   columns: 40,
 })
   .filter((line) => line.key.startsWith('m:widetbl:e0:k0:'))
-  .map(visualLineText);
+  .map(unindentedLineText);
 check(
   wideTableRows.some((row) => row.startsWith('│') && row.endsWith('│') && row.includes('more column')),
   'markdown table hidden-column notice stays inside table borders',
@@ -207,11 +241,11 @@ check(
 // --- block spacing: exactly one blank row between text and tool calls ---
 const toolCalls: LiveToolCallRecord[] = [toolRecord('tc1'), toolRecord('tc2')];
 
-// header + "a" + 1 blank + tool line + trailing blank = 5 rows.
+// top padding + header + "a" + 1 blank + tool line + trailing blank = 7 rows.
 const paddedTextThenTool = elementMessage('s1', [textElement('a\n\n\n'), toolElement('tc1')]);
 check(
-  countChatLines({ messages: [paddedTextThenTool], artifacts: [], toolCalls, columns }) === 5,
-  'text + tool = header + text + 1 blank + tool + trailing blank (5 rows)',
+  countChatLines({ messages: [paddedTextThenTool], artifacts: [], toolCalls, columns }) === 7,
+  'text + tool = top padding + header + text + 1 blank + tool + trailing blank (7 rows)',
 );
 
 // Trailing newlines the model emits before a tool must not inflate the gap.
@@ -223,11 +257,11 @@ check(
 );
 
 // text -> tool -> text: a single blank between each of the three blocks.
-// header + "a" + blank + tool + blank + "b" + trailing blank = 7 rows.
+// top padding + header + "a" + blank + tool + blank + "b" + trailing blank = 9 rows.
 const textToolText = elementMessage('s3', [textElement('a'), toolElement('tc1'), textElement('b')]);
 check(
-  countChatLines({ messages: [textToolText], artifacts: [], toolCalls, columns }) === 7,
-  'text/tool/text join with one blank between each block (7 rows)',
+  countChatLines({ messages: [textToolText], artifacts: [], toolCalls, columns }) === 9,
+  'text/tool/text join with one blank between each block (9 rows)',
 );
 
 // A whitespace-only text element (e.g. the lone "\n\n" before a tool) is skipped
@@ -240,11 +274,11 @@ check(
 );
 
 // Two adjacent tool calls keep a single blank between them.
-// header + "a" + blank + tool + blank + tool + trailing blank = 7 rows.
+// top padding + header + "a" + blank + tool + blank + tool + trailing blank = 9 rows.
 const textToolTool = elementMessage('s5', [textElement('a'), toolElement('tc1'), toolElement('tc2')]);
 check(
-  countChatLines({ messages: [textToolTool], artifacts: [], toolCalls, columns }) === 7,
-  'adjacent tool calls keep exactly one blank between them (7 rows)',
+  countChatLines({ messages: [textToolTool], artifacts: [], toolCalls, columns }) === 9,
+  'adjacent tool calls keep exactly one blank between them (9 rows)',
 );
 
 // --- deterministic, stable slicing ---

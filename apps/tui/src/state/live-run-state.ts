@@ -26,10 +26,19 @@ export type LiveAudit = {
 
 export type LiveRunStatus = "idle" | "running" | "completed" | "failed";
 
+export type LiveToolCallStatus =
+  | "pending"
+  | "running"
+  | "success"
+  | "failed"
+  | "cancelled";
+
 export type LiveToolCallRecord = {
   id: string;
   name: string;
-  status: "running" | "success" | "failed";
+  status: LiveToolCallStatus;
+  /** Run identity this tool call belongs to; keeps reused provider call ids scoped. */
+  runId?: string | undefined;
   /** Linked ACTIVITY STEP step_id when correlated with a backend tool wrapper. */
   stepId?: string | undefined;
   /** Raw payload from AG-UI TOOL_CALL_RESULT when CopilotKit thread lacks tool message. */
@@ -81,6 +90,8 @@ export type SessionUsageStats = {
 };
 
 export type LiveRun = {
+  runId?: string | undefined;
+  agentResponseComplete?: boolean | undefined;
   plan: LivePlanTask[];
   events: TimelineEvent[];
   artifacts: DataArtifact[];
@@ -206,29 +217,26 @@ export function reduceLiveRunEvent(state: LiveRun, event: AgUiLikeEvent): LiveRu
     case "RUN_STARTED":
       return {
         ...createInitialLiveRun(),
+        ...optionalRunId(runIdFromEvent(event)),
+        agentResponseComplete: false,
         runStatus: "running",
         runStartedAt: Date.now(),
       };
     case "RUN_FINISHED":
-      return {
-        ...state,
-        runStatus: "completed",
-        runFinishedAt: Date.now(),
-        plan: state.plan.map((task) =>
-          task.status === "running" || task.id === "final"
-            ? { ...task, status: "completed" }
-            : task,
-        ),
-        toolCalls: finalizeRunningToolCalls(state.toolCalls, "success"),
-      };
+      if (isTerminalRunStatus(state.runStatus) && state.runStatus !== "completed") {
+        return state;
+      }
+      return completeRunState(state, "completed", "success");
     case "RUN_ERROR":
-      return {
-        ...state,
-        runStatus: "failed",
-        runFinishedAt: Date.now(),
-        errorMessage: stringValue(event.message) ?? "Agent 运行失败",
-        toolCalls: finalizeRunningToolCalls(state.toolCalls, "failed"),
-      };
+      if (isTerminalRunStatus(state.runStatus) && state.runStatus !== "failed") {
+        return state;
+      }
+      return completeRunState(
+        state,
+        "failed",
+        "failed",
+        stringValue(event.message) ?? "Agent 运行失败",
+      );
     case "STATE_SNAPSHOT":
       return reduceStateSnapshot(state, event);
     case "STATE_DELTA":
@@ -249,6 +257,56 @@ export function reduceLiveRunEvent(state: LiveRun, event: AgUiLikeEvent): LiveRu
   }
 }
 
+export function isTerminalToolCallStatus(status: LiveToolCallStatus): boolean {
+  return status === "success" || status === "failed" || status === "cancelled";
+}
+
+function isTerminalRunStatus(status: LiveRunStatus): boolean {
+  return status === "completed" || status === "failed";
+}
+
+function applyRunStatus(state: LiveRun, status: LiveRunStatus): LiveRun {
+  if (state.runStatus === status && !isTerminalRunStatus(status)) return state;
+  if (isTerminalRunStatus(state.runStatus) && state.runStatus !== status) return state;
+  if (status === "completed") return completeRunState(state, "completed", "success");
+  if (status === "failed") return completeRunState(state, "failed", "failed");
+  return { ...state, runStatus: status };
+}
+
+function completeRunState(
+  state: LiveRun,
+  runStatus: Extract<LiveRunStatus, "completed" | "failed">,
+  finalToolStatus: Extract<LiveToolCallStatus, "success" | "failed">,
+  errorMessage?: string,
+): LiveRun {
+  return {
+    ...state,
+    agentResponseComplete: true,
+    runStatus,
+    ...(errorMessage ? { errorMessage } : {}),
+    runFinishedAt: state.runFinishedAt ?? Date.now(),
+    plan: runStatus === "completed"
+      ? state.plan.map((task) =>
+          task.status === "running" || task.id === "final"
+            ? { ...task, status: "completed" }
+            : task,
+        )
+      : state.plan,
+    toolCalls: finalizeRunningToolCalls(state.toolCalls, finalToolStatus),
+  };
+}
+
+function adoptRunId(state: LiveRun, runId: string): LiveRun {
+  if (state.runId === runId) return state;
+  const previousRunId = state.runId;
+  const toolCalls = state.toolCalls.map((toolCall) =>
+    toolCall.runId === undefined || toolCall.runId === previousRunId
+      ? { ...toolCall, runId }
+      : toolCall,
+  );
+  return { ...state, runId, toolCalls };
+}
+
 export function planTasksToTimelineSteps(tasks: LivePlanTask[]): TimelineStep[] {
   return tasks.map((task) => ({
     id: task.id,
@@ -260,7 +318,13 @@ export function planTasksToTimelineSteps(tasks: LivePlanTask[]): TimelineStep[] 
 function reduceStateSnapshot(state: LiveRun, event: AgUiLikeEvent): LiveRun {
   const snapshot = recordValue(event.snapshot);
   const status = liveStatusFromValue(snapshot?.runStatus);
-  return status ? { ...state, runStatus: status } : state;
+  const runId = stringValue(snapshot?.runId);
+  if (!status && !runId) return state;
+
+  let next = state;
+  if (runId) next = adoptRunId(next, runId);
+  if (status) next = applyRunStatus(next, status);
+  return next;
 }
 
 function reduceStateDelta(state: LiveRun, event: AgUiLikeEvent): LiveRun {
@@ -271,7 +335,7 @@ function reduceStateDelta(state: LiveRun, event: AgUiLikeEvent): LiveRun {
   for (const op of patch) {
     if (op.path === "/runStatus") {
       const status = liveStatusFromValue(op.value);
-      if (status) next = { ...next, runStatus: status };
+      if (status) next = applyRunStatus(next, status);
     }
     if (op.path === "/errorMessage") {
       const errorMessage = stringValue(op.value);
@@ -321,6 +385,7 @@ function reduceActivitySnapshot(state: LiveRun, event: AgUiLikeEvent): LiveRun {
         id: eventId,
         name: toolName,
         status: nextToolStatus,
+        ...optionalRunId(state.runId),
         ...(stepId ? { stepId } : toolCall?.stepId ? { stepId: toolCall.stepId } : {}),
         startedAtMs: toolCall?.startedAtMs ?? now,
         ...(nextToolStatus !== "running"
@@ -412,6 +477,7 @@ function reduceToolEvent(state: LiveRun, event: AgUiLikeEvent): LiveRun {
     directEvent ?? correlatedEvent,
   );
   const id = explicitId ?? correlatedToolCall?.id ?? `${toolName}-${state.events.length + 1}`;
+  const recordRunId = runIdFromEvent(event) ?? state.runId;
 
   let nextState = state;
   if (
@@ -430,6 +496,7 @@ function reduceToolEvent(state: LiveRun, event: AgUiLikeEvent): LiveRun {
       id,
       name: toolName,
       status: "running",
+      ...optionalRunId(recordRunId),
       ...(existing?.stepId ? { stepId: existing.stepId } : {}),
       startedAtMs: existing?.startedAtMs ?? Date.now(),
     });
@@ -440,6 +507,7 @@ function reduceToolEvent(state: LiveRun, event: AgUiLikeEvent): LiveRun {
       id,
       name: toolName,
       status,
+      ...optionalRunId(recordRunId),
       startedAtMs: existing?.startedAtMs ?? Date.now(),
       ...(existing?.stepId ? { stepId: existing.stepId } : {}),
       ...(existing?.finishedAtMs ? { finishedAtMs: existing.finishedAtMs } : {}),
@@ -453,6 +521,7 @@ function reduceToolEvent(state: LiveRun, event: AgUiLikeEvent): LiveRun {
       id,
       name: toolName,
       status: failed ? "failed" : "success",
+      ...optionalRunId(recordRunId),
       startedAtMs: existing?.startedAtMs ?? Date.now(),
       finishedAtMs: Date.now(),
       ...(resultPayload ? { result: resultPayload } : {}),
@@ -640,6 +709,10 @@ function parseSchemaTables(parsed: Record<string, unknown> | null): SchemaTable[
 }
 
 function reduceCustomEvent(state: LiveRun, event: AgUiLikeEvent): LiveRun {
+  if (event.name === "run.response.completed") {
+    return { ...state, agentResponseComplete: true };
+  }
+
   if (event.name === "sql_audit") {
     const value = recordValue(event.value);
     const audit: LiveAudit = {
@@ -1154,6 +1227,7 @@ function rekeyToolCall(
     id: toId,
     name: isSpecificToolName(toCall?.name) ? toCall.name : fromCall.name,
     status: toCall?.status ?? fromCall.status,
+    runId: toCall?.runId ?? fromCall.runId,
     startedAtMs: fromCall.startedAtMs ?? toCall?.startedAtMs,
     finishedAtMs: toCall?.finishedAtMs ?? fromCall.finishedAtMs,
     stepId: toCall?.stepId ?? fromCall.stepId,
@@ -1241,6 +1315,15 @@ function liveStatusFromValue(value: unknown): LiveRunStatus | null {
   return null;
 }
 
+export function runIdFromEvent(event: AgUiLikeEvent): string | undefined {
+  return stringValue(event.runId) ??
+    stringValue(recordValue(event.snapshot)?.runId) ??
+    stringValue(recordValue(event.value)?.runId);
+}
+
+const optionalRunId = (runId: string | undefined): { runId?: string | undefined } =>
+  runId ? { runId } : {};
+
 function statusSummary(value: unknown): string {
   const status = stringValue(value);
   if (status === "running") return "正在执行。";
@@ -1326,8 +1409,14 @@ export function resolveTraceToolStatus(
   toolStatus: LiveToolCallRecord["status"],
   activityStatus?: TimelineEvent["activityStatus"],
 ): LiveToolCallRecord["status"] {
-  if (activityStatus === "failed" || toolStatus === "failed") return "failed";
-  if (activityStatus === "completed" && toolStatus === "running") return "success";
+  if (toolStatus === "failed" || toolStatus === "cancelled") return toolStatus;
+  if (activityStatus === "failed") return "failed";
+  if (activityStatus === "completed" && !isTerminalToolCallStatus(toolStatus)) {
+    return "success";
+  }
+  if (activityStatus === "running" && !isTerminalToolCallStatus(toolStatus)) {
+    return "running";
+  }
   return toolStatus;
 }
 
@@ -1465,20 +1554,55 @@ function upsertToolCallRecord(
     return { ...state, toolCalls: [...state.toolCalls, record] };
   }
   const toolCalls = [...state.toolCalls];
-  toolCalls[existingIndex] = { ...toolCalls[existingIndex], ...record };
+  const existing = toolCalls[existingIndex];
+  if (!existing) return state;
+  toolCalls[existingIndex] = mergeToolCallRecord(existing, record);
   return { ...state, toolCalls };
 }
 
 function finalizeRunningToolCalls(
   toolCalls: LiveToolCallRecord[],
-  finalStatus: "success" | "failed",
+  finalStatus: Extract<LiveToolCallStatus, "success" | "failed">,
 ): LiveToolCallRecord[] {
   const finishedAtMs = Date.now();
   return toolCalls.map((call) =>
-    call.status === "running"
+    !isTerminalToolCallStatus(call.status)
       ? { ...call, status: finalStatus, finishedAtMs: call.finishedAtMs ?? finishedAtMs }
       : call,
   );
+}
+
+function mergeToolCallRecord(
+  existing: LiveToolCallRecord,
+  incoming: LiveToolCallRecord,
+): LiveToolCallRecord {
+  if (
+    isTerminalToolCallStatus(existing.status) &&
+    !isTerminalToolCallStatus(incoming.status)
+  ) {
+    return {
+      ...existing,
+      name: isSpecificToolName(existing.name) ? existing.name : incoming.name,
+      runId: existing.runId ?? incoming.runId,
+      stepId: existing.stepId ?? incoming.stepId,
+      startedAtMs: existing.startedAtMs ?? incoming.startedAtMs,
+      finishedAtMs: existing.finishedAtMs ?? incoming.finishedAtMs,
+      result: existing.result ?? incoming.result,
+    };
+  }
+
+  if (existing.status === "failed" && incoming.status === "success") {
+    return {
+      ...existing,
+      runId: existing.runId ?? incoming.runId,
+      stepId: existing.stepId ?? incoming.stepId,
+      startedAtMs: existing.startedAtMs ?? incoming.startedAtMs,
+      finishedAtMs: existing.finishedAtMs ?? incoming.finishedAtMs,
+      result: existing.result ?? incoming.result,
+    };
+  }
+
+  return { ...existing, ...incoming };
 }
 
 function toolCallsToStats(toolCalls: LiveToolCallRecord[]): ToolCallStats {

@@ -87,8 +87,6 @@ Data Management:
   /kb <action>          - Manage knowledge bases (list|add|upload)
 
 Session:
-  /config <action>      - View configuration (show|capabilities)
-  /stats                - Display session statistics
   /export [file]        - Export conversation to file
 
 Tips:
@@ -176,31 +174,6 @@ Examples:
   /kb list
   /kb add
   /kb upload my-kb docs.pdf
-`.trim(),
-
-    config: `
-/config - View system configuration
-
-Usage:
-  /config show                  - Show current configuration
-  /config capabilities          - Show backend capabilities
-
-Examples:
-  /config show
-  /config capabilities
-`.trim(),
-
-    stats: `
-/stats - Display session statistics
-
-Usage:
-  /stats                        - Show current session statistics
-
-Displays:
-  - Token usage (input/output/total)
-  - Tool call statistics
-  - SQL query statistics
-  - Run duration and status
 `.trim(),
 
     export: `
@@ -693,148 +666,6 @@ This will be implemented when backend /api/v1/knowledge/upload endpoint is avail
 }
 
 /**
- * /config command - View configuration
- */
-export function configCommand(context: HandlerContext): CommandResult {
-  const { args, state } = context;
-  const action = args.positional[0] || 'show';
-
-  switch (action) {
-    case 'show': {
-      const { workspaceConfig, connectionStatus, threadId } = state;
-
-      const activeDatasources = workspaceConfig.db.filter((ds) => ds.enabled);
-      const activeModels = workspaceConfig.llm.filter((m) => m.enabled);
-      const activeSkills = workspaceConfig.skill.filter((s) => s.enabled);
-
-      const lines = [
-        'Current Configuration:',
-        '',
-        `Connection Status: ${connectionStatus}`,
-        `Thread ID: ${threadId || 'Not set'}`,
-        '',
-        'Active Data Sources:',
-        ...activeDatasources.map((ds) => `  - ${ds.name} (${ds.id})`),
-        '',
-        'Active Models:',
-        ...activeModels.map((m) => `  - ${m.name} (${m.id})`),
-        '',
-        'Active Skills:',
-        ...activeSkills.map((s) => `  - ${s.name} (${s.id})`),
-        '',
-        `Total MCP Servers: ${workspaceConfig.mcp.length}`,
-        `Total Knowledge Bases: ${workspaceConfig.kb.length}`,
-      ];
-
-      return {
-        success: true,
-        message: lines.join('\n'),
-        data: { workspaceConfig, connectionStatus, threadId },
-      };
-    }
-
-    case 'capabilities': {
-      const capabilities = {
-        'datasource.server': false,
-        'datasource.queryPolicy': false,
-        'llm.samplingParams': false,
-        'artifact.export': false,
-      };
-
-      const lines = [
-        'Backend Capabilities:',
-        '',
-        ...Object.entries(capabilities).map(
-          ([cap, enabled]) => `  ${enabled ? '✓' : '✗'} ${cap}`
-        ),
-        '',
-        'Note: Most capabilities are pending backend implementation.',
-      ];
-
-      return {
-        success: true,
-        message: lines.join('\n'),
-        data: { capabilities },
-      };
-    }
-
-    default:
-      return {
-        success: false,
-        message: `Unknown action: ${action}. Use: show, capabilities`,
-      };
-  }
-}
-
-/**
- * /stats command - Display session statistics
- */
-export function statsCommand(context: HandlerContext): CommandResult {
-  const { state } = context;
-
-  const liveView = selectLiveSessionView(state);
-  const { sessionStats, runStatus, runStartedAt, runFinishedAt } = state;
-
-  const formatNumber = (num: number) => num.toLocaleString();
-  const formatDuration = (ms: number) => {
-    if (ms < 1000) return `${ms}ms`;
-    if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`;
-    return `${(ms / 60000).toFixed(1)}m`;
-  };
-
-  const lines = [
-    'Session Statistics:',
-    '',
-    'Token Usage:',
-    `  Input Tokens:  ${formatNumber(liveView.tokens.inputTokens)}`,
-    `  Output Tokens: ${formatNumber(liveView.tokens.outputTokens)}`,
-    `  Total Tokens:  ${formatNumber(liveView.tokens.inputTokens + liveView.tokens.outputTokens)}`,
-    '',
-    'Tool Calls:',
-    `  Total:    ${liveView.toolCalls.total}`,
-    `  Success:  ${liveView.toolCalls.success}`,
-    `  Failed:   ${liveView.toolCalls.failed}`,
-    liveView.toolCalls.total > 0
-      ? `  Success Rate: ${((liveView.toolCalls.success / liveView.toolCalls.total) * 100).toFixed(1)}%`
-      : '',
-    '',
-    'SQL Queries:',
-    `  Total:    ${liveView.sql.total}`,
-    `  Success:  ${liveView.sql.success}`,
-    `  Failed:   ${liveView.sql.failed}`,
-    liveView.sql.total > 0
-      ? `  Success Rate: ${((liveView.sql.success / liveView.sql.total) * 100).toFixed(1)}%`
-      : '',
-    '',
-    'Session Status:',
-    `  Completed Runs: ${sessionStats.completedRuns}`,
-    `  Failed Runs:    ${sessionStats.failedRuns}`,
-    `  Current Status: ${runStatus}`,
-  ].filter(Boolean);
-
-  if (runStartedAt) {
-    const startTime = new Date(runStartedAt).toLocaleTimeString();
-    lines.push(`  Started At:     ${startTime}`);
-  }
-
-  if (runFinishedAt) {
-    const endTime = new Date(runFinishedAt).toLocaleTimeString();
-    lines.push(`  Finished At:    ${endTime}`);
-  }
-
-  if (runStartedAt && runFinishedAt) {
-    const duration = new Date(runFinishedAt).getTime() - new Date(runStartedAt).getTime();
-    lines.push(`  Duration:       ${formatDuration(duration)}`);
-  }
-
-  return {
-    success: true,
-    message: lines.join('\n'),
-    data: { stats: liveView, sessionStats },
-  };
-}
-
-/**
  * /export command - Export conversation
  */
 export function exportCommand(context: HandlerContext): CommandResult {
@@ -901,8 +732,6 @@ export const commandHandlers = {
   skill: skillCommand,
   mcp: mcpCommand,
   kb: kbCommand,
-  config: configCommand,
-  stats: statsCommand,
   export: exportCommand,
   clear: clearCommand,
   exit: exitCommand,

@@ -52,18 +52,9 @@ npm run start:tui -- --demo
 npm run start:tui -- --help
 ```
 
-## 主要视图
+## 主界面
 
-TUI 使用四个视图：
-
-| 视图 | 用途 |
-| --- | --- |
-| Chat | 与 Agent 对话，查看流式回复、工具调用和结果。 |
-| Stats | 查看会话统计、步骤进度和运行状态。 |
-| Config | 查看工作区配置和资源状态。 |
-| Outputs | 查看本次会话产出。 |
-
-使用 `/tab <name>` 切换视图，也可以直接输入 `/chat`、`/stats`、`/config`、`/outputs`。
+TUI 默认停留在 Chat。使用 `/outputs` 可以像 `/resume` 一样打开独立的全屏产出页，按 `Esc` 或 `q` 关闭。
 
 ## Slash 命令
 
@@ -74,11 +65,7 @@ TUI 使用四个视图：
 | `/help` | 查看可用命令。 | `/help` |
 | `/clear` | 清空当前聊天记录。 | `/clear` |
 | `/status` | 查看 thread、消息数、当前数据源和 Skill。 | `/status` |
-| `/tab <chat\|stats\|config\|outputs>` | 切换视图。 | `/tab outputs` |
-| `/chat` | 切到 Chat 视图。 | `/chat` |
-| `/stats` | 切到 Stats 视图。 | `/stats` |
-| `/config` | 切到 Config 视图。 | `/config` |
-| `/outputs` | 切到 Outputs 视图。 | `/outputs` |
+| `/outputs` | 打开当前会话的产出页。 | `/outputs` |
 | `/datasource` | 列出或选择数据源。 | `/datasource list` |
 | `/skill` | 打开 Skill 选择器、列出或选择 Skill。 | `/skill show` |
 | `/reset` | 创建新的本地会话。 | `/reset` |
@@ -110,7 +97,7 @@ TUI 使用四个视图：
 
 | 快捷键 | 功能 |
 | --- | --- |
-| `Ctrl+C` | 退出程序。 |
+| `Ctrl+C` | 清空当前输入；1 秒内再次按下退出程序。 |
 | `Ctrl+L` | 清空聊天显示。 |
 | `Ctrl+N` | 创建新会话。 |
 | `PageUp` / `PageDown` | 在 Chat 视图滚动。 |
@@ -123,7 +110,7 @@ TUI 使用四个视图：
 
 ## 运行行为
 
-连接真实后端时，TUI 会把自然语言输入发送到 `/api/copilotkit`，并把当前数据源、启用资源和 Skill 选择写入 `run_config`。后端返回 AG-UI 事件后，TUI 会在 Chat、Stats 和 Outputs 视图展示文本、工具调用、运行状态和产出。
+连接真实后端时，TUI 会把自然语言输入发送到 `/api/copilotkit`，并把当前数据源、启用资源和 Skill 选择写入 `run_config`。后端返回 AG-UI 事件后，TUI 会在 Chat 展示文本和工具调用；会话产出可通过 `/outputs` 查看。
 
 `/resume` 依赖 `/api/v1/sessions` 和 `/api/v1/sessions/:id/conversation`。后端不可用或服务端不支持会话接口时，TUI 会在命令提示区显示错误。
 
@@ -142,8 +129,7 @@ TUI 使用四个视图：
 ```
 
 6. 在 Chat 视图观察流式回复和工具调用。
-7. 运行 `/stats` 查看运行状态。
-8. 运行 `/outputs` 查看产出。
+7. 运行 `/outputs` 查看产出。
 
 ## 与 Web 工作台的区别
 
@@ -151,7 +137,7 @@ TUI 使用四个视图：
 | --- | --- | --- |
 | 使用环境 | 浏览器、本地演示、业务分析。 | SSH、远程服务器、终端工作流。 |
 | 操作方式 | 点击、输入框、控制台。 | 键盘和 slash 命令。 |
-| 追溯展示 | 右侧控制台、步骤详情和追溯列表。 | Chat、Stats 和 Outputs 视图。 |
+| 追溯展示 | 右侧控制台、步骤详情和追溯列表。 | Chat 记录和 `/outputs` 页面。 |
 | 资源操作 | 表单创建、测试、导入和预览。 | 选择数据源和 Skill，查看配置状态。 |
 
 需要完整视觉演示时，用 Web 工作台。需要在 SSH 或轻量终端环境验证 Agent 运行链路时，用 TUI。

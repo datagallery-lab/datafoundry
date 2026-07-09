@@ -1,4 +1,4 @@
-import type { LiveRun } from "./live-run-state.js";
+import type { LiveRun, LiveToolCallRecord } from "./live-run-state.js";
 
 /**
  * Connection status for the TUI client
@@ -10,7 +10,13 @@ export type ConnectionStatus = "connected" | "disconnected" | "error";
  */
 export type MessageElement =
   | { type: 'text'; content: string; timestamp: number }
-  | { type: 'tool_call'; toolCallId: string; timestamp: number };
+  | {
+      type: 'tool_call';
+      toolCallId: string;
+      timestamp: number;
+      runId?: string | undefined;
+      toolCall?: LiveToolCallRecord | undefined;
+    };
 
 /**
  * Display message for chat history in TUI

@@ -18,12 +18,16 @@ export const ToolCallsView: React.FC<ToolCallsViewProps> = ({
   // Get status icon and color
   const getStatusDisplay = (status: LiveToolCallRecord['status']) => {
     switch (status) {
+      case 'pending':
+        return { icon: '○', color: 'gray' as const, label: 'Pending' };
       case 'running':
         return { icon: '⟳', color: 'yellow' as const, label: 'Running' };
       case 'success':
         return { icon: '✓', color: 'green' as const, label: 'Success' };
       case 'failed':
         return { icon: '✗', color: 'red' as const, label: 'Failed' };
+      case 'cancelled':
+        return { icon: '⊘', color: 'yellow' as const, label: 'Cancelled' };
       default:
         return { icon: '?', color: 'gray' as const, label: 'Unknown' };
     }
@@ -33,7 +37,10 @@ export const ToolCallsView: React.FC<ToolCallsViewProps> = ({
   const formatDuration = (toolCall: LiveToolCallRecord): string => {
     if (!toolCall.startedAtMs) return '';
 
-    const endTime = toolCall.finishedAtMs || Date.now();
+    const endTime = toolCall.finishedAtMs ??
+      (toolCall.status === 'running' || toolCall.status === 'pending'
+        ? Date.now()
+        : toolCall.startedAtMs);
     const durationMs = endTime - toolCall.startedAtMs;
 
     if (durationMs < 1000) {
@@ -93,7 +100,7 @@ export const ToolCallsView: React.FC<ToolCallsViewProps> = ({
             )}
 
             {/* Result preview for completed calls */}
-            {toolCall.result && toolCall.status !== 'running' && (
+            {toolCall.result && toolCall.status !== 'running' && toolCall.status !== 'pending' && (
               <Box marginLeft={2} flexDirection="column">
                 <Text dimColor>Result:</Text>
                 <Box marginLeft={1}>

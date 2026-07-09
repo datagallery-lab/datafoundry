@@ -52,18 +52,9 @@ View CLI flags:
 npm run start:tui -- --help
 ```
 
-## Main views
+## Main Screen
 
-The TUI has four views:
-
-| View | Purpose |
-| --- | --- |
-| Chat | Talk to the agent; view streaming replies, tool calls, and results. |
-| Stats | Session stats, step progress, and run status. |
-| Config | Workspace configuration and resource status. |
-| Outputs | Outputs for the current session. |
-
-Switch with `/tab <name>`, or directly with `/chat`, `/stats`, `/config`, `/outputs`.
+The TUI opens in Chat. Use `/outputs` to open the current session outputs in a separate full-screen page, and `Esc` or `q` to close it.
 
 ## Slash commands
 
@@ -74,11 +65,7 @@ Type `/` and use `Tab` to complete. Built-in commands:
 | `/help` | List available commands. | `/help` |
 | `/clear` | Clear current chat display. | `/clear` |
 | `/status` | Show thread, message count, current data source and Skill. | `/status` |
-| `/tab <chat\|stats\|config\|outputs>` | Switch view. | `/tab outputs` |
-| `/chat` | Switch to Chat view. | `/chat` |
-| `/stats` | Switch to Stats view. | `/stats` |
-| `/config` | Switch to Config view. | `/config` |
-| `/outputs` | Switch to Outputs view. | `/outputs` |
+| `/outputs` | Open the outputs page for the current session. | `/outputs` |
 | `/datasource` | List or select a data source. | `/datasource list` |
 | `/skill` | Open Skill picker, list, or select a Skill. | `/skill show` |
 | `/reset` | Create a new local session. | `/reset` |
@@ -110,7 +97,7 @@ Type `/` and use `Tab` to complete. Built-in commands:
 
 | Shortcut | Action |
 | --- | --- |
-| `Ctrl+C` | Exit. |
+| `Ctrl+C` | Clear current input; press again within 1 second to exit. |
 | `Ctrl+L` | Clear chat display. |
 | `Ctrl+N` | New session. |
 | `PageUp` / `PageDown` | Scroll in Chat view. |
@@ -123,7 +110,7 @@ Type `/` and use `Tab` to complete. Built-in commands:
 
 ## Runtime behavior
 
-When connected to a real backend, the TUI sends natural-language input to `/api/copilotkit` and writes the current data source, enabled resources, and Skill selection into `run_config`. AG-UI events from the backend appear in Chat, Stats, and Outputs as text, tool calls, run state, and outputs.
+When connected to a real backend, the TUI sends natural-language input to `/api/copilotkit` and writes the current data source, enabled resources, and Skill selection into `run_config`. AG-UI events from the backend appear in Chat as text and tool calls; session outputs are available through `/outputs`.
 
 `/resume` depends on `/api/v1/sessions` and `/api/v1/sessions/:id/conversation`. If the backend is unavailable or sessions are unsupported, the TUI shows an error in the command hint area.
 
@@ -142,8 +129,7 @@ List tables in the current data source and compute GMV by channel from the order
 ```
 
 6. Watch streaming replies and tool calls in Chat.
-7. Run `/stats` for run status.
-8. Run `/outputs` for outputs.
+7. Run `/outputs` for outputs.
 
 ## Compared with the Web workbench
 
@@ -151,7 +137,7 @@ List tables in the current data source and compute GMV by channel from the order
 | --- | --- | --- |
 | Environment | Browser, local demos, business analysis. | SSH, remote servers, terminal workflows. |
 | Interaction | Clicks, input box, console. | Keyboard and slash commands. |
-| Trace | Right console, step details, trace list. | Chat, Stats, and Outputs views. |
+| Trace | Right console, step details, trace list. | Chat transcript and `/outputs` page. |
 | Resources | Forms for create, test, import, preview. | Select data source and Skill; view config state. |
 
 Use the Web workbench for full visual demos. Use the TUI to verify agent runtime over SSH or lightweight terminal environments.

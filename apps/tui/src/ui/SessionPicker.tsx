@@ -1,16 +1,21 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Box, Text, useInput } from 'ink';
 import type { SessionListItem } from '../config/index.js';
+import { isMouseInput } from '../input/mouse-wheel.js';
+import { textWidth, truncateToWidth } from './text-width.js';
 
 interface SessionPickerProps {
   sessions: SessionListItem[];
   loading: boolean;
   error?: string | undefined;
+  columns?: number | undefined;
+  rows?: number | undefined;
   onSelect: (sessionId: string) => void;
   onCancel: () => void;
 }
 
-const WINDOW_SIZE = 10;
+const RESERVED_LINES = 7;
+const ITEM_HEIGHT = 3;
 
 const formatRelative = (timestamp: string | undefined): string => {
   if (!timestamp) return 'unknown';
@@ -29,9 +34,9 @@ const formatRelative = (timestamp: string | undefined): string => {
   return `${Math.floor(hours / 24)}d ago`;
 };
 
-const truncate = (value: string, maxLength: number): string => {
-  if (value.length <= maxLength) return value;
-  return `${value.slice(0, Math.max(0, maxLength - 3))}...`;
+const truncate = (value: string, maxWidth: number): string => {
+  const firstLine = value.split(/\r?\n/, 1)[0] ?? '';
+  return truncateToWidth(firstLine, Math.max(1, maxWidth), '...');
 };
 
 const getSessionTimestamp = (session: SessionListItem): string | undefined => {
@@ -46,11 +51,23 @@ export const SessionPicker: React.FC<SessionPickerProps> = ({
   sessions,
   loading,
   error,
+  columns = 100,
+  rows = 40,
   onSelect,
   onCancel,
 }) => {
   const [query, setQuery] = useState('');
   const [selectedIndex, setSelectedIndex] = useState(0);
+  const panelWidth = Math.max(24, columns);
+  const panelHeight = Math.max(8, rows - 1);
+  const contentWidth = Math.max(10, panelWidth - 4);
+  const separatorWidth = Math.max(0, panelWidth - 2);
+  const maxVisibleItems = Math.max(
+    1,
+    Math.floor((panelHeight - RESERVED_LINES) / ITEM_HEIGHT),
+  );
+  const searchPrefix = query ? 'Search: ' : 'Type to search';
+  const queryWidth = Math.max(1, contentWidth - textWidth(searchPrefix) - 1);
 
   const filteredSessions = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
@@ -68,17 +85,22 @@ export const SessionPicker: React.FC<SessionPickerProps> = ({
   }, [filteredSessions]);
 
   useInput((input, key) => {
+    if (isMouseInput(input)) {
+      return;
+    }
+
     if (key.escape) {
       onCancel();
       return;
     }
 
-    if (key.upArrow) {
+    if (key.upArrow || (key.ctrl && input === 'p') || input === 'k') {
       setSelectedIndex((index) => Math.max(0, index - 1));
       return;
     }
 
-    if (key.downArrow) {
+    if (key.downArrow || (key.ctrl && input === 'n') || input === 'j') {
+      if (filteredSessions.length === 0) return;
       setSelectedIndex((index) => Math.min(filteredSessions.length - 1, index + 1));
       return;
     }
@@ -108,61 +130,142 @@ export const SessionPicker: React.FC<SessionPickerProps> = ({
   const windowStart = Math.max(
     0,
     Math.min(
-      selectedIndex - Math.floor(WINDOW_SIZE / 2),
-      Math.max(0, filteredSessions.length - WINDOW_SIZE),
+      selectedIndex - Math.floor(maxVisibleItems / 2),
+      Math.max(0, filteredSessions.length - maxVisibleItems),
     ),
   );
-  const visibleSessions = filteredSessions.slice(windowStart, windowStart + WINDOW_SIZE);
+  const visibleSessions = filteredSessions.slice(windowStart, windowStart + maxVisibleItems);
+  const showScrollUp = windowStart > 0;
+  const showScrollDown = windowStart + maxVisibleItems < filteredSessions.length;
+  const matchText = query ? ` (${filteredSessions.length} matches)` : '';
+  const titleText = truncate(
+    'Resume Session',
+    Math.max(1, contentWidth - textWidth(matchText)),
+  );
 
   return (
     <Box
       flexDirection="column"
-      borderStyle="single"
-      borderColor="cyan"
-      paddingX={1}
-      paddingY={1}
-      marginX={1}
+      width={panelWidth}
+      height={panelHeight}
+      overflow="hidden"
     >
-      <Text bold color="cyan">Resume a previous session</Text>
-      <Box>
-        <Text dimColor>Type to search: </Text>
-        <Text>{query}</Text>
-        <Text inverse> </Text>
-      </Box>
+      <Box
+        flexDirection="column"
+        borderStyle="single"
+        borderColor="cyan"
+        width={panelWidth}
+        height={panelHeight}
+        overflow="hidden"
+      >
+        <Box paddingX={1}>
+          <Text bold color="cyan" wrap="truncate-end">
+            {titleText}
+          </Text>
+          {matchText ? (
+            <Text dimColor wrap="truncate-end">
+              {truncate(matchText, Math.max(1, contentWidth - textWidth(titleText)))}
+            </Text>
+          ) : null}
+        </Box>
 
-      <Box flexDirection="column" marginTop={1} minHeight={WINDOW_SIZE}>
-        {loading ? (
-          <Text dimColor>Loading recent sessions...</Text>
-        ) : error ? (
-          <Text color="red">Failed to load sessions: {error}</Text>
-        ) : sessions.length === 0 ? (
-          <Text dimColor>No server sessions found.</Text>
-        ) : filteredSessions.length === 0 ? (
-          <Text dimColor>No sessions match "{query}".</Text>
-        ) : (
-          visibleSessions.map((session, index) => {
-            const absoluteIndex = windowStart + index;
-            const selected = absoluteIndex === selectedIndex;
-            const title = truncate(getSessionTitle(session), 58);
-            const threadId = truncate(session.threadId, 24);
-            const relativeTime = formatRelative(getSessionTimestamp(session));
+        <Box paddingX={1}>
+          {query ? (
+            <>
+              <Text dimColor>Search: </Text>
+              <Text wrap="truncate-end">{truncate(query, queryWidth)}</Text>
+            </>
+          ) : (
+            <Text dimColor wrap="truncate-end">
+              {truncate('Type to search', contentWidth)}
+            </Text>
+          )}
+        </Box>
 
-            return (
-              <Box key={session.threadId}>
-                <Text color={selected ? 'cyan' : 'white'}>{selected ? '>' : ' '} </Text>
-                <Text dimColor>{relativeTime.padStart(9)} </Text>
-                <Text color={selected ? 'cyan' : 'white'} bold={selected}>
-                  {title}
-                </Text>
-                <Text dimColor> ({threadId})</Text>
-              </Box>
-            );
-          })
-        )}
-      </Box>
+        <Box>
+          <Text color="gray">{'-'.repeat(separatorWidth)}</Text>
+        </Box>
 
-      <Box marginTop={1}>
-        <Text dimColor>Up/Down Navigate - Enter Resume - Esc Cancel</Text>
+        <Box flexDirection="column" flexGrow={1} paddingX={1} overflow="hidden">
+          {loading ? (
+            <Box paddingY={1}>
+              <Text dimColor wrap="truncate-end">
+                {truncate('Loading recent sessions...', contentWidth)}
+              </Text>
+            </Box>
+          ) : error ? (
+            <Box paddingY={1}>
+              <Text color="red" wrap="truncate-end">
+                {truncate(`Failed to load sessions: ${error}`, contentWidth)}
+              </Text>
+            </Box>
+          ) : sessions.length === 0 ? (
+            <Box paddingY={1}>
+              <Text dimColor wrap="truncate-end">
+                {truncate('No server sessions found.', contentWidth)}
+              </Text>
+            </Box>
+          ) : filteredSessions.length === 0 ? (
+            <Box paddingY={1}>
+              <Text dimColor wrap="truncate-end">
+                {truncate(`No sessions match "${query}".`, contentWidth)}
+              </Text>
+            </Box>
+          ) : (
+            visibleSessions.map((session, index) => {
+              const absoluteIndex = windowStart + index;
+              const selected = absoluteIndex === selectedIndex;
+              const isFirst = index === 0;
+              const isLast = index === visibleSessions.length - 1;
+              const prefix = selected
+                ? '> '
+                : isFirst && showScrollUp
+                  ? '^ '
+                  : isLast && showScrollDown
+                    ? 'v '
+                    : '  ';
+              const title = truncate(getSessionTitle(session), Math.max(1, contentWidth - 2));
+              const threadId = truncate(session.threadId, Math.min(32, Math.max(8, contentWidth - 16)));
+              const relativeTime = formatRelative(getSessionTimestamp(session));
+              const metadata = truncate(
+                `${relativeTime} - ${threadId}`,
+                Math.max(1, contentWidth - 2),
+              );
+
+              return (
+                <Box
+                  key={session.threadId}
+                  flexDirection="column"
+                  marginBottom={isLast ? 0 : 1}
+                >
+                  <Box>
+                    <Text color={selected ? 'cyan' : 'white'} bold={selected}>
+                      {prefix}
+                    </Text>
+                    <Text color={selected ? 'cyan' : 'white'} bold={selected} wrap="truncate-end">
+                      {title}
+                    </Text>
+                  </Box>
+                  <Box paddingLeft={2}>
+                    <Text dimColor wrap="truncate-end">
+                      {metadata}
+                    </Text>
+                  </Box>
+                </Box>
+              );
+            })
+          )}
+        </Box>
+
+        <Box>
+          <Text color="gray">{'-'.repeat(separatorWidth)}</Text>
+        </Box>
+
+        <Box paddingX={1}>
+          <Text dimColor wrap="truncate-end">
+            {truncate('Up/Down/j/k navigate - Enter resume - Esc cancel', contentWidth)}
+          </Text>
+        </Box>
       </Box>
     </Box>
   );

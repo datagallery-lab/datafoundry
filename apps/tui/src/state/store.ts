@@ -1,6 +1,7 @@
 import { createInitialTuiState, type TuiSessionState } from "./tui-state.js";
 import {
   reduceLiveRunEvent,
+  runIdFromEvent,
   type LiveRun,
   type LiveToolCallRecord,
   createInitialSessionUsage,
@@ -17,6 +18,7 @@ import {
   finalizeLastAssistantMessage,
   updateLastAssistantMessage,
   insertToolCallIntoLastMessage,
+  updateToolCallInMessages,
 } from "./message-history.js";
 import {
   updateConnectionStatus,
@@ -150,8 +152,35 @@ class StateStore {
    * Reduces the LiveRun part and merges with TUI-specific state
    */
   handleLiveRunEvent(event: { type?: string; [key: string]: unknown }): void {
+    const eventRunId = runIdFromEvent(event);
+    const previousRunId = this.state.runId;
+    const clientRunId =
+      typeof event._clientRunId === "string" && event._clientRunId.length > 0
+        ? event._clientRunId
+        : undefined;
+    if (
+      event.type !== "RUN_STARTED" &&
+      clientRunId &&
+      this.state.runId &&
+      clientRunId !== this.state.runId
+    ) {
+      return;
+    }
+
+    if (
+      event.type !== "RUN_STARTED" &&
+      eventRunId &&
+      this.state.runId &&
+      eventRunId !== this.state.runId &&
+      clientRunId !== this.state.runId
+    ) {
+      return;
+    }
+
     // Apply the event to the LiveRun portion of the state
     const liveRun: LiveRun = {
+      runId: this.state.runId,
+      agentResponseComplete: this.state.agentResponseComplete,
       plan: this.state.plan,
       events: this.state.events,
       artifacts: this.state.artifacts,
@@ -169,15 +198,36 @@ class StateStore {
       return;
     }
 
-    const previousToolCallIds = new Set(this.state.toolCalls.map((toolCall) => toolCall.id));
+    const previousToolCallsById = new Map(
+      this.state.toolCalls.map((toolCall) => [toolCall.id, toolCall]),
+    );
+    const previousToolCallIds = new Set(previousToolCallsById.keys());
     const newToolCallIds = newLiveRun.toolCalls
       .filter((toolCall) => !previousToolCallIds.has(toolCall.id))
       .map((toolCall) => toolCall.id);
+    const newToolCallsById = new Map(
+      newLiveRun.toolCalls.map((toolCall) => [toolCall.id, toolCall]),
+    );
+    const hasNewRunningToolCall = newLiveRun.toolCalls.some((toolCall) => {
+      const previous = previousToolCallsById.get(toolCall.id);
+      return toolCall.status === "running" && previous?.status !== "running";
+    });
     let stateWithNewToolCalls: TuiAppState = this.state;
+    const liveRunId = newLiveRun.runId ?? this.state.runId;
     for (const toolCallId of newToolCallIds) {
       stateWithNewToolCalls = insertToolCallIntoLastMessage(
         stateWithNewToolCalls,
         toolCallId,
+        newToolCallsById.get(toolCallId),
+        liveRunId,
+      ) as TuiAppState;
+    }
+    for (const toolCall of newLiveRun.toolCalls) {
+      stateWithNewToolCalls = updateToolCallInMessages(
+        stateWithNewToolCalls,
+        toolCall,
+        liveRunId,
+        previousRunId,
       ) as TuiAppState;
     }
 
@@ -203,7 +253,13 @@ class StateStore {
       sessionStats: newSessionStats,
     };
 
-    this.setState(newState);
+    const notifyImmediately =
+      hasNewRunningToolCall ||
+      event.type === "RUN_STARTED" ||
+      event.type === "RUN_FINISHED" ||
+      event.type === "RUN_ERROR" ||
+      event.name === "run.response.completed";
+    this.setState(newState, notifyImmediately);
   }
 
   /**
@@ -219,7 +275,7 @@ class StateStore {
    */
   addAssistantMessage(content: string, isStreaming = false): void {
     const newState = addAssistantMessage(this.state, content, isStreaming);
-    this.setState(newState as TuiAppState);
+    this.setState(newState as TuiAppState, isStreaming);
   }
 
   /**
@@ -235,7 +291,7 @@ class StateStore {
    */
   updateAssistantMessage(content: string, isStreaming = false): void {
     const newState = updateLastAssistantMessage(this.state, content, isStreaming);
-    this.setState(newState as TuiAppState);
+    this.setState(newState as TuiAppState, !isStreaming);
   }
 
   /**
@@ -243,7 +299,7 @@ class StateStore {
    */
   finalizeAssistantMessage(): void {
     const newState = finalizeLastAssistantMessage(this.state);
-    this.setState(newState as TuiAppState);
+    this.setState(newState as TuiAppState, true);
   }
 
   /**
@@ -315,6 +371,8 @@ class StateStore {
       artifacts: initial.artifacts,
       audits: initial.audits,
       runStatus: initial.runStatus,
+      runId: undefined,
+      agentResponseComplete: undefined,
       errorMessage: undefined,
       toolCalls: input.toolCalls ?? [],
       runStartedAt: undefined,
@@ -375,6 +433,8 @@ class StateStore {
       artifacts: initial.artifacts,
       audits: initial.audits,
       runStatus: initial.runStatus,
+      runId: undefined,
+      agentResponseComplete: undefined,
       errorMessage: undefined,
       toolCalls: initial.toolCalls,
       runStartedAt: undefined,
@@ -399,6 +459,8 @@ export type { Selector };
  */
 export const selectLiveSessionView = (state: TuiAppState) => {
   const liveRun: LiveRun = {
+    runId: state.runId,
+    agentResponseComplete: state.agentResponseComplete,
     plan: state.plan,
     events: state.events,
     artifacts: state.artifacts,
@@ -418,6 +480,8 @@ export const selectLiveSessionView = (state: TuiAppState) => {
  */
 export const selectCurrentRunStats = (state: TuiAppState) => {
   const liveRun: LiveRun = {
+    runId: state.runId,
+    agentResponseComplete: state.agentResponseComplete,
     plan: state.plan,
     events: state.events,
     artifacts: state.artifacts,
