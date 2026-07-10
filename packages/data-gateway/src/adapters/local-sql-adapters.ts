@@ -101,7 +101,7 @@ export class DuckDbAdapter implements DataSourceAdapter {
 
   private async query(sql: string, signal?: AbortSignal | undefined): Promise<Record<string, unknown>[]> {
     const duckdb = await loadDuckDb();
-    const database = new duckdb.Database(stringConfig(this.config, "path", ":memory:"));
+    const database = new duckdb.Database(stringConfig(this.config, "path"));
     const connection = database.connect();
     try {
       const rows = await duckDbAll(connection, sql, signal);

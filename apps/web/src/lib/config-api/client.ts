@@ -293,6 +293,23 @@ export const configApi = {
     );
   },
 
+  async uploadDatasourceFile(
+    file: File,
+  ): Promise<{ path: string; originalName: string; size: number; mimeType: string }> {
+    const form = new FormData();
+    form.append("file", file);
+    const response = await requestRaw("/api/v1/datasources/uploads", {
+      method: "POST",
+      body: form,
+    });
+    return parseJsonResponse<{
+      path: string;
+      originalName: string;
+      size: number;
+      mimeType: string;
+    }>(response);
+  },
+
   getSessionConversation(sessionId: string, limit?: number): Promise<SessionConversationDto> {
     const params = new URLSearchParams();
     if (limit !== undefined) {
@@ -691,14 +708,27 @@ export const configApi = {
     return requestEnvelope<{ files: FileAssetRefDto[] }>(`/api/v1/files${queryString(params)}`);
   },
 
-  async uploadWorkspaceFiles(files: File[]): Promise<{ files: FileAssetRefDto[] }> {
+  async uploadWorkspaceFiles(
+    files: File[],
+    sessionId?: string | null,
+  ): Promise<{ files: FileAssetRefDto[] }> {
     const form = new FormData();
     for (const file of files) {
       form.append("file", file);
     }
+    if (sessionId) {
+      form.append("sessionId", sessionId);
+      form.append("threadId", sessionId);
+    }
     return requestEnvelope<{ files: FileAssetRefDto[] }>("/api/v1/files", {
       method: "POST",
       body: form,
+    });
+  },
+
+  promoteWorkspaceFile(id: string): Promise<FileAssetRefDto> {
+    return requestEnvelope<FileAssetRefDto>(`/api/v1/files/${encodeURIComponent(id)}/promote`, {
+      method: "POST",
     });
   },
 

@@ -479,7 +479,7 @@ const TERMINAL_RUN_STATUSES = new Set<LiveRunStatus>(["completed", "failed", "ca
 
 function terminalToolCallStatus(
   runStatus: LiveRunStatus,
-): LiveToolCallRecord["status"] | undefined {
+): "success" | "failed" | undefined {
   if (runStatus === "completed") return "success";
   if (runStatus === "failed" || runStatus === "canceled") return "failed";
   return undefined;

@@ -13,6 +13,7 @@ describe("duckdb datasource form", () => {
     expect(filePath).toBeDefined();
     expect(filePath?.required).toBe(true);
     expect(filePath?.helpText?.toLowerCase()).toContain("duckdb");
+    expect(filePath?.helpText?.toLowerCase()).toContain("upload");
     expect(filePath?.helpText?.toLowerCase()).not.toContain("demo");
   });
 
@@ -37,5 +38,12 @@ describe("duckdb datasource form", () => {
         filePath: "/data/sales.duckdb",
       }),
     ).toBe(true);
+  });
+
+  it("shows Access file path (not host/port) and allows ODBC connection string", () => {
+    const fields = visibleConfigFields("db", { type: "access", mode: "readonly" });
+    expect(fields.some((field) => field.key === "filePath")).toBe(true);
+    expect(fields.some((field) => field.key === "host")).toBe(false);
+    expect(fields.some((field) => field.key === "connectionString")).toBe(true);
   });
 });

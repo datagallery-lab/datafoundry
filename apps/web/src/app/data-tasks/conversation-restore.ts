@@ -1060,7 +1060,7 @@ export function conversationToAgentMessages(
         contentParts && contentParts.length > 0
           ? contentParts.map((part) => ({ type: part.type, text: part.text }))
           : content,
-    });
+    } as Message);
   }
 
   const withPlaceholders = insertSyntheticToolParentMessages(messages, sorted, dto.toolCalls);

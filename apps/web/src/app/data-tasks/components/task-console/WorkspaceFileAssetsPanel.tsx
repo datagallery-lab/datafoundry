@@ -4,6 +4,10 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { configApi } from "../../../../lib/config-api";
 import type { FileAssetRefDto } from "../../../../lib/config-api";
 import { filterWorkspaceAssetFiles, hasCapability } from "../../data-task-state";
+import {
+  uploadAndPromoteWorkspaceFiles,
+  WorkspaceUploadPromoteError,
+} from "../../workspace-file-upload";
 import { btnSecondaryClass, panelShellClass, panelTitleClass, sectionLabelClass } from "../../ui-tokens";
 
 function formatBytes(bytes?: number): string {
@@ -14,23 +18,31 @@ function formatBytes(bytes?: number): string {
 }
 
 type WorkspaceFileAssetsPanelProps = {
+  /** Active chat session / thread id — required for session-scoped upload + promote. */
+  sessionId?: string | null;
   onFilesChange?: (files: FileAssetRefDto[]) => void;
 };
 
-export function WorkspaceFileAssetsPanel({ onFilesChange }: WorkspaceFileAssetsPanelProps) {
+export function WorkspaceFileAssetsPanel({
+  sessionId,
+  onFilesChange,
+}: WorkspaceFileAssetsPanelProps) {
   const [files, setFiles] = useState<FileAssetRefDto[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const canUpload = Boolean(sessionId?.trim());
 
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (options?: { clearError?: boolean }) => {
     if (!hasCapability("files")) {
       setFiles([]);
       onFilesChange?.([]);
       return;
     }
     setLoading(true);
-    setError(null);
+    if (options?.clearError !== false) {
+      setError(null);
+    }
     try {
       const response = await configApi.listWorkspaceFiles({
         scope: "workspace",
@@ -56,13 +68,25 @@ export function WorkspaceFileAssetsPanel({ onFilesChange }: WorkspaceFileAssetsP
 
   const handleUpload = async (selected: FileList | null) => {
     if (!selected?.length) return;
+    if (!canUpload) {
+      setError("Select or open a chat session before uploading workspace files.");
+      return;
+    }
     setLoading(true);
     setError(null);
     try {
-      await configApi.uploadWorkspaceFiles([...selected]);
+      await uploadAndPromoteWorkspaceFiles(configApi, [...selected], sessionId);
       await refresh();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Upload failed");
+      if (err instanceof WorkspaceUploadPromoteError) {
+        setError(err.message);
+        if (err.result.promoted.length > 0) {
+          // Keep the partial-success message visible while refreshing the list.
+          await refresh({ clearError: false });
+        }
+      } else {
+        setError(err instanceof Error ? err.message : "Upload failed");
+      }
     } finally {
       setLoading(false);
       if (inputRef.current) {
@@ -116,7 +140,8 @@ export function WorkspaceFileAssetsPanel({ onFilesChange }: WorkspaceFileAssetsP
           <button
             type="button"
             onClick={() => inputRef.current?.click()}
-            disabled={loading}
+            disabled={loading || !canUpload}
+            title={canUpload ? undefined : "Select or open a chat session before uploading"}
             className={`${btnSecondaryClass} disabled:opacity-60`}
           >
             Upload
@@ -126,6 +151,7 @@ export function WorkspaceFileAssetsPanel({ onFilesChange }: WorkspaceFileAssetsP
             type="file"
             multiple
             className="hidden"
+            disabled={!canUpload}
             onChange={(event) => void handleUpload(event.target.files)}
           />
         </div>
@@ -133,6 +159,11 @@ export function WorkspaceFileAssetsPanel({ onFilesChange }: WorkspaceFileAssetsP
       <p className="mb-3 text-[11px] leading-4 text-muted-light">
         Manage reusable workspace files for later @file selection or run_config.fileIds injection. These are separate from chat attachments.
       </p>
+      {!canUpload ? (
+        <p className="mb-3 text-[11px] leading-4 text-muted-light">
+          Open a chat session to enable workspace file upload.
+        </p>
+      ) : null}
       {error ? (
         <p className="mb-3 rounded-lg bg-step-error/10 px-2.5 py-2 text-xs text-step-error">
           {error}

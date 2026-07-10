@@ -1007,6 +1007,8 @@ export const DB_MODE_OPTIONS = [
 const DB_SERVER_TYPES = DB_SERVER_TYPE_OPTIONS.map((option) => option.value);
 const DB_PENDING_TYPES = DB_PENDING_TYPE_OPTIONS.map((option) => option.value);
 const DB_FILE_TYPES = DB_TYPE_OPTIONS.map((option) => option.value);
+/** File-backed types that may appear via live capability lists (not host/port servers). */
+const DB_LOCAL_FILE_EXTENDED_TYPES = ["access"] as const;
 let liveDbTypeOptions: Array<{ value: string; label: string; enabled: boolean }> = [
   ...DB_TYPE_OPTIONS.map((option) => ({ ...option, enabled: true })),
   ...DB_SERVER_TYPE_OPTIONS.map((option) => ({ ...option, enabled: true })),
@@ -1047,7 +1049,22 @@ function isDbClickHouseType(settings: Record<string, string>): boolean {
   return dbTypeOf(settings) === "clickhouse";
 }
 
+function isDbLocalFileType(settings: Record<string, string>): boolean {
+  const type = dbTypeOf(settings);
+  return (
+    DB_FILE_TYPES.includes(type as (typeof DB_FILE_TYPES)[number]) ||
+    DB_LOCAL_FILE_EXTENDED_TYPES.includes(
+      type as (typeof DB_LOCAL_FILE_EXTENDED_TYPES)[number],
+    )
+  );
+}
+
+function isDbAccessType(settings: Record<string, string>): boolean {
+  return dbTypeOf(settings) === "access";
+}
+
 function isDbServerType(settings: Record<string, string>): boolean {
+  if (isDbLocalFileType(settings)) return false;
   const type = dbTypeOf(settings);
   return (
     DB_SERVER_TYPES.includes(type as (typeof DB_SERVER_TYPES)[number]) ||
@@ -1356,12 +1373,24 @@ export const WORKSPACE_CONFIG_FIELDS: Record<
     {
       key: "filePath",
       label: "File path",
-      placeholder: "/data/sales.duckdb or /data/orders.csv",
+      placeholder: "Upload a local file, or paste an existing server path",
       helpText:
-        "Server-local path to the DuckDB / SQLite / CSV / Excel file. The API process must be able to read this path.",
+        "Choose a local DuckDB / SQLite / CSV / Excel / Access file to upload. " +
+        "The server stores it under your workspace and fills this path automatically. " +
+        "You can still paste an existing server-readable path if you already have one.",
       required: true,
       fullWidth: true,
-      visibleWhen: (s) => !isDbServerType(s),
+      visibleWhen: (s) => isDbLocalFileType(s) && !(isDbAccessType(s) && (s.connectionString ?? "").trim()),
+    },
+    {
+      key: "connectionString",
+      label: "ODBC connection string",
+      inputType: "password",
+      placeholder: "Driver={Microsoft Access Driver (*.mdb, *.accdb)};DBQ=/data/sales.accdb;",
+      helpText:
+        "Optional for Access. When set, overrides building the ODBC string from the file path.",
+      fullWidth: true,
+      visibleWhen: isDbAccessType,
     },
     {
       key: "host",
@@ -1885,7 +1914,7 @@ export const WORKSPACE_CONFIG_FIELDS: Record<
     {
       key: "defaultDbIds",
       label: "Default data sources",
-      placeholder: "api-duckdb-demo, sales-pg",
+      placeholder: "sales-db, analytics-pg",
       helpText: "Comma-separated datasource ids. Added automatically to the run when the skill matches.",
       pendingCapability: "skill.resourceBinding",
       fullWidth: true,

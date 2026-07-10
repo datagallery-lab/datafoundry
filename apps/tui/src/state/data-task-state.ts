@@ -532,12 +532,12 @@ export function hasCapability(capability: BackendCapability): boolean {
 
 /**
  * Datasource engine types. Only types the backend Data Gateway can actually
- * adapt are exposed: duckdb(demo) / sqlite / csv / xlsx. postgresql/mysql are
- * disabled placeholders and bigquery/snowflake have no backend code, so they
+ * adapt are exposed: duckdb / sqlite / csv / xlsx (file-backed). postgresql/mysql
+ * are disabled placeholders and bigquery/snowflake have no backend code, so they
  * are intentionally NOT offered here (kept only in the backend roadmap doc).
  */
 export const DB_TYPE_OPTIONS = [
-  { value: "duckdb", label: "DuckDB（内置 demo）" },
+  { value: "duckdb", label: "DuckDB（文件）" },
   { value: "sqlite", label: "SQLite（文件）" },
   { value: "csv", label: "CSV 文件" },
   { value: "xlsx", label: "Excel 文件" },
@@ -714,7 +714,7 @@ export const WORKSPACE_CONFIG_FIELDS: Record<
       label: "数据源类型",
       inputType: "select",
       options: dbTypeOptions(),
-      helpText: "当前后端可连接：DuckDB(demo) / SQLite / CSV / Excel。",
+      helpText: "当前后端可连接：DuckDB / SQLite / CSV / Excel（文件）。",
       required: true,
       readOnly: (item) => !!item.builtin,
     },
@@ -729,11 +729,12 @@ export const WORKSPACE_CONFIG_FIELDS: Record<
     {
       key: "filePath",
       label: "文件路径",
-      placeholder: "/data/sales.sqlite 或 /data/orders.csv",
-      helpText: "SQLite / CSV / Excel 的本地文件路径。DuckDB 为内置 demo，无需路径。",
+      placeholder: "上传本地文件，或粘贴已有服务端路径",
+      helpText:
+        "选择本地 DuckDB / SQLite / CSV / Excel 文件上传后自动填入服务端路径；也可手动填写 API 进程可访问的路径。",
       required: true,
       fullWidth: true,
-      visibleWhen: (s) => dbTypeOf(s) !== "duckdb" && !isDbServerType(s),
+      visibleWhen: (s) => !isDbServerType(s),
     },
     // 以下为 gated-off：后端 PostgreSQL/MySQL adapter（#2）就绪后翻 datasource.server。
     {
@@ -1004,20 +1005,7 @@ const WORKSPACE_CONFIG_STORAGE_KEY = "data-tasks:workspace-config:v1";
 
 function defaultWorkspaceConfig(): WorkspaceConfigStore {
   return {
-    db: [
-      {
-        id: "api-duckdb-demo",
-        name: "api-duckdb-demo",
-        description: "DuckDB 演示数据源",
-        enabled: true,
-        builtin: true,
-        settings: {
-          datasourceId: "api-duckdb-demo",
-          type: "duckdb",
-          mode: "readonly",
-        },
-      },
-    ],
+    db: [],
     kb: [],
     mcp: [],
     llm: [

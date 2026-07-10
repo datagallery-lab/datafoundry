@@ -8,8 +8,13 @@ const nextConfig: NextConfig = {
   // Next's default `compress: true` applies gzip to `text/*`, including
   // `text/event-stream`. Even with flush hooks, compression is the wrong layer
   // for AG-UI SSE. Disable here; terminate TLS/gzip at the reverse proxy for
-  // HTML/assets, and leave `/api/copilotkit` uncompressed.
+  // HTML/assets (see deploy/nginx.datafoundry.conf.example), and leave
+  // `/api/copilotkit` uncompressed.
   compress: false,
+  // Production / test builds: tree-shake heavy package entrypoints.
+  experimental: {
+    optimizePackageImports: ["zod"],
+  },
   // Dev uses Turbopack (see `dev` script). Declaring this key pins the
   // monorepo root and silences the "Webpack is configured while Turbopack is
   // not" warning; the webpack() hook below still applies to `next build`.

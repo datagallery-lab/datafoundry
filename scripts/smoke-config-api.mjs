@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
+import { existsSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -287,6 +287,36 @@ try {
   assert.equal(chatUpload.body.path, "uploads/metrics.csv");
   assert.equal(chatUpload.body.mimeType, "text/csv");
   assert.equal(chatUpload.body.size > 0, true);
+
+  const datasourceUploadForm = new FormData();
+  datasourceUploadForm.append(
+    "file",
+    new Blob(["name,value\nrevenue,42\n"], { type: "text/csv" }),
+    "sales-metrics.csv"
+  );
+  const datasourceUpload = await requestJson("/api/v1/datasources/uploads", {
+    method: "POST",
+    body: datasourceUploadForm
+  });
+  assert.equal(datasourceUpload.response.status, 200);
+  assert.equal(typeof datasourceUpload.body.path, "string");
+  assert.match(datasourceUpload.body.path, /datasources[/\\]sales-metrics\.csv$/);
+  assert.equal(datasourceUpload.body.originalName, "sales-metrics.csv");
+  assert.equal(datasourceUpload.body.mimeType, "text/csv");
+  assert.equal(datasourceUpload.body.size > 0, true);
+  assert.equal(existsSync(datasourceUpload.body.path), true);
+
+  const rejectedDatasourceUploadForm = new FormData();
+  rejectedDatasourceUploadForm.append(
+    "file",
+    new Blob(["not-a-datasource"], { type: "application/pdf" }),
+    "notes.pdf"
+  );
+  const rejectedDatasourceUpload = await requestJson("/api/v1/datasources/uploads", {
+    method: "POST",
+    body: rejectedDatasourceUploadForm
+  });
+  assert.equal(rejectedDatasourceUpload.response.status, 415);
 
   const conversationSessionId = "conversation-api-session";
   const conversationRunId = "conversation-api-run";
@@ -782,6 +812,91 @@ try {
   });
   assert.equal(upload.response.status, 201);
   assert.equal(upload.body.data.status, "ready");
+
+  // KB type gate: multipart PDF/DOCX and forged MIME / JSON filename bypasses must be 415.
+  const rejectedPdfForm = new FormData();
+  rejectedPdfForm.append(
+    "file",
+    new Blob(["%PDF-1.4"], { type: "application/pdf" }),
+    "doc.pdf"
+  );
+  const rejectedPdf = await requestJson("/api/v1/knowledge-bases/metrics-docs/files", {
+    method: "POST",
+    body: rejectedPdfForm
+  });
+  assert.equal(rejectedPdf.response.status, 415);
+  assert.match(String(rejectedPdf.body?.error?.message ?? ""), /KNOWLEDGE_FILE_TYPE_UNSUPPORTED/);
+
+  const rejectedDocxForm = new FormData();
+  rejectedDocxForm.append(
+    "file",
+    new Blob(["PK"], {
+      type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    }),
+    "report.docx"
+  );
+  const rejectedDocx = await requestJson("/api/v1/knowledge-bases/metrics-docs/files", {
+    method: "POST",
+    body: rejectedDocxForm
+  });
+  assert.equal(rejectedDocx.response.status, 415);
+
+  const forgedMimeForm = new FormData();
+  forgedMimeForm.append(
+    "file",
+    new Blob(["spoofed"], { type: "text/plain" }),
+    "doc.pdf"
+  );
+  const forgedMime = await requestJson("/api/v1/knowledge-bases/metrics-docs/files", {
+    method: "POST",
+    body: forgedMimeForm
+  });
+  assert.equal(forgedMime.response.status, 415);
+
+  const rejectedJsonPdf = await requestJson("/api/v1/knowledge-bases/metrics-docs/files", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ filename: "doc.pdf", content: "not a pdf but must still be rejected" })
+  });
+  assert.equal(rejectedJsonPdf.response.status, 415);
+  assert.match(String(rejectedJsonPdf.body?.error?.message ?? ""), /KNOWLEDGE_FILE_TYPE_UNSUPPORTED/);
+
+  // Light upload → promote → list(scope=workspace) path for workspace assets.
+  const workspaceSessionId = "config-smoke-workspace-promote";
+  metadataStore.sessions.create({
+    user_id: "dev-user",
+    id: workspaceSessionId,
+    title: "config smoke workspace promote"
+  });
+  const workspaceUploadForm = new FormData();
+  workspaceUploadForm.append(
+    "files",
+    new Blob(["workspace-asset-body"], { type: "text/plain" }),
+    "workspace-asset.txt"
+  );
+  const workspaceUploadResponse = await requestRaw("/api/v1/files", {
+    method: "POST",
+    headers: { "X-Session-Id": workspaceSessionId },
+    body: workspaceUploadForm
+  });
+  assert.equal(workspaceUploadResponse.status, 201);
+  const workspaceUploadBody = await workspaceUploadResponse.json();
+  const workspaceUploaded =
+    workspaceUploadBody.body?.data?.files?.[0] ?? workspaceUploadBody.data.files[0];
+  assert.equal(workspaceUploaded.filename, "workspace-asset.txt");
+  const promotedWorkspace = await requestJson(`/api/v1/files/${workspaceUploaded.id}/promote`, {
+    method: "POST"
+  });
+  assert.equal(promotedWorkspace.response.status, 200);
+  assert.equal(promotedWorkspace.body.data.scope, "workspace");
+  assert.equal(promotedWorkspace.body.data.sessionId ?? null, null);
+  const workspaceList = await requestJson("/api/v1/files?scope=workspace&origin=uploaded,saved");
+  assert.equal(workspaceList.response.status, 200);
+  assert.equal(
+    workspaceList.body.data.files.some((file) => file.id === promotedWorkspace.body.data.id),
+    true
+  );
+
   const search = await requestJson("/api/v1/knowledge-bases/metrics-docs/search", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -1198,7 +1313,7 @@ try {
   }), /SECRET_NOT_FOUND/u);
 
   console.log(
-    "Config API smoke OK: secrets, datasource/types/policies, chat upload, conversation, revision, "
+    "Config API smoke OK: secrets, datasource/types/policies, chat upload, datasource upload, conversation, revision, "
       + "KB, MCP, model profile, skill binding, defaults, artifact, tombstone"
   );
 } finally {

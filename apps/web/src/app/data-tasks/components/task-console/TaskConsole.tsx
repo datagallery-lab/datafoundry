@@ -49,7 +49,7 @@ import {
   deriveProcessGroupUsage,
   type ProcessToolGroup,
 } from "../../process-tool-groups";
-import type { TaskSelection } from "../../page";
+import type { TaskSelection } from "../../data-tasks-app";
 import { overviewSectionPlan } from "../../task-console-layout";
 import {
   filterTableRows,

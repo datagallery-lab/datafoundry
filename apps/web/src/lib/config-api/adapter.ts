@@ -103,6 +103,7 @@ export function datasourceDtoToItem(dto: DatasourceDto): WorkspaceConfigItem {
       type: dto.type,
       mode: dto.mode ?? "readonly",
       filePath,
+      connectionString: pickString(config, "connectionString", "connection_string"),
       host: pickString(config, "host"),
       port: pickString(config, "port"),
       database: pickString(config, "database"),
@@ -374,6 +375,9 @@ export function itemToCreateBody(
       if (settings.filePath?.trim()) {
         config.filePath = settings.filePath.trim();
       }
+      if (settings.connectionString?.trim()) {
+        config.connectionString = settings.connectionString.trim();
+      }
       for (const key of [
         "host",
         "port",
@@ -552,6 +556,9 @@ export function itemToPatchBody(
     case "db": {
       const config: Record<string, unknown> = {};
       if (settings.filePath?.trim()) config.filePath = settings.filePath.trim();
+      if (settings.connectionString?.trim()) {
+        config.connectionString = settings.connectionString.trim();
+      }
       for (const key of [
         "host",
         "port",

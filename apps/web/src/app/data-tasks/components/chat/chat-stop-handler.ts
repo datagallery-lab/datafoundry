@@ -8,7 +8,8 @@ export type ChatRunCancellationOptions = {
 export function performChatRunCancellation(
   options: ChatRunCancellationOptions,
 ): Promise<void> {
-  if (!options.onCancelRun) {
+  const onCancelRun = options.onCancelRun;
+  if (!onCancelRun) {
     options.onStopFrontend?.();
     return Promise.resolve();
   }
@@ -27,7 +28,7 @@ export function performChatRunCancellation(
     const timeout = setTimeout(fallback, options.fallbackTimeoutMs ?? 5000);
 
     try {
-      void Promise.resolve(options.onCancelRun()).then(
+      void Promise.resolve(onCancelRun()).then(
         () => {
           settled = true;
           clearTimeout(timeout);
