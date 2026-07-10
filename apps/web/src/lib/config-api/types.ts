@@ -507,6 +507,19 @@ export type TraceDagDto = {
   sessionId: string;
   nodes: TraceDagNodeDto[];
   edges: TraceDagEdgeDto[];
+  sections: TraceDagSectionDto[];
+};
+
+export type TraceDagSectionDto = {
+  id: string;
+  runId: string;
+  phaseKey: string;
+  status: "completed" | "failed" | "in-progress";
+  title: string;
+  summary: string;
+  startEventSeq: number;
+  endEventSeq: number;
+  nodeIds: string[];
 };
 
 export type ConversationToolCallDto = {

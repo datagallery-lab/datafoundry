@@ -4,6 +4,7 @@ import type { RunEventWriter } from "@datafoundry/metadata";
 import type { ConversationMemoryEventObserver } from "./conversation-memory.js";
 import type { RunCheckpointProjector } from "./run-checkpoint-projector.js";
 import type { TaskPlanProjector } from "./task-plan-projector.js";
+import type { TraceSectionCoordinator } from "./trace-section-coordinator.js";
 import type { ToolCallResultBridge } from "./tool-call-result-bridge.js";
 
 type RunEventPipelineInput = {
@@ -13,6 +14,7 @@ type RunEventPipelineInput = {
   runId: string;
   sessionId: string;
   taskPlanProjector: TaskPlanProjector;
+  traceSectionCoordinator?: TraceSectionCoordinator;
   toolCallResultBridge: ToolCallResultBridge;
   userId: string;
   sink(event: BaseEvent): void;
@@ -75,6 +77,7 @@ export class RunEventPipeline {
       event
     });
     this.input.checkpointProjector?.observe(envelope);
+    this.input.traceSectionCoordinator?.observe(envelope);
     this.input.conversationMemoryObserver.observe(event);
     this.input.sink(event);
   }

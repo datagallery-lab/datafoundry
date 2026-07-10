@@ -26,6 +26,7 @@ type TaskConsoleDrawerProps = {
   isOpen: boolean;
   onClose: () => void;
   onOpenTrace: () => void;
+  onCreateCheckpointBranch?: (checkpointId: string) => Promise<void> | void;
   onPromoteArtifact?: (artifact: DataArtifact) => Promise<void> | void;
   onArtifactExportJob?: (job: JobDto) => void;
   onSelectEvent: (eventId: string) => void;
@@ -51,6 +52,7 @@ export function TaskConsoleDrawer({
   isOpen,
   onClose,
   onOpenTrace,
+  onCreateCheckpointBranch,
   onPromoteArtifact,
   onArtifactExportJob,
   onSelectEvent,
@@ -94,6 +96,7 @@ export function TaskConsoleDrawer({
           onClose={onClose}
           onMentionArtifact={onMentionArtifact}
           onOpenTrace={onOpenTrace}
+          onCreateCheckpointBranch={onCreateCheckpointBranch}
           onPromoteArtifact={onPromoteArtifact}
           onArtifactExportJob={onArtifactExportJob}
           onSelectEvent={onSelectEvent}

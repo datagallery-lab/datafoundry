@@ -88,6 +88,8 @@
     "smoke:server-datasources": "npm run build && node scripts/smoke-server-datasources-e2e.mjs",
     "smoke:sql": "npm run build && node scripts/smoke-sql-readonly.mjs",
     "smoke:agent": "npm run build && node scripts/smoke-agent-runtime.mjs",
+    "smoke:trace-sections": "npm run build && node scripts/smoke-trace-sections.mjs",
+    "eval:dacomp6": "node scripts/run-dacomp6-complex-case.mjs",
     "smoke:task-state": "npm run build && node scripts/smoke-task-state.mjs",
     "smoke:collaboration": "npm run build && node scripts/smoke-collaboration-tools.mjs",
     "smoke:workspace": "npm run build && node scripts/smoke-workspace-tools.mjs",

@@ -9,6 +9,7 @@ import type {
   TraceDagEdgeDto,
   TraceDagNodeDto,
   TraceDagNodeKind,
+  TraceDagSectionDto,
 } from "../../../../lib/config-api";
 
 const CANVAS_WIDTH = 920;
@@ -27,8 +28,14 @@ type TraceDagCanvasProps = {
   dag: TraceDagDto | null;
   error: string | null;
   isLoading: boolean;
+  mode?: "embedded" | "fullscreen";
+  sections?: TraceDagSectionDto[];
+  collapsedSectionIds?: ReadonlySet<string>;
   selectedNodeId: string | null;
+  selectedSectionId?: string | null;
   onSelectNode: (nodeId: string) => void;
+  onSelectSection?: (sectionId: string) => void;
+  onToggleSection?: (sectionId: string) => void;
 };
 
 type ViewTransform = {
@@ -44,7 +51,15 @@ type DragState = {
   view: ViewTransform;
 };
 
-type LayoutNode = TraceDagNodeDto & {
+type CanvasNode = TraceDagNodeDto & {
+  section?: TraceDagSectionDto;
+};
+
+type CanvasDag = Omit<TraceDagDto, "nodes"> & {
+  nodes: CanvasNode[];
+};
+
+type LayoutNode = CanvasNode & {
   x: number;
   y: number;
 };
@@ -73,21 +88,35 @@ export function TraceDagCanvas({
   dag,
   error,
   isLoading,
+  mode = "fullscreen",
+  sections = [],
+  collapsedSectionIds = new Set<string>(),
   selectedNodeId,
+  selectedSectionId,
   onSelectNode,
+  onSelectSection,
+  onToggleSection,
 }: TraceDagCanvasProps) {
   const svgRef = useRef<SVGSVGElement | null>(null);
   const dragRef = useRef<DragState | null>(null);
-  const layout = useMemo(() => buildDagLayout(dag), [dag]);
+  const previousLayoutKey = useRef<string | null>(null);
+  const displayDag = useMemo(
+    () => collapseTraceSections(dag, sections, collapsedSectionIds),
+    [collapsedSectionIds, dag, sections],
+  );
+  const layout = useMemo(() => buildDagLayout(displayDag), [displayDag]);
   const [view, setView] = useState<ViewTransform>(() => fitLayout(layout));
+  const layoutKey = layout?.nodes.map((node) => node.id).join("|") ?? "";
 
   const resetView = useCallback(() => {
     setView(fitLayout(layout));
   }, [layout]);
 
   useEffect(() => {
+    if (previousLayoutKey.current === layoutKey) return;
+    previousLayoutKey.current = layoutKey;
     setView(fitLayout(layout));
-  }, [layout]);
+  }, [layout, layoutKey]);
 
   const zoomBy = useCallback((factor: number) => {
     setView((current) => zoomAt(current, factor, CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2));
@@ -163,7 +192,7 @@ export function TraceDagCanvas({
         <div>
           <h3 className="text-sm font-semibold text-foreground">Trace DAG</h3>
           <div className="mt-0.5 text-[11px] text-muted-light">
-            {layout.nodes.length} nodes · {layout.edges.length} edges
+            {layout.nodes.length} visible nodes · {sections.length} sections
           </div>
         </div>
         <div className="flex items-center gap-1">
@@ -173,11 +202,22 @@ export function TraceDagCanvas({
         </div>
       </div>
 
+      {sections.length > 0 ? (
+        <TraceSectionStrip
+          collapsedSectionIds={collapsedSectionIds}
+          onSelectSection={onSelectSection}
+          onToggleSection={onToggleSection}
+          sections={sections}
+          selectedSectionId={selectedSectionId}
+        />
+      ) : null}
+
       <div
         className={[
-          "relative h-[520px] overflow-hidden rounded-lg border border-border",
+          "relative overflow-hidden rounded-lg border border-border",
           "bg-[linear-gradient(180deg,var(--surface-subtle),var(--surface))]",
-          "touch-none md:h-[620px]",
+          "touch-none",
+          mode === "embedded" ? "h-[360px] md:h-[420px]" : "h-[520px] md:h-[620px]",
         ].join(" ")}
         onPointerCancel={handlePointerUp}
         onPointerDown={handlePointerDown}
@@ -226,8 +266,10 @@ export function TraceDagCanvas({
               <TraceCanvasNode
                 key={node.id}
                 node={node}
-                selected={node.id === selectedNodeId}
-                onSelect={() => onSelectNode(node.id)}
+                selected={node.id === selectedNodeId || node.section?.id === selectedSectionId}
+                onSelect={() => node.section && onSelectSection
+                  ? onSelectSection(node.section.id)
+                  : onSelectNode(node.id)}
               />
             ))}
           </g>
@@ -255,7 +297,11 @@ function TraceCanvasNode({
   onSelect: () => void;
 }) {
   const visual = traceNodeVisual(node);
-  const label = node.kind === "tool" ? shortLabel(toolDisplayName(node), 18) : undefined;
+  const label = node.section
+    ? shortLabel(node.section.title, 28)
+    : node.kind === "tool"
+      ? shortLabel(toolDisplayName(node), 18)
+      : undefined;
   const radius = node.prominent ? DOT_RADIUS + 2 : DOT_RADIUS;
   const checkpointRadius = radius + 7;
 
@@ -279,6 +325,27 @@ function TraceCanvasNode({
     >
       <title>{node.label}</title>
       <circle r={HIT_RADIUS} fill="transparent" />
+      {node.section ? (
+        <>
+          <rect
+            x="-58"
+            y="-15"
+            width="116"
+            height="30"
+            rx="5"
+            fill="var(--surface)"
+            stroke={selected ? "var(--foreground)" : "var(--primary)"}
+            strokeWidth={selected ? 2.5 : 1.5}
+          />
+          <circle cx="-45" r="5" fill="var(--primary)" />
+          <text x="-34" y="4" className="pointer-events-none fill-foreground text-[10px] font-semibold">
+            {label}
+          </text>
+          <text x="48" y="4" className="pointer-events-none fill-muted text-[9px]" textAnchor="end">
+            {node.section.nodeIds.length}
+          </text>
+        </>
+      ) : null}
       <circle
         r={selected ? checkpointRadius + 5 : checkpointRadius}
         fill={visual.halo}
@@ -294,14 +361,18 @@ function TraceCanvasNode({
           strokeWidth={selected ? 2.4 : 1.8}
         />
       ) : null}
-      <circle
-        r={radius}
-        fill={visual.color}
-        stroke={selected ? "var(--foreground)" : visual.stroke}
-        strokeWidth={selected ? 3 : 2}
-      />
-      <circle r={radius / 2.6} fill="var(--surface)" opacity={node.rollbackable ? 0.86 : 0.42} />
-      {label ? (
+      {!node.section ? (
+        <>
+          <circle
+            r={radius}
+            fill={visual.color}
+            stroke={selected ? "var(--foreground)" : visual.stroke}
+            strokeWidth={selected ? 3 : 2}
+          />
+          <circle r={radius / 2.6} fill="var(--surface)" opacity={node.rollbackable ? 0.86 : 0.42} />
+        </>
+      ) : null}
+      {label && !node.section ? (
         <text
           y={radius + 24}
           className="pointer-events-none fill-muted text-[11px] font-semibold"
@@ -437,7 +508,104 @@ function TraceDagCanvasState({
   );
 }
 
-function buildDagLayout(dag: TraceDagDto | null): DagLayout | null {
+function TraceSectionStrip({
+  collapsedSectionIds,
+  onSelectSection,
+  onToggleSection,
+  sections,
+  selectedSectionId,
+}: {
+  collapsedSectionIds: ReadonlySet<string>;
+  onSelectSection?: (sectionId: string) => void;
+  onToggleSection?: (sectionId: string) => void;
+  sections: TraceDagSectionDto[];
+  selectedSectionId?: string | null;
+}) {
+  return (
+    <div className="mb-3 grid gap-2">
+      {sections.map((section) => {
+        const collapsed = collapsedSectionIds.has(section.id);
+        const selected = section.id === selectedSectionId;
+        return (
+          <div
+            key={section.id}
+            className={[
+              "grid grid-cols-[minmax(0,1fr)_auto] gap-2 rounded border px-3 py-2",
+              selected ? "border-primary bg-primary-light/10" : "border-border bg-surface-subtle",
+            ].join(" ")}
+          >
+            <button
+              type="button"
+              onClick={() => onSelectSection?.(section.id)}
+              className="min-w-0 text-left"
+            >
+              <div className="flex items-center gap-2">
+                <span className={[
+                  "h-2 w-2 shrink-0 rounded-full",
+                  section.status === "completed" ? "bg-step-success" : "bg-primary",
+                ].join(" ")} />
+                <span className="truncate text-xs font-semibold text-foreground">{section.title}</span>
+                <span className="shrink-0 text-[10px] text-muted-light">{section.nodeIds.length} nodes</span>
+              </div>
+              <p className="mt-1 line-clamp-2 text-[11px] leading-4 text-muted">{section.summary}</p>
+            </button>
+            <button
+              type="button"
+              aria-expanded={!collapsed}
+              onClick={() => onToggleSection?.(section.id)}
+              className="self-start rounded border border-border px-2 py-1 text-[10px] font-semibold text-muted hover:bg-surface"
+            >
+              {collapsed ? "Expand" : "Collapse"}
+            </button>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function collapseTraceSections(
+  dag: TraceDagDto | null,
+  sections: TraceDagSectionDto[],
+  collapsedSectionIds: ReadonlySet<string>,
+): CanvasDag | null {
+  if (!dag) {
+    return null;
+  }
+  const collapsedSections = sections.filter((section) =>
+    collapsedSectionIds.has(section.id) && section.nodeIds.length > 0
+  );
+  if (collapsedSections.length === 0) {
+    return dag;
+  }
+  const hiddenNodeIds = new Set(collapsedSections.flatMap((section) => section.nodeIds));
+  const sectionNodes = collapsedSections.flatMap((section) => {
+    const firstNode = section.nodeIds
+      .map((nodeId) => dag.nodes.find((node) => node.id === nodeId))
+      .find((node): node is TraceDagNodeDto => Boolean(node));
+    if (!firstNode) {
+      return [];
+    }
+    return [{
+      ...firstNode,
+      id: `section:${section.id}`,
+      kind: "context" as const,
+      label: section.title,
+      prominent: true,
+      summary: section.summary,
+      status: section.status,
+      checkpointId: undefined,
+      rollbackable: false,
+      section,
+    }];
+  });
+  return {
+    ...dag,
+    nodes: [...dag.nodes.filter((node) => !hiddenNodeIds.has(node.id)), ...sectionNodes]
+  };
+}
+
+function buildDagLayout(dag: CanvasDag | null): DagLayout | null {
   if (!dag || dag.nodes.length === 0) return null;
   const sourceNodes = dag.nodes;
   const sourceOrder = new Map(sourceNodes.map((node, index) => [node.id, index]));
@@ -484,8 +652,8 @@ function buildDagLayout(dag: TraceDagDto | null): DagLayout | null {
 }
 
 function buildVisualTreeEdges(
-  dag: TraceDagDto,
-  nodeById: Map<string, TraceDagNodeDto>,
+  dag: CanvasDag,
+  nodeById: Map<string, CanvasNode>,
   sourceOrder: Map<string, number>,
 ): TraceDagEdgeDto[] {
   const edges: TraceDagEdgeDto[] = [];
@@ -535,7 +703,7 @@ function buildVisualTreeEdges(
 }
 
 function buildRowGroups(
-  nodes: TraceDagNodeDto[],
+  nodes: CanvasNode[],
   sourceOrder: Map<string, number>,
 ): Array<{ runId: string; rows: TraceDagNodeDto[][] }> {
   const groups: Array<{ runId: string; rows: TraceDagNodeDto[][] }> = [];
@@ -581,14 +749,14 @@ function buildRowGroups(
 }
 
 function rowsForTurn(
-  userTurn: TraceDagNodeDto,
-  nodes: TraceDagNodeDto[],
+  userTurn: CanvasNode,
+  nodes: CanvasNode[],
   sourceOrder: Map<string, number>,
 ): TraceDagNodeDto[][] {
   return [[userTurn], ...rowsForRun(nodes.filter((node) => node.id !== userTurn.id), sourceOrder)];
 }
 
-function rowsForRun(nodes: TraceDagNodeDto[], sourceOrder: Map<string, number>): TraceDagNodeDto[][] {
+function rowsForRun(nodes: CanvasNode[], sourceOrder: Map<string, number>): CanvasNode[][] {
   const byKind = (kind: TraceDagNodeKind) =>
     nodes.filter((node) => node.kind === kind).sort((left, right) => compareNodes(left, right, sourceOrder));
   const runStarts = byKind("run-start");
@@ -629,8 +797,8 @@ function rowsForRun(nodes: TraceDagNodeDto[], sourceOrder: Map<string, number>):
   ].filter((row) => row.length > 0);
 }
 
-function chunkNodes(nodes: TraceDagNodeDto[], size: number): TraceDagNodeDto[][] {
-  const chunks: TraceDagNodeDto[][] = [];
+function chunkNodes(nodes: CanvasNode[], size: number): CanvasNode[][] {
+  const chunks: CanvasNode[][] = [];
   for (let index = 0; index < nodes.length; index += size) {
     chunks.push(nodes.slice(index, index + size));
   }
@@ -682,13 +850,13 @@ function compareNodes(
   return (sourceOrder.get(left.id) ?? 0) - (sourceOrder.get(right.id) ?? 0);
 }
 
-function findBranchSource(dag: TraceDagDto, branchNodeId: string): string | undefined {
+function findBranchSource(dag: CanvasDag, branchNodeId: string): string | undefined {
   return dag.edges.find((edge) => edge.kind === "branches_from" && edge.target === branchNodeId)?.source;
 }
 
 function parentForEvent(
-  node: TraceDagNodeDto,
-  contexts: TraceDagNodeDto[],
+  node: CanvasNode,
+  contexts: CanvasNode[],
   runStart: TraceDagNodeDto | undefined,
 ): TraceDagNodeDto | undefined {
   if (contexts.length === 0) return runStart;
@@ -699,7 +867,7 @@ function parentForEvent(
     .find((context) => context.eventSeq !== undefined && context.eventSeq <= eventSeq) ?? runStart;
 }
 
-function eventSeqInRange(node: TraceDagNodeDto, start?: number, end?: number): boolean {
+function eventSeqInRange(node: CanvasNode, start?: number, end?: number): boolean {
   if (node.eventSeq === undefined) return end === undefined;
   if (start !== undefined && node.eventSeq < start) return false;
   return end === undefined || node.eventSeq < end;

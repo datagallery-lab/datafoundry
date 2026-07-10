@@ -246,6 +246,24 @@ export type CheckpointKind = "context-compiled" | "run-terminal" | "tool-result"
 
 export type CheckpointStatus = "stable" | "failed" | "terminal";
 
+export type TraceSectionStatus = "completed" | "failed" | "in-progress";
+
+export type TraceSectionRecord = {
+  id: string;
+  user_id: string;
+  session_id: string;
+  run_id: string;
+  branch_id: string;
+  phase_key: string;
+  start_event_seq: number;
+  end_event_seq: number;
+  status: TraceSectionStatus;
+  title: string;
+  summary: string;
+  created_at: string;
+  updated_at: string;
+};
+
 export type CheckpointRecord = {
   id: string;
   user_id: string;
@@ -472,6 +490,20 @@ export type CreateCheckpointInput = {
   message_position?: number;
 };
 
+export type UpsertTraceSectionInput = {
+  id: string;
+  user_id: string;
+  session_id: string;
+  run_id: string;
+  branch_id?: string;
+  phase_key: string;
+  start_event_seq: number;
+  end_event_seq: number;
+  status: TraceSectionStatus;
+  title: string;
+  summary: string;
+};
+
 export type ListRelevantLongTermMemoriesInput = {
   user_id: string;
   query: string;
@@ -590,6 +622,7 @@ export class MetadataStore {
   readonly sessions: SessionRepository;
   readonly secrets: EncryptedSecretStore;
   readonly sqlAuditLogs: SqlAuditLogRepository;
+  readonly traceSections: TraceSectionRepository;
   readonly userPasswordCredentials: UserPasswordCredentialRepository;
   readonly users: UserRepository;
   readonly workspaceMemberships: WorkspaceMembershipRepository;
@@ -614,6 +647,7 @@ export class MetadataStore {
     this.configJobs = new ConfigJobRepository(db);
     this.configResources = new ConfigResourceRepository(db);
     this.checkpoints = new CheckpointRepository(db);
+    this.traceSections = new TraceSectionRepository(db);
     this.contextPackageSnapshots = new ContextPackageSnapshotRepository(db);
     this.dataSources = new DataSourceRepository(db);
     this.fileAssets = new FileAssetRepository(db);
@@ -2170,6 +2204,90 @@ export class CheckpointRepository {
       .all(input.user_id, input.session_id, limit)
       .map(mapRequiredCheckpointRow);
   }
+
+  listByRun(input: { user_id: string; run_id: string }): CheckpointRecord[] {
+    return this.db
+      .prepare(
+        "SELECT * FROM checkpoints WHERE user_id = ? AND run_id = ? ORDER BY event_seq ASC, created_at ASC"
+      )
+      .all(input.user_id, input.run_id)
+      .map(mapRequiredCheckpointRow);
+  }
+}
+
+export class TraceSectionRepository {
+  constructor(private readonly db: DatabaseSync) {}
+
+  upsert(input: UpsertTraceSectionInput): TraceSectionRecord {
+    const now = new Date().toISOString();
+    this.db.prepare(`
+      INSERT INTO trace_sections (
+        id, user_id, session_id, run_id, branch_id, phase_key, start_event_seq,
+        end_event_seq, status, title, summary, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(user_id, id) DO UPDATE SET
+        phase_key = excluded.phase_key,
+        end_event_seq = excluded.end_event_seq,
+        status = excluded.status,
+        title = excluded.title,
+        summary = excluded.summary,
+        updated_at = excluded.updated_at
+    `).run(
+      input.id,
+      input.user_id,
+      input.session_id,
+      input.run_id,
+      input.branch_id ?? "main",
+      input.phase_key,
+      input.start_event_seq,
+      input.end_event_seq,
+      input.status,
+      input.title,
+      input.summary,
+      now,
+      now
+    );
+    return this.get({ user_id: input.user_id, trace_section_id: input.id });
+  }
+
+  findOpenByRun(input: { user_id: string; run_id: string }): Optional<TraceSectionRecord> {
+    return mapTraceSectionRow(this.db.prepare(`
+      SELECT * FROM trace_sections
+      WHERE user_id = ? AND run_id = ? AND status = 'in-progress'
+      ORDER BY updated_at DESC
+      LIMIT 1
+    `).get(input.user_id, input.run_id));
+  }
+
+  get(input: { user_id: string; trace_section_id: string }): TraceSectionRecord {
+    const record = mapTraceSectionRow(this.db.prepare(
+      "SELECT * FROM trace_sections WHERE user_id = ? AND id = ?"
+    ).get(input.user_id, input.trace_section_id));
+    if (!record) {
+      throw new Error(`Trace section not found: ${input.trace_section_id}`);
+    }
+    return record;
+  }
+
+  listBySessions(input: { user_id: string; session_ids: string[] }): TraceSectionRecord[] {
+    if (input.session_ids.length === 0) {
+      return [];
+    }
+    const placeholders = input.session_ids.map(() => "?").join(", ");
+    return this.db.prepare(`
+      SELECT * FROM trace_sections
+      WHERE user_id = ? AND session_id IN (${placeholders})
+      ORDER BY created_at ASC, start_event_seq ASC
+    `).all(input.user_id, ...input.session_ids).map(mapRequiredTraceSectionRow);
+  }
+
+  listByRun(input: { user_id: string; run_id: string }): TraceSectionRecord[] {
+    return this.db.prepare(`
+      SELECT * FROM trace_sections
+      WHERE user_id = ? AND run_id = ?
+      ORDER BY start_event_seq ASC, updated_at ASC
+    `).all(input.user_id, input.run_id).map(mapRequiredTraceSectionRow);
+  }
 }
 
 export class ArtifactRepository {
@@ -2218,7 +2336,9 @@ export class ArtifactRepository {
     return artifact;
   }
 
-  findBySessionLogicalKey(input: { user_id: string; session_id: string; logical_key: string }): Optional<ArtifactRecord> {
+  findBySessionLogicalKey(
+    input: { user_id: string; session_id: string; logical_key: string }
+  ): Optional<ArtifactRecord> {
     const records = this.listBySession({
       user_id: input.user_id,
       session_id: input.session_id
@@ -2533,7 +2653,9 @@ export class FileAssetRefRepository {
    * file_id references remain valid) but its file_asset_id moves to the new content's
    * asset. The previously-pointed asset becomes an orphan candidate for GC.
    */
-  reassignAsset(input: { user_id: string; workspace_id: string; id: string; file_asset_id: string }): FileAssetRefRecord {
+  reassignAsset(
+    input: { user_id: string; workspace_id: string; id: string; file_asset_id: string }
+  ): FileAssetRefRecord {
     this.db.prepare(`
       UPDATE file_asset_refs SET file_asset_id = ?
       WHERE user_id = ? AND workspace_id = ? AND id = ? AND status != 'deleted'
@@ -3009,6 +3131,29 @@ const runMigrations = (db: DatabaseSync): void => {
     CREATE INDEX IF NOT EXISTS idx_checkpoints_user_run
       ON checkpoints(user_id, run_id, event_seq);
 
+    CREATE TABLE IF NOT EXISTS trace_sections (
+      id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      session_id TEXT NOT NULL,
+      run_id TEXT NOT NULL,
+      branch_id TEXT NOT NULL,
+      phase_key TEXT,
+      start_event_seq INTEGER NOT NULL,
+      end_event_seq INTEGER NOT NULL,
+      status TEXT NOT NULL,
+      title TEXT NOT NULL,
+      summary TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY (user_id, id),
+      FOREIGN KEY (user_id, session_id) REFERENCES sessions(user_id, id),
+      FOREIGN KEY (user_id, run_id) REFERENCES runs(user_id, id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_trace_sections_user_session
+      ON trace_sections(user_id, session_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_trace_sections_user_run
+      ON trace_sections(user_id, run_id, start_event_seq, end_event_seq);
+
     CREATE TABLE IF NOT EXISTS file_assets (
       id TEXT PRIMARY KEY,
       sha256 TEXT NOT NULL UNIQUE,
@@ -3142,11 +3287,16 @@ const runMigrations = (db: DatabaseSync): void => {
       migrateUserScopedIdentity(db);
     }
   });
-  runSchemaMigration(db, "0006_user_scoped_datasources", "Migrate datasource tables to user-scoped primary keys", () => {
-    if (requiresUserScopedDataSourcesMigration(db)) {
-      migrateUserScopedDataSources(db);
+  runSchemaMigration(
+    db,
+    "0006_user_scoped_datasources",
+    "Migrate datasource tables to user-scoped primary keys",
+    () => {
+      if (requiresUserScopedDataSourcesMigration(db)) {
+        migrateUserScopedDataSources(db);
+      }
     }
-  });
+  );
   runSchemaMigration(db, "0007_metadata_indexes", "Ensure metadata indexes", () => {
     createMetadataIndexes(db);
   });
@@ -3167,6 +3317,12 @@ const runMigrations = (db: DatabaseSync): void => {
   });
   runSchemaMigration(db, "0013_artifact_versions", "Ensure artifact version history schema", () => {
     initializeArtifactVersionSchema(db);
+  });
+  runSchemaMigration(db, "0014_trace_sections", "Ensure semantic trace section schema", () => {
+    initializeTraceSectionSchema(db);
+  });
+  runSchemaMigration(db, "0015_trace_section_phase_key", "Ensure trace section phase key", () => {
+    ensureTraceSectionPhaseKeyColumn(db);
   });
 };
 
@@ -3260,6 +3416,37 @@ const ensureSessionBranchCheckpointColumn = (db: DatabaseSync): void => {
   db.exec(`
     CREATE INDEX IF NOT EXISTS idx_session_branches_parent_checkpoint
       ON session_branches(user_id, parent_session_id, fork_checkpoint_id, created_at);
+  `);
+};
+
+const ensureTraceSectionPhaseKeyColumn = (db: DatabaseSync): void => {
+  ensureColumn(db, "trace_sections", "phase_key", "TEXT");
+};
+
+const initializeTraceSectionSchema = (db: DatabaseSync): void => {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS trace_sections (
+      id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      session_id TEXT NOT NULL,
+      run_id TEXT NOT NULL,
+      branch_id TEXT NOT NULL,
+      phase_key TEXT,
+      start_event_seq INTEGER NOT NULL,
+      end_event_seq INTEGER NOT NULL,
+      status TEXT NOT NULL,
+      title TEXT NOT NULL,
+      summary TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY (user_id, id),
+      FOREIGN KEY (user_id, session_id) REFERENCES sessions(user_id, id),
+      FOREIGN KEY (user_id, run_id) REFERENCES runs(user_id, id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_trace_sections_user_session
+      ON trace_sections(user_id, session_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_trace_sections_user_run
+      ON trace_sections(user_id, run_id, start_event_seq, end_event_seq);
   `);
 };
 
@@ -4231,6 +4418,36 @@ const mapRequiredCheckpointRow = (row: unknown): CheckpointRecord => {
     throw new Error("Invalid checkpoint row");
   }
   return checkpoint;
+};
+
+const mapTraceSectionRow = (row: unknown): Optional<TraceSectionRecord> => {
+  if (!isRecord(row)) {
+    return undefined;
+  }
+  const id = requiredString(row, "id");
+  return {
+    id,
+    user_id: requiredString(row, "user_id"),
+    session_id: requiredString(row, "session_id"),
+    run_id: requiredString(row, "run_id"),
+    branch_id: requiredString(row, "branch_id"),
+    phase_key: optionalString(row.phase_key) ?? `legacy:${id}`,
+    start_event_seq: requiredNumber(row, "start_event_seq"),
+    end_event_seq: requiredNumber(row, "end_event_seq"),
+    status: requiredString(row, "status") as TraceSectionStatus,
+    title: requiredString(row, "title"),
+    summary: requiredString(row, "summary"),
+    created_at: requiredString(row, "created_at"),
+    updated_at: requiredString(row, "updated_at")
+  };
+};
+
+const mapRequiredTraceSectionRow = (row: unknown): TraceSectionRecord => {
+  const section = mapTraceSectionRow(row);
+  if (!section) {
+    throw new Error("Invalid trace section row");
+  }
+  return section;
 };
 
 const mapArtifactRow = (row: unknown): Optional<ArtifactRecord> => {

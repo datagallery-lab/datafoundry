@@ -52,6 +52,7 @@ import { persistCurrentUserMessage } from "./conversation-memory.js";
 import { resolveEvidenceReferenceContext } from "./evidence-reference-context.js";
 import { createRunAgentAssembly, createRunAgentContext } from "./run-agent-assembly.js";
 import { RunCheckpointProjector } from "./run-checkpoint-projector.js";
+import { TraceSectionCoordinator } from "./trace-section-coordinator.js";
 import { resolveCheckpointResumeSeed, type CheckpointResumeSeed } from "./run-checkpoint-resume.js";
 import { resolveRunConfig } from "./run-config-resolver.js";
 import { resolveRunIdentity } from "./run-identity-orchestrator.js";
@@ -558,6 +559,11 @@ class DataFoundryAgUiAgent extends AbstractAgent {
         const taskPlanProjector = new TaskPlanProjector(runContext);
         const toolCallResultBridge = new ToolCallResultBridge();
         const checkpointProjector = new RunCheckpointProjector(this.input.metadataStore, this.input.user.id);
+        const traceSectionCoordinator = new TraceSectionCoordinator(
+          this.input.metadataStore,
+          modelProvider,
+          this.input.user.id
+        );
         const contextPackageRecorder = createMetadataContextPackageRecorder({
           metadataStore: this.input.metadataStore,
           runId,
@@ -578,6 +584,7 @@ class DataFoundryAgUiAgent extends AbstractAgent {
           runId,
           sessionId,
           taskPlanProjector,
+          traceSectionCoordinator,
           toolCallResultBridge,
           userId: this.input.user.id,
           sink: (event) => subscriber.next(event)

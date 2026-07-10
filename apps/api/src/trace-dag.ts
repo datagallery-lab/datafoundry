@@ -5,7 +5,8 @@ import type {
   MetadataStore,
   RunEventRecord,
   RunRecord,
-  SessionBranchRecord
+  SessionBranchRecord,
+  TraceSectionRecord
 } from "@datafoundry/metadata";
 
 import {
@@ -116,6 +117,19 @@ export type TraceDagDto = {
   sessionId: string;
   nodes: TraceDagNode[];
   edges: TraceDagEdge[];
+  sections: TraceDagSection[];
+};
+
+export type TraceDagSection = {
+  id: string;
+  runId: string;
+  phaseKey: string;
+  status: TraceSectionRecord["status"];
+  title: string;
+  summary: string;
+  startEventSeq: number;
+  endEventSeq: number;
+  nodeIds: string[];
 };
 
 type AddEventNodeResult = {
@@ -221,10 +235,19 @@ export function buildSessionTraceDag(input: {
     userId: input.userId
   });
 
+  const nodes = builder.nodes();
+
   return {
     sessionId: input.sessionId,
-    nodes: builder.nodes(),
-    edges: builder.edges()
+    nodes,
+    edges: builder.edges(),
+    sections: visibleTraceSections({
+      lineage,
+      metadataStore: input.metadataStore,
+      nodes,
+      runIds,
+      userId: input.userId
+    })
   };
 }
 
@@ -628,6 +651,44 @@ function visibleContextCheckpoints(input: {
       .listBySession({ user_id: input.userId, session_id: segment.sessionId, limit: 500 })
       .filter((checkpoint) => runIdSet.has(checkpoint.run_id))
   );
+}
+
+function visibleTraceSections(input: {
+  lineage: SessionLineage;
+  metadataStore: MetadataStore;
+  nodes: TraceDagNode[];
+  runIds: string[];
+  userId: string;
+}): TraceDagSection[] {
+  const visibleRunIds = new Set(input.runIds);
+  const nodeIdsByRun = new Map<string, TraceDagNode[]>();
+  for (const node of input.nodes) {
+    if (!node.runId || node.eventSeq === undefined) {
+      continue;
+    }
+    const nodes = nodeIdsByRun.get(node.runId) ?? [];
+    nodes.push(node);
+    nodeIdsByRun.set(node.runId, nodes);
+  }
+  return input.metadataStore.traceSections
+    .listBySessions({
+      user_id: input.userId,
+      session_ids: input.lineage.segments.map((segment) => segment.sessionId)
+    })
+    .filter((section) => visibleRunIds.has(section.run_id))
+    .map((section) => ({
+      id: section.id,
+      runId: section.run_id,
+      phaseKey: section.phase_key,
+      status: section.status,
+      title: section.title,
+      summary: section.summary,
+      startEventSeq: section.start_event_seq,
+      endEventSeq: section.end_event_seq,
+      nodeIds: (nodeIdsByRun.get(section.run_id) ?? [])
+        .filter((node) => node.eventSeq! >= section.start_event_seq && node.eventSeq! <= section.end_event_seq)
+        .map((node) => node.id)
+    }));
 }
 
 function preferredCheckpointForNode(

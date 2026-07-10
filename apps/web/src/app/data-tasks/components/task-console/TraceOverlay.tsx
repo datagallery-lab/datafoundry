@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import {
   configApi,
@@ -28,8 +28,13 @@ type TraceOverlayProps = {
   onCreateCheckpointBranch?: (checkpointId: string) => Promise<void> | void;
   onSelectArtifact: (artifactId: string) => void;
   onSelectEvent: (eventId: string) => void;
+  onOpenFullscreen?: () => void;
+  presentation?: "embedded" | "overlay";
   sessionId?: string;
 };
+
+const TRACE_REFRESH_INTERVAL_MS = 2_500;
+const TRACE_FINALIZATION_TIMEOUT_MS = 180_000;
 
 function runStatusLabel(status: LiveRun["runStatus"]): string {
   switch (status) {
@@ -44,6 +49,19 @@ function runStatusLabel(status: LiveRun["runStatus"]): string {
     default:
       return "Idle";
   }
+}
+
+function isTerminalRunStatus(status: LiveRun["runStatus"]): boolean {
+  return status === "completed" || status === "failed" || status === "canceled";
+}
+
+function traceSectionsFinalized(dag: TraceDagDto | null): boolean {
+  if (!dag || dag.sections.length === 0 || dag.sections.some((section) => section.status !== "completed")) {
+    return false;
+  }
+  const terminalNode = dag.nodes.find((node) => node.kind === "run-terminal");
+  return terminalNode !== undefined
+    && dag.sections.some((section) => section.nodeIds.includes(terminalNode.id));
 }
 
 function formatDuration(ms?: number): string {
@@ -65,13 +83,23 @@ export function TraceOverlay({
   onCreateCheckpointBranch,
   onSelectArtifact,
   onSelectEvent,
+  onOpenFullscreen,
+  presentation = "overlay",
   sessionId,
 }: TraceOverlayProps) {
   const [branchingCheckpointId, setBranchingCheckpointId] = useState<string | null>(null);
   const [dagError, setDagError] = useState<string | null>(null);
   const [isDagLoading, setIsDagLoading] = useState(false);
+  const [refreshTick, setRefreshTick] = useState(0);
+  const [collapsedSectionIds, setCollapsedSectionIds] = useState<Set<string>>(() => new Set());
+  const [expandedEmbeddedSectionIds, setExpandedEmbeddedSectionIds] = useState<Set<string>>(() => new Set());
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  const [selectedSectionId, setSelectedSectionId] = useState<string | null>(null);
   const [traceDag, setTraceDag] = useState<TraceDagDto | null>(null);
+  const hasLoadedTraceDag = useRef(false);
+  const initializedSectionIds = useRef(new Set<string>());
+  const loadedTraceSessionId = useRef<string | null>(null);
+  const traceFinalizationDeadline = useRef<number | null>(null);
   const stats = useMemo(
     () => traceTimelineStats(liveRun, buildTraceTimeline(liveRun)),
     [liveRun],
@@ -80,30 +108,91 @@ export function TraceOverlay({
     () => traceDag?.nodes.find((node) => node.id === selectedNodeId) ?? null,
     [selectedNodeId, traceDag],
   );
+  const selectedSection = useMemo(
+    () => traceDag?.sections.find((section) => section.id === selectedSectionId) ?? null,
+    [selectedSectionId, traceDag],
+  );
 
   useEffect(() => {
-    if (!isOpen) return;
+    if (!isOpen || presentation !== "overlay") return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") onClose();
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [isOpen, onClose]);
+  }, [isOpen, onClose, presentation]);
+
+  useEffect(() => {
+    if (!isOpen || !sessionId) {
+      traceFinalizationDeadline.current = null;
+      return;
+    }
+    if (liveRun.runStatus === "running") {
+      traceFinalizationDeadline.current = null;
+      return;
+    }
+    if (isTerminalRunStatus(liveRun.runStatus)) {
+      traceFinalizationDeadline.current = Date.now() + TRACE_FINALIZATION_TIMEOUT_MS;
+      setRefreshTick((current) => current + 1);
+    }
+  }, [isOpen, liveRun.runStatus, sessionId]);
+
+  useEffect(() => {
+    if (!isOpen || !sessionId) return;
+    const isRunning = liveRun.runStatus === "running";
+    const deadline = traceFinalizationDeadline.current;
+    const isFinalizing = deadline !== null && Date.now() < deadline && !traceSectionsFinalized(traceDag);
+    if (!isRunning && !isFinalizing) return;
+    const interval = window.setInterval(
+      () => setRefreshTick((current) => current + 1),
+      TRACE_REFRESH_INTERVAL_MS,
+    );
+    return () => window.clearInterval(interval);
+  }, [isOpen, liveRun.runStatus, sessionId, traceDag]);
 
   useEffect(() => {
     if (!isOpen || !sessionId) {
       setTraceDag(null);
       setDagError(null);
       setSelectedNodeId(null);
+      setSelectedSectionId(null);
+      setCollapsedSectionIds(new Set());
+      setExpandedEmbeddedSectionIds(new Set());
+      hasLoadedTraceDag.current = false;
+      initializedSectionIds.current.clear();
+      loadedTraceSessionId.current = null;
       return;
     }
+    if (loadedTraceSessionId.current !== sessionId) {
+      loadedTraceSessionId.current = sessionId;
+      hasLoadedTraceDag.current = false;
+      initializedSectionIds.current.clear();
+      setTraceDag(null);
+      setSelectedNodeId(null);
+      setSelectedSectionId(null);
+      setCollapsedSectionIds(new Set());
+      setExpandedEmbeddedSectionIds(new Set());
+    }
     let canceled = false;
-    setIsDagLoading(true);
+    if (!hasLoadedTraceDag.current) {
+      setIsDagLoading(true);
+    }
     setDagError(null);
     configApi.getSessionTraceDag(sessionId)
       .then((dag) => {
         if (canceled) return;
+        hasLoadedTraceDag.current = true;
         setTraceDag(dag);
+        setCollapsedSectionIds((current) => {
+          const next = new Set(current);
+          for (const section of dag.sections) {
+            if (section.status === "completed" && !initializedSectionIds.current.has(section.id)) {
+              next.add(section.id);
+              initializedSectionIds.current.add(section.id);
+            }
+          }
+          return next;
+        });
         setSelectedNodeId((current) =>
           current && dag.nodes.some((node) => node.id === current)
             ? current
@@ -120,7 +209,7 @@ export function TraceOverlay({
     return () => {
       canceled = true;
     };
-  }, [isOpen, sessionId]);
+  }, [isOpen, refreshTick, sessionId]);
 
   const handleCreateCheckpointBranch = async (checkpointId: string) => {
     if (!onCreateCheckpointBranch) return;
@@ -134,6 +223,81 @@ export function TraceOverlay({
   };
 
   if (!isOpen) return null;
+
+  const workspace = (
+    <TraceDagWorkspace
+      branchingCheckpointId={branchingCheckpointId}
+      collapsedSectionIds={collapsedSectionIds}
+      dag={traceDag}
+      dagError={dagError}
+      isDagLoading={isDagLoading}
+      mode={presentation === "embedded" ? "embedded" : "fullscreen"}
+      node={selectedNode}
+      onCreateCheckpointBranch={handleCreateCheckpointBranch}
+      onSelectNode={(nodeId) => {
+        setSelectedSectionId(null);
+        setSelectedNodeId(nodeId);
+      }}
+      onSelectSection={(sectionId) => {
+        setSelectedNodeId(null);
+        setSelectedSectionId(sectionId);
+      }}
+      onToggleSection={(sectionId) => {
+        setCollapsedSectionIds((current) => {
+          const next = new Set(current);
+          if (next.has(sectionId)) {
+            next.delete(sectionId);
+          } else {
+            next.add(sectionId);
+          }
+          return next;
+        });
+      }}
+      section={selectedSection}
+    />
+  );
+
+  if (presentation === "embedded") {
+    return (
+      <section className="grid gap-3 rounded-lg border border-border bg-surface p-3">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <h3 className="text-sm font-semibold text-foreground">Trace DAG</h3>
+            <p className="mt-0.5 text-[11px] text-muted-light">Semantic task sections and checkpoint lineage.</p>
+          </div>
+          {onOpenFullscreen ? (
+            <button
+              type="button"
+              onClick={onOpenFullscreen}
+              className={[
+                "shrink-0 rounded border border-border px-2.5 py-1.5 text-[11px] font-semibold text-muted",
+                "hover:bg-surface-subtle",
+              ].join(" ")}
+            >
+              Open full screen
+            </button>
+          ) : null}
+        </div>
+        <TraceSectionProgressList
+          dag={traceDag}
+          error={dagError}
+          expandedSectionIds={expandedEmbeddedSectionIds}
+          isLoading={isDagLoading}
+          onToggleSection={(sectionId) => {
+            setExpandedEmbeddedSectionIds((current) => {
+              const next = new Set(current);
+              if (next.has(sectionId)) {
+                next.delete(sectionId);
+              } else {
+                next.add(sectionId);
+              }
+              return next;
+            });
+          }}
+        />
+      </section>
+    );
+  }
 
   return (
     <div className={`${overlayBackdropClass} p-4`}>
@@ -186,21 +350,7 @@ export function TraceOverlay({
         </header>
 
         <div className="min-h-0 flex-1 overflow-y-auto p-5">
-          <div className="grid gap-4 xl:grid-cols-[minmax(0,1.55fr)_minmax(340px,0.75fr)]">
-            <TraceDagCanvas
-              dag={traceDag}
-              error={dagError}
-              isLoading={isDagLoading}
-              selectedNodeId={selectedNodeId}
-              onSelectNode={setSelectedNodeId}
-            />
-            <TraceDagNodeDetails
-              branchingCheckpointId={branchingCheckpointId}
-              dag={traceDag}
-              node={selectedNode}
-              onCreateCheckpointBranch={handleCreateCheckpointBranch}
-            />
-          </div>
+          {workspace}
 
           <div className="mt-5">
             <TraceList
@@ -223,17 +373,213 @@ export function TraceOverlay({
   );
 }
 
+export function EmbeddedTraceDag(
+  props: Omit<TraceOverlayProps, "isOpen" | "onClose" | "presentation">
+) {
+  return <TraceOverlay {...props} isOpen presentation="embedded" onClose={() => undefined} />;
+}
+
+function TraceSectionProgressList({
+  dag,
+  error,
+  expandedSectionIds,
+  isLoading,
+  onToggleSection,
+}: {
+  dag: TraceDagDto | null;
+  error: string | null;
+  expandedSectionIds: ReadonlySet<string>;
+  isLoading: boolean;
+  onToggleSection: (sectionId: string) => void;
+}) {
+  if (isLoading) {
+    return (
+      <TraceProgressState
+        label="Collecting task phases"
+        detail="The first phase appears after enough context steps."
+      />
+    );
+  }
+  if (error) {
+    return <TraceProgressState label="Trace phases unavailable" detail={error} tone="error" />;
+  }
+  if (!dag || dag.nodes.length === 0) {
+    return <TraceProgressState label="No task progress yet" detail="Start a task to build its trace phases." />;
+  }
+  if (dag.sections.length === 0) {
+    return <TraceProgressState
+      label="Building the first phase"
+      detail="The trace will be grouped after several context steps or when the task finishes."
+    />;
+  }
+  const nodesById = new Map(dag.nodes.map((node) => [node.id, node]));
+  return (
+    <ol className="grid gap-1.5">
+      {dag.sections.map((section, index) => {
+        const expanded = expandedSectionIds.has(section.id);
+        const phaseNodes = section.nodeIds.flatMap((nodeId) => {
+          const node = nodesById.get(nodeId);
+          return node ? [node] : [];
+        });
+        return (
+          <li key={section.id} className="relative pl-7">
+            {index < dag.sections.length - 1 ? (
+              <span className="absolute left-[9px] top-5 h-[calc(100%+3px)] w-px bg-border" />
+            ) : null}
+            <span className={[
+              "absolute left-0 top-2.5 flex h-5 w-5 items-center justify-center rounded-full border-2 bg-surface",
+              section.status === "completed" ? "border-step-success" : "border-primary",
+            ].join(" ")}>
+              <span className={[
+                "h-1.5 w-1.5 rounded-full",
+                section.status === "completed" ? "bg-step-success" : "bg-primary",
+              ].join(" ")} />
+            </span>
+            <div className="rounded border border-border bg-surface-subtle px-3 py-2.5">
+              <div className="flex items-start justify-between gap-3">
+                <button type="button" onClick={() => onToggleSection(section.id)} className="min-w-0 text-left">
+                  <div className="truncate text-xs font-semibold text-foreground">{section.title}</div>
+                  <p className="mt-1 text-[11px] leading-4 text-muted">{section.summary}</p>
+                </button>
+                <button
+                  type="button"
+                  aria-expanded={expanded}
+                  onClick={() => onToggleSection(section.id)}
+                  className={[
+                    "shrink-0 rounded border border-border px-1.5 py-1 text-[10px] font-semibold text-muted",
+                    "hover:bg-surface",
+                  ].join(" ")}
+                >
+                  {expanded ? "Hide steps" : `${phaseNodes.length} steps`}
+                </button>
+              </div>
+              {expanded ? (
+                <ol className="mt-2 grid gap-1 border-t border-border pt-2">
+                  {phaseNodes.map((node) => (
+                    <li key={node.id} className="flex min-w-0 items-center gap-2 text-[11px] text-muted">
+                      <span className={[
+                        "h-1.5 w-1.5 shrink-0 rounded-full",
+                        node.kind === "tool" ? "bg-step-success" : "bg-muted-light",
+                      ].join(" ")} />
+                      <span className="shrink-0 text-muted-light">{traceDagNodeKindLabel(node)}</span>
+                      <span className="truncate text-foreground">{node.label}</span>
+                    </li>
+                  ))}
+                </ol>
+              ) : null}
+            </div>
+          </li>
+        );
+      })}
+    </ol>
+  );
+}
+
+function TraceProgressState({
+  detail,
+  label,
+  tone = "muted",
+}: {
+  detail: string;
+  label: string;
+  tone?: "error" | "muted";
+}) {
+  return (
+    <div className={[
+      "rounded border px-3 py-3 text-xs",
+      tone === "error"
+        ? "border-step-error/30 bg-step-error/10 text-step-error"
+        : "border-border bg-surface-subtle text-muted",
+    ].join(" ")}>
+      <div className="font-semibold">{label}</div>
+      <div className="mt-1 text-[11px] leading-4 opacity-80">{detail}</div>
+    </div>
+  );
+}
+
+function TraceDagWorkspace({
+  branchingCheckpointId,
+  collapsedSectionIds,
+  dag,
+  dagError,
+  isDagLoading,
+  mode,
+  node,
+  onCreateCheckpointBranch,
+  onSelectNode,
+  onSelectSection,
+  onToggleSection,
+  section,
+}: {
+  branchingCheckpointId: string | null;
+  collapsedSectionIds: ReadonlySet<string>;
+  dag: TraceDagDto | null;
+  dagError: string | null;
+  isDagLoading: boolean;
+  mode: "embedded" | "fullscreen";
+  node: TraceDagNodeDto | null;
+  onCreateCheckpointBranch: (checkpointId: string) => Promise<void>;
+  onSelectNode: (nodeId: string) => void;
+  onSelectSection: (sectionId: string) => void;
+  onToggleSection: (sectionId: string) => void;
+  section: NonNullable<TraceDagDto["sections"]>[number] | null;
+}) {
+  const layoutClass = mode === "embedded"
+    ? "grid gap-3"
+    : "grid gap-4 xl:grid-cols-[minmax(0,1.55fr)_minmax(340px,0.75fr)]";
+  return (
+    <div className={layoutClass}>
+      <TraceDagCanvas
+        collapsedSectionIds={collapsedSectionIds}
+        dag={dag}
+        error={dagError}
+        isLoading={isDagLoading}
+        mode={mode}
+        onSelectNode={onSelectNode}
+        onSelectSection={onSelectSection}
+        onToggleSection={onToggleSection}
+        sections={dag?.sections}
+        selectedNodeId={node?.id ?? null}
+        selectedSectionId={section?.id ?? null}
+      />
+      <TraceDagNodeDetails
+        branchingCheckpointId={branchingCheckpointId}
+        dag={dag}
+        node={node}
+        onCreateCheckpointBranch={onCreateCheckpointBranch}
+        section={section}
+      />
+    </div>
+  );
+}
+
 function TraceDagNodeDetails({
   branchingCheckpointId,
   dag,
   node,
   onCreateCheckpointBranch,
+  section,
 }: {
   branchingCheckpointId: string | null;
   dag: TraceDagDto | null;
   node: TraceDagNodeDto | null;
   onCreateCheckpointBranch: (checkpointId: string) => Promise<void>;
+  section: NonNullable<TraceDagDto["sections"]>[number] | null;
 }) {
+  if (section) {
+    return (
+      <aside className="min-w-0 rounded-lg border border-border bg-surface p-4">
+        <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-light">Task section</div>
+        <h3 className="mt-1 text-base font-semibold text-foreground">{section.title}</h3>
+        <p className="mt-3 text-xs leading-5 text-muted">{section.summary}</p>
+        <div className="mt-4 grid gap-2 border-t border-border pt-4 text-xs">
+          <TraceField label="Steps" value={`${section.startEventSeq}-${section.endEventSeq}`} />
+          <TraceField label="Nodes" value={String(section.nodeIds.length)} />
+          <TraceField label="State" value={section.status} />
+        </div>
+      </aside>
+    );
+  }
   if (!node) {
     return (
       <aside className="rounded-xl border border-border bg-surface p-4 text-sm text-muted">

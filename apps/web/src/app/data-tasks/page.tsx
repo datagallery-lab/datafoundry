@@ -2033,6 +2033,7 @@ function DataTaskWorkspace({
             onClose={closeTaskConsole}
             onMentionArtifact={mentionArtifactFile}
             onOpenTrace={() => setIsTraceOpen(true)}
+            onCreateCheckpointBranch={createCheckpointBranch}
             onPromoteArtifact={promoteArtifactToWorkspace}
             onArtifactExportJob={setActiveJob}
             onSelectEvent={(eventId) =>
@@ -2067,6 +2068,7 @@ function DataTaskWorkspace({
         isOpen={!sidePanelOpen && !canDockRightPanel && isConsoleDrawerOpen}
         onClose={closeTaskConsole}
         onOpenTrace={() => setIsTraceOpen(true)}
+        onCreateCheckpointBranch={createCheckpointBranch}
         onPromoteArtifact={promoteArtifactToWorkspace}
         onArtifactExportJob={setActiveJob}
         onSelectEvent={(eventId) =>

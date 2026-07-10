@@ -59,6 +59,7 @@ import {
 } from "../../table-rows";
 import { RunConfigurationPanel } from "./RunConfigurationPanel";
 import { TraceList } from "./TraceList";
+import { EmbeddedTraceDag } from "./TraceOverlay";
 import { ArtifactMarkdownPreview } from "./ArtifactMarkdownPreview";
 import { ActionMenu, type ActionMenuItem } from "./ActionMenu";
 import { IconDots, IconOpen } from "./console-icons";
@@ -114,6 +115,8 @@ export type TaskConsoleProps = {
   onSelectEvent: (eventId: string) => void;
   onSelectToolGroup: (groupId: string) => void;
   promotedArtifactIds?: ReadonlySet<string>;
+  sessionId?: string;
+  onCreateCheckpointBranch?: (checkpointId: string) => Promise<void> | void;
 };
 
 function runStatusLabel(status: LiveRun["runStatus"], t: ReturnType<typeof useT>): string {
@@ -175,6 +178,8 @@ export function TaskConsole({
   onSelectEvent,
   onSelectToolGroup,
   promotedArtifactIds,
+  sessionId,
+  onCreateCheckpointBranch,
 }: TaskConsoleProps) {
   const t = useT();
   const [activeTab, setActiveTab] = useState<ConsoleTab>("overview");
@@ -325,9 +330,11 @@ export function TaskConsole({
           <EvidenceZone
             artifacts={artifacts}
             liveRun={liveRun}
+            onCreateCheckpointBranch={onCreateCheckpointBranch}
             onOpenTrace={onOpenTrace}
             onSelectArtifact={openArtifactOrOutputs}
             onSelectEvent={onSelectEvent}
+            sessionId={sessionId}
           />
         ) : null}
 
@@ -789,20 +796,32 @@ function StepStatusDot({
 function EvidenceZone({
   artifacts,
   liveRun,
+  onCreateCheckpointBranch,
   onOpenTrace,
   onSelectArtifact,
   onSelectEvent,
+  sessionId,
 }: {
   artifacts: DataArtifact[];
   liveRun: LiveRun;
+  onCreateCheckpointBranch?: (checkpointId: string) => Promise<void> | void;
   onOpenTrace: () => void;
   onSelectArtifact: (artifactId: string) => void;
   onSelectEvent: (eventId: string) => void;
+  sessionId?: string;
 }) {
   const t = useT();
   return (
     <div className="grid gap-4">
-      <TraceDagEntry onOpenTrace={onOpenTrace} />
+      <EmbeddedTraceDag
+        artifacts={artifacts}
+        liveRun={liveRun}
+        onCreateCheckpointBranch={onCreateCheckpointBranch}
+        onOpenFullscreen={onOpenTrace}
+        onSelectArtifact={onSelectArtifact}
+        onSelectEvent={onSelectEvent}
+        sessionId={sessionId}
+      />
       <RunConfigurationPanel liveRun={liveRun} />
       <ConsoleSection title={t("console.dataTrail")}>
         <TraceList
@@ -813,27 +832,6 @@ function EvidenceZone({
         />
       </ConsoleSection>
     </div>
-  );
-}
-
-function TraceDagEntry({ onOpenTrace }: { onOpenTrace: () => void }) {
-  const t = useT();
-  return (
-    <section className="rounded-lg border border-border bg-surface-subtle p-3">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="min-w-0">
-          <h3 className={panelTitleClass}>{t("console.traceDag.title")}</h3>
-        </div>
-        <button
-          type="button"
-          onClick={onOpenTrace}
-          className={`inline-flex items-center gap-2 ${btnPrimaryClass}`}
-        >
-          <IconOpen className="h-4 w-4" />
-          {t("console.traceDag.open")}
-        </button>
-      </div>
-    </section>
   );
 }
 

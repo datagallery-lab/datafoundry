@@ -117,7 +117,7 @@ export function TaskConsolePanel({
             />
           </div>
         ) : (
-          <TaskConsole {...consoleProps} onOpenArtifactPage={openArtifactPage} />
+          <TaskConsole {...consoleProps} sessionId={sessionId} onOpenArtifactPage={openArtifactPage} />
         )}
       </div>
     </div>

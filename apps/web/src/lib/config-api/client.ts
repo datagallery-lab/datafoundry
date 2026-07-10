@@ -310,7 +310,7 @@ export const configApi = {
     }
     return requestEnvelope<TraceDagDto>(
       `/api/v1/sessions/${encodeURIComponent(sessionId)}/trace-dag${queryString(params)}`,
-    );
+    ).then(normalizeTraceDagDto);
   },
 
   createSessionBranch(
@@ -740,5 +740,15 @@ export const configApi = {
     );
   },
 };
+
+/** Keep Trace clients compatible with API responses persisted before semantic sections existed. */
+export function normalizeTraceDagDto(
+  input: Omit<TraceDagDto, "sections"> & { sections?: TraceDagDto["sections"] },
+): TraceDagDto {
+  return {
+    ...input,
+    sections: Array.isArray(input.sections) ? input.sections : [],
+  };
+}
 
 export { ConfigApiError } from "./types";
