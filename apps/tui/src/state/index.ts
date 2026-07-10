@@ -18,6 +18,7 @@ export {
   createInitialLiveRun,
   createInitialSessionUsage,
   reduceLiveRunEvent,
+  dataArtifactFromArtifactValue,
   isTerminalToolCallStatus,
   deriveRunUsage,
   accumulateSessionUsage,
@@ -63,6 +64,7 @@ export {
   restoreSessionConversation,
   conversationToDisplayMessages,
   conversationToToolCalls,
+  sessionArtifactsToDataArtifacts,
 } from "./session-restore.js";
 
 export type {

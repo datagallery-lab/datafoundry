@@ -729,7 +729,7 @@ function reduceCustomEvent(state: LiveRun, event: AgUiLikeEvent): LiveRun {
     const value = recordValue(event.value);
     if (!value) return state;
 
-    const artifact = parseArtifactFromCustom(value);
+    const artifact = dataArtifactFromArtifactValue(value);
     let nextState: LiveRun = {
       ...state,
       artifacts: [
@@ -853,7 +853,7 @@ function parseChartPreview(
   };
 }
 
-function parseArtifactFromCustom(value: Record<string, unknown>): DataArtifact {
+export function dataArtifactFromArtifactValue(value: Record<string, unknown>): DataArtifact {
   const id =
     stringValue(value.id) ??
     stringValue(value.artifact_id) ??
@@ -936,7 +936,7 @@ function parseArtifactFromCustom(value: Record<string, unknown>): DataArtifact {
     title,
     kind,
     type: type ?? undefined,
-    summary: summary ?? "后端通过 AG-UI artifact 事件返回的产出物。",
+    summary: summary ?? "后端返回的产出物。",
     version: stringValue(value.version) ?? "v1",
     fileId: fileId ?? undefined,
     downloadUrl: downloadUrl ?? undefined,

@@ -29,6 +29,7 @@ import {
 import type { DisplayMessage } from "./tui-state.js";
 import {
   loadWorkspaceConfig,
+  type DataArtifact,
   type WorkspaceConfigStore,
 } from "./data-task-state.js";
 
@@ -362,13 +363,14 @@ class StateStore {
     threadId: string;
     messages: DisplayMessage[];
     toolCalls?: LiveToolCallRecord[] | undefined;
+    artifacts?: DataArtifact[] | undefined;
   }): void {
     const initial = createInitialTuiState();
     this.setState({
       ...this.state,
       plan: initial.plan,
       events: initial.events,
-      artifacts: initial.artifacts,
+      artifacts: input.artifacts ?? initial.artifacts,
       audits: initial.audits,
       runStatus: initial.runStatus,
       runId: undefined,

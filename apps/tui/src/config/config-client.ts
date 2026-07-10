@@ -389,6 +389,25 @@ const SessionConversationSchema = z.object({
   toolCalls: z.array(ConversationToolCallSchema),
 });
 
+const SessionArtifactSchema = z.object({
+  id: z.string(),
+  type: z.string(),
+  name: z.string(),
+  runId: z.string().optional(),
+  toolCallId: z.string().optional(),
+  stepId: z.string().optional(),
+  fileId: z.string().nullable().optional(),
+  downloadUrl: z.string().optional(),
+  mimeType: z.string().optional(),
+  preview_json: z.unknown().optional(),
+  preview_available: z.boolean().optional(),
+  createdAt: z.string().optional(),
+});
+
+const SessionArtifactListSchema = z.object({
+  artifacts: z.array(SessionArtifactSchema),
+});
+
 const SessionTitleSchema = z.object({
   sessionId: z.string(),
   title: z.string(),
@@ -429,6 +448,8 @@ export type ConversationRunEventRef = z.infer<typeof ConversationRunEventRefSche
 export type ConversationCheckpoint = z.infer<typeof ConversationCheckpointSchema>;
 export type ConversationToolCall = z.infer<typeof ConversationToolCallSchema>;
 export type SessionConversation = z.infer<typeof SessionConversationSchema>;
+export type SessionArtifact = z.infer<typeof SessionArtifactSchema>;
+export type SessionArtifactList = z.infer<typeof SessionArtifactListSchema>;
 export type SessionTitle = z.infer<typeof SessionTitleSchema>;
 
 // ==================== Client Configuration ====================
@@ -692,6 +713,13 @@ export class ConfigClient {
         schema: SessionConversationSchema,
       }
     );
+  }
+
+  async listSessionArtifacts(sessionId: string): Promise<SessionArtifactList> {
+    return this.request<SessionArtifactList>("GET", "/api/v1/artifacts", {
+      params: { sessionId },
+      schema: SessionArtifactListSchema,
+    });
   }
 
   async patchSessionTitle(sessionId: string, title: string): Promise<SessionTitle> {

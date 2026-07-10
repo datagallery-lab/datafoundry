@@ -641,8 +641,11 @@ export const App: React.FC<AppProps> = ({
         }
       }
 
-      const conversation = await configClient.getSessionConversation(sessionId);
-      const restored = restoreSessionConversation(conversation);
+      const [conversation, artifactList] = await Promise.all([
+        configClient.getSessionConversation(sessionId),
+        configClient.listSessionArtifacts(sessionId),
+      ]);
+      const restored = restoreSessionConversation(conversation, artifactList.artifacts);
       clearQueuedPrompts();
       store.restoreSession(restored);
       chatAreaRef.current?.reset();
