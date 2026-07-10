@@ -303,6 +303,7 @@ import {
   type WorkspaceResourceNavAction,
   type WorkspaceResourceNavGroup,
 } from "./session-pane-ui";
+import { LocaleProvider, useT } from "../../i18n/locale-context";
 import {
   getAgentRuntimeUrl,
   getBackendCapabilities,
@@ -717,9 +718,11 @@ function sanitizeWorkspaceConfig(
 
 export default function DataTasksPage() {
   return (
-    <DataTaskIdentityProvider>
-      <DataTasksCopilotShell />
-    </DataTaskIdentityProvider>
+    <LocaleProvider>
+      <DataTaskIdentityProvider>
+        <DataTasksCopilotShell />
+      </DataTaskIdentityProvider>
+    </LocaleProvider>
   );
 }
 
@@ -789,6 +792,8 @@ function DataTaskWorkspace({
   identityScopeKey: string;
   onCopilotPropertiesChange: (properties: Record<string, unknown>) => void;
 }) {
+  const t = useT();
+  const defaultSessionTitle = t("session.defaultTitle");
   const {
     workspaceConfig,
     runDefaults,
@@ -1053,10 +1058,10 @@ function DataTaskWorkspace({
       setActiveSessionId(stored[0].id);
       return;
     }
-    const first = createChatSession();
+    const first = createChatSession(defaultSessionTitle);
     setSessions([first]);
     setActiveSessionId(first.id);
-  }, [identityScopeKey]);
+  }, [defaultSessionTitle, identityScopeKey]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1066,7 +1071,7 @@ function DataTaskWorkspace({
         if (response.sessions.length === 0) {
           setSessions((current) => {
             if (current.length > 0) return current;
-            const first = createChatSession();
+            const first = createChatSession(defaultSessionTitle);
             setActiveSessionId(first.id);
             return [first];
           });
@@ -1091,7 +1096,7 @@ function DataTaskWorkspace({
     return () => {
       cancelled = true;
     };
-  }, [identityScopeKey]);
+  }, [defaultSessionTitle, identityScopeKey]);
 
   useEffect(() => {
     if (sessions.length > 0) persistChatSessions(sessions, identityScopeKey);
@@ -1340,7 +1345,7 @@ function DataTaskWorkspace({
   }, [activeThreadId, pendingBranchRun]);
 
   const createSession = useCallback(() => {
-    const next = createChatSession();
+    const next = createChatSession(defaultSessionTitle);
     setSessions((current) => sortChatSessions([next, ...current]));
     setActiveSessionId(next.id);
     setSelection(null);
@@ -1352,7 +1357,7 @@ function DataTaskWorkspace({
     setUserRightPanelOpen(false);
     setIsConsoleDrawerOpen(false);
     clearDraftPromptRequest();
-  }, [clearDraftPromptRequest]);
+  }, [clearDraftPromptRequest, defaultSessionTitle]);
 
   const renameSession = useCallback((sessionId: string, title: string) => {
     setSessions((current) => renameChatSession(current, sessionId, title));
@@ -1436,7 +1441,7 @@ function DataTaskWorkspace({
       setSessions((current) => {
         const next = deleteChatSession(current, sessionId);
         if (next.length === 0) {
-          const fallback = createChatSession();
+          const fallback = createChatSession(defaultSessionTitle);
           setActiveSessionId(fallback.id);
           return [fallback];
         }
@@ -1447,7 +1452,7 @@ function DataTaskWorkspace({
       });
       setSelection(null);
     },
-    [activeSessionId],
+    [activeSessionId, defaultSessionTitle],
   );
 
   const togglePinSession = useCallback((sessionId: string) => {
@@ -1989,7 +1994,7 @@ function DataTaskWorkspace({
             width={rightPanelWidth}
             minWidth={RIGHT_PANEL_MIN_WIDTH}
             maxWidth={rightPanelDockableMaxWidth}
-            label="Resize task console"
+            label={t("chat.resizeConsole")}
             isResizing={isRightPanelResizing}
             onResizeStart={onRightPanelResizeStart}
             onReset={resetRightPanelWidth}
@@ -2244,6 +2249,7 @@ function ToolInvocationCard({
   onActivate?: () => void;
   children: ReactNode;
 }) {
+  const t = useT();
   const statusTone = toolStatusToneClass(displayStatus);
 
   return (
@@ -2263,11 +2269,11 @@ function ToolInvocationCard({
               }
             : undefined
         }
-        title={onActivate ? "View tool details in the task console" : undefined}
+        title={onActivate ? t("console.empty.noStepSelectedDescription") : undefined}
       >
         <div className="flex min-w-0 items-center gap-2">
           <span className="rounded-full border border-border bg-surface-subtle px-2 py-0.5 text-[11px] font-semibold text-muted">
-            Tool calls
+            {t("chat.toolCalls")}
           </span>
           <strong className="truncate font-mono text-foreground">{name}</strong>
         </div>
@@ -2278,7 +2284,7 @@ function ToolInvocationCard({
             displayStatus === "executing" ? "animate-pulse" : "",
           ].join(" ")}
         >
-          {invocationStatusLabel(displayStatus)}
+          {invocationStatusLabel(displayStatus, t)}
         </span>
       </div>
       {children}
@@ -2335,9 +2341,12 @@ function ToolResultCard({
   );
 }
 
-function invocationStatusLabel(status: ToolDisplayStatus): string {
-  if (status === "failed") return "Failed";
-  if (status === "complete") return "Submitted";
+function invocationStatusLabel(
+  status: ToolDisplayStatus,
+  t: ReturnType<typeof useT>,
+): string {
+  if (status === "failed") return t("common.failed");
+  if (status === "complete") return t("common.completed");
   return toolDisplayStatusLabel(status);
 }
 
@@ -2670,28 +2679,30 @@ function CopyContentButton({
   className?: string;
   content: string;
 }) {
+  const t = useT();
   const [copied, setCopied] = useState(false);
-  const label = copied ? "Copied" : "Copy this message";
+  const label = copied ? t("chat.copiedMessage") : t("chat.copyMessage");
   return (
-    <button
-      type="button"
-      onClick={async (event) => {
-        event.stopPropagation();
-        try {
-          await navigator.clipboard.writeText(content);
-          setCopied(true);
-          setTimeout(() => setCopied(false), 1500);
-        } catch {
-          /* clipboard unavailable */
-        }
-      }}
-      className={[
-        "cursor-pointer rounded-md p-0.5 text-muted-light transition-colors duration-150 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/20",
-        className,
-      ].filter(Boolean).join(" ")}
-      title={label}
-      aria-label={label}
-    >
+    <>
+      <button
+        type="button"
+        onClick={async (event) => {
+          event.stopPropagation();
+          try {
+            await navigator.clipboard.writeText(content);
+            setCopied(true);
+            setTimeout(() => setCopied(false), 1500);
+          } catch {
+            /* clipboard unavailable */
+          }
+        }}
+        className={[
+          "cursor-pointer rounded-md p-0.5 text-muted-light transition-colors duration-150 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/20",
+          className,
+        ].filter(Boolean).join(" ")}
+        title={label}
+        aria-label={label}
+      >
       {copied ? (
         <svg viewBox="0 0 20 20" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden>
           <path d="M5 10.5 8.5 14 15 7" strokeLinecap="round" strokeLinejoin="round" />
@@ -2703,6 +2714,20 @@ function CopyContentButton({
         </svg>
       )}
     </button>
+      {copied ? (
+        <div
+          role="status"
+          className="pointer-events-none fixed inset-x-0 bottom-24 z-[80] flex justify-center px-4"
+        >
+          <div className="inline-flex items-center gap-2 rounded-full bg-foreground/90 px-3.5 py-2 text-xs font-medium text-white shadow-lg">
+            <svg viewBox="0 0 20 20" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden>
+              <path d="M5 10.5 8.5 14 15 7" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+            {t("chat.addedToClipboard")}
+          </div>
+        </div>
+      ) : null}
+    </>
   );
 }
 
@@ -2966,6 +2991,7 @@ function StepAssistantMessage({
   isRunning: propIsRunning,
 }: CopilotChatAssistantMessageProps) {
   useAgentMessageRenderGeneration();
+  const t = useT();
   const chatConfig = useCopilotChatConfiguration();
   const { agent } = useAgent({ agentId: chatConfig?.agentId ?? runtimeAgentId });
   const liveRunStatus = useContext(ChatRunStatusContext);
@@ -3242,11 +3268,11 @@ function StepAssistantMessage({
         ? collaborationStepLabel
         : isFinalAnswer
           ? isActive
-            ? "Answering"
-            : "Answer"
+            ? t("chat.answering")
+            : t("chat.answer")
           : displayHasToolCalls
             ? toolActionLabel
-            : "Thinking";
+            : t("chat.thinking");
   const stepHeaderLabel = isProcessStep
     ? isWaitingForUser || hostsPendingSlot || isCollaborationStep
       ? kindLabel
@@ -3302,11 +3328,11 @@ function StepAssistantMessage({
       >
         <div className="mb-2 flex items-center gap-2 text-xs font-medium text-muted-light">
           <span className="h-1.5 w-1.5 rounded-full bg-muted-light" />
-          <span>{isActive ? "Answering" : "Answer"}</span>
+          <span>{isActive ? t("chat.answering") : t("chat.answer")}</span>
           {isActive ? (
             <span className="inline-flex items-center gap-1 rounded-full border border-border bg-surface-subtle px-2 py-0.5 text-[10px] text-muted">
               <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-muted" />
-              Generating
+              {t("chat.generating")}
             </span>
           ) : null}
           {content ? (
@@ -3462,7 +3488,7 @@ function StepAssistantMessage({
             className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium ${theme.statusPill}`}
           >
             <span className={`h-1.5 w-1.5 rounded-full animate-pulse ${theme.statusDot}`} />
-            {isFinalAnswer ? "Generating" : isWaitingForUser ? "Waiting for input" : isCollaborationStep ? "Collaborating" : "Running"}
+            {isFinalAnswer ? t("chat.generating") : isWaitingForUser ? t("chat.waitingForInput") : isCollaborationStep ? t("chat.collaborating") : t("common.running")}
           </span>
         )}
         <div className="ml-auto flex items-center gap-0.5">
@@ -3529,7 +3555,7 @@ function StepAssistantMessage({
           {processContent && displayHasToolCalls ? (
             <>
               <StepSubPanel
-                title="Thinking"
+                title={t("chat.thinking")}
                 tone="thought"
                 streaming={isActive}
                 onHeaderClick={displayHasToolCalls ? openStepDetails : undefined}
@@ -3542,7 +3568,7 @@ function StepAssistantMessage({
                 </div>
               </StepSubPanel>
               <StepSubPanel
-                title="Tool calls"
+                title={t("chat.toolCalls")}
                 tone="tool"
                 badge={effectiveToolCalls.length}
                 busy={isActive}
@@ -3570,7 +3596,7 @@ function StepAssistantMessage({
             </div>
           ) : displayHasToolCalls ? (
             <StepSubPanel
-              title="Tool calls"
+              title={t("chat.toolCalls")}
               tone="tool"
               badge={effectiveToolCalls.length}
               busy={isActive}
@@ -3606,11 +3632,11 @@ function StepAssistantMessage({
       >
         <div className="mb-2 flex items-center gap-2 text-xs font-medium text-muted-light">
           <span className="h-1.5 w-1.5 rounded-full bg-muted-light" />
-          <span>{isFollowUpAnswerActive ? "Answering" : "Answer"}</span>
+          <span>{isFollowUpAnswerActive ? t("chat.answering") : t("chat.answer")}</span>
           {isFollowUpAnswerActive ? (
             <span className="inline-flex items-center gap-1 rounded-full border border-border bg-surface-subtle px-2 py-0.5 text-[10px] text-muted">
               <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-muted" />
-              Generating
+              {t("chat.generating")}
             </span>
           ) : null}
           <span className="ml-auto">
@@ -3691,7 +3717,7 @@ function StepSubPanel({
             className={`ml-auto inline-flex items-center gap-1 text-[10px] font-medium ${styles.label}`}
           >
             <span className={`h-1.5 w-1.5 rounded-full animate-pulse ${styles.dot}`} />
-            {streaming ? "Generating" : "Running"}
+            {streaming ? t("chat.generating") : t("common.running")}
           </span>
         )}
       </button>
@@ -4101,11 +4127,12 @@ function SessionBubbleIcon() {
 }
 
 function SessionRunningIcon() {
+  const t = useT();
   return (
     <span
       className="relative inline-flex h-4 w-4 shrink-0 items-center justify-center"
-      aria-label="Running"
-      title="Running"
+      aria-label={t("common.running")}
+      title={t("common.running")}
     >
       <svg
         viewBox="0 0 20 20"
@@ -4229,6 +4256,7 @@ function SessionActionMenu({
   onDelete: () => void;
   onTogglePin: () => void;
 }) {
+  const t = useT();
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
 
@@ -4262,7 +4290,7 @@ function SessionActionMenu({
     <div ref={rootRef} className="relative shrink-0">
       <button
         type="button"
-        aria-label={`Session actions: ${session.title}`}
+        aria-label={t("sidebar.sessionActions", { title: session.title })}
         aria-expanded={open}
         aria-haspopup="menu"
         onClick={(event) => {
@@ -4297,17 +4325,17 @@ function SessionActionMenu({
             }}
           >
             <PinMenuIcon />
-            {session.pinned ? "Unpin" : "Pin"}
+            {session.pinned ? t("session.unpin") : t("session.pin")}
           </button>
           <button
             type="button"
             role="menuitem"
             disabled
             className="flex w-full cursor-not-allowed items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-sm text-muted-light opacity-50"
-            title="Sharing awaits backend support"
+            title={t("session.sharingDisabled")}
           >
             <ShareMenuIcon />
-            Share
+            {t("session.share")}
           </button>
           <button
             type="button"
@@ -4323,7 +4351,7 @@ function SessionActionMenu({
             }}
           >
             <PencilMenuIcon />
-            Rename
+            {t("session.rename")}
           </button>
           <button
             type="button"
@@ -4339,7 +4367,7 @@ function SessionActionMenu({
             }}
           >
             <TrashMenuIcon />
-            Delete
+            {t("session.delete")}
           </button>
         </div>
       ) : null}
@@ -4364,6 +4392,7 @@ function SessionListItem({
   onDelete: () => void;
   onTogglePin: () => void;
 }) {
+  const t = useT();
   const [editing, setEditing] = useState(false);
   const [draftTitle, setDraftTitle] = useState(session.title);
 
@@ -4432,8 +4461,8 @@ function SessionListItem({
       {iconSlots.trailing === "pin" && (
         <span
           className="shrink-0 text-muted"
-          title="Pinned"
-          aria-label="Pinned"
+          title={t("common.pinned")}
+          aria-label={t("common.pinned")}
         >
           <PinMenuIcon />
         </span>
@@ -4508,7 +4537,8 @@ function SessionPane({
   onDeleteSession,
   onTogglePinSession,
 }: SessionPaneProps) {
-  const collapsedRailCopy = getCollapsedWorkspaceRailCopy();
+  const t = useT();
+  const collapsedRailCopy = getCollapsedWorkspaceRailCopy(t);
   const previewClassNames = getCollapsedWorkspacePreviewClassNames();
 
   if (collapsed) {
@@ -4574,7 +4604,7 @@ function SessionPane({
         width={leftPanelWidth}
         minWidth={LEFT_PANEL_MIN_WIDTH}
         maxWidth={LEFT_PANEL_MAX_WIDTH}
-        label="Resize workspace sidebar"
+        label={t("sidebar.resizeSidebar")}
         isResizing={isLeftPanelResizing}
         onResizeStart={onLeftPanelResizeStart}
         onReset={onResetLeftPanelWidth}
@@ -4643,8 +4673,10 @@ function SessionPaneContent({
   onTogglePinSession,
   preview = false,
 }: SessionPaneContentProps) {
+  const t = useT();
   const previewClassNames = getCollapsedWorkspacePreviewClassNames();
   const resourceNavGroups = getWorkspaceResourceNavGroups({
+    t,
     workspaceConfig,
     workspaceFileCount,
     activeConfigPanel,
@@ -4682,14 +4714,14 @@ function SessionPaneContent({
           D
         </div>
         <div className="min-w-0 flex-1">
-          <h1 className="truncate text-sm font-semibold text-foreground">DataFoundry</h1>
-          <p className="text-xs text-muted-light">{sessionCount} sessions</p>
+          <h1 className="truncate text-sm font-semibold text-foreground">{t("sidebar.brand")}</h1>
+          <p className="text-xs text-muted-light">{t("sidebar.sessionCount", { count: sessionCount })}</p>
         </div>
         <button
           type="button"
           onClick={onToggleCollapse}
-          title={preview ? "Expand to persistent sidebar" : "Collapse to workspace rail"}
-          aria-label={preview ? "Expand to persistent sidebar" : "Collapse to workspace rail"}
+          title={preview ? t("sidebar.expandToSidebar") : t("sidebar.collapseToRail")}
+          aria-label={preview ? t("sidebar.expandToSidebar") : t("sidebar.collapseToRail")}
           className="flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-lg text-muted-light transition-colors duration-200 hover:bg-surface-subtle hover:text-foreground"
         >
           <SidebarToggleIcon />
@@ -4701,7 +4733,7 @@ function SessionPaneContent({
         className="border-b border-border px-2.5 pt-1.5 pb-1"
       >
         <div className="mb-0.5 px-0.5">
-          <span className={sectionLabelClass}>Workspace Resources</span>
+          <span className={sectionLabelClass}>{t("sidebar.workspaceResources")}</span>
         </div>
         <div className="flex flex-col gap-px">
           {resourceNavGroups.map((group) => (
@@ -4720,15 +4752,15 @@ function SessionPaneContent({
           onClick={onCreateSession}
           className="h-9 w-full cursor-pointer rounded-lg bg-primary text-sm font-semibold text-white transition-colors duration-200 hover:bg-primary-light focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/25"
         >
-          New data task
+          {t("sidebar.newTask")}
         </button>
         <label className="mt-2 block">
-          <span className="sr-only">Search conversations</span>
+          <span className="sr-only">{t("sidebar.searchConversations")}</span>
           <input
             value={query}
             onChange={(event) => onQueryChange(event.target.value)}
             className="h-9 w-full rounded-lg border border-border bg-surface px-3 text-sm text-foreground outline-none transition-colors duration-200 placeholder:text-muted-light focus:border-muted-light focus:bg-surface"
-            placeholder="Search conversations"
+            placeholder={t("sidebar.searchConversations")}
           />
         </label>
       </div>
@@ -4741,11 +4773,11 @@ function SessionPaneContent({
         }
       >
         <div className="px-2 pb-2 text-xs font-semibold text-muted-light">
-          {preview ? "History" : "Sessions"}
+          {preview ? t("sidebar.history") : t("sidebar.sessions")}
         </div>
         <div className="flex flex-col gap-0.5">
           {filteredSessions.length === 0 ? (
-            <p className="px-2 py-3 text-xs text-muted-light">No matching sessions.</p>
+            <p className="px-2 py-3 text-xs text-muted-light">{t("sidebar.noMatchingSessions")}</p>
           ) : (
             filteredSessions.map((session) => (
               <SessionListItem
@@ -4779,6 +4811,7 @@ function WorkspaceFilesLibraryPanel({
   onBack: () => void;
   onFilesChange: (files: FileAssetRefDto[]) => void;
 }) {
+  const t = useT();
   return (
     <div className="flex min-h-0 min-w-0 flex-col overflow-hidden bg-surface">
       <div className="flex h-16 items-center gap-3 border-b border-border px-4">
@@ -4786,16 +4819,14 @@ function WorkspaceFilesLibraryPanel({
           type="button"
           onClick={onBack}
           className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-muted-light transition hover:bg-surface-subtle hover:text-foreground"
-          aria-label="Back to workspace"
-          title="Back to workspace"
+          aria-label={t("common.backToWorkspace")}
+          title={t("common.backToWorkspace")}
         >
           <ChevronIcon direction="left" />
         </button>
         <div className="min-w-0">
-          <h2 className={panelTitleClass}>Assets</h2>
-          <p className="text-xs text-muted-light">
-            Reusable workspace assets for future data tasks and @ mentions.
-          </p>
+          <h2 className={panelTitleClass}>{t("assets.title")}</h2>
+          <p className="text-xs text-muted-light">{t("assets.description")}</p>
         </div>
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto p-4">
@@ -4848,6 +4879,7 @@ function WorkspaceConfigPanel({
   onReplaceSkill?: (itemId: string, file: File) => Promise<void>;
   onValidateSkill?: (itemId: string) => Promise<void>;
 }) {
+  const t = useT();
   const [detailItemId, setDetailItemId] = useState<string | null>(null);
   const [draftItem, setDraftItem] = useState<WorkspaceConfigItem | null>(null);
   const [editDraftItem, setEditDraftItem] = useState<WorkspaceConfigItem | null>(null);
@@ -4899,35 +4931,35 @@ function WorkspaceConfigPanel({
       : null;
 
   const titles: Record<typeof panel, string> = {
-    db: "Data Sources",
-    kb: "Knowledge",
-    mcp: "Agent Tools",
-    skill: "Agent Tools",
-    llm: "Models",
+    db: t("configPanel.titles.db"),
+    kb: t("configPanel.titles.kb"),
+    mcp: t("configPanel.titles.mcp"),
+    skill: t("configPanel.titles.skill"),
+    llm: t("configPanel.titles.llm"),
   };
 
   const detailTitles: Record<typeof panel, string> = {
-    db: "Data source details",
-    kb: "Knowledge base details",
-    mcp: "MCP server details",
-    skill: "Skill package details",
-    llm: "Model profile details",
+    db: t("configPanel.detailTitles.db"),
+    kb: t("configPanel.detailTitles.kb"),
+    mcp: t("configPanel.detailTitles.mcp"),
+    skill: t("configPanel.detailTitles.skill"),
+    llm: t("configPanel.detailTitles.llm"),
   };
 
   const descriptions: Record<typeof panel, string> = {
-    db: "Manage databases and connection profiles.",
-    kb: "Manage documents, indexes and retrieval settings for workspace knowledge.",
-    mcp: "Manage MCP server connections. Tests refresh the cached tools manifest.",
-    skill: "Import SKILL.md or .zip packages. Runtime payloads reference skill ids only.",
-    llm: "Manage LLM model profiles. Runs reference activeLlmProfileId through run_config.",
+    db: t("configPanel.descriptions.db"),
+    kb: t("configPanel.descriptions.kb"),
+    mcp: t("configPanel.descriptions.mcp"),
+    skill: t("configPanel.descriptions.skill"),
+    llm: t("configPanel.descriptions.llm"),
   };
 
   const addLabels: Record<typeof panel, string> = {
-    db: "Add data source",
-    kb: "Add knowledge base",
-    mcp: "Add MCP",
-    skill: "Import Skill",
-    llm: "Add model",
+    db: t("configPanel.addLabels.db"),
+    kb: t("configPanel.addLabels.kb"),
+    mcp: t("configPanel.addLabels.mcp"),
+    skill: t("configPanel.addLabels.skill"),
+    llm: t("configPanel.addLabels.llm"),
   };
 
   const openCreate = () => {
@@ -5035,7 +5067,7 @@ function WorkspaceConfigPanel({
         <button
           type="button"
           onClick={handleHeaderBack}
-          aria-label={detailItem || dbGalleryOpen || explorerItem ? `Back to ${titles[panel]} list` : "Back to workspace"}
+          aria-label={detailItem || dbGalleryOpen || explorerItem ? t("configPanel.backToList", { panel: titles[panel] }) : t("common.backToWorkspace")}
           className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-slate-500 transition hover:bg-slate-100 hover:text-slate-700"
         >
           <ChevronIcon direction="left" />
@@ -5060,19 +5092,19 @@ function WorkspaceConfigPanel({
                 ? addLabels[panel]
                 : detailItem.name || titles[panel]
               : dbGalleryOpen
-                ? "Choose data source"
+                ? t("configPanel.chooseDataSource")
                 : explorerItem
-                  ? explorerItem.name || "Data source browser"
+                  ? explorerItem.name || t("configPanel.dataSourceBrowser")
               : titles[panel]}
           </h2>
           <p className="text-xs text-slate-500">
             {detailItem
               ? detailTitles[panel]
               : dbGalleryOpen
-                ? "Pick one backend-enabled adapter"
+                ? t("configPanel.pickAdapter")
                 : explorerItem
-                  ? "Browse schema and data preview"
-                  : "Workspace configuration"}
+                  ? t("configPanel.browseSchema")
+                  : t("configPanel.workspaceConfiguration")}
           </p>
         </div>
       </header>
@@ -5085,7 +5117,7 @@ function WorkspaceConfigPanel({
             </div>
           ) : null}
           {loading ? (
-            <p className="text-sm text-slate-500">Loading configuration from REST API...</p>
+            <p className="text-sm text-slate-500">{t("configPanel.loading")}</p>
           ) : null}
           {(panel === "mcp" || panel === "skill") && !detailItem ? (
             <AgentToolsTabs
@@ -5401,15 +5433,16 @@ function DatasourceConfigList({
   onEdit: (itemId: string) => void;
   onTest: (itemId: string) => void;
 }) {
+  const t = useT();
   const typeLabelByName = new Map(datasourceTypes.map((type) => [type.name, type.label]));
 
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-border bg-surface-subtle px-4 py-3">
         <div>
-          <h3 className="text-sm font-semibold text-slate-950">Configured data sources</h3>
+          <h3 className="text-sm font-semibold text-slate-950">{t("configPanel.configuredDataSources")}</h3>
           <p className="mt-1 text-xs text-slate-600">
-            Browse configured sources, sync schema, and open table-level previews.
+            {t("configPanel.configuredDataSourcesHelp")}
           </p>
         </div>
         <button
@@ -5417,14 +5450,14 @@ function DatasourceConfigList({
           onClick={onAdd}
           className="h-9 cursor-pointer rounded-lg bg-slate-950 px-4 text-sm font-semibold text-white transition-colors duration-200 hover:bg-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-300"
         >
-          Add data source
+          {t("configPanel.addDataSource")}
         </button>
       </div>
 
       {items.length === 0 ? (
         <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50 p-6 text-center">
-          <p className="text-sm font-medium text-slate-700">No data sources configured.</p>
-          <p className="mt-1 text-xs text-slate-500">Start from the adapter gallery to create one.</p>
+          <p className="text-sm font-medium text-slate-700">{t("configPanel.noDataSources")}</p>
+          <p className="mt-1 text-xs text-slate-500">{t("configPanel.startFromGallery")}</p>
         </div>
       ) : (
         <div className={DATASOURCE_CARD_GRID_CLASS}>
@@ -5460,11 +5493,11 @@ function DatasourceConfigList({
                     </p>
                     <div className="mt-3 flex flex-wrap gap-1.5 text-[10px] text-slate-500">
                       <span className="rounded-full border border-border bg-slate-50 px-2 py-0.5">
-                        {item.enabled ? "Workspace default" : "Disabled by default"}
+                        {item.enabled ? t("configPanel.workspaceDefault") : t("configPanel.disabledByDefault")}
                       </span>
                       {item.hasSecret ? (
                         <span className="rounded-full border border-emerald-100 bg-emerald-50 px-2 py-0.5 text-emerald-700">
-                          Secret saved
+                          {t("configPanel.secretSaved")}
                         </span>
                       ) : null}
                       <span className="rounded-full border border-border bg-slate-50 px-2 py-0.5">
@@ -5546,6 +5579,7 @@ function ConfigItemDetailView({
   testBusy?: boolean;
   testResult?: ConfigTestPresentation | null;
 }) {
+  const t = useT();
   const [mcpTools, setMcpTools] = useState<Array<Record<string, unknown>> | null>(null);
   const [mcpToolsError, setMcpToolsError] = useState<string | null>(null);
 
@@ -5604,14 +5638,14 @@ function ConfigItemDetailView({
 
   const configKindLabel =
     panel === "db"
-      ? "Data source"
+      ? t("configPanel.kindDb")
       : panel === "kb"
-        ? "Knowledge base"
+        ? t("configPanel.kindKb")
         : panel === "mcp"
-          ? "MCP"
+          ? t("configPanel.kindMcp")
           : panel === "llm"
-            ? "Model"
-            : "Skill";
+            ? t("configPanel.kindModel")
+            : t("configPanel.kindSkill");
 
   const notes: Record<WorkspaceConfigPanelKey, string> = {
     db:
@@ -5630,7 +5664,7 @@ function ConfigItemDetailView({
   const createDisabledFinal =
     Boolean(createDisabled) ||
     !isWorkspaceConfigItemValid(panel, item, settings);
-  const createLabel = panel === "skill" ? "Import Skill" : "Create configuration item";
+  const createLabel = panel === "skill" ? t("configPanel.importSkill") : t("configPanel.createItem");
   const isDirty =
     mode === "edit" &&
     savedItem != null &&
@@ -5666,22 +5700,22 @@ function ConfigItemDetailView({
         <section className="flex flex-wrap gap-2 rounded-xl border border-border bg-white px-5 py-4">
           {onTest ? (
             <ActionButton
-              label={testBusy ? "Testing..." : "Test connection"}
+              label={testBusy ? t("configPanel.testing") : t("configPanel.testConnection")}
               disabled={testBusy}
               onClick={() => void onTest()}
             />
           ) : null}
           {onIntrospect ? (
-            <ActionButton label="Sync schema" onClick={() => void onIntrospect()} />
+            <ActionButton label={t("configPanel.syncSchema")} onClick={() => void onIntrospect()} />
           ) : null}
           {onReindex ? (
-            <ActionButton label="Reindex" onClick={() => void onReindex()} />
+            <ActionButton label={t("configPanel.reindex")} onClick={() => void onReindex()} />
           ) : null}
           {onValidateSkill ? (
-            <ActionButton label="Validate semantics" onClick={() => void onValidateSkill()} />
+            <ActionButton label={t("configPanel.validateSemantics")} onClick={() => void onValidateSkill()} />
           ) : null}
           {onDelete ? (
-            <ActionButton label="Delete" tone="danger" onClick={() => void onDelete()} />
+            <ActionButton label={t("common.delete")} tone="danger" onClick={() => void onDelete()} />
           ) : null}
         </section>
       ) : null}
@@ -5691,31 +5725,31 @@ function ConfigItemDetailView({
       <div className="rounded-xl border border-border bg-white px-5 py-4">
         <div className="space-y-3">
           <EditableField
-            label="Name"
+            label={t("common.name")}
             value={item.name}
             readOnly={nameReadOnly}
             required
-            placeholder={`Enter ${configKindLabel}Name`}
+            placeholder={t("configPanel.enterName", { kind: configKindLabel })}
             onChange={(name) => onUpdate({ name })}
           />
           <EditableField
-            label="Description"
+            label={t("common.description")}
             value={item.description}
             multiline
-            placeholder="Short description"
+            placeholder={t("configPanel.shortDescription")}
             onChange={(description) => onUpdate({ description })}
           />
         </div>
       </div>
 
       {mode === "edit" && (
-        <DetailField label="Configuration ID" value={item.id} />
+        <DetailField label={t("configPanel.configurationId")} value={item.id} />
       )}
 
       {(panel !== "skill" || hasUploadedSkillPackage) && (
         <section className="space-y-3 rounded-xl border border-border bg-slate-50 px-5 py-4">
           <h4 className="text-xs font-semibold uppercase tracking-[0.06em] text-slate-400">
-            {panel === "skill" ? "Package information" : "Configuration details"}
+            {panel === "skill" ? t("configPanel.packageInformation") : t("configPanel.configurationDetails")}
           </h4>
           {panel === "llm" && (
             <LlmConfigProtocolHint builtin={!!item.builtin && mode === "edit"} />
@@ -5770,7 +5804,7 @@ function ConfigItemDetailView({
 
       <section className="rounded-xl border border-border bg-white px-5 py-4">
         <h4 className="text-xs font-semibold uppercase tracking-[0.06em] text-slate-400">
-          Notes
+          {t("common.notes")}
         </h4>
         <p className="mt-2 text-sm leading-6 text-slate-600">{notes[panel]}</p>
         {mode === "edit" && (
@@ -5797,10 +5831,10 @@ function ConfigItemDetailView({
       {mode === "edit" && onSave && onCancel ? (
         <div className="flex flex-wrap items-center justify-end gap-2 border-t border-border pt-4">
           {isDirty ? (
-            <span className="mr-auto text-xs text-amber-700">Unsaved changes</span>
+            <span className="mr-auto text-xs text-amber-700">{t("configPanel.unsavedChanges")}</span>
           ) : null}
           <ActionButton
-            label="Cancel"
+            label={t("common.cancel")}
             disabled={!isDirty || saveBusy}
             onClick={onCancel}
           />
@@ -5873,14 +5907,15 @@ function KnowledgeFileUpload({
 }: {
   onUpload: (file: File) => void | Promise<void>;
 }) {
+  const t = useT();
   const inputRef = useRef<HTMLInputElement>(null);
   return (
     <section className="rounded-xl border border-dashed border-slate-300 bg-white px-5 py-4">
       <div className="flex items-center justify-between gap-3">
         <div>
-          <h4 className="text-sm font-medium text-slate-900">Upload document</h4>
+          <h4 className="text-sm font-medium text-slate-900">{t("configPanel.uploadDocument")}</h4>
           <p className="mt-1 text-xs text-slate-500">
-            Upload into the knowledge base for later reindexing and retrieval.
+            {t("configPanel.uploadDocumentHelp")}
           </p>
         </div>
         <button
@@ -5888,7 +5923,7 @@ function KnowledgeFileUpload({
           onClick={() => inputRef.current?.click()}
           className="h-9 rounded-lg border border-border bg-white px-4 text-sm font-medium text-slate-700 transition hover:bg-slate-50"
         >
-          Choose file
+          {t("configPanel.chooseFile")}
         </button>
       </div>
       <input
@@ -6064,7 +6099,7 @@ function McpToolsManifest({
       ) : tools === null ? (
         <p className="mt-1 text-xs text-slate-400">Loading...</p>
       ) : tools.length === 0 ? (
-        <p className="mt-1 text-xs text-slate-500">No tools yet. Test the connection first to refresh the manifest.</p>
+        <p className="mt-1 text-xs text-slate-500">{t("configPanel.noToolsYet")}</p>
       ) : (
         <ul className="mt-2 max-h-40 space-y-1 overflow-y-auto text-xs text-slate-600">
           {tools.map((tool, index) => {
@@ -6740,13 +6775,7 @@ function ChatPane({
         <div className="flex shrink-0 items-center gap-2">
           <RunStatusPill status={liveRunStatus} />
           {!rightPanelOpen ? (
-            <button
-              type="button"
-              onClick={onOpenRightPanel}
-              className={`h-8 ${btnSecondaryClass}`}
-            >
-              Open console
-            </button>
+            <ChatOpenConsoleButton onOpenRightPanel={onOpenRightPanel} />
           ) : null}
         </div>
       </header>
@@ -6815,23 +6844,37 @@ function parseJson<T>(value: unknown): T | null {
   }
 }
 
+function ChatOpenConsoleButton({ onOpenRightPanel }: { onOpenRightPanel: () => void }) {
+  const t = useT();
+  return (
+    <button
+      type="button"
+      onClick={onOpenRightPanel}
+      className={`h-8 ${btnSecondaryClass}`}
+    >
+      {t("chat.openConsole")}
+    </button>
+  );
+}
+
 function RunStatusPill({
   status,
 }: {
   status: LiveRun["runStatus"];
 }) {
+  const t = useT();
   const label =
     status === "completed"
-      ? "Completed"
+      ? t("common.completed")
       : status === "running"
-        ? "Running"
+        ? t("common.running")
         : status === "suspended"
-          ? "Waiting"
+          ? t("common.waiting")
           : status === "failed"
-            ? "Failed"
+            ? t("common.failed")
             : status === "canceled"
-              ? "Canceled"
-              : "Ready";
+              ? t("common.canceled")
+              : t("common.ready");
   const className =
     status === "completed"
       ? "border border-step-success/20 bg-step-success/8 text-step-success"

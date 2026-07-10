@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { createTranslator } from "../../../i18n/translate";
 import {
-  QUICK_START_EXAMPLE_PROMPT,
   QUICK_START_PROMPT_SEEN_STORAGE_KEY,
   QUICK_START_STEP_ORDER,
   getQuickStartPromptSeenStorageKey,
@@ -12,6 +12,9 @@ import {
   type QuickStartStorage,
 } from "../components/guide/quick-start-guide-state";
 import type { WorkspaceConfigStore } from "../data-task-state";
+
+const t = createTranslator("en");
+const tZh = createTranslator("zh-CN");
 
 function item(id: string, enabled = true, name = id) {
   return { id, name, description: `${name} description`, enabled };
@@ -123,28 +126,33 @@ describe("quick start guide state", () => {
     const welcome = resolveQuickStartStep("welcome", {
       readiness: resolveQuickStartReadiness(workspaceConfig()),
       runStatus: "idle",
+      t,
     });
     const resources = resolveQuickStartStep("resources", {
       readiness: resolveQuickStartReadiness(workspaceConfig()),
       runStatus: "idle",
+      t,
     });
     const datasource = resolveQuickStartStep("datasource", {
       readiness: resolveQuickStartReadiness(
         workspaceConfig({ db: [item("api-duckdb-demo")] }),
       ),
       runStatus: "idle",
+      t,
     });
     const model = resolveQuickStartStep("model", {
       readiness: resolveQuickStartReadiness(
         workspaceConfig({ llm: [item("llm")], db: [item("api-duckdb-demo")] }),
       ),
       runStatus: "idle",
+      t,
     });
     const query = resolveQuickStartStep("query", {
       readiness: resolveQuickStartReadiness(
         workspaceConfig({ llm: [item("llm")], db: [item("api-duckdb-demo")] }),
       ),
       runStatus: "idle",
+      t,
     });
     const output = resolveQuickStartStep("output", {
       readiness: resolveQuickStartReadiness(
@@ -152,6 +160,7 @@ describe("quick start guide state", () => {
       ),
       runStatus: "completed",
       hasSubmittedTask: true,
+      t,
     });
 
     expect(welcome.targetId).toBe("workspace-layout");
@@ -168,7 +177,7 @@ describe("quick start guide state", () => {
     expect(model.targetId).toBe("model-picker");
     expect(model.title).toBe("Confirm the model");
     expect(query.targetId).toBe("chat-input");
-    expect(query.body).toContain(QUICK_START_EXAMPLE_PROMPT);
+    expect(query.body).toContain(t("welcome.runSqlPrompt"));
     expect(query.cta).toBe("Use this query");
     expect(output.targetId).toBe("run-output");
     expect(output.title).toBe("Review the result");
@@ -183,11 +192,13 @@ describe("quick start guide state", () => {
       readiness,
       runStatus: "idle",
       hasSubmittedTask: false,
+      t,
     });
     const submitted = resolveQuickStartStep("send", {
       readiness,
       runStatus: "running",
       hasSubmittedTask: true,
+      t,
     });
 
     expect(waiting.cta).toBe("Waiting for send");
@@ -202,16 +213,43 @@ describe("quick start guide state", () => {
       readiness: resolveQuickStartReadiness(workspaceConfig()),
       runStatus: "idle",
       hasSubmittedTask: false,
+      t,
     });
     const model = resolveQuickStartStep("model", {
       readiness: resolveQuickStartReadiness(workspaceConfig()),
       runStatus: "idle",
       hasSubmittedTask: false,
+      t,
     });
 
     expect(datasource.body).toContain("create and test");
     expect(datasource.body).toContain("return to this guide");
     expect(model.body).toContain("create and test");
     expect(model.body).toContain("return to this guide");
+  });
+
+  it("resolves Chinese shell copy for the welcome step", () => {
+    const welcome = resolveQuickStartStep("welcome", {
+      readiness: resolveQuickStartReadiness(workspaceConfig()),
+      runStatus: "idle",
+      t: tZh,
+    });
+
+    expect(welcome.title).toBe("先看清工作区布局");
+    expect(welcome.body).toContain("左侧");
+    expect(welcome.cta).toBe("下一步");
+  });
+
+  it("localizes the sample query prompt for Chinese", () => {
+    const query = resolveQuickStartStep("query", {
+      readiness: resolveQuickStartReadiness(
+        workspaceConfig({ llm: [item("llm")], db: [item("api-duckdb-demo")] }),
+      ),
+      runStatus: "idle",
+      t: tZh,
+    });
+
+    expect(query.body).toContain("查询最近 30 天的订单总量，按日期分组");
+    expect(query.cta).toBe("Use this query");
   });
 });

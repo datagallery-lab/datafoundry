@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
+import { useT } from "../../../../i18n/locale-context";
+import { translateRunStatus } from "../../../../i18n/status-labels";
 import {
   Bar,
   BarChart,
@@ -114,31 +116,21 @@ export type TaskConsoleProps = {
   promotedArtifactIds?: ReadonlySet<string>;
 };
 
-function runStatusLabel(status: LiveRun["runStatus"]): string {
-  switch (status) {
-    case "running":
-      return "Running";
-    case "suspended":
-      return "Waiting";
-    case "completed":
-      return "Completed";
-    case "failed":
-      return "Failed";
-    case "canceled":
-      return "Canceled";
-    default:
-      return "Idle";
-  }
+function runStatusLabel(status: LiveRun["runStatus"], t: ReturnType<typeof useT>): string {
+  return translateRunStatus(status, t);
 }
 
-function toolStatusLabel(status: LiveToolCallRecord["status"]): string {
+function toolStatusLabel(
+  status: LiveToolCallRecord["status"],
+  t: ReturnType<typeof useT>,
+): string {
   switch (status) {
     case "running":
-      return "Running";
+      return t("common.running");
     case "success":
-      return "Completed";
+      return t("common.completed");
     case "failed":
-      return "Failed";
+      return t("common.failed");
   }
 }
 
@@ -153,12 +145,15 @@ function formatCount(value: number): string {
 }
 
 /** Single-step elapsed time; running/unfinished steps show a soft placeholder. */
-function stepDurationLabel(call?: LiveToolCallRecord): string {
+function stepDurationLabel(
+  call: LiveToolCallRecord | undefined,
+  t: ReturnType<typeof useT>,
+): string {
   if (!call) return "—";
   if (call.startedAtMs !== undefined && call.finishedAtMs !== undefined) {
     return formatDuration(Math.max(0, call.finishedAtMs - call.startedAtMs));
   }
-  if (call.status === "running") return "Running";
+  if (call.status === "running") return t("common.running");
   return "—";
 }
 
@@ -181,6 +176,7 @@ export function TaskConsole({
   onSelectToolGroup,
   promotedArtifactIds,
 }: TaskConsoleProps) {
+  const t = useT();
   const [activeTab, setActiveTab] = useState<ConsoleTab>("overview");
   const runUsage = useMemo(() => deriveRunUsage(liveRun), [liveRun]);
   const sessionView = useMemo(
@@ -228,7 +224,7 @@ export function TaskConsole({
     >
       <header className="flex h-16 items-center justify-between gap-3 border-b border-border bg-surface px-4">
         <div className="min-w-0">
-          <h2 className={panelTitleClass}>Task Console</h2>
+          <h2 className={panelTitleClass}>{t("console.title")}</h2>
           <div className="mt-1 flex min-w-0 items-center gap-2 text-[11px] text-muted-light">
             <span className="inline-flex items-center gap-1.5">
               <span
@@ -243,11 +239,11 @@ export function TaskConsole({
                         : "bg-muted-light",
                 ].join(" ")}
               />
-              {runStatusLabel(liveRun.runStatus)}
+              {runStatusLabel(liveRun.runStatus, t)}
             </span>
             <span className="text-border">/</span>
             <span className="tabular">
-              {liveRun.runStatus !== "idle" ? formatDuration(runUsage.durationMs) : "Not started"}
+              {liveRun.runStatus !== "idle" ? formatDuration(runUsage.durationMs) : t("common.notStarted")}
             </span>
           </div>
         </div>
@@ -255,8 +251,8 @@ export function TaskConsole({
           <button
             type="button"
             onClick={onClose}
-            aria-label="Close Task Console"
-            title="Close Task Console"
+            aria-label={t("console.close")}
+            title={t("console.close")}
             className={`flex h-8 w-8 shrink-0 items-center justify-center ${btnGhostClass}`}
           >
             <span aria-hidden="true" className="text-lg leading-none">
@@ -268,28 +264,28 @@ export function TaskConsole({
 
       <nav className="flex shrink-0 items-center gap-0.5 overflow-x-auto border-b border-border px-2 py-2 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
         <TabButton active={activeTab === "overview"} onClick={() => handleTabClick("overview")}>
-          Overview
+          {t("console.tabs.overview")}
         </TabButton>
         <TabButton
           active={activeTab === "trace"}
           badge={liveRun.toolCalls.length}
           onClick={() => handleTabClick("trace")}
         >
-          Trace
+          {t("console.tabs.trace")}
         </TabButton>
         <TabButton
           active={activeTab === "outputs"}
           badge={artifacts.length}
           onClick={() => handleTabClick("outputs")}
         >
-          Outputs
+          {t("console.tabs.outputs")}
         </TabButton>
         <TabButton
           active={activeTab === "detail"}
           badge={selection?.type === "action" || selection?.type === "toolGroup" ? 1 : undefined}
           onClick={() => handleTabClick("detail")}
         >
-          Details
+          {t("console.tabs.details")}
         </TabButton>
       </nav>
 
@@ -370,8 +366,8 @@ export function TaskConsole({
             />
           ) : (
             <EmptyState
-              title="No step selected"
-              description="Select a step from the center tool card or Trace timeline to inspect duration, action details, and output lineage."
+              title={t("console.empty.noStepSelected")}
+              description={t("console.empty.noStepSelectedDescription")}
             />
           )
         ) : null}
@@ -491,6 +487,7 @@ function ConclusionZone({
   toolGroups: ProcessToolGroup[];
   sessionUsage: SessionUsageStats;
 }) {
+  const t = useT();
   const runUsage = useMemo(() => deriveRunUsage(liveRun), [liveRun]);
   const groupUsage = useMemo(
     () => deriveProcessGroupUsage(toolGroups, liveRun),
@@ -526,12 +523,12 @@ function ConclusionZone({
       : undefined;
 
   return (
-    <ConsoleSection title="Summary">
+    <ConsoleSection title={t("console.sections.summary")}>
       <div>
-        <div className={sectionLabelClass}>Current question</div>
+        <div className={sectionLabelClass}>{t("console.currentQuestion")}</div>
         <p className="mt-1 text-sm leading-6 text-foreground">
           {currentQuestion ?? (
-            <span className="text-muted-light">Send a question to start dataFoundry.</span>
+            <span className="text-muted-light">{t("console.startPrompt")}</span>
           )}
         </p>
       </div>
@@ -544,29 +541,29 @@ function ConclusionZone({
 
       <div className="mt-4 grid grid-cols-2 gap-2">
         <KpiMetric
-          label={liveRun.runHistory?.length ? "Steps (session)" : "Steps"}
+          label={liveRun.runHistory?.length ? t("console.stepsSession") : t("console.steps")}
           value={hasRun ? formatCount(groupUsage.stepCount) : "—"}
           meta={
             hasRun && groupUsage.toolCallCount > 0
-              ? `${formatCount(groupUsage.toolCallCount)} tool calls`
+              ? t("console.toolCallsMeta", { count: formatCount(groupUsage.toolCallCount) })
               : undefined
           }
           accentClass="text-primary"
         />
         <KpiMetric
-          label="Success rate"
+          label={t("console.successRate")}
           value={successRate}
           meta={toolRatio}
           accentClass="text-step-success"
         />
         <KpiMetric
-          label={liveRun.runHistory?.length ? "Outputs (session)" : "Outputs"}
+          label={liveRun.runHistory?.length ? t("console.sections.outputsSession") : t("console.sections.outputs")}
           value={hasRun ? formatCount(runUsage.artifactCount) : "—"}
-          meta="items"
+          meta={t("console.itemsMeta")}
           accentClass="text-step-query"
         />
         <KpiMetric
-          label="Token / Cost"
+          label={t("console.tokenCost")}
           value={tokenKpi}
           meta={tokenLine}
           accentClass={tokenReported ? "text-step-knowledge" : "text-muted-light"}
@@ -591,6 +588,7 @@ function DynamicStepsList({
   onSelectEvent: (eventId: string) => void;
   onSelectToolGroup: (groupId: string) => void;
 }) {
+  const t = useT();
   const eventById = useMemo(
     () => new Map(events.map((event) => [event.id, event] as const)),
     [events],
@@ -606,11 +604,11 @@ function DynamicStepsList({
   ) : null;
 
   return (
-    <ConsoleSection title="Progress" badge={badge}>
+    <ConsoleSection title={t("console.sections.progress")} badge={badge}>
       {toolGroups.length === 0 ? (
         <EmptyState
-          title="No steps yet"
-          description="After you send a question, process steps appear here in order. Parallel tools are grouped under one step."
+          title={t("console.empty.noStepsYet")}
+          description={t("console.empty.noStepsYetDescription")}
         />
       ) : (
         <ol className={["grid gap-1.5", consoleStepsListClass].join(" ")}>
@@ -653,7 +651,7 @@ function DynamicStepsList({
                   </span>
                 </span>
                 <span className="shrink-0 text-right text-[10px] text-muted-light">
-                  <span className="block">{toolStatusLabel(group.status)}</span>
+                  <span className="block">{toolStatusLabel(group.status, t)}</span>
                   <span className="tabular block font-mono">{groupDuration}</span>
                 </span>
               </>
@@ -692,7 +690,7 @@ function DynamicStepsList({
                           <StepStatusDot status={call.status} compact />
                           <span className="min-w-0 flex-1 truncate text-muted">{title}</span>
                           <span className="shrink-0 tabular font-mono text-muted-light">
-                            {stepDurationLabel(call)}
+                            {stepDurationLabel(call, t)}
                           </span>
                         </button>
                       );
@@ -710,12 +708,13 @@ function DynamicStepsList({
 
 // Section 3: Tool distribution, derived from whatever tools ran.
 function ToolDistributionZone({ liveRun }: { liveRun: LiveRun }) {
+  const t = useT();
   const runUsage = useMemo(() => deriveRunUsage(liveRun), [liveRun]);
   const entries = Object.entries(runUsage.toolCalls.byTool);
   if (entries.length === 0) return null;
 
   return (
-    <ConsoleSection title="Tool distribution" collapsible defaultExpanded={false}>
+    <ConsoleSection title={t("console.toolDistribution")} collapsible defaultExpanded={false}>
       <div className="grid gap-1.5">
         {entries.map(([name, bucket]) => {
           const kind = dataStepKindForTool(name);
@@ -800,11 +799,12 @@ function EvidenceZone({
   onSelectArtifact: (artifactId: string) => void;
   onSelectEvent: (eventId: string) => void;
 }) {
+  const t = useT();
   return (
     <div className="grid gap-4">
       <TraceDagEntry onOpenTrace={onOpenTrace} />
       <RunConfigurationPanel liveRun={liveRun} />
-      <ConsoleSection title="Data trail">
+      <ConsoleSection title={t("console.dataTrail")}>
         <TraceList
           artifacts={artifacts}
           liveRun={liveRun}
@@ -817,11 +817,12 @@ function EvidenceZone({
 }
 
 function TraceDagEntry({ onOpenTrace }: { onOpenTrace: () => void }) {
+  const t = useT();
   return (
     <section className="rounded-lg border border-border bg-surface-subtle p-3">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="min-w-0">
-          <h3 className={panelTitleClass}>Trace DAG</h3>
+          <h3 className={panelTitleClass}>{t("console.traceDag.title")}</h3>
         </div>
         <button
           type="button"
@@ -829,7 +830,7 @@ function TraceDagEntry({ onOpenTrace }: { onOpenTrace: () => void }) {
           className={`inline-flex items-center gap-2 ${btnPrimaryClass}`}
         >
           <IconOpen className="h-4 w-4" />
-          Open Trace DAG
+          {t("console.traceDag.open")}
         </button>
       </div>
     </section>
@@ -867,6 +868,7 @@ function DeliverablesZone({
   onSelectEvent: (eventId: string) => void;
   promotedArtifactIds?: ReadonlySet<string>;
 }) {
+  const t = useT();
   const exportReady = hasCapability("artifact.export");
   const [sortOrder, setSortOrder] = useState<OutputsSortOrder>("oldest");
   const sortedArtifacts = useMemo(() => {
@@ -885,7 +887,7 @@ function DeliverablesZone({
             sortOrder === "oldest" ? "bg-primary-light/15 text-primary" : "hover:text-foreground",
           ].join(" ")}
         >
-          Oldest
+          {t("common.oldest")}
         </button>
         <button
           type="button"
@@ -896,7 +898,7 @@ function DeliverablesZone({
             sortOrder === "newest" ? "bg-primary-light/15 text-primary" : "hover:text-foreground",
           ].join(" ")}
         >
-          Newest
+          {t("common.newest")}
         </button>
       </span>
       <span className="tabular rounded-full bg-primary-light/15 px-1.5 text-[10px] font-bold leading-4 text-primary">
@@ -907,11 +909,11 @@ function DeliverablesZone({
 
   return (
     <div data-guide-id="run-output" className="grid gap-4">
-      <ConsoleSection title="Outputs" badge={badge}>
+      <ConsoleSection title={t("console.sections.outputs")} badge={badge}>
         {artifacts.length === 0 ? (
           <EmptyState
-            title="No outputs yet"
-            description="SQL, datasets, charts, and reports appear here after a question. Open an item to read it and reference the whole or parts."
+            title={t("console.empty.noOutputs")}
+            description={t("console.empty.noOutputsDescription")}
           />
         ) : (
           <div className="grid gap-3">
@@ -936,7 +938,7 @@ function DeliverablesZone({
             })}
             <p className="text-[11px] leading-4 text-muted-light">
               {exportReady
-                ? "Open any output to read the full content and reference the whole or a selected part."
+                ? t("console.outputsHintExport")
                 : "Preview and download require the backend artifact API."}
             </p>
           </div>
@@ -1380,6 +1382,7 @@ function ToolGroupDetailView({
   onBack: () => void;
   onSelectEvent: (eventId: string) => void;
 }) {
+  const t = useT();
   const calls = useMemo(
     () =>
       group
@@ -1418,27 +1421,27 @@ function ToolGroupDetailView({
     group.startedAtMs !== undefined && group.finishedAtMs !== undefined
       ? formatDuration(Math.max(0, group.finishedAtMs - group.startedAtMs))
       : group.status === "running"
-        ? "Running"
+        ? t("common.running")
         : "—";
 
   return (
     <div className="grid gap-3">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <div className={sectionLabelClass}>Step details · Step {group.stepNumber}</div>
+          <div className={sectionLabelClass}>{t("console.stepDetails", { n: group.stepNumber })}</div>
           <h3 className="mt-1 text-sm font-semibold text-foreground">
             {group.title}
           </h3>
           <p className="mt-1 text-xs leading-5 text-muted">{group.summary}</p>
         </div>
         <button type="button" onClick={onBack} className={btnSecondaryClass}>
-          Back
+          {t("common.back")}
         </button>
       </div>
 
       <div className="grid grid-cols-2 gap-2">
         <Metric label="Step duration" value={groupDuration} />
-        <Metric label="Status" value={toolStatusLabel(group.status)} />
+        <Metric label="Status" value={toolStatusLabel(group.status, t)} />
         <Metric label="Tool calls" value={`${calls.length} calls`} />
         <Metric label="Outputs" value={`${producedArtifacts.length} items`} />
       </div>
@@ -1468,8 +1471,8 @@ function ToolGroupDetailView({
                   </span>
                 </span>
                 <span className="shrink-0 text-right text-[10px] text-muted-light">
-                  <span className="block">{toolStatusLabel(call.status)}</span>
-                  <span className="tabular block font-mono">{stepDurationLabel(call)}</span>
+                  <span className="block">{toolStatusLabel(call.status, t)}</span>
+                  <span className="tabular block font-mono">{stepDurationLabel(call, t)}</span>
                 </span>
               </button>
             );
@@ -1583,6 +1586,7 @@ function ArtifactDetailPanel({
   onBack: () => void;
   onSelectEvent: (eventId: string) => void;
 }) {
+  const t = useT();
   if (!artifact) {
     return (
       <EmptyState
@@ -1614,7 +1618,7 @@ function ArtifactDetailPanel({
           onClick={onBack}
           className={btnSecondaryClass}
         >
-          Back
+          {t("common.back")}
         </button>
       </div>
 
@@ -1640,14 +1644,15 @@ function ArtifactDetailPanel({
 
 function detailStatusLabel(
   toolCall: LiveToolCallRecord | undefined,
-  activityStatus?: TimelineEvent["activityStatus"],
+  activityStatus: TimelineEvent["activityStatus"] | undefined,
+  t: ReturnType<typeof useT>,
 ): string {
   if (toolCall) {
-    return toolStatusLabel(resolveTraceToolStatus(toolCall.status, activityStatus));
+    return toolStatusLabel(resolveTraceToolStatus(toolCall.status, activityStatus), t);
   }
-  if (activityStatus === "failed") return "Failed";
-  if (activityStatus === "completed") return "Completed";
-  if (activityStatus === "running") return "Running";
+  if (activityStatus === "failed") return t("common.failed");
+  if (activityStatus === "completed") return t("common.completed");
+  if (activityStatus === "running") return t("common.running");
   return "—";
 }
 
@@ -1664,6 +1669,7 @@ function ActionDetail({
   toolCall?: LiveToolCallRecord;
   onBack: () => void;
 }) {
+  const t = useT();
   const [expandedArtifactId, setExpandedArtifactId] = useState<string | null>(
     null,
   );
@@ -1701,15 +1707,15 @@ function ActionDetail({
           onClick={onBack}
           className={btnSecondaryClass}
         >
-          Back
+          {t("common.back")}
         </button>
       </div>
 
       <div className="grid grid-cols-2 gap-2">
-        <Metric label="Step duration" value={stepDurationLabel(toolCall)} />
+        <Metric label="Step duration" value={stepDurationLabel(toolCall, t)} />
         <Metric
           label="Status"
-          value={detailStatusLabel(toolCall, event.activityStatus)}
+          value={detailStatusLabel(toolCall, event.activityStatus, t)}
         />
       </div>
 

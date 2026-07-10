@@ -23,7 +23,7 @@ describe("quick start guide integration", () => {
 
     expect(page).toContain("quickStartGuide={quickStartGuide}");
     expect(identity).toContain("quickStartGuide?: ReactNode");
-    expect(guide).toContain('aria-label="Open quick start guide"');
+    expect(guide).toContain('aria-label={t("guide.open")}');
     expect(guide).toContain("rounded-full");
     expect(guide).not.toContain(">Guide<");
   });
@@ -42,11 +42,9 @@ describe("quick start guide integration", () => {
     expect(page).toContain("data-guide-id={");
     expect(page).toContain('"datasource-config"');
     expect(chatInput).toContain(
-      '<div ref={rootRef} data-guide-id="model-picker" className="relative">',
+      'data-guide-id="model-picker"',
     );
-    expect(chatInput).not.toContain(
-      '<div ref={rootRef} data-guide-id="model-picker" className="relative">\n      <button\n        type="button"\n        aria-label="Add content"',
-    );
+    expect(chatInput).toContain('ref={rootRef}');
     expect(chatInput).toContain('data-guide-id="chat-input"');
     expect(taskConsole).toContain('data-guide-id="run-console"');
     expect(taskConsole).toContain('data-guide-id="run-output"');
@@ -79,7 +77,7 @@ describe("quick start guide integration", () => {
     expect(page).toContain("hasVisibleMessages");
     expect(page).toContain("<ChatWelcomeOverlay");
     expect(welcome).toContain("onUsePrompt?:");
-    expect(welcome).toContain("Use this prompt");
+    expect(welcome).toContain('t("welcome.useThisPrompt")');
   });
 
   it("clears draft prompt requests when switching or creating sessions", () => {
@@ -97,7 +95,7 @@ describe("quick start guide integration", () => {
     );
 
     expect(page).toContain("hasSubmittedTask={");
-    expect(guide).toContain("Step {currentStepIndex + 1} of");
+    expect(guide).toContain('t("guide.stepOf"');
     expect(guide).toContain("disabled={step.blocked}");
     expect(guide).toContain('aria-disabled={step.blocked ? "true" : undefined}');
   });

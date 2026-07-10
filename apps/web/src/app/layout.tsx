@@ -1,20 +1,6 @@
 import type { Metadata } from "next";
-import { Fira_Code, Inter } from "next/font/google";
 import "./globals.css";
 import "@copilotkit/react-core/v2/styles.css";
-
-const inter = Inter({
-  subsets: ["latin"],
-  variable: "--font-inter",
-  display: "swap",
-});
-
-const firaCode = Fira_Code({
-  subsets: ["latin"],
-  weight: ["400", "500", "600", "700"],
-  variable: "--font-fira-code",
-  display: "swap",
-});
 
 export const metadata: Metadata = {
   title: {
@@ -30,7 +16,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" className={`${inter.variable} ${firaCode.variable}`}>
+    <html lang="zh-CN" suppressHydrationWarning>
       <body className="font-sans antialiased">{children}</body>
     </html>
   );

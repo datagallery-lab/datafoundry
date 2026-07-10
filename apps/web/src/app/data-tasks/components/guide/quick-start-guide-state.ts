@@ -1,5 +1,6 @@
 import { getEnabledLlmItems, type WorkspaceConfigStore } from "../../data-task-state";
 import type { LiveRunStatus } from "../../live-run-state";
+import type { TranslateFn } from "../../../../i18n/types";
 
 export const QUICK_START_PROMPT_SEEN_STORAGE_KEY =
   "data-tasks:quick-start:first-prompt-seen:v1";
@@ -107,10 +108,12 @@ export function resolveQuickStartStep(
     readiness,
     runStatus,
     hasSubmittedTask = runStatus !== "idle",
+    t,
   }: {
     readiness: QuickStartReadiness;
     runStatus: LiveRunStatus;
     hasSubmittedTask?: boolean;
+    t: TranslateFn;
   },
 ): QuickStartStepPresentation {
   switch (step) {
@@ -118,75 +121,85 @@ export function resolveQuickStartStep(
       return {
         id: step,
         targetId: "workspace-layout",
-        title: "Start with the workspace map",
-        body: "Left is where you configure resources, middle is where you ask the data question, and right is where you watch the task run and review outputs.",
-        cta: "Next",
+        title: t("guide.welcome.title"),
+        body: t("guide.welcome.body"),
+        cta: t("guide.next"),
       };
     case "resources":
       return {
         id: step,
         targetId: "workspace-resources",
-        title: "Understand workspace resources",
-        body: "The left panel covers Data Sources, Knowledge, Agent Tools / MCP, Skills, Models, and Assets / Files. These are the building blocks the agent can use for each task.",
-        cta: "Next",
+        title: t("guide.resources.title"),
+        body: t("guide.resources.body"),
+        cta: t("guide.next"),
       };
     case "datasource":
       return {
         id: step,
         targetId: "datasource-config",
-        title: "Confirm the datasource",
+        title: t("guide.datasource.title"),
         body: readiness.preferredDatasourceId
-          ? `A datasource is ready: ${readiness.preferredDatasourceId}. This is what the agent will query for the first task.`
-          : "Add or enable a datasource before running the sample task. Open datasource config, create and test the connection, then return to this guide. The demo datasource is the fastest path when it is available.",
-        cta: readiness.hasDatasource ? "Next" : "Open datasource config",
+          ? t("guide.datasource.bodyReady", { id: readiness.preferredDatasourceId })
+          : t("guide.datasource.bodyMissing"),
+        cta: readiness.hasDatasource
+          ? t("guide.next")
+          : t("guide.openDatasourceConfig"),
       };
     case "model":
       return {
         id: step,
         targetId: "model-picker",
-        title: readiness.hasModel ? "Confirm the model" : "Connect a model",
+        title: readiness.hasModel
+          ? t("guide.model.titleReady")
+          : t("guide.model.titleMissing"),
         body: readiness.hasModel
-          ? "A model profile is available. The model understands the request, helps generate SQL, and summarizes the result."
-          : "Quick start needs an enabled LLM profile. Open model configuration, create and test a profile, then return to this guide.",
-        cta: readiness.hasModel ? "Next" : "Open model config",
+          ? t("guide.model.bodyReady")
+          : t("guide.model.bodyMissing"),
+        cta: readiness.hasModel ? t("guide.next") : t("guide.openModelConfig"),
       };
     case "query":
       return {
         id: step,
         targetId: "chat-input",
-        title: "Use a sample query",
-        body: `Start with this sample query: ${QUICK_START_EXAMPLE_PROMPT}`,
-        cta: "Use this query",
+        title: t("guide.query.title"),
+        body: t("guide.query.body", { prompt: t("welcome.runSqlPrompt") }),
+        cta: t("guide.useThisQuery"),
       };
     case "send":
       return {
         id: step,
         targetId: "chat-input",
-        title: "Send the task",
+        title: t("guide.send.title"),
         body: hasSubmittedTask
-          ? "The task has started. The agent will inspect the datasource and run a read-only query."
-          : "Review the sample task in the chat input, then click the send arrow. This step unlocks after the run starts.",
-        cta: hasSubmittedTask ? "Next" : "Waiting for send",
+          ? t("guide.send.bodyReady")
+          : t("guide.send.bodyWaiting"),
+        cta: hasSubmittedTask ? t("guide.next") : t("guide.waitingForSend"),
         blocked: !hasSubmittedTask,
       };
     case "console":
       return {
         id: step,
         targetId: "run-console",
-        title: runStatus === "running" ? "Watch the run" : "Open the run console",
-        body: "The Task Console shows run status, steps, tool calls, traces, and generated outputs while the task is running.",
-        cta: "Next",
+        title:
+          runStatus === "running"
+            ? t("guide.console.titleRunning")
+            : t("guide.console.titleIdle"),
+        body: t("guide.console.body"),
+        cta: t("guide.next"),
       };
     case "output":
       return {
         id: step,
         targetId: "run-output",
-        title: runStatus === "failed" ? "Check the failed run" : "Review the result",
+        title:
+          runStatus === "failed"
+            ? t("guide.output.titleFailed")
+            : t("guide.output.titleReady"),
         body:
           runStatus === "failed"
-            ? "The run failed. Check the model and datasource configuration, then try the sample task again."
-            : "When the run completes, review the answer and outputs here. You can ask a follow-up question or inspect the trace.",
-        cta: "Finish",
+            ? t("guide.output.bodyFailed")
+            : t("guide.output.bodyReady"),
+        cta: t("guide.finish"),
       };
   }
 }

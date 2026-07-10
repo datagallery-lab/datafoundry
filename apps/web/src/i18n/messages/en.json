@@ -1,0 +1,323 @@
+{
+  "common": {
+    "backToWorkspace": "Back to workspace",
+    "back": "Back",
+    "close": "Close",
+    "cancel": "Cancel",
+    "save": "Save",
+    "delete": "Delete",
+    "copy": "Copy",
+    "copied": "Copied",
+    "name": "Name",
+    "description": "Description",
+    "notes": "Notes",
+    "ready": "Ready",
+    "notStarted": "Not started",
+    "running": "Running",
+    "waiting": "Waiting",
+    "completed": "Completed",
+    "failed": "Failed",
+    "canceled": "Canceled",
+    "idle": "Idle",
+    "connected": "Connected",
+    "unavailable": "Unavailable",
+    "notTested": "Not tested",
+    "oldest": "Oldest",
+    "newest": "Newest",
+    "pinned": "Pinned",
+    "enable": "Enable",
+    "disable": "Disable",
+    "loading": "Loading…",
+    "edit": "Edit",
+    "upload": "Upload"
+  },
+  "language": {
+    "switchToEnglish": "Switch to English",
+    "switchToChinese": "Switch to Chinese",
+    "englishShort": "EN",
+    "chineseShort": "中"
+  },
+  "sidebar": {
+    "brand": "DataFoundry",
+    "sessionCount": "{{count}} sessions",
+    "workspaceResources": "Workspace Resources",
+    "newTask": "New data task",
+    "searchConversations": "Search conversations",
+    "sessions": "Sessions",
+    "history": "History",
+    "noMatchingSessions": "No matching sessions.",
+    "collapseToRail": "Collapse to workspace rail",
+    "expandToSidebar": "Expand to persistent sidebar",
+    "expandRail": "Expand workspace rail",
+    "railLabel": "Workspace rail",
+    "sessionActions": "Session actions: {{title}}",
+    "resizeSidebar": "Resize workspace sidebar"
+  },
+  "resources": {
+    "dataSources": "Data Sources",
+    "dataLink": "Data Link",
+    "knowledge": "Knowledge",
+    "agentTools": "Agent Tools",
+    "models": "Models",
+    "assets": "Assets",
+    "backendUnsupported": "Backend unsupported",
+    "mcpUnsupported": "MCP unsupported",
+    "skillsUnsupported": "Skills unsupported",
+    "dataSource": "Data source",
+    "mcp": "MCP",
+    "skills": "Skills"
+  },
+  "session": {
+    "defaultTitle": "New data task",
+    "pin": "Pin",
+    "unpin": "Unpin",
+    "share": "Share",
+    "rename": "Rename",
+    "delete": "Delete",
+    "sharingDisabled": "Sharing awaits backend support"
+  },
+  "userBar": {
+    "currentUser": "Current user",
+    "settings": "Settings",
+    "signOut": "Sign out"
+  },
+  "chat": {
+    "openConsole": "Open console",
+    "initializingSession": "Initializing session…",
+    "answer": "Answer",
+    "answering": "Answering",
+    "thinking": "Thinking",
+    "generating": "Generating",
+    "waitingForInput": "Waiting for input",
+    "collaborating": "Collaborating",
+    "toolCalls": "Tool calls",
+    "copyMessage": "Copy this message",
+    "copiedMessage": "Copied",
+    "addedToClipboard": "Added to clipboard",
+    "resizeConsole": "Resize task console"
+  },
+  "chatInput": {
+    "placeholder": "Ask a data question…",
+    "model": "Model",
+    "modelList": "Model list",
+    "selectModel": "Select model",
+    "enableLlmFirst": "Enable an LLM in the configuration panel first.",
+    "modelNotTested": "This model has not passed a connection test",
+    "modelNotTestedHint": "This model has not passed a connection test. Run \"Test connection\" in the model configuration.",
+    "sendNow": "Send now",
+    "sendQueuedNow": "Send queued prompt now",
+    "editQueued": "Edit queued prompt",
+    "deleteQueued": "Delete queued prompt",
+    "saveQueued": "Save",
+    "cancelQueued": "Cancel",
+    "dropFiles": "Drop files here to upload"
+  },
+  "sessionConfig": {
+    "agentToolsSettings": "Agent Tools session settings",
+    "locked": "Locked",
+    "currentChat": "Current chat",
+    "lockedHelp": "Data source and knowledge selections are locked after the first message in this chat.",
+    "scopeHelp": "Controls resources for this chat only. Manage global resources from Workspace Resources on the left.",
+    "agentToolsScopeHelp": "Controls MCP servers and Skills for this chat only.",
+    "noConfigurationYet": "No configuration yet. Add one from Workspace Resources on the left.",
+    "noConfigurationShort": "No configuration yet."
+  },
+  "console": {
+    "title": "Task Console",
+    "close": "Close Task Console",
+    "tabs": {
+      "overview": "Overview",
+      "trace": "Trace",
+      "outputs": "Outputs",
+      "details": "Details"
+    },
+    "sections": {
+      "summary": "Summary",
+      "progress": "Progress",
+      "outputs": "Outputs",
+      "outputsSession": "Outputs (session)"
+    },
+    "traceDag": {
+      "title": "Trace DAG",
+      "open": "Open Trace DAG"
+    },
+    "empty": {
+      "noStepSelected": "No step selected",
+      "noStepSelectedDescription": "Select a step from the center tool card or Trace timeline to inspect duration, action details, and output lineage.",
+      "noStepsYet": "No steps yet",
+      "noStepsYetDescription": "After you send a question, process steps appear here in order. Parallel tools are grouped under one step.",
+      "noOutputs": "No outputs yet",
+      "noOutputsDescription": "SQL, datasets, charts, and reports appear here after a question. Open an item to read it and reference the whole or parts."
+    },
+    "outputsHintExport": "Open any output to read the full content and reference the whole or a selected part.",
+    "outputsHint": "Open any output to read the full content.",
+    "seeOutputsTab": "See the Outputs tab for the full list.",
+    "metricOutputs": "Outputs",
+    "metricItems": "{{count}} items",
+    "currentQuestion": "Current question",
+    "startPrompt": "Send a question to start dataFoundry.",
+    "steps": "Steps",
+    "stepsSession": "Steps (session)",
+    "successRate": "Success rate",
+    "tokenCost": "Token / Cost",
+    "toolCallsMeta": "{{count}} tool calls",
+    "itemsMeta": "items",
+    "toolDistribution": "Tool distribution",
+    "dataTrail": "Data trail",
+    "stepDetails": "Step details · Step {{n}}",
+    "versionHistory": "Version history",
+    "noVersionsYet": "No versions yet",
+    "addToProject": "Add to project",
+    "adding": "Adding…",
+    "addedToProject": "Added to project",
+    "viewSource": "View source",
+    "downloadFile": "Download file"
+  },
+  "assets": {
+    "title": "Assets",
+    "description": "Reusable workspace assets for future data tasks and @ mentions."
+  },
+  "configPanel": {
+    "workspaceConfiguration": "Workspace configuration",
+    "chooseDataSource": "Choose data source",
+    "pickAdapter": "Pick one backend-enabled adapter",
+    "dataSourceBrowser": "Data source browser",
+    "browseSchema": "Browse schema and data preview",
+    "backToList": "Back to {{panel}} list",
+    "noDataSources": "No data sources configured.",
+    "noToolsYet": "No tools yet. Test the connection first to refresh the manifest.",
+    "loading": "Loading configuration from REST API...",
+    "configuredDataSources": "Configured data sources",
+    "configuredDataSourcesHelp": "Browse configured sources, sync schema, and open table-level previews.",
+    "addDataSource": "Add data source",
+    "startFromGallery": "Start from the adapter gallery to create one.",
+    "workspaceDefault": "Workspace default",
+    "disabledByDefault": "Disabled by default",
+    "secretSaved": "Secret saved",
+    "testConnection": "Test connection",
+    "testing": "Testing...",
+    "syncSchema": "Sync schema",
+    "reindex": "Reindex",
+    "validateSemantics": "Validate semantics",
+    "createItem": "Create configuration item",
+    "importSkill": "Import Skill",
+    "unsavedChanges": "Unsaved changes",
+    "enterName": "Enter {{kind}} name",
+    "shortDescription": "Short description",
+    "configurationId": "Configuration ID",
+    "configurationDetails": "Configuration details",
+    "packageInformation": "Package information",
+    "uploadDocument": "Upload document",
+    "uploadDocumentHelp": "Upload into the knowledge base for later reindexing and retrieval.",
+    "chooseFile": "Choose file",
+    "kindDb": "Data source",
+    "kindKb": "Knowledge",
+    "kindMcp": "MCP",
+    "kindModel": "Model",
+    "kindSkill": "Skill",
+    "titles": {
+      "db": "Data Sources",
+      "kb": "Knowledge",
+      "mcp": "Agent Tools",
+      "skill": "Agent Tools",
+      "llm": "Models"
+    },
+    "detailTitles": {
+      "db": "Data source details",
+      "kb": "Knowledge base details",
+      "mcp": "MCP server details",
+      "skill": "Skill package details",
+      "llm": "Model profile details"
+    },
+    "descriptions": {
+      "db": "Manage databases and connection profiles.",
+      "kb": "Manage documents, indexes and retrieval settings for workspace knowledge.",
+      "mcp": "Manage MCP server connections. Tests refresh the cached tools manifest.",
+      "skill": "Import SKILL.md or .zip packages. Runtime payloads reference skill ids only.",
+      "llm": "Manage LLM model profiles. Runs reference activeLlmProfileId through run_config."
+    },
+    "addLabels": {
+      "db": "Add data source",
+      "kb": "Add knowledge base",
+      "mcp": "Add MCP",
+      "skill": "Import Skill",
+      "llm": "Add model"
+    }
+  },
+  "welcome": {
+    "title": "Data Analysis Workbench",
+    "subtitle": "Ask in natural language. The agent can inspect schemas, run read-only SQL, and show the full trace in the console.",
+    "chipSql": "SQL Query",
+    "chipSchema": "Schema Check",
+    "chipTrace": "Data Trace",
+    "useThisPrompt": "Use this prompt",
+    "footerBeforeAt": "Ask directly in the input below, or use",
+    "footerAfterAt": "to select a datasource.",
+    "inspectSchema": "Inspect Schema",
+    "inspectSchemaDesc": "List tables and fields for the active datasource",
+    "inspectSchemaPrompt": "Show the tables in the datasource and summarize the main fields for each table",
+    "runSql": "Run SQL Query",
+    "runSqlDesc": "Generate and run read-only SQL from natural language",
+    "runSqlPrompt": "Query total orders in the last 30 days, grouped by date",
+    "analyzeTrends": "Analyze Trends",
+    "analyzeTrendsDesc": "Explore metric changes and anomalies",
+    "analyzeTrendsPrompt": "Analyze monthly sales trends and identify the months with the largest swings"
+  },
+  "schema": {
+    "copyTableName": "Copy table name"
+  },
+  "guide": {
+    "open": "Open quick start guide",
+    "dialog": "Quick start guide",
+    "close": "Close quick start guide",
+    "badge": "Quick start",
+    "stepOf": "Step {{current}} of {{total}}",
+    "back": "Back",
+    "skip": "Skip",
+    "next": "Next",
+    "finish": "Finish",
+    "useThisQuery": "Use this query",
+    "waitingForSend": "Waiting for send",
+    "openDatasourceConfig": "Open datasource config",
+    "openModelConfig": "Open model config",
+    "welcome": {
+      "title": "Start with the workspace map",
+      "body": "Left is where you configure resources, middle is where you ask the data question, and right is where you watch the task run and review outputs."
+    },
+    "resources": {
+      "title": "Understand workspace resources",
+      "body": "The left panel covers Data Sources, Knowledge, Agent Tools / MCP, Skills, Models, and Assets / Files. These are the building blocks the agent can use for each task."
+    },
+    "datasource": {
+      "title": "Confirm the datasource",
+      "bodyReady": "A datasource is ready: {{id}}. This is what the agent will query for the first task.",
+      "bodyMissing": "Add or enable a datasource before running the sample task. Open datasource config, create and test the connection, then return to this guide. The demo datasource is the fastest path when it is available."
+    },
+    "model": {
+      "titleReady": "Confirm the model",
+      "titleMissing": "Connect a model",
+      "bodyReady": "A model profile is available. The model understands the request, helps generate SQL, and summarizes the result.",
+      "bodyMissing": "Quick start needs an enabled LLM profile. Open model configuration, create and test a profile, then return to this guide."
+    },
+    "query": {
+      "title": "Use a sample query",
+      "body": "Start with this sample query: {{prompt}}"
+    },
+    "send": {
+      "title": "Send the task",
+      "bodyReady": "The task has started. The agent will inspect the datasource and run a read-only query.",
+      "bodyWaiting": "Review the sample task in the chat input, then click the send arrow. This step unlocks after the run starts."
+    },
+    "console": {
+      "titleRunning": "Watch the run",
+      "titleIdle": "Open the run console",
+      "body": "The Task Console shows run status, steps, tool calls, traces, and generated outputs while the task is running."
+    },
+    "output": {
+      "titleFailed": "Check the failed run",
+      "titleReady": "Review the result",
+      "bodyFailed": "The run failed. Check the model and datasource configuration, then try the sample task again.",
+      "bodyReady": "When the run completes, review the answer and outputs here. You can ask a follow-up question or inspect the trace."
+    }
+  }
+}

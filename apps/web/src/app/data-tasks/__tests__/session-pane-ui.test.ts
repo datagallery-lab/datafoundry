@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { createTranslator } from "../../../i18n/translate";
 import {
   getCollapsedWorkspaceRailCopy,
   getCollapsedWorkspacePreviewClassNames,
@@ -29,6 +30,8 @@ const workspaceConfig: WorkspaceConfigStore = {
   llm: [item("llm-default", "GPT-4.1")],
 };
 
+const t = createTranslator("en");
+
 const dataTasksPageSource = () =>
   readFileSync(join(process.cwd(), "src/app/data-tasks/page.tsx"), "utf8");
 const schemaPreviewSource = () =>
@@ -39,7 +42,7 @@ const schemaPreviewSource = () =>
 
 describe("session pane ui conventions", () => {
   it("names the collapsed sidebar as a workspace quick rail", () => {
-    expect(getCollapsedWorkspaceRailCopy()).toEqual({
+    expect(getCollapsedWorkspaceRailCopy(t)).toEqual({
       expandLabel: "Expand workspace rail",
       railLabel: "Workspace rail",
       sessionCountLabel: "Sessions",
@@ -91,6 +94,7 @@ describe("session pane ui conventions", () => {
 
   it("groups workspace resources into product-level navigation entries", () => {
     const groups = getWorkspaceResourceNavGroups({
+      t,
       workspaceConfig,
       workspaceFileCount: 7,
       activeConfigPanel: null,
@@ -143,6 +147,7 @@ describe("session pane ui conventions", () => {
 
   it("counts only runnable data sources in the workspace rail", () => {
     const groups = getWorkspaceResourceNavGroups({
+      t,
       workspaceConfig: {
         ...workspaceConfig,
         db: [
@@ -170,6 +175,7 @@ describe("session pane ui conventions", () => {
 
   it("keeps sidebar status minimal for static configuration navigation", () => {
     const groups = getWorkspaceResourceNavGroups({
+      t,
       workspaceConfig: { ...workspaceConfig, db: [] },
       workspaceFileCount: 0,
       activeConfigPanel: "kb",

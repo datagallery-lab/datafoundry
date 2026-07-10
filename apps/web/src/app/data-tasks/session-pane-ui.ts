@@ -1,6 +1,7 @@
 import { isConfigItemUsable, type WorkspaceConfigStore } from "./data-task-state";
 import type { LiveRunStatus } from "./live-run-state";
 import { LEFT_PANEL_MAX_WIDTH } from "./workspace-layout";
+import type { TranslateFn } from "../../../../i18n/types";
 
 function isDatalinkMcpItem(item: WorkspaceConfigStore["mcp"][number]): boolean {
   const name = item.name.toLowerCase();
@@ -30,6 +31,7 @@ export type WorkspaceResourceNavGroup = {
 };
 
 export function getWorkspaceResourceNavGroups({
+  t,
   workspaceConfig,
   workspaceFileCount,
   activeConfigPanel,
@@ -41,6 +43,7 @@ export function getWorkspaceResourceNavGroups({
   supportsMcp,
   supportsSkills,
 }: {
+  t: TranslateFn;
   workspaceConfig: WorkspaceConfigStore;
   workspaceFileCount: number;
   activeConfigPanel: "db" | "kb" | "mcp" | "skill" | "llm" | null;
@@ -52,22 +55,23 @@ export function getWorkspaceResourceNavGroups({
   supportsMcp: boolean;
   supportsSkills: boolean;
 }): WorkspaceResourceNavGroup[] {
+  const backendUnsupported = t("resources.backendUnsupported");
   const assetsUnsupported = capabilitiesReady && !supportsFiles;
   const knowledgeUnsupported = capabilitiesReady && !supportsKnowledge;
   const mcpUnsupported = capabilitiesReady && !supportsMcp;
   const skillsUnsupported = capabilitiesReady && !supportsSkills;
   const agentToolsStatus = mcpUnsupported
     ? skillsUnsupported
-      ? "Backend unsupported"
-      : "MCP unsupported"
+      ? backendUnsupported
+      : t("resources.mcpUnsupported")
     : skillsUnsupported
-      ? "Skills unsupported"
+      ? t("resources.skillsUnsupported")
       : undefined;
 
   return [
     {
       id: "data-sources",
-      title: "Data Sources",
+      title: t("resources.dataSources"),
       summary: String(workspaceConfig.db.filter(isConfigItemUsable).length),
       icon: "database",
       action: { type: "config", panel: "db" },
@@ -75,25 +79,25 @@ export function getWorkspaceResourceNavGroups({
     },
     {
       id: "data-link",
-      title: "Data Link",
+      title: t("resources.dataLink"),
       summary: String(workspaceConfig.mcp.filter(isDatalinkMcpItem).length),
       icon: "graph",
       action: { type: "datalink" },
       active: activeDataLinkPanel,
-      statusLabel: mcpUnsupported ? "Backend unsupported" : undefined,
+      statusLabel: mcpUnsupported ? backendUnsupported : undefined,
     },
     {
       id: "knowledge",
-      title: "Knowledge",
+      title: t("resources.knowledge"),
       summary: String(workspaceConfig.kb.length),
       icon: "book",
       action: { type: "config", panel: "kb" },
       active: activeConfigPanel === "kb",
-      statusLabel: knowledgeUnsupported ? "Backend unsupported" : undefined,
+      statusLabel: knowledgeUnsupported ? backendUnsupported : undefined,
     },
     {
       id: "agent-tools",
-      title: "Agent Tools",
+      title: t("resources.agentTools"),
       summary: `${workspaceConfig.mcp.length} · ${workspaceConfig.skill.length}`,
       icon: "tools",
       action: { type: "config", panel: "mcp" },
@@ -102,7 +106,7 @@ export function getWorkspaceResourceNavGroups({
     },
     {
       id: "models",
-      title: "Models",
+      title: t("resources.models"),
       summary: String(workspaceConfig.llm.length),
       icon: "models",
       action: { type: "config", panel: "llm" },
@@ -110,21 +114,21 @@ export function getWorkspaceResourceNavGroups({
     },
     {
       id: "assets",
-      title: "Assets",
+      title: t("resources.assets"),
       summary: String(workspaceFileCount),
       icon: "assets",
       action: { type: "assets" },
       active: activeFilesPanel,
-      statusLabel: assetsUnsupported ? "Backend unsupported" : undefined,
+      statusLabel: assetsUnsupported ? backendUnsupported : undefined,
     },
   ];
 }
 
-export function getCollapsedWorkspaceRailCopy() {
+export function getCollapsedWorkspaceRailCopy(t: TranslateFn) {
   return {
-    expandLabel: "Expand workspace rail",
-    railLabel: "Workspace rail",
-    sessionCountLabel: "Sessions",
+    expandLabel: t("sidebar.expandRail"),
+    railLabel: t("sidebar.railLabel"),
+    sessionCountLabel: t("sidebar.sessions"),
   } as const;
 }
 

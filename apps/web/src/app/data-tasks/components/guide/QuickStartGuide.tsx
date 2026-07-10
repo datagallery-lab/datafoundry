@@ -1,11 +1,11 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useT } from "../../../../i18n/locale-context";
 import { useDataTaskIdentity } from "../../data-task-identity";
 import type { WorkspaceConfigStore } from "../../data-task-state";
 import type { LiveRun } from "../../live-run-state";
 import {
-  QUICK_START_EXAMPLE_PROMPT,
   QUICK_START_STEP_ORDER,
   getQuickStartInitialStep,
   hasSeenQuickStartPrompt,
@@ -76,6 +76,7 @@ export function QuickStartGuide({
   onOpenTaskConsole,
   onUseExampleQuery,
 }: QuickStartGuideProps) {
+  const t = useT();
   const { scopeKey } = useDataTaskIdentity();
   const readiness = useMemo(
     () => resolveQuickStartReadiness(workspaceConfig),
@@ -90,6 +91,7 @@ export function QuickStartGuide({
     readiness,
     runStatus: liveRun.runStatus,
     hasSubmittedTask,
+    t,
   });
   const currentStepIndex = QUICK_START_STEP_ORDER.indexOf(stepId);
 
@@ -158,7 +160,7 @@ export function QuickStartGuide({
   };
 
   const useExampleQuery = () => {
-    onUseExampleQuery(QUICK_START_EXAMPLE_PROMPT);
+    onUseExampleQuery(t("welcome.runSqlPrompt"));
     setStepId("send");
   };
 
@@ -195,8 +197,8 @@ export function QuickStartGuide({
         className="guide-launcher inline-flex h-8 w-8 cursor-pointer items-center justify-center rounded-full border border-border bg-surface text-sm font-semibold text-foreground shadow-[var(--shadow-card)] transition-colors duration-200 hover:bg-surface-subtle focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/20"
         aria-expanded={open}
         aria-haspopup="dialog"
-        aria-label="Open quick start guide"
-        title="Open quick start guide"
+        aria-label={t("guide.open")}
+        title={t("guide.open")}
       >
         ?
       </button>
@@ -212,27 +214,30 @@ export function QuickStartGuide({
           ) : null}
           <section
             role="dialog"
-            aria-label="Quick start guide"
+            aria-label={t("guide.dialog")}
             className="fixed z-[80] w-[min(344px,calc(100vw-2rem))] rounded-xl border border-border bg-surface p-4 text-sm shadow-[0_20px_50px_rgba(15,23,42,0.18)] guide-popover-in max-sm:bottom-4 max-sm:left-4 max-sm:right-4"
             style={popoverStyle}
           >
             <div className="mb-3 flex items-start justify-between gap-3">
               <div className="min-w-0">
                 <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-light">
-                  Quick start
+                  {t("guide.badge")}
                 </p>
                 <h2 className="mt-1 text-base font-semibold text-foreground">
                   {step.title}
                 </h2>
                 <p className="mt-1 text-[11px] font-medium text-muted-light">
-                  Step {currentStepIndex + 1} of {QUICK_START_STEP_ORDER.length}
+                  {t("guide.stepOf", {
+                    current: currentStepIndex + 1,
+                    total: QUICK_START_STEP_ORDER.length,
+                  })}
                 </p>
               </div>
               <button
                 type="button"
                 onClick={close}
                 className="flex h-7 w-7 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted-light transition-colors duration-150 hover:bg-surface-subtle hover:text-foreground"
-                aria-label="Close quick start guide"
+                aria-label={t("guide.close")}
               >
                 ×
               </button>
@@ -240,7 +245,7 @@ export function QuickStartGuide({
             <p className="leading-6 text-muted">{step.body}</p>
             {stepId === "query" ? (
               <div className="mt-3 rounded-lg border border-border bg-surface-subtle px-3 py-2 font-mono text-xs leading-5 text-foreground">
-                {QUICK_START_EXAMPLE_PROMPT}
+                {t("welcome.runSqlPrompt")}
               </div>
             ) : null}
             <div className="mt-4 flex items-center justify-between gap-3">
@@ -250,7 +255,7 @@ export function QuickStartGuide({
                 disabled={stepId === QUICK_START_STEP_ORDER[0]}
                 className="h-8 cursor-pointer rounded-lg px-3 text-xs font-medium text-muted transition-colors duration-150 hover:bg-surface-subtle hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
               >
-                Back
+                {t("guide.back")}
               </button>
               <div className="flex items-center gap-2">
                 <button
@@ -258,7 +263,7 @@ export function QuickStartGuide({
                   onClick={close}
                   className="h-8 cursor-pointer rounded-lg px-3 text-xs font-medium text-muted transition-colors duration-150 hover:bg-surface-subtle hover:text-foreground"
                 >
-                  Skip
+                  {t("guide.skip")}
                 </button>
                 <button
                   type="button"

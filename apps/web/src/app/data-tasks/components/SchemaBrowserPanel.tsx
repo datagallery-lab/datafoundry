@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useT } from "../../../i18n/locale-context";
 import { configApi } from "../../../lib/config-api";
 import type { DatasourceSchemaDto } from "../../../lib/config-api";
 import { btnSecondaryClass, panelTitleClass, sectionLabelClass } from "../ui-tokens";
@@ -32,6 +33,7 @@ export function DatasourceSchemaPreviewPopover({
   datasourceName,
   onClose,
 }: DatasourceSchemaPreviewPopoverProps) {
+  const t = useT();
   const [schema, setSchema] = useState<DatasourceSchemaDto | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -134,7 +136,7 @@ export function DatasourceSchemaPreviewPopover({
                       onClick={() => void handleCopy(tableName)}
                       className={btnSecondaryClass}
                     >
-                      {copied === tableName ? "Copied" : "Copy table name"}
+                      {copied === tableName ? t("common.copied") : t("schema.copyTableName")}
                     </button>
                   </div>
                   <div className="mt-2 flex flex-wrap gap-1.5">

@@ -10,12 +10,13 @@ describe("data task identity menu", () => {
     const file = source();
 
     for (const label of [
-      "Settings",
-      "Sign out",
+      't("userBar.settings")',
+      't("userBar.signOut")',
     ]) {
       expect(file).toContain(label);
     }
 
+    expect(file).toContain("LanguageToggle");
     expect(file).toContain("AccountMoreIcon");
     expect(file).toContain("onOpenSettings");
   });

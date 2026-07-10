@@ -13,8 +13,6 @@ import {
 import { createPortal } from "react-dom";
 import {
   PER_RUN_MENTION_APPEARANCE,
-  SESSION_RESOURCE_LABEL,
-  configItemStatusLabel,
   isConfigItemUsable,
   isSessionResourceKindLocked,
   sessionResourceCounts,
@@ -28,6 +26,11 @@ import type {
   WorkspaceConfigStore,
 } from "../../data-task-state";
 import { ResourceKindIcon } from "./SessionResourceSummary";
+import { useT } from "../../../../i18n/locale-context";
+import {
+  translateConfigItemStatus,
+  translateSessionResourceLabel,
+} from "../../../../i18n/status-labels";
 
 const SESSION_CONFIG_PORTAL_ATTR = "data-session-config-portal";
 const SESSION_CONFIG_PILLS = ["db", "kb", "agent-tools"] as const;
@@ -244,9 +247,10 @@ function SessionConfigPill({
   onToggleResource: (id: string) => void;
   rootRef?: (node: HTMLDivElement | null) => void;
 }) {
+  const t = useT();
   const anchorRef = useRef<HTMLDivElement>(null);
   const appearance = PER_RUN_MENTION_APPEARANCE[kind];
-  const label = SESSION_RESOURCE_LABEL[kind];
+  const label = translateSessionResourceLabel(kind, t);
   const locked = isSessionResourceKindLocked(session, kind, sessionStartedHints);
   const countLabel = `${counts.enabled}/${counts.total}`;
 
@@ -315,6 +319,7 @@ function AgentToolsPill({
   onToggleOpen: () => void;
   onToggleResource: (kind: PerRunMentionKind, id: string) => void;
 }) {
+  const t = useT();
   const anchorRef = useRef<HTMLDivElement>(null);
   const mcpCounts = sessionResourceCounts(workspaceConfig, "mcp", session);
   const skillCounts = sessionResourceCounts(workspaceConfig, "skill", session);
@@ -322,6 +327,7 @@ function AgentToolsPill({
   const total = mcpCounts.total + skillCounts.total;
   const countLabel = `${enabled}/${total}`;
   const appearance = PER_RUN_MENTION_APPEARANCE.mcp;
+  const agentToolsLabel = t("resources.agentTools");
 
   return (
     <div ref={anchorRef} className="relative shrink-0">
@@ -329,8 +335,8 @@ function AgentToolsPill({
         type="button"
         aria-haspopup="listbox"
         aria-expanded={open}
-        aria-label={`Agent Tools session settings, ${countLabel}`}
-        title={`Agent Tools: ${countLabel}`}
+        aria-label={`${t("sessionConfig.agentToolsSettings")}, ${countLabel}`}
+        title={`${agentToolsLabel}: ${countLabel}`}
         onClick={onToggleOpen}
         className={[
           "inline-flex items-center rounded-full border text-xs font-medium transition",
@@ -371,22 +377,23 @@ function AgentToolsPillPanel({
   session: ChatSession | null;
   onToggleResource: (kind: PerRunMentionKind, id: string) => void;
 }) {
+  const t = useT();
   return (
     <div
       role="listbox"
-      aria-label="Agent Tools session settings"
+      aria-label={t("sessionConfig.agentToolsSettings")}
       className="overflow-hidden rounded-2xl border border-border bg-surface shadow-xl"
       onMouseDown={preventFocusSteal}
     >
       <div className="border-b border-border px-3 py-2.5">
         <div className="flex items-center justify-between gap-2">
-          <span className="text-xs font-semibold text-foreground">Agent Tools</span>
+          <span className="text-xs font-semibold text-foreground">{t("resources.agentTools")}</span>
           <span className="rounded-full border border-border bg-surface-subtle px-2 py-0.5 text-[10px] font-medium text-muted-light">
-            Current chat
+            {t("sessionConfig.currentChat")}
           </span>
         </div>
         <p className="mt-1 text-[11px] leading-4 text-muted-light">
-          Controls MCP servers and Skills for this chat only.
+          {t("sessionConfig.agentToolsScopeHelp")}
         </p>
       </div>
       <AgentToolsSection
@@ -416,7 +423,8 @@ function AgentToolsSection({
   session: ChatSession | null;
   onToggleResource: (kind: PerRunMentionKind, id: string) => void;
 }) {
-  const label = SESSION_RESOURCE_LABEL[kind];
+  const t = useT();
+  const label = translateSessionResourceLabel(kind, t);
 
   return (
     <section className="border-b border-border last:border-b-0">
@@ -426,7 +434,7 @@ function AgentToolsSection({
       </div>
       {items.length === 0 ? (
         <p className="px-3 pb-3 text-sm text-muted-light">
-          No configuration yet.
+          {t("sessionConfig.noConfigurationShort")}
         </p>
       ) : (
         <ul className="max-h-40 overflow-y-auto py-1">
@@ -460,7 +468,7 @@ function AgentToolsSection({
                     checked={enabled && usable}
                     disabled={!usable}
                     onChange={() => onToggleResource(kind, item.id)}
-                    aria-label={`${enabled ? "Disable" : "Enable"} ${item.name}`}
+                    aria-label={`${enabled ? t("common.disable") : t("common.enable")} ${item.name}`}
                   />
                 </div>
               </li>
@@ -485,7 +493,8 @@ function SessionConfigPillPanel({
   locked: boolean;
   onToggleResource: (id: string) => void;
 }) {
-  const label = SESSION_RESOURCE_LABEL[kind];
+  const t = useT();
+  const label = translateSessionResourceLabel(kind, t);
 
   return (
     <div
@@ -498,18 +507,16 @@ function SessionConfigPillPanel({
         <div className="flex items-center justify-between gap-2">
           <span className="text-xs font-semibold text-foreground">{label}</span>
           <span className="rounded-full border border-border bg-surface-subtle px-2 py-0.5 text-[10px] font-medium text-muted-light">
-            {locked ? "Locked" : "Current chat"}
+            {locked ? t("sessionConfig.locked") : t("sessionConfig.currentChat")}
           </span>
         </div>
         <p className="mt-1 text-[11px] leading-4 text-muted-light">
-          {locked
-            ? "Data source and knowledge selections are locked after the first message in this chat."
-            : "Controls resources for this chat only. Manage global resources from Workspace Resources on the left."}
+          {locked ? t("sessionConfig.lockedHelp") : t("sessionConfig.scopeHelp")}
         </p>
       </div>
       {items.length === 0 ? (
         <p className="px-3 py-4 text-sm text-muted-light">
-          No configuration yet. Add one from Workspace Resources on the left.
+          {t("sessionConfig.noConfigurationYet")}
         </p>
       ) : (
         <ul className="max-h-56 overflow-y-auto py-1">
@@ -543,7 +550,7 @@ function SessionConfigPillPanel({
                     checked={enabled && usable}
                     disabled={locked || !usable}
                     onChange={() => onToggleResource(item.id)}
-                    aria-label={`${enabled ? "Disable" : "Enable"} ${item.name}`}
+                    aria-label={`${enabled ? t("common.disable") : t("common.enable")} ${item.name}`}
                   />
                 </div>
               </li>
@@ -596,6 +603,7 @@ function Switch({
 }
 
 function ConfigStatusChip({ status }: { status: ConfigItemStatus | undefined }) {
+  const t = useT();
   return (
     <span
       className={[
@@ -605,7 +613,7 @@ function ConfigStatusChip({ status }: { status: ConfigItemStatus | undefined }) 
           : "bg-slate-100 text-slate-500",
       ].join(" ")}
     >
-      {configItemStatusLabel(status)}
+      {translateConfigItemStatus(status, t)}
     </span>
   );
 }

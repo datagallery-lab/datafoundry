@@ -401,6 +401,9 @@ export function useDataTaskIdentity(): DataTaskIdentityContextValue {
   return context;
 }
 
+import { LanguageToggle } from "../../i18n/LanguageToggle";
+import { useT } from "../../i18n/locale-context";
+
 export function DataTaskUserBar({
   compact = false,
   onOpenSettings,
@@ -415,6 +418,7 @@ export function DataTaskUserBar({
     error,
     signOut,
   } = useDataTaskIdentity();
+  const t = useT();
   const [open, setOpen] = useState(false);
 
   if (compact) {
@@ -425,10 +429,11 @@ export function DataTaskUserBar({
           type="button"
           className="flex h-9 w-9 items-center justify-center rounded-lg border border-border bg-surface text-xs font-semibold text-foreground"
           title={currentUser.displayName || currentUser.userId}
-          aria-label="Current user"
+          aria-label={t("userBar.currentUser")}
         >
           {identityInitials(currentUser)}
         </button>
+        <LanguageToggle compact />
       </div>
     );
   }
@@ -454,14 +459,14 @@ export function DataTaskUserBar({
           </div>
           <div className="pt-1.5">
             <AccountMenuItem
-              label="Settings"
+              label={t("userBar.settings")}
               onClick={() => {
                 onOpenSettings?.();
                 setOpen(false);
               }}
             />
             <AccountMenuItem
-              label="Sign out"
+              label={t("userBar.signOut")}
               onClick={() => {
                 signOut();
                 setOpen(false);
@@ -491,6 +496,7 @@ export function DataTaskUserBar({
           </span>
         </button>
         {quickStartGuide}
+        <LanguageToggle />
       </div>
     </div>
   );

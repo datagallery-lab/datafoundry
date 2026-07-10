@@ -1,24 +1,7 @@
 "use client";
 
+import { useT } from "../../../../i18n/locale-context";
 import { chipClass } from "../../ui-tokens";
-
-const EXAMPLE_PROMPTS = [
-  {
-    title: "Inspect Schema",
-    description: "List tables and fields for the active datasource",
-    prompt: "Show the tables in the datasource and summarize the main fields for each table",
-  },
-  {
-    title: "Run SQL Query",
-    description: "Generate and run read-only SQL from natural language",
-    prompt: "Query total orders in the last 30 days, grouped by date",
-  },
-  {
-    title: "Analyze Trends",
-    description: "Explore metric changes and anomalies",
-    prompt: "Analyze monthly sales trends and identify the months with the largest swings",
-  },
-] as const;
 
 function DatabaseIcon({ className }: { className?: string }) {
   return (
@@ -61,27 +44,46 @@ export function DataTaskWelcomeScreen({
 }: {
   onUsePrompt?: (prompt: string) => void;
 }) {
+  const t = useT();
+  const examplePrompts = [
+    {
+      title: t("welcome.inspectSchema"),
+      description: t("welcome.inspectSchemaDesc"),
+      prompt: t("welcome.inspectSchemaPrompt"),
+    },
+    {
+      title: t("welcome.runSql"),
+      description: t("welcome.runSqlDesc"),
+      prompt: t("welcome.runSqlPrompt"),
+    },
+    {
+      title: t("welcome.analyzeTrends"),
+      description: t("welcome.analyzeTrendsDesc"),
+      prompt: t("welcome.analyzeTrendsPrompt"),
+    },
+  ] as const;
+
   return (
     <div className="flex flex-1 flex-col items-center justify-center px-6 py-10">
       <div className="mb-6 flex h-14 w-14 items-center justify-center rounded-2xl border border-border bg-surface-subtle text-foreground">
         <DatabaseIcon className="h-7 w-7" />
       </div>
       <h2 className="text-center text-lg font-semibold text-foreground">
-        Data Analysis Workbench
+        {t("welcome.title")}
       </h2>
       <p className="mt-2 max-w-md text-center text-sm leading-6 text-muted">
-        Ask in natural language. The agent can inspect schemas, run read-only SQL, and show the full trace in the console.
+        {t("welcome.subtitle")}
       </p>
       <div className="mt-6 flex flex-wrap justify-center gap-2">
         <span className={chipClass}>
           <SparkIcon className="h-3.5 w-3.5 text-muted-light" />
-          SQL Query
+          {t("welcome.chipSql")}
         </span>
-        <span className={chipClass}>Schema Check</span>
-        <span className={chipClass}>Data Trace</span>
+        <span className={chipClass}>{t("welcome.chipSchema")}</span>
+        <span className={chipClass}>{t("welcome.chipTrace")}</span>
       </div>
       <div className="mt-8 grid w-full max-w-lg gap-3">
-        {EXAMPLE_PROMPTS.map((item) => (
+        {examplePrompts.map((item) => (
           <button
             key={item.title}
             type="button"
@@ -96,7 +98,7 @@ export function DataTaskWelcomeScreen({
               </div>
               {onUsePrompt ? (
                 <span className="shrink-0 rounded-full border border-border bg-surface-subtle px-2 py-0.5 text-[10px] font-semibold text-muted-light">
-                  Use this prompt
+                  {t("welcome.useThisPrompt")}
                 </span>
               ) : null}
             </div>
@@ -107,7 +109,11 @@ export function DataTaskWelcomeScreen({
         ))}
       </div>
       <p className="mt-6 text-xs text-muted-light">
-        Ask directly in the input below, or use <kbd className="rounded border border-border bg-surface-subtle px-1 py-0.5 font-mono text-[10px]">@</kbd> to select a datasource.
+        {t("welcome.footerBeforeAt")}{" "}
+        <kbd className="rounded border border-border bg-surface-subtle px-1 py-0.5 font-mono text-[10px]">
+          @
+        </kbd>{" "}
+        {t("welcome.footerAfterAt")}
       </p>
     </div>
   );
@@ -123,11 +129,13 @@ export function DatasourceChip({ datasourceId }: { datasourceId: string }) {
 }
 
 export function ChatInitializingState() {
+  const t = useT();
+
   return (
     <div className="grid flex-1 place-items-center px-6">
       <div className="text-center">
         <div className="mx-auto mb-3 h-8 w-8 animate-pulse rounded-full bg-surface-subtle ring-1 ring-border" />
-        <p className="text-sm text-muted">Initializing session...</p>
+        <p className="text-sm text-muted">{t("chat.initializingSession")}</p>
       </div>
     </div>
   );

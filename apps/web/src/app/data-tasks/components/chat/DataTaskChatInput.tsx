@@ -24,6 +24,7 @@ import {
   isConfigItemUsable,
 } from "../../data-task-state";
 import { MentionChips, useMentionAutocomplete } from "./chat-mentions";
+import { useT } from "../../../../i18n/locale-context";
 import { AttachmentChips } from "./AttachmentChips";
 import { CHAT_ATTACHMENT_ACCEPT } from "./chat-attachments";
 import { buildChatAddActions, type ChatAddAction } from "./chat-add-actions";
@@ -96,10 +97,14 @@ export function DataTaskChatInput({
   onChange,
   ...props
 }: DataTaskChatInputProps) {
+  const t = useT();
   const textAreaSlot =
     textArea && typeof textArea === "object" && !Array.isArray(textArea)
       ? {
           ...textArea,
+          placeholder:
+            (textArea as { placeholder?: string }).placeholder ??
+            t("chatInput.placeholder"),
           style: {
             overflow: "hidden",
             resize: "none" as const,
@@ -107,6 +112,7 @@ export function DataTaskChatInput({
           },
         }
       : {
+          placeholder: t("chatInput.placeholder"),
           style: {
             overflow: "hidden",
             resize: "none" as const,
@@ -239,6 +245,7 @@ function DataTaskChatInputLayout({
   onDeleteQueuedPrompt?: (id: string) => void;
   onSendQueuedPromptNow?: (id: string) => void;
 }) {
+  const t = useT();
   const { chatColumnWidth, draftPromptRequest, onDraftPromptConsumed } =
     useDataTaskChatInputBindings();
   const chatInputWidth = resolveChatInputWidth(chatColumnWidth);
@@ -366,7 +373,7 @@ function DataTaskChatInputLayout({
         >
           {attachmentsApi.dragOver && (
             <div className="pointer-events-none absolute inset-0 z-30 grid place-items-center rounded-2xl border-2 border-dashed border-primary bg-primary-light/10 text-sm font-medium text-primary">
-              Drop files here to upload
+              {t("chatInput.dropFiles")}
             </div>
           )}
           <div className="w-full px-3 py-1.5">
@@ -482,6 +489,7 @@ function QueuedPromptStrip({
   onDelete?: (id: string) => void;
   onSendNow?: (id: string) => void;
 }) {
+  const t = useT();
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
 
@@ -539,8 +547,8 @@ function QueuedPromptStrip({
               <>
                 <button
                   type="button"
-                  title="Save queued prompt"
-                  aria-label="Save queued prompt"
+                  title={t("chatInput.saveQueued")}
+                  aria-label={t("chatInput.saveQueued")}
                   onClick={() => {
                     const next = draft.trim();
                     if (!next) return;
@@ -553,8 +561,8 @@ function QueuedPromptStrip({
                 </button>
                 <button
                   type="button"
-                  title="Cancel editing"
-                  aria-label="Cancel editing"
+                  title={t("chatInput.cancelQueued")}
+                  aria-label={t("chatInput.cancelQueued")}
                   onClick={() => setEditingId(null)}
                   className="grid h-6 w-6 shrink-0 cursor-pointer place-items-center rounded-md text-muted transition-colors hover:bg-surface hover:text-foreground"
                 >
@@ -565,8 +573,8 @@ function QueuedPromptStrip({
               <>
                 <button
                   type="button"
-                  title="Edit queued prompt"
-                  aria-label="Edit queued prompt"
+                  title={t("chatInput.editQueued")}
+                  aria-label={t("chatInput.editQueued")}
                   onClick={() => {
                     setEditingId(prompt.id);
                     setDraft(prompt.text);
@@ -577,8 +585,8 @@ function QueuedPromptStrip({
                 </button>
                 <button
                   type="button"
-                  title="Send now"
-                  aria-label="Send queued prompt now"
+                  title={t("chatInput.sendNow")}
+                  aria-label={t("chatInput.sendQueuedNow")}
                   disabled={isInterrupting}
                   onClick={() => onSendNow?.(prompt.id)}
                   className="grid h-6 w-6 shrink-0 cursor-pointer place-items-center rounded-md text-muted transition-colors hover:bg-surface hover:text-primary disabled:cursor-default disabled:opacity-50"
@@ -587,8 +595,8 @@ function QueuedPromptStrip({
                 </button>
                 <button
                   type="button"
-                  title="Delete queued prompt"
-                  aria-label="Delete queued prompt"
+                  title={t("chatInput.deleteQueued")}
+                  aria-label={t("chatInput.deleteQueued")}
                   onClick={() => onDelete?.(prompt.id)}
                   className="grid h-6 w-6 shrink-0 cursor-pointer place-items-center rounded-md text-muted transition-colors hover:bg-surface hover:text-rose-600"
                 >
@@ -732,11 +740,12 @@ function ChatModelPicker({
   onActiveLlmChange: (llmId: string) => void;
   onOpenLlmConfig?: () => void;
 }) {
+  const t = useT();
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
   const activeItem =
     llmOptions.find((item) => item.id === activeLlmId) ?? llmOptions[0] ?? null;
-  const label = activeItem ? getLlmDisplayLabel(activeItem) : "Select model";
+  const label = activeItem ? getLlmDisplayLabel(activeItem) : t("chatInput.selectModel");
   const activeUnavailable = activeItem ? !isConfigItemUsable(activeItem) : false;
 
   useEffect(() => {
@@ -757,9 +766,7 @@ function ChatModelPicker({
         aria-haspopup="listbox"
         aria-expanded={open}
         title={
-          activeUnavailable
-            ? "This model has not passed a connection test"
-            : label
+          activeUnavailable ? t("chatInput.modelNotTested") : label
         }
         onClick={() => setOpen((value) => !value)}
         className={[
@@ -780,15 +787,15 @@ function ChatModelPicker({
       {open && (
         <div
           role="listbox"
-          aria-label="Model list"
+          aria-label={t("chatInput.modelList")}
           className="absolute bottom-full right-0 z-50 mb-2 w-[min(280px,calc(100vw-2rem))] overflow-hidden rounded-xl border border-border bg-surface shadow-lg"
         >
           <div className="border-b border-border px-3 py-2 text-[11px] font-medium uppercase tracking-[0.06em] text-muted-light">
-            Model
+            {t("chatInput.model")}
           </div>
           {llmOptions.length === 0 ? (
             <p className="px-3 py-4 text-sm text-muted-light">
-              Enable an LLM in the configuration panel first.
+              {t("chatInput.enableLlmFirst")}
             </p>
           ) : (
             <ul className="max-h-64 overflow-y-auto py-1">
@@ -803,11 +810,7 @@ function ChatModelPicker({
                       aria-selected={selected}
                       aria-disabled={!usable}
                       disabled={!usable}
-                      title={
-                        usable
-                          ? undefined
-                          : "This model has not passed a connection test. Run \"Test connection\" in the model configuration."
-                      }
+                      title={usable ? undefined : t("chatInput.modelNotTestedHint")}
                       onClick={() => {
                         if (!usable) return;
                         onActiveLlmChange(item.id);
