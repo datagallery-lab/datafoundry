@@ -5,7 +5,8 @@ import {
   llmEnvFingerprint,
   modelProfileConnectivityPayloadChanged,
   resolveModelProfileSaveStatus,
-  serverDefaultConnectionStatus
+  serverDefaultConnectionStatus,
+  isServerLlmEnvConfigured
 } from "../apps/api/src/model-profile-connection-status.ts";
 
 test("resolveModelProfileSaveStatus keeps connected until connectivity changes", () => {
@@ -87,4 +88,37 @@ test("serverDefaultConnectionStatus invalidates stale connected status", () => {
     }),
     "untested"
   );
+});
+
+test("isServerLlmEnvConfigured requires API key, base URL, and model", () => {
+  assert.equal(
+    isServerLlmEnvConfigured({
+      LLM_API_KEY: "secret",
+      LLM_BASE_URL: "https://example/v1",
+      LLM_MODEL: "qwen-plus"
+    }),
+    true
+  );
+  assert.equal(
+    isServerLlmEnvConfigured({
+      LLM_API_KEY: "secret",
+      LLM_BASE_URL: "https://example/v1"
+    }),
+    false
+  );
+  assert.equal(
+    isServerLlmEnvConfigured({
+      LLM_BASE_URL: "https://example/v1",
+      LLM_MODEL: "qwen-plus"
+    }),
+    false
+  );
+  assert.equal(
+    isServerLlmEnvConfigured({
+      LLM_API_KEY: "secret",
+      LLM_MODEL: "qwen-plus"
+    }),
+    false
+  );
+  assert.equal(isServerLlmEnvConfigured({}), false);
 });

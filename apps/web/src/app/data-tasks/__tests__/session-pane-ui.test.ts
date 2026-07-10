@@ -140,7 +140,7 @@ describe("session pane ui conventions", () => {
     });
     expect(groups[3]).toMatchObject({
       title: "Agent Tools",
-      summary: "2 · 1",
+      summary: "3",
       action: { type: "config", panel: "mcp" },
     });
   });

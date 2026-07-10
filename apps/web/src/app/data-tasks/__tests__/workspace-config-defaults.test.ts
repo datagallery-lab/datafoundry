@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  defaultWorkspaceConfig,
   getEnabledLlmItems,
   resolveActiveLlmProfileId,
   summarizeConfigItems,
@@ -9,6 +10,16 @@ import {
 } from "../data-task-state";
 
 describe("workspace config defaults", () => {
+  it("starts with empty lists instead of hardcoded builtin demo/server-default", () => {
+    expect(defaultWorkspaceConfig()).toEqual({
+      db: [],
+      kb: [],
+      mcp: [],
+      llm: [],
+      skill: [],
+    });
+  });
+
   it("summarizes configured items as default available even if legacy enabled is false", () => {
     const item = {
       id: "db-1",
@@ -55,5 +66,10 @@ describe("active LLM selection", () => {
     expect(
       resolveActiveLlmProfileId(profiles, "profile-b", "server-default"),
     ).toBe("profile-b");
+  });
+
+  it("returns null when no profiles are available", () => {
+    expect(resolveActiveLlmProfileId([], null, "server-default")).toBeNull();
+    expect(resolveActiveLlmProfileId([], "stale-id", null)).toBeNull();
   });
 });

@@ -57,6 +57,10 @@ export function AuthFlow({
     setLocalError(null);
     setMessage(null);
     try {
+      if ((mode === "register" || mode === "reset") && password.length < 6) {
+        setLocalError("Password must be at least 6 characters.");
+        return;
+      }
       if (mode === "login") {
         await configApi.login({ email, password });
         await onAuthenticated();
@@ -139,7 +143,8 @@ export function AuthFlow({
             type="password"
             value={password}
             onChange={setPassword}
-            placeholder="••••••••"
+            placeholder={mode === "login" ? "••••••••" : "At least 6 characters"}
+            hint={mode === "register" || mode === "reset" ? "At least 6 characters" : undefined}
             autoComplete={mode === "login" ? "current-password" : "new-password"}
             {...(mode === "login"
               ? {
@@ -227,6 +232,7 @@ function AuthField({
   value,
   onChange,
   placeholder,
+  hint,
   type = "text",
   autoComplete,
   action,
@@ -236,6 +242,7 @@ function AuthField({
   value: string;
   onChange: (value: string) => void;
   placeholder?: string;
+  hint?: string;
   type?: string;
   autoComplete?: string;
   action?: ReactNode;
@@ -257,6 +264,7 @@ function AuthField({
         autoComplete={autoComplete}
         className="h-10 w-full rounded-md border border-border bg-surface px-3 text-sm text-foreground outline-none transition-colors placeholder:text-muted-light hover:border-muted-light focus:border-primary focus:ring-2 focus:ring-primary/10"
       />
+      {hint ? <p className="text-[11px] leading-relaxed text-muted-light">{hint}</p> : null}
     </div>
   );
 }

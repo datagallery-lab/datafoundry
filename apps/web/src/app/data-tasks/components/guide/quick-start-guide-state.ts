@@ -82,9 +82,7 @@ export function resolveQuickStartReadiness(
   const availableDatasources = workspaceConfig.db.filter(
     (item) => item.enabled !== false,
   );
-  const demoDatasource =
-    availableDatasources.find((item) => item.id === "api-duckdb-demo") ?? null;
-  const preferredDatasource = demoDatasource ?? availableDatasources[0] ?? null;
+  const preferredDatasource = availableDatasources[0] ?? null;
   const hasModel = enabledLlms.length > 0;
   const hasDatasource = preferredDatasource != null;
 

@@ -67,7 +67,7 @@ describe("quick start guide state", () => {
     expect(hasSeenQuickStartPrompt(storage, "user-b")).toBe(false);
   });
 
-  it("prefers the demo datasource when resolving readiness", () => {
+  it("prefers the first available datasource when resolving readiness", () => {
     const config = workspaceConfig({
       llm: [item("server-default", true, "Server default")],
       db: [
@@ -79,8 +79,17 @@ describe("quick start guide state", () => {
     expect(resolveQuickStartReadiness(config)).toEqual({
       hasModel: true,
       hasDatasource: true,
-      preferredDatasourceId: "api-duckdb-demo",
+      preferredDatasourceId: "warehouse",
       canRun: true,
+    });
+  });
+
+  it("reports no preferred datasource when none are configured", () => {
+    expect(resolveQuickStartReadiness(workspaceConfig({ llm: [item("llm")] }))).toEqual({
+      hasModel: true,
+      hasDatasource: false,
+      preferredDatasourceId: null,
+      canRun: false,
     });
   });
 

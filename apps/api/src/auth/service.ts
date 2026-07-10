@@ -432,8 +432,8 @@ function normalizeDisplayName(value: string): string {
 }
 
 function assertPassword(password: string): void {
-  if (password.length < 12) {
-    throw new AuthError(400, "BAD_REQUEST", "Password must be at least 12 characters.");
+  if (password.length < 6) {
+    throw new AuthError(400, "BAD_REQUEST", "Password must be at least 6 characters.");
   }
 }
 

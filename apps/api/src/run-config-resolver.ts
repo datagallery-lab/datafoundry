@@ -42,7 +42,7 @@ export type McpRuntime = {
 };
 
 type ResolveRunConfigInput = {
-  defaultDatasourceId: string;
+  defaultDatasourceId?: string;
   metadataStore: MetadataStore;
   runInput: RunAgentInput;
   userId: string;

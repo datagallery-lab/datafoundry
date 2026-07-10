@@ -427,7 +427,8 @@ export function DataTaskUserBar({
         {quickStartGuide}
         <button
           type="button"
-          className="flex h-9 w-9 items-center justify-center rounded-lg border border-border bg-surface text-xs font-semibold text-foreground"
+          onClick={() => onOpenSettings?.()}
+          className="flex h-9 w-9 items-center justify-center rounded-lg border border-border bg-surface text-xs font-semibold text-foreground transition-colors hover:bg-surface-subtle"
           title={currentUser.displayName || currentUser.userId}
           aria-label={t("userBar.currentUser")}
         >
