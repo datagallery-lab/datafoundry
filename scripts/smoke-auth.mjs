@@ -68,6 +68,30 @@ try {
   assert.equal(anonymousMe.response.status, 401);
   assert.equal(anonymousMe.body.error.code, "UNAUTHORIZED");
 
+  const tooShort = await requestJson("/api/v1/auth/register", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      email: "short@example.com",
+      password: "12345",
+      displayName: "Too Short"
+    })
+  });
+  assert.equal(tooShort.response.status, 400, JSON.stringify(tooShort.body));
+  assert.equal(tooShort.body.error.code, "BAD_REQUEST");
+  assert.match(tooShort.body.error.message, /at least 6 characters/i);
+
+  const minLengthOk = await requestJson("/api/v1/auth/register", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      email: "minlen@example.com",
+      password: "123456",
+      displayName: "Min Length"
+    })
+  });
+  assert.equal(minLengthOk.response.status, 201, JSON.stringify(minLengthOk.body));
+
   const registered = await requestJson("/api/v1/auth/register", {
     method: "POST",
     headers: { "Content-Type": "application/json" },

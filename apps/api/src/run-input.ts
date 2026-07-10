@@ -65,7 +65,7 @@ export type PerRunMentionKind = "db" | "kb" | "mcp" | "skill";
 /** Parse and validate the frontend run_config into the backend's effective run policy. */
 export const extractEffectiveRunConfig = (
   input: RunAgentInput,
-  defaultDatasourceId: string,
+  defaultDatasourceId?: string,
   defaults?: RunConfigDefaults
 ): EffectiveRunConfig => {
   const runConfig = extractRunConfigRecord(input);
@@ -158,7 +158,7 @@ export const resolveEffectiveRunConfig = (
   input: RunAgentInput,
   metadataStore: MetadataStore,
   userId: string,
-  defaultDatasourceId: string,
+  defaultDatasourceId?: string,
   workspaceId = "default"
 ): EffectiveRunConfig => {
   const defaults = loadWorkspaceRunDefaults(metadataStore, userId, workspaceId);

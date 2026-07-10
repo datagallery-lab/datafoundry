@@ -98,7 +98,7 @@ export function getWorkspaceResourceNavGroups({
     {
       id: "agent-tools",
       title: t("resources.agentTools"),
-      summary: `${workspaceConfig.mcp.length} · ${workspaceConfig.skill.length}`,
+      summary: String(workspaceConfig.mcp.length + workspaceConfig.skill.length),
       icon: "tools",
       action: { type: "config", panel: "mcp" },
       active: activeConfigPanel === "mcp" || activeConfigPanel === "skill",

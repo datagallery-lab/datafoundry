@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Create zero-extra-deps local fixtures (CSV + SQLite) and register them via Config API.
- * DuckDB demo (`api-duckdb-demo`) is auto-seeded by the API server on startup.
+ * DuckDB demo (`api-duckdb-demo`) is optional and is no longer auto-seeded by the API server.
  */
 import assert from "node:assert/strict";
 import { mkdirSync, writeFileSync } from "node:fs";
@@ -141,9 +141,9 @@ try {
 
   const demo = await requestJson("/api/v1/datasources/api-duckdb-demo");
   if (demo.response.status !== 200) {
-    console.warn("[seed] api-duckdb-demo not found — restart API to auto-seed demo datasource");
+    console.warn("[seed] api-duckdb-demo not found — create it manually if you need the DuckDB demo");
   } else {
-    console.log("[seed] api-duckdb-demo present (builtin DuckDB demo)");
+    console.log("[seed] api-duckdb-demo present");
   }
 
   const verifiedIds = [];

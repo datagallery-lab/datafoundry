@@ -854,6 +854,10 @@ try {
   assert.equal(modelProfileTest.body.data.status, "connected");
   assert.equal(modelProfileTest.body.data.model, "smoke-model");
   assert.equal(modelProfileTest.body.data.response, "OK");
+  assert.match(
+    modelProfileTest.body.data.reason,
+    /Model "smoke-model" responded successfully \(OK\)\./
+  );
   assert.equal(modelProbeRequest.method, "POST");
   assert.equal(modelProbeRequest.path, "/chat/completions");
   assert.equal(modelProbeRequest.authorization, "Bearer smoke-model-key");
@@ -1016,6 +1020,12 @@ try {
     method: "POST"
   });
   assert.equal(badModelProfileTest.body.success, false);
+  assert.equal(badModelProfileTest.body.error.code, "PROVIDER_TEST_FAILED");
+  assert.match(badModelProfileTest.body.error.message, /^PROVIDER_TEST_FAILED:/);
+  assert.equal(
+    badModelProfileTest.body.error.message.includes("REVISION_CONFLICT"),
+    false
+  );
   const failedModelProfile = await requestJson("/api/v1/model-profiles/smoke-bad-model");
   assert.equal(failedModelProfile.body.data.connectionStatus, "failed");
 

@@ -21,6 +21,23 @@ describe("data task identity menu", () => {
     expect(file).toContain("onOpenSettings");
   });
 
+  it("wires compact avatar clicks to onOpenSettings", () => {
+    const file = source();
+
+    expect(file).toContain("if (compact)");
+    expect(file).toContain("onClick={() => onOpenSettings?.()}");
+  });
+
+  it("expands the collapsed rail before opening settings from the compact avatar", () => {
+    const page = readFileSync(join(process.cwd(), "src/app/data-tasks/page.tsx"), "utf8");
+
+    expect(page).toContain("DataTaskUserBar");
+    expect(page).toContain("compact");
+    expect(page).toMatch(
+      /onOpenSettings=\{\(\) => \{\s*onToggleCollapse\(\);\s*onOpenConfigPanel\("llm"\);\s*\}\}/,
+    );
+  });
+
   it("does not expose placeholder account menu items", () => {
     const file = source();
 

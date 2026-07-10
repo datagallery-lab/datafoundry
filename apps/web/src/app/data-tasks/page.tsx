@@ -314,7 +314,6 @@ export const dynamic = "force-dynamic";
 
 const runtimeAgentId = "dataFoundry";
 const sessionAgentIdPrefix = `${runtimeAgentId}:session:`;
-const defaultDatasourceId = "api-duckdb-demo";
 const runtimeUrl = getAgentRuntimeUrl();
 
 type CopilotSessionAgentRegistry = {
@@ -1182,7 +1181,7 @@ function DataTaskWorkspace({
     workspaceConfig,
     activeSession,
     perRunSelection,
-    runDefaults?.activeDatasourceId ?? defaultDatasourceId,
+    runDefaults?.activeDatasourceId,
   );
 
   const enabledLlmOptions = useMemo(
@@ -1537,7 +1536,7 @@ function DataTaskWorkspace({
     () =>
       buildRunConfig(workspaceConfig, {
         activeLlmId,
-        defaultDatasourceId: runDefaults?.activeDatasourceId ?? defaultDatasourceId,
+        defaultDatasourceId: runDefaults?.activeDatasourceId,
         session: activeSession,
         perRunSelection,
         perRunFiles,
@@ -1546,7 +1545,6 @@ function DataTaskWorkspace({
     [
       activeLlmId,
       activeSession,
-      defaultDatasourceId,
       perRunFiles,
       perRunSelection,
       runDefaults?.activeDatasourceId,
@@ -1573,7 +1571,6 @@ function DataTaskWorkspace({
     perRunFiles,
     selectedEvidenceRefs,
     activeDatasourceId,
-    defaultDatasourceId,
     runDefaultsActiveDatasourceId: runDefaults?.activeDatasourceId,
     activeThreadId,
     pendingCheckpointResume,
@@ -1586,7 +1583,6 @@ function DataTaskWorkspace({
     perRunFiles,
     selectedEvidenceRefs,
     activeDatasourceId,
-    defaultDatasourceId,
     runDefaultsActiveDatasourceId: runDefaults?.activeDatasourceId,
     activeThreadId,
     pendingCheckpointResume,
@@ -1596,8 +1592,7 @@ function DataTaskWorkspace({
     const inputs = runConfigInputsRef.current;
     const runConfig = buildRunConfig(inputs.workspaceConfig, {
       activeLlmId: inputs.activeLlmId,
-      defaultDatasourceId:
-        inputs.runDefaultsActiveDatasourceId ?? inputs.defaultDatasourceId,
+      defaultDatasourceId: inputs.runDefaultsActiveDatasourceId,
       session: inputs.activeSession,
       perRunSelection: inputs.perRunSelection,
       perRunFiles: inputs.perRunFiles,
@@ -4585,7 +4580,14 @@ function SessionPane({
             />
           </div>
         </div>
-        <DataTaskUserBar compact quickStartGuide={quickStartGuide} />
+        <DataTaskUserBar
+          compact
+          quickStartGuide={quickStartGuide}
+          onOpenSettings={() => {
+            onToggleCollapse();
+            onOpenConfigPanel("llm");
+          }}
+        />
       </aside>
     );
   }
@@ -5149,7 +5151,7 @@ function WorkspaceConfigPanel({
                 try {
                   await onTestItem(explorerItem.id);
                 } catch (error) {
-                  setPanelError(error instanceof Error ? error.message : "Test failed");
+                  setPanelError(formatConfigTestError(error).details[0] ?? "Test failed");
                 } finally {
                   setActionBusy(false);
                 }
@@ -5348,14 +5350,24 @@ function WorkspaceConfigPanel({
                 <DatasourceConfigList
                   items={items}
                   datasourceTypes={datasourceTypes}
+                  testBusy={actionBusy}
                   onAdd={openCreate}
                   onBrowse={(itemId) => setExplorerItemId(itemId)}
                   onEdit={(itemId) => setDetailItemId(itemId)}
-                  onTest={(itemId) =>
-                    onTestItem(itemId).catch((error) => {
-                      setPanelError(error instanceof Error ? error.message : "Test failed");
-                    })
-                  }
+                  onTest={(itemId) => {
+                    if (actionBusy) return;
+                    setActionBusy(true);
+                    setPanelError(null);
+                    void onTestItem(itemId)
+                      .catch((error) => {
+                        setPanelError(
+                          formatConfigTestError(error).details[0] ?? "Test failed",
+                        );
+                      })
+                      .finally(() => {
+                        setActionBusy(false);
+                      });
+                  }}
                 />
               ) : (
                 <div className={CONFIG_ITEM_CARD_GRID_CLASS}>
@@ -5425,6 +5437,7 @@ function DatasourceConfigList({
   onBrowse,
   onEdit,
   onTest,
+  testBusy = false,
 }: {
   items: WorkspaceConfigItem[];
   datasourceTypes: DatasourceTypeDto[];
@@ -5432,6 +5445,7 @@ function DatasourceConfigList({
   onBrowse: (itemId: string) => void;
   onEdit: (itemId: string) => void;
   onTest: (itemId: string) => void;
+  testBusy?: boolean;
 }) {
   const t = useT();
   const typeLabelByName = new Map(datasourceTypes.map((type) => [type.name, type.label]));
@@ -5507,7 +5521,12 @@ function DatasourceConfigList({
                   </div>
                 </div>
                 <div className="mt-4 flex flex-wrap justify-end gap-2">
-                  <button type="button" onClick={() => onTest(item.id)} className={btnSecondaryClass}>
+                  <button
+                    type="button"
+                    disabled={testBusy}
+                    onClick={() => onTest(item.id)}
+                    className={`${btnSecondaryClass} disabled:opacity-50`}
+                  >
                     Test
                   </button>
                   <button type="button" onClick={() => onEdit(item.id)} className={btnSecondaryClass}>

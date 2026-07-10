@@ -54,6 +54,16 @@ export const llmEnvFingerprint = (env: Record<string, string | undefined>): stri
   return createHash("sha256").update(material).digest("hex").slice(0, 16);
 };
 
+/**
+ * True when server LLM env is complete enough to expose the builtin server-default profile.
+ * Requires the same fields needed for a real probe (key, base URL, and model) — not just
+ * the defaults that createModelProviderFromEnv would invent.
+ */
+export const isServerLlmEnvConfigured = (
+  env: Record<string, string | undefined> = process.env,
+): boolean =>
+  Boolean(env.LLM_API_KEY?.trim() && env.LLM_BASE_URL?.trim() && env.LLM_MODEL?.trim());
+
 export const serverDefaultConnectionStatus = (input: {
   currentStatus?: string | undefined;
   storedFingerprint?: string | undefined;

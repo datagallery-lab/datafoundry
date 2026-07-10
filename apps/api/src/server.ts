@@ -15,7 +15,7 @@ import {
 } from "@datafoundry/agent-runtime";
 import { LocalArtifactService, SessionOutputService } from "@datafoundry/artifacts";
 import { type MeResponse, createEnvConfig, createErrorResult, createSuccessResult } from "@datafoundry/contracts";
-import { LocalDataGateway, createDemoDuckDbConfig } from "@datafoundry/data-gateway";
+import { LocalDataGateway } from "@datafoundry/data-gateway";
 import { LocalFileAssetService } from "@datafoundry/files";
 import { LocalKnowledgeService } from "@datafoundry/knowledge";
 import {
@@ -40,7 +40,7 @@ import { Observable } from "rxjs";
 import { handleConfigApiRequest } from "./config-api.js";
 import { loadPasswordAuthConfig, type PasswordAuthConfig } from "./auth/config.js";
 import { AuthService, type AuthIdentity } from "./auth/service.js";
-import { serverDefaultConnectionStatus } from "./model-profile-connection-status.js";
+import { serverDefaultConnectionStatus, isServerLlmEnvConfigured } from "./model-profile-connection-status.js";
 import {
   handleAuthApiRequest,
   isUnsafeMethod,
@@ -198,7 +198,7 @@ export const createServer = async (options: CreateServerOptions = {}): Promise<S
   const runCancelRegistry = new RunCancelRegistry();
   const authService = new AuthService(metadataStore, authConfig);
   ensureDevUser(metadataStore);
-  ensureDemoDataSource(metadataStore, DEV_USER.id, "api-duckdb-demo");
+  removeLegacyBuiltinDemoDataSource(metadataStore, DEV_USER.id);
   await ensureBuiltinConfigResources(fileAssetService, metadataStore, DEV_USER.id, DEFAULT_WORKSPACE_ID);
 
   const server = createHttpServer(async (request, response) => {
@@ -231,9 +231,7 @@ export const createServer = async (options: CreateServerOptions = {}): Promise<S
       if (isPasswordAuth(authConfig) && isUnsafeMethod(request.method)) {
         authService.validateCsrf(authContext.identity, headerString(request.headers["x-csrf-token"]));
       }
-      if (authContext.user.id === DEV_USER.id) {
-        ensureDemoDataSource(metadataStore, authContext.user.id, "api-duckdb-demo");
-      }
+      removeLegacyBuiltinDemoDataSource(metadataStore, authContext.user.id);
       await ensureBuiltinConfigResources(fileAssetService, metadataStore, authContext.user.id, authContext.workspaceId);
 
       const configResponse = await handleConfigApiRequest(request, requestUrl.pathname, {
@@ -362,7 +360,6 @@ const handleCopilotKitRequest = async ({
         conversationMemoryMode,
         knowledgeService,
         memoryExtractionTimeoutMs,
-        defaultDatasourceId: "api-duckdb-demo",
         metadataStore,
         runCancelRegistry,
         taskStateRuntime,
@@ -394,7 +391,7 @@ type DataFoundryAgUiAgentInput = {
   sessionOutputService: SessionOutputService;
   conversationMemoryMode: AgentMemoryMode;
   dataGateway: LocalDataGateway;
-  defaultDatasourceId: string;
+  defaultDatasourceId?: string;
   fileAssetService: LocalFileAssetService;
   metadataStore: MetadataStore;
   knowledgeService: LocalKnowledgeService;
@@ -455,7 +452,9 @@ class DataFoundryAgUiAgent extends AbstractAgent {
             selectedSkills,
             skillSelection
           } = resolveRunConfig({
-            defaultDatasourceId: this.input.defaultDatasourceId,
+            ...(this.input.defaultDatasourceId
+              ? { defaultDatasourceId: this.input.defaultDatasourceId }
+              : {}),
             metadataStore: this.input.metadataStore,
             runInput: normalizedRunInput,
             userId: this.input.user.id,
@@ -1068,40 +1067,25 @@ const sendJson = (response: ServerResponse, statusCode: number, body: unknown): 
   response.end(JSON.stringify(body));
 };
 
-const ensureDemoDataSource = (metadataStore: MetadataStore, userId: string, datasourceId: string): void => {
-  const demoConfig = createDemoDuckDbConfig();
+const BUILTIN_DEMO_DATASOURCE_ID = "api-duckdb-demo";
 
+/** Drop previously auto-seeded builtin demo datasources; they are no longer injected by default. */
+const removeLegacyBuiltinDemoDataSource = (metadataStore: MetadataStore, userId: string): void => {
+  const current = metadataStore.dataSources.find({
+    user_id: userId,
+    datasource_id: BUILTIN_DEMO_DATASOURCE_ID
+  });
+  if (!current) return;
   try {
-    const current = metadataStore.dataSources.get({
-      user_id: userId,
-      datasource_id: datasourceId
-    });
     const config = JSON.parse(current.config_json) as Record<string, unknown>;
-    if (
-      config.builtin !== true
-      || config.defaultEnabled !== true
-      || config.mode !== "demo"
-      || config.path !== demoConfig.path
-    ) {
-      metadataStore.dataSources.create({
+    if (config.builtin === true && config.mode === "demo") {
+      metadataStore.dataSources.delete({
         user_id: userId,
-        id: current.id,
-        name: current.name,
-        type: current.type,
-        config: { ...config, ...demoConfig },
-        ...(current.description ? { description: current.description } : {}),
-        status: current.status
+        datasource_id: BUILTIN_DEMO_DATASOURCE_ID
       });
     }
   } catch {
-    metadataStore.dataSources.create({
-      user_id: userId,
-      id: datasourceId,
-      name: "API DuckDB Demo",
-      type: "duckdb",
-      config: demoConfig,
-      description: "Default demo datasource for agent runtime smoke runs."
-    });
+    // Ignore malformed legacy rows; leave non-demo datasources untouched.
   }
 };
 
@@ -1121,37 +1105,45 @@ const ensureBuiltinConfigResources = async (
     kind: "model-profile",
     id: "server-default"
   });
-  if (!currentServerDefault) {
-    metadataStore.configResources.upsert({
-      ...common,
-      kind: "model-profile",
-      id: "server-default",
-      name: "default",
-      description: "Uses the server LLM environment variables.",
-      payload: { provider: "server", modelName: "server", baseUrl: "server" },
-      builtin: true,
-      status: "untested"
-    });
-  } else {
-    const nextStatus = serverDefaultConnectionStatus({
-      currentStatus: currentServerDefault.status,
-      storedFingerprint: stringRecordValue(currentServerDefault.payload, "llmEnvFingerprint"),
-      env: process.env
-    });
-    if (nextStatus !== currentServerDefault.status) {
+  if (isServerLlmEnvConfigured(process.env)) {
+    if (!currentServerDefault) {
       metadataStore.configResources.upsert({
         ...common,
         kind: "model-profile",
         id: "server-default",
-        name: currentServerDefault.name,
-        ...(currentServerDefault.description ? { description: currentServerDefault.description } : {}),
-        payload: currentServerDefault.payload,
-        default_enabled: currentServerDefault.default_enabled,
+        name: "default",
+        description: "Uses the server LLM environment variables.",
+        payload: { provider: "server", modelName: "server", baseUrl: "server" },
         builtin: true,
-        status: nextStatus,
-        expected_revision: currentServerDefault.revision
+        status: "untested"
       });
+    } else {
+      const nextStatus = serverDefaultConnectionStatus({
+        currentStatus: currentServerDefault.status,
+        storedFingerprint: stringRecordValue(currentServerDefault.payload, "llmEnvFingerprint"),
+        env: process.env
+      });
+      if (nextStatus !== currentServerDefault.status) {
+        metadataStore.configResources.upsert({
+          ...common,
+          kind: "model-profile",
+          id: "server-default",
+          name: currentServerDefault.name,
+          ...(currentServerDefault.description ? { description: currentServerDefault.description } : {}),
+          payload: currentServerDefault.payload,
+          default_enabled: currentServerDefault.default_enabled,
+          builtin: true,
+          status: nextStatus,
+          expected_revision: currentServerDefault.revision
+        });
+      }
     }
+  } else if (currentServerDefault?.builtin) {
+    metadataStore.configResources.delete({
+      ...common,
+      kind: "model-profile",
+      id: "server-default"
+    });
   }
   for (const source of BUILTIN_SKILL_SOURCES) {
     const content = readFileSync(source.path);

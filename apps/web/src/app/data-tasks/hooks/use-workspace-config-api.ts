@@ -24,7 +24,24 @@ import {
   type WorkspaceConfigStore,
 } from "../data-task-state";
 
-const AUTO_TEST_KINDS: WorkspaceConfigKind[] = ["db", "llm", "kb", "mcp", "skill"];
+const AUTO_TEST_KINDS: WorkspaceConfigKind[] = ["db", "llm", "mcp"];
+
+function statusFromTestResult(result: Record<string, unknown>): ConfigItemStatus | null {
+  if (result.tested === false) return null;
+  const status = typeof result.status === "string" ? result.status.trim() : "";
+  if (status === "connected" || status === "ready" || status === "valid") return "connected";
+  if (status === "failed" || status === "invalid") return "failed";
+  return null;
+}
+
+function isNotFoundConfigError(err: unknown): boolean {
+  if (!(err instanceof ConfigApiError)) return false;
+  return (
+    err.code === "RESOURCE_NOT_FOUND"
+    || err.message.includes("CONFIG_RESOURCE_NOT_FOUND")
+    || /not found/iu.test(err.message)
+  );
+}
 
 export type WorkspaceApiState = {
   workspaceConfig: WorkspaceConfigStore;
@@ -144,29 +161,51 @@ export function useWorkspaceConfigApi(): WorkspaceApiState & WorkspaceApiActions
     }
   }, [applyCapabilities]);
 
+  // Quiet refresh used after connectivity tests so revision/status stay current
+  // without flipping the panel into a loading state.
+  const refreshQuiet = useCallback(async () => {
+    try {
+      const [workspace, defaults] = await Promise.all([
+        configApi.getWorkspaceConfig(),
+        configApi.getRunDefaults(),
+      ]);
+      setWorkspaceConfig(workspaceConfigDtoToStore(workspace));
+      setRunDefaults(defaults);
+    } catch {
+      // Keep the current local store if a background refresh fails.
+    }
+  }, []);
+
   useEffect(() => {
     void refresh();
   }, [refresh]);
 
-  const setItemStatus = useCallback(
-    (kind: WorkspaceConfigKind, itemId: string, status: ConfigItemStatus) => {
-      setWorkspaceConfig((current) => ({
-        ...current,
-        [kind]: current[kind].map((entry) =>
-          entry.id === itemId ? { ...entry, status } : entry,
-        ),
-      }));
-    },
-    [],
-  );
+  // Deduplicate concurrent auto/manual tests for the same item so two probes
+  // cannot race on expected_revision and surface REVISION_CONFLICT.
+  const inFlightTestsRef = useRef<Map<string, Promise<Record<string, unknown>>>>(new Map());
 
   const runItemTest = useCallback(
-    async (kind: WorkspaceConfigKind, itemId: string): Promise<void> => {
-      if (kind === "db") await configApi.testDatasource(itemId);
-      else if (kind === "kb") await configApi.testKnowledgeBase(itemId);
-      else if (kind === "mcp") await configApi.testMcpServer(itemId);
-      else if (kind === "llm") await configApi.testModelProfile(itemId);
-      else await configApi.testSkill(itemId);
+    async (kind: WorkspaceConfigKind, itemId: string): Promise<Record<string, unknown>> => {
+      const key = `${kind}:${itemId}`;
+      const existing = inFlightTestsRef.current.get(key);
+      if (existing) return existing;
+
+      const pending = (async (): Promise<Record<string, unknown>> => {
+        if (kind === "db") return configApi.testDatasource(itemId);
+        if (kind === "kb") return configApi.testKnowledgeBase(itemId);
+        if (kind === "mcp") return configApi.testMcpServer(itemId);
+        if (kind === "llm") return configApi.testModelProfile(itemId);
+        return configApi.testSkill(itemId);
+      })();
+
+      inFlightTestsRef.current.set(key, pending);
+      try {
+        return await pending;
+      } finally {
+        if (inFlightTestsRef.current.get(key) === pending) {
+          inFlightTestsRef.current.delete(key);
+        }
+      }
     },
     [],
   );
@@ -197,15 +236,41 @@ export function useWorkspaceConfigApi(): WorkspaceApiState & WorkspaceApiActions
     void (async () => {
       for (const entry of pending) {
         try {
-          await runItemTest(entry.kind, entry.id);
-          setItemStatus(entry.kind, entry.id, "connected");
-        } catch {
-          setItemStatus(entry.kind, entry.id, "failed");
+          const result = await runItemTest(entry.kind, entry.id);
+          const nextStatus = statusFromTestResult(result);
+          if (!nextStatus) continue;
+          setWorkspaceConfig((current) => {
+            if (!current[entry.kind].some((item) => item.id === entry.id)) {
+              return current;
+            }
+            return {
+              ...current,
+              [entry.kind]: current[entry.kind].map((item) =>
+                item.id === entry.id ? { ...item, status: nextStatus } : item,
+              ),
+            };
+          });
+        } catch (err) {
+          if (isNotFoundConfigError(err)) {
+            continue;
+          }
+          setWorkspaceConfig((current) => {
+            if (!current[entry.kind].some((item) => item.id === entry.id)) {
+              return current;
+            }
+            return {
+              ...current,
+              [entry.kind]: current[entry.kind].map((item) =>
+                item.id === entry.id ? { ...item, status: "failed" as ConfigItemStatus } : item,
+              ),
+            };
+          });
         }
       }
+      await refreshQuiet();
       autoTestingRef.current = false;
     })();
-  }, [loading, workspaceConfig, runItemTest, setItemStatus]);
+  }, [loading, workspaceConfig, runItemTest, refreshQuiet]);
 
   const replaceItemInStore = useCallback(
     (kind: WorkspaceConfigKind, item: WorkspaceConfigItem) => {
@@ -222,6 +287,11 @@ export function useWorkspaceConfigApi(): WorkspaceApiState & WorkspaceApiActions
       if (err.code === "SECRET_MASTER_KEY_REQUIRED") {
         return new Error(
           "SECRET_MASTER_KEY is not configured on the server, so API keys cannot be saved. Set it in .env and restart the API.",
+        );
+      }
+      if (err.code === "REVISION_CONFLICT" || err.message.startsWith("REVISION_CONFLICT:")) {
+        return new Error(
+          "This configuration was updated elsewhere (for example by a connection test). Refresh and try again.",
         );
       }
       if (
@@ -367,33 +437,65 @@ export function useWorkspaceConfigApi(): WorkspaceApiState & WorkspaceApiActions
 
   const deleteItem = useCallback(
     async (kind: WorkspaceConfigKind, itemId: string): Promise<void> => {
-      if (kind === "db") await configApi.deleteDatasource(itemId);
-      else if (kind === "kb") await configApi.deleteKnowledgeBase(itemId);
-      else if (kind === "mcp") await configApi.deleteMcpServer(itemId);
-      else if (kind === "llm") await configApi.deleteModelProfile(itemId);
-      else if (kind === "skill") await configApi.deleteSkill(itemId);
+      try {
+        if (kind === "db") await configApi.deleteDatasource(itemId);
+        else if (kind === "kb") await configApi.deleteKnowledgeBase(itemId);
+        else if (kind === "mcp") await configApi.deleteMcpServer(itemId);
+        else if (kind === "llm") await configApi.deleteModelProfile(itemId);
+        else if (kind === "skill") await configApi.deleteSkill(itemId);
 
-      setWorkspaceConfig((current) => ({
-        ...current,
-        [kind]: current[kind].filter((item) => item.id !== itemId),
-      }));
+        setWorkspaceConfig((current) => ({
+          ...current,
+          [kind]: current[kind].filter((item) => item.id !== itemId),
+        }));
+      } catch (err) {
+        if (err instanceof ConfigApiError && err.code === "REVISION_CONFLICT") {
+          await refreshQuiet();
+        }
+        throw formatConfigActionError(err);
+      }
     },
-    [],
+    [formatConfigActionError, refreshQuiet],
   );
 
   const testItem = useCallback(
     async (kind: WorkspaceConfigKind, itemId: string): Promise<Record<string, unknown>> => {
-      let result: Record<string, unknown>;
-      if (kind === "db") result = await configApi.testDatasource(itemId);
-      else if (kind === "kb") result = await configApi.testKnowledgeBase(itemId);
-      else if (kind === "mcp") result = await configApi.testMcpServer(itemId);
-      else if (kind === "llm") result = await configApi.testModelProfile(itemId);
-      else result = await configApi.testSkill(itemId);
-
-      await refresh();
-      return result;
+      try {
+        const result = await runItemTest(kind, itemId);
+        await refreshQuiet();
+        return result;
+      } catch (err) {
+        await refreshQuiet();
+        if (isNotFoundConfigError(err)) {
+          throw new Error(
+            "This configuration was deleted while testing. The list has been refreshed.",
+          );
+        }
+        if (
+          err instanceof ConfigApiError
+          && (err.code === "REVISION_CONFLICT" || err.message.includes("REVISION_CONFLICT"))
+        ) {
+          // One automatic retry after refresh — common when auto-test and save race.
+          try {
+            const result = await runItemTest(kind, itemId);
+            await refreshQuiet();
+            return result;
+          } catch (retryErr) {
+            if (
+              retryErr instanceof ConfigApiError
+              && (retryErr.code === "REVISION_CONFLICT" || retryErr.message.includes("REVISION_CONFLICT"))
+            ) {
+              throw new Error(
+                "Configuration was updated while testing. Refresh and try again.",
+              );
+            }
+            throw retryErr;
+          }
+        }
+        throw err;
+      }
     },
-    [refresh],
+    [refreshQuiet, runItemTest],
   );
 
   const introspectDatasource = useCallback(async (itemId: string): Promise<JobDto> => {

@@ -1161,9 +1161,12 @@ export function getEnabledLlmItems(
   return workspaceConfig.llm;
 }
 
-export function loadActiveLlmId(workspaceConfig: WorkspaceConfigStore, scopeKey?: string | null): string {
+export function loadActiveLlmId(
+  workspaceConfig: WorkspaceConfigStore,
+  scopeKey?: string | null,
+): string | null {
   const enabled = getEnabledLlmItems(workspaceConfig);
-  const fallback = enabled[0]?.id ?? "server-default";
+  const fallback = enabled[0]?.id ?? null;
   if (typeof window === "undefined") return fallback;
   try {
     const raw = window.localStorage.getItem(
@@ -1188,16 +1191,16 @@ export function persistActiveLlmId(llmId: string, scopeKey?: string | null): voi
   }
 }
 
-/** Keeps a valid dialog selection; otherwise falls back to server/local default. */
+/** Keeps a valid dialog selection; otherwise falls back to an available profile. */
 export function resolveActiveLlmProfileId(
   enabledProfiles: WorkspaceConfigItem[],
   activeLlmId: string | null,
-  fallback: string,
-): string {
+  fallback: string | null,
+): string | null {
   const enabledIds = new Set(enabledProfiles.map((profile) => profile.id));
   if (activeLlmId && enabledIds.has(activeLlmId)) return activeLlmId;
-  if (enabledIds.has(fallback)) return fallback;
-  return enabledProfiles[0]?.id ?? fallback;
+  if (fallback && enabledIds.has(fallback)) return fallback;
+  return enabledProfiles[0]?.id ?? null;
 }
 
 /** MCP transport types aligned with common MCP client configs. */
@@ -2020,47 +2023,14 @@ export type WorkspaceConfigStore = Record<
   WorkspaceConfigItem[]
 >;
 
+/** Empty local shell until workspace config is loaded from the API. */
 export function defaultWorkspaceConfig(): WorkspaceConfigStore {
   return {
-    db: [
-      {
-        id: "api-duckdb-demo",
-        name: "api-duckdb-demo",
-        description: "DuckDB demo data source",
-        enabled: true,
-        builtin: true,
-        settings: {
-          datasourceId: "api-duckdb-demo",
-          type: "duckdb",
-          mode: "readonly",
-        },
-      },
-    ],
+    db: [],
     kb: [],
     mcp: [],
-    llm: [
-      {
-        id: "server-default",
-        name: "Server default",
-        description: "Uses LLM_PROVIDER / LLM_BASE_URL / LLM_MODEL from the dataFoundry server .env",
-        enabled: true,
-        builtin: true,
-        settings: {
-          provider: "Server (LLM_PROVIDER)",
-          baseUrl: "Server (LLM_BASE_URL)",
-          apiKey: "",
-          modelName: "Server (LLM_MODEL)",
-        },
-      },
-    ],
-    skill: DATA_SKILLS.map((skill) => ({
-      id: skill.id,
-      name: skill.name,
-      description: skill.description,
-      enabled: true,
-      builtin: true,
-      settings: builtinSkillSettings(skill.id),
-    })),
+    llm: [],
+    skill: [],
   };
 }
 
@@ -2542,7 +2512,7 @@ export type RunConfigPayload = {
 
 export interface BuildRunConfigOptions {
   activeLlmId: string | null;
-  defaultDatasourceId: string;
+  defaultDatasourceId?: string;
   session?: ChatSession | null;
   perRunSelection?: PerRunSelection;
   perRunFiles?: PerRunFileSelection;
@@ -2591,7 +2561,7 @@ export function buildRunConfig(
 
   const activeDatasourceId = mentioned.db[0]
     ?? (enabledDb.length > 0
-      ? (enabledDbSet.has(options.defaultDatasourceId)
+      ? (options.defaultDatasourceId && enabledDbSet.has(options.defaultDatasourceId)
         ? options.defaultDatasourceId
         : enabledDb[0])
       : undefined);
@@ -2687,14 +2657,14 @@ export function resolveActiveDatasourceId(
   store: WorkspaceConfigStore,
   session: ChatSession | null | undefined,
   selection: PerRunSelection,
-  fallback: string,
+  fallback?: string,
 ): string | undefined {
   const enabled = sessionRunnableDatasourceIds(store, session);
   const enabledSet = new Set(enabled);
   const mentioned = selection.db.find((id) => enabledSet.has(id));
   if (mentioned) return mentioned;
   if (enabled.length === 0) return undefined;
-  if (enabledSet.has(fallback)) return fallback;
+  if (fallback && enabledSet.has(fallback)) return fallback;
   return enabled[0];
 }
 

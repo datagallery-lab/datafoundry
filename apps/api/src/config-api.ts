@@ -60,6 +60,11 @@ import {
   modelProfileConnectivityPayloadChanged,
   resolveModelProfileSaveStatus
 } from "./model-profile-connection-status.js";
+import {
+  isRevisionConflictError,
+  modelProfileTestFailureMessage,
+  modelProfileTestSuccessReason
+} from "./model-profile-test.js";
 import { handleCapabilitiesRequest } from "./routes/capabilities.js";
 import type { ConfigApiContext, ConfigApiResponse } from "./routes/types.js";
 import {
@@ -308,8 +313,6 @@ const handleChatUpload = async (
       workspace_id: context.workspaceId,
       session_id: sessionId,
       run_id: "chat-upload",
-      selected_datasource_id: "api-duckdb-demo",
-      enabled_datasource_ids: ["api-duckdb-demo"],
       user_input: "chat upload",
       chat_mode: "copilotkit",
       model_name: "chat-upload"
@@ -1410,75 +1413,93 @@ const handleGenericResourceRequest = async (
       kind
     });
     if (kind === "mcp-server") {
-      const tools = await listMcpTools(resource, context);
-      const updated = context.metadataStore.configResources.upsert({
-        id,
-        workspace_id: context.workspaceId,
-        user_id: context.userId,
-        kind,
-        name: resource.name,
-        ...(resource.description ? { description: resource.description } : {}),
-        payload: { ...resource.payload, toolManifest: tools },
-        ...(resource.secret_ref ? { secret_ref: resource.secret_ref } : {}),
-        default_enabled: resource.default_enabled,
-        builtin: resource.builtin,
+      let tools: Array<Record<string, unknown>>;
+      try {
+        tools = await listMcpTools(resource, context);
+      } catch (error) {
+        // Persist failed status best-effort; never let a revision race mask the probe reason.
+        try {
+          persistResourceTestStatus({
+            context,
+            resource,
+            status: "failed"
+          });
+        } catch (persistError) {
+          if (!isRevisionConflictError(persistError)) {
+            throw persistError;
+          }
+        }
+        throw new Error(mcpTestFailureMessage(error));
+      }
+      const updated = persistResourceTestStatus({
+        context,
+        resource,
         status: "connected",
-        expected_revision: resource.revision
+        payload: { ...resource.payload, toolManifest: tools }
       });
-      return ok({ id, latencyMs: 0, status: "connected", toolCount: tools.length, revision: updated.revision });
+      return ok({
+        id,
+        latencyMs: Date.now() - startedAt,
+        status: "connected",
+        toolCount: tools.length,
+        revision: updated.revision
+      });
     }
     if (kind === "model-profile") {
+      let probe: { model: string; text: string };
       try {
         const provider = resolveProfileProvider(resource, context);
-        const probe = await probeModelProvider(provider, numberValue(resource.payload.timeoutMs) ?? 30000);
-        const payload: Record<string, unknown> = {
-          ...resource.payload,
-          capabilities: { reasoning: "unknown", toolCall: "untested" }
-        };
-        if (resource.id === "server-default") {
-          payload.llmEnvFingerprint = llmEnvFingerprint(process.env);
-        }
-        const updated = context.metadataStore.configResources.upsert({
-          id,
-          workspace_id: context.workspaceId,
-          user_id: context.userId,
-          kind,
-          name: resource.name,
-          ...(resource.description ? { description: resource.description } : {}),
-          payload,
-          ...(resource.secret_ref ? { secret_ref: resource.secret_ref } : {}),
-          default_enabled: resource.default_enabled,
-          builtin: resource.builtin,
-          status: "connected",
-          expected_revision: resource.revision
-        });
-        return ok({
-          id,
-          latencyMs: Date.now() - startedAt,
-          model: probe.model,
-          response: probe.text,
-          status: "connected",
-          revision: updated.revision
-        });
+        probe = await probeModelProvider(provider, numberValue(resource.payload.timeoutMs) ?? 30000);
       } catch (error) {
-        context.metadataStore.configResources.upsert({
-          id,
-          workspace_id: context.workspaceId,
-          user_id: context.userId,
-          kind,
-          name: resource.name,
-          ...(resource.description ? { description: resource.description } : {}),
-          payload: resource.payload,
-          ...(resource.secret_ref ? { secret_ref: resource.secret_ref } : {}),
-          default_enabled: resource.default_enabled,
-          builtin: resource.builtin,
-          status: "failed",
-          expected_revision: resource.revision
-        });
-        throw error;
+        // Persist failed status best-effort; never let a revision race mask the probe reason.
+        try {
+          persistResourceTestStatus({
+            context,
+            resource,
+            status: "failed"
+          });
+        } catch (persistError) {
+          if (!isRevisionConflictError(persistError)) {
+            throw persistError;
+          }
+        }
+        throw new Error(modelProfileTestFailureMessage(error));
       }
+      const payload: Record<string, unknown> = {
+        ...resource.payload,
+        capabilities: { reasoning: "unknown", toolCall: "untested" }
+      };
+      if (resource.id === "server-default") {
+        payload.llmEnvFingerprint = llmEnvFingerprint(process.env);
+      }
+      const updated = persistResourceTestStatus({
+        context,
+        resource,
+        status: "connected",
+        payload
+      });
+      const reason = modelProfileTestSuccessReason({
+        model: probe.model,
+        response: probe.text
+      });
+      return ok({
+        id,
+        latencyMs: Date.now() - startedAt,
+        model: probe.model,
+        response: probe.text,
+        reason,
+        status: "connected",
+        revision: updated.revision
+      });
     }
-    return ok({ id, status: "connected", validated: true, revision: resource.revision });
+    // kb / skill have no connectivity probe — keep stored status and avoid fake "connected".
+    return ok({
+      id,
+      status: resource.status || "untested",
+      tested: false,
+      reason: "Connectivity probe is not available for this resource type.",
+      revision: resource.revision
+    });
   }
   if (action === "tools" && request.method === "GET" && kind === "mcp-server") {
     const resource = context.metadataStore.configResources.get({
@@ -3655,7 +3676,7 @@ const handleSkillSelectionPreview = async (
     } as never,
     context.metadataStore,
     context.userId,
-    "api-duckdb-demo",
+    undefined,
     context.workspaceId
   );
   const selection = selectSkillsForRun({
@@ -3703,6 +3724,13 @@ const errorResponse = (error: unknown): ConfigApiResponse => {
   }
   if (message.startsWith("DATASOURCE_TEST_FAILED")) {
     return fail(422, "DATASOURCE_TEST_FAILED", message);
+  }
+  if (
+    message.startsWith("MCP_TEST_FAILED")
+    || message.startsWith("MCP_SERVER_")
+    || message.startsWith("MCP_STDIO_")
+  ) {
+    return fail(422, "BAD_REQUEST", message);
   }
   // Preview-only table/chart artifacts have no file_asset_ref_id and cannot be promoted.
   if (message.startsWith("ARTIFACT_PROMOTE_NO_FILE")) {
@@ -4065,6 +4093,82 @@ const splitCommandLine = (value: string): string[] => {
 };
 
 const sanitizeMcpName = (value: string): string => value.replace(/[^a-zA-Z0-9_-]/gu, "_");
+
+const mcpTestFailureMessage = (error: unknown): string => {
+  const message = error instanceof Error ? error.message : String(error);
+  const trimmed = message.trim() || "MCP server probe failed.";
+  if (
+    trimmed.startsWith("MCP_TEST_FAILED:")
+    || trimmed.startsWith("MCP_SERVER_")
+    || trimmed.startsWith("MCP_STDIO_")
+  ) {
+    return trimmed;
+  }
+  return `MCP_TEST_FAILED:${trimmed}`;
+};
+
+/**
+ * Persist config-resource test status; retry on revision conflict.
+ * Success writes must not surface REVISION_CONFLICT after a completed probe —
+ * concurrent saves can bump revision while the probe runs; keep merging onto
+ * the latest row. If retries still conflict, force-write without expected_revision.
+ */
+const persistResourceTestStatus = (input: {
+  context: Required<ConfigApiContext>;
+  resource: ConfigResourceRecord;
+  status: "connected" | "failed";
+  payload?: Record<string, unknown>;
+}): ConfigResourceRecord => {
+  const write = (
+    current: ConfigResourceRecord,
+    options?: { force?: boolean },
+  ): ConfigResourceRecord =>
+    input.context.metadataStore.configResources.upsert({
+      id: current.id,
+      workspace_id: input.context.workspaceId,
+      user_id: input.context.userId,
+      kind: current.kind,
+      name: current.name,
+      ...(current.description ? { description: current.description } : {}),
+      payload: input.payload ?? current.payload,
+      ...(current.secret_ref ? { secret_ref: current.secret_ref } : {}),
+      default_enabled: current.default_enabled,
+      builtin: current.builtin,
+      status: input.status,
+      ...(options?.force ? {} : { expected_revision: current.revision })
+    });
+
+  const readLatest = (): ConfigResourceRecord =>
+    input.context.metadataStore.configResources.get({
+      id: input.resource.id,
+      workspace_id: input.context.workspaceId,
+      user_id: input.context.userId,
+      kind: input.resource.kind
+    });
+
+  const maxAttempts = 5;
+  let current = input.resource;
+  let lastError: unknown;
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    try {
+      return write(current);
+    } catch (error) {
+      lastError = error;
+      if (!isRevisionConflictError(error)) {
+        throw error;
+      }
+      current = readLatest();
+      if (current.status === input.status && input.status === "connected") {
+        return current;
+      }
+    }
+  }
+  if (input.status === "connected") {
+    // Probe already succeeded — force persist so the UI never sees REVISION_CONFLICT.
+    return write(readLatest(), { force: true });
+  }
+  throw lastError instanceof Error ? lastError : new Error(String(lastError));
+};
 
 const resolveProfileProvider = (
   resource: ConfigResourceRecord,
