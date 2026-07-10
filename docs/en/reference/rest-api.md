@@ -54,7 +54,7 @@ DATAFOUNDRY_AUTH_MODE=password
 X-CSRF-Token: <token_from_df_csrf_cookie>
 ```
 
-Use `DATAFOUNDRY_AUTH_MODE=dev` for local dev-token auth. In production, password mode is the default unless overridden.
+Use `DATAFOUNDRY_AUTH_MODE=dev` only for contributor hot-reload. Formal test and real production default to `password` unless overridden.
 
 ## Identity endpoints
 
@@ -86,12 +86,14 @@ These endpoints are enabled when password auth mode is active:
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| GET | `/healthz` | Check whether the backend is running. |
+| GET | `/healthz` | Process liveness. |
+| GET | `/ready` | Readiness: Mastra / builtins finished; response includes `startup_ms` and `phases`. |
 | GET | `/api/v1/capabilities` | Read backend capability switches. |
 | GET | `/api/v1/me` | Read current identity. |
 
 ```bash
 curl http://127.0.0.1:8787/healthz
+curl http://127.0.0.1:8787/ready
 curl http://127.0.0.1:8787/api/v1/capabilities
 ```
 

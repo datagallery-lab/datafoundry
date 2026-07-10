@@ -103,13 +103,33 @@ Knowledge bases are managed by backend services for documents, chunking, and ret
 
 Artifacts are managed by the Artifact service—common types include tables, charts, SQL, reports, and files. Web suits preview, download, and export; TUI suits command-line viewing.
 
-## Local development vs production
+## Formal deploy boundary
 
-Current docs cover the local-first version and the built-in password-auth path. Production deployment typically also needs:
+The default path is formal mode (`password` + `build` / `start`); do not run `npm run dev`. Formal test and real production share the same start commands:
+
+```bash
+npm run build && npm run build:web
+npm run start:api
+npm run start:web
+```
+
+| Environment | Email | Public URL |
+| --- | --- | --- |
+| Formal test | `AUTH_EMAIL_DELIVERY=test` | Local / private |
+| Real production | `AUTH_EMAIL_DELIVERY=smtp` | Public HTTPS + reverse proxy |
+
+The browser reaches REST and CopilotKit SSE through the same-origin Next BFF. Probes:
+
+- `GET /healthz` — process liveness
+- `GET /ready` — Mastra and builtin resources ready (response includes `startup_ms` / `phases`)
+
+Reverse-proxy sample: [`deploy/nginx.datafoundry.conf.example`](../../../deploy/nginx.datafoundry.conf.example) — compress static assets; leave the SSE path uncompressed and unbuffered. Contributor hot-reload: [Quick start appendix](../quick-start.md).
+
+Real production typically also needs:
 
 - Secret management such as KMS or Vault.
 - Deployment, monitoring, and audit policies.
 - Real-environment E2E validation against external databases.
 - RBAC, organization policies, and multi-workspace UI if your deployment needs more than one personal workspace.
 
-These do not block the local demo path but should be evaluated before external delivery.
+These do not block formal-test acceptance but should be evaluated before external delivery.

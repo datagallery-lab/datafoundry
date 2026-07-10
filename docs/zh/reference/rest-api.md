@@ -54,7 +54,7 @@ DATAFOUNDRY_AUTH_MODE=password
 X-CSRF-Token: <token_from_df_csrf_cookie>
 ```
 
-本地开发 token 模式使用 `DATAFOUNDRY_AUTH_MODE=dev`。生产环境默认使用 password 模式，除非显式覆盖。
+本地开发 token 模式使用 `DATAFOUNDRY_AUTH_MODE=dev`（仅贡献者热更新）。正式测试与真实生产默认使用 `password`，除非显式覆盖。
 
 ## 身份接口
 
@@ -86,12 +86,14 @@ X-CSRF-Token: <token_from_df_csrf_cookie>
 
 | Method | Path | 用途 |
 | --- | --- | --- |
-| GET | `/healthz` | 检查后端是否运行。 |
+| GET | `/healthz` | 进程存活（liveness）。 |
+| GET | `/ready` | 就绪探针：Mastra / builtin 初始化完成；响应含 `startup_ms` 与 `phases`。 |
 | GET | `/api/v1/capabilities` | 读取后端能力开关。 |
 | GET | `/api/v1/me` | 读取当前身份。 |
 
 ```bash
 curl http://127.0.0.1:8787/healthz
+curl http://127.0.0.1:8787/ready
 curl http://127.0.0.1:8787/api/v1/capabilities
 ```
 

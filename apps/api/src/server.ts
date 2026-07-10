@@ -39,6 +39,7 @@ import { Observable } from "rxjs";
 
 import { handleConfigApiRequest } from "./config-api.js";
 import { createAsyncMemoByKey, createStartupTimer } from "./async-memo.js";
+import { ensureBuiltinDtcGrowthDatasource } from "./builtin-dtc-growth-datasource.js";
 import { loadPasswordAuthConfig, type PasswordAuthConfig } from "./auth/config.js";
 import { AuthService, type AuthIdentity } from "./auth/service.js";
 import { serverDefaultConnectionStatus, isServerLlmEnvConfigured } from "./model-profile-connection-status.js";
@@ -1201,6 +1202,12 @@ const ensureBuiltinConfigResources = async (
       id: "server-default"
     });
   }
+  ensureBuiltinDtcGrowthDatasource({
+    metadataStore,
+    userId,
+    workspaceId
+  });
+
   for (const source of BUILTIN_SKILL_SOURCES) {
     const content = readFileSync(source.path);
     const contentSha256 = createHash("sha256").update(content).digest("hex");
