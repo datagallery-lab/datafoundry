@@ -36,7 +36,7 @@ API_PROXY_TARGET=http://127.0.0.1:8787
 - 存活：`GET /healthz`
 - 就绪：`GET /ready`（含 `startup_ms` / `phases`）
 
-反代样例（真实生产）：[`deploy/nginx.datafoundry.conf.example`](../../../deploy/nginx.datafoundry.conf.example)。
+反代样例（真实生产）：[`deploy/nginx.datafoundry.conf.example`](https://github.com/datagallery-lab/datafoundry/blob/main/deploy/nginx.datafoundry.conf.example)。
 
 贡献者本地热更新（非正式态，勿与 `start:*` 混开）见 [快速开始附录](../quick-start.md)。
 

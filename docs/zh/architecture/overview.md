@@ -127,7 +127,7 @@ npm run start:web
 - `GET /healthz`：进程存活
 - `GET /ready`：Mastra 与 builtin 资源就绪（响应含 `startup_ms` / `phases`）
 
-反代样例见 [`deploy/nginx.datafoundry.conf.example`](../../../deploy/nginx.datafoundry.conf.example)：静态资源压缩，SSE 路径不压缩、不缓冲。贡献者热更新见 [快速开始附录](../quick-start.md)。
+反代样例见 [`deploy/nginx.datafoundry.conf.example`](https://github.com/datagallery-lab/datafoundry/blob/main/deploy/nginx.datafoundry.conf.example)：静态资源压缩，SSE 路径不压缩、不缓冲。贡献者热更新见 [快速开始附录](../quick-start.md)。
 
 真实生产通常还需要补充：
 

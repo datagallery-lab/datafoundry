@@ -36,7 +36,7 @@ Probes:
 - Liveness: `GET /healthz`
 - Readiness: `GET /ready` (includes `startup_ms` / `phases`)
 
-Reverse-proxy sample (real production): [`deploy/nginx.datafoundry.conf.example`](../../../deploy/nginx.datafoundry.conf.example).
+Reverse-proxy sample (real production): [`deploy/nginx.datafoundry.conf.example`](https://github.com/datagallery-lab/datafoundry/blob/main/deploy/nginx.datafoundry.conf.example).
 
 Contributor hot-reload (not formal; do not mix with `start:*`): [Quick start appendix](../quick-start.md).
 

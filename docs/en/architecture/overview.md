@@ -123,7 +123,7 @@ The browser reaches REST and CopilotKit SSE through the same-origin Next BFF. Pr
 - `GET /healthz` — process liveness
 - `GET /ready` — Mastra and builtin resources ready (response includes `startup_ms` / `phases`)
 
-Reverse-proxy sample: [`deploy/nginx.datafoundry.conf.example`](../../../deploy/nginx.datafoundry.conf.example) — compress static assets; leave the SSE path uncompressed and unbuffered. Contributor hot-reload: [Quick start appendix](../quick-start.md).
+Reverse-proxy sample: [`deploy/nginx.datafoundry.conf.example`](https://github.com/datagallery-lab/datafoundry/blob/main/deploy/nginx.datafoundry.conf.example) — compress static assets; leave the SSE path uncompressed and unbuffered. Contributor hot-reload: [Quick start appendix](../quick-start.md).
 
 Real production typically also needs:
 
