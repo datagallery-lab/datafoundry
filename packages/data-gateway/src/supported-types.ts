@@ -5,10 +5,9 @@ export const SUPPORTED_DATA_SOURCE_TYPES: SupportedDataSourceType[] = [
     name: "duckdb",
     enabled: true,
     label: "DuckDB",
-    description: "Local analytical datasource. Supports the built-in demo mode and real DuckDB database files.",
+    description: "Local DuckDB database file.",
     parameters: [
-      { name: "mode", label: "Mode", type: "select", required: false, options: ["demo", "file"] },
-      { name: "path", label: "Database Path", type: "file", required: false }
+      { name: "path", label: "Database Path", type: "file", required: true }
     ]
   },
   {

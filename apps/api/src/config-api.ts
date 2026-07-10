@@ -58,6 +58,7 @@ import { resolveEffectiveRunConfig } from "./run-input.js";
 import {
   llmEnvFingerprint,
   modelProfileConnectivityPayloadChanged,
+  preferConnectedResourceId,
   resolveModelProfileSaveStatus
 } from "./model-profile-connection-status.js";
 import {
@@ -3429,13 +3430,14 @@ const buildRunDefaults = (context: Required<ConfigApiContext>): Record<string, u
       user_id: context.userId,
       kind
     }).filter((item) => item.default_enabled);
+  const modelProfiles = enabled("model-profile");
   return {
     enabledDatasourceIds: datasourceIds,
     enabledKnowledgeIds: enabled("knowledge-base").map((item) => item.id),
     enabledMcpServerIds: enabled("mcp-server").map((item) => item.id),
     enabledSkillIds: enabled("skill").map((item) => item.id),
     ...(datasourceIds[0] ? { activeDatasourceId: datasourceIds[0] } : {}),
-    activeLlmProfileId: enabled("model-profile")[0]?.id,
+    activeLlmProfileId: preferConnectedResourceId(modelProfiles),
     activeSkillId: enabled("skill")[0]?.id
   };
 };

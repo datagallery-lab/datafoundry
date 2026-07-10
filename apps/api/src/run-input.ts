@@ -3,6 +3,8 @@ import type { EvidenceKind, EvidenceRef } from "@datafoundry/contracts";
 import type { ConfigResourceKind, MetadataStore } from "@datafoundry/metadata";
 import type { SkillMode, SkillPolicyConfig } from "@datafoundry/skills";
 
+import { preferConnectedResourceId } from "./model-profile-connection-status.js";
+
 export type RunConfigDefaults = {
   activeDatasourceId?: string;
   activeLlmProfileId?: string;
@@ -180,20 +182,21 @@ const loadWorkspaceRunDefaults = (
       return item.status === "ready" && config.defaultEnabled !== false;
     })
     .map((item) => item.id);
-  const enabled = (kind: ConfigResourceKind): string[] => metadataStore.configResources.list({
+  const enabled = (kind: ConfigResourceKind) => metadataStore.configResources.list({
     workspace_id: workspaceId,
     user_id: userId,
     kind
-  }).filter((item) => item.default_enabled && item.status !== "disabled").map((item) => item.id);
-  const modelProfileIds = enabled("model-profile");
-  const skillIds = enabled("skill");
+  }).filter((item) => item.default_enabled && item.status !== "disabled");
+  const modelProfiles = enabled("model-profile");
+  const skillIds = enabled("skill").map((item) => item.id);
+  const activeLlmProfileId = preferConnectedResourceId(modelProfiles);
   return {
     ...(datasourceIds[0] ? { activeDatasourceId: datasourceIds[0] } : {}),
-    ...(modelProfileIds[0] ? { activeLlmProfileId: modelProfileIds[0] } : {}),
+    ...(activeLlmProfileId ? { activeLlmProfileId } : {}),
     ...(skillIds[0] ? { activeSkillId: skillIds[0] } : {}),
     enabledDatasourceIds: datasourceIds,
-    enabledKnowledgeIds: enabled("knowledge-base"),
-    enabledMcpServerIds: enabled("mcp-server"),
+    enabledKnowledgeIds: enabled("knowledge-base").map((item) => item.id),
+    enabledMcpServerIds: enabled("mcp-server").map((item) => item.id),
     enabledSkillIds: skillIds
   };
 };

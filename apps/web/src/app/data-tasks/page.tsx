@@ -27,6 +27,7 @@ import {
   buildRunForwardedProps,
   buildAgentRunStatePatch,
   createChatSession,
+  createClientId,
   createWorkspaceConfigItem,
   defaultSettingsForKind,
   applyAutoTitle,
@@ -185,6 +186,8 @@ import {
   type QueuedChatPrompt,
 } from "./components/chat/queued-chat-runs";
 import { scheduleChatTextareaResize } from "./components/chat/use-chat-textarea-autoresize";
+import { invokeWithReportedError } from "./invoke-with-reported-error";
+import { formatRunErrorMessage } from "./run-error-message";
 import {
   DataTaskChatInputBindingsProvider,
   useDataTaskChatInputBindings,
@@ -336,14 +339,22 @@ function threadIdFromDataTaskSessionAgentId(agentId: unknown): string | null {
   }
 }
 
-function reportDataFoundryRunError(error: unknown, threadId?: string | null): void {
+function reportDataFoundryRunError(
+  error: unknown,
+  threadId?: string | null,
+  options?: { source?: "client" | "runtime" },
+): void {
   const message = error instanceof Error ? error.message : String(error);
   if (typeof window === "undefined") {
     return;
   }
   window.dispatchEvent(
     new CustomEvent("datafoundry-run-error", {
-      detail: { message, threadId: threadId ?? null },
+      detail: {
+        message,
+        threadId: threadId ?? null,
+        source: options?.source ?? "runtime",
+      },
     }),
   );
 }
@@ -422,6 +433,7 @@ function StableDataTaskChatInput({
   const { copilotkit } = useCopilotKit();
   const [queuedPrompts, setQueuedPrompts] = useState<QueuedChatPrompt[]>([]);
   const [draftText, setDraftText] = useState("");
+  const [submitError, setSubmitError] = useState<string | null>(null);
   const awaitingQueuedRunCompletionRef = useRef(false);
   const queuedRunSawActiveRef = useRef(false);
 
@@ -455,9 +467,9 @@ function StableDataTaskChatInput({
       maxSize: CHAT_ATTACHMENT_MAX_BYTES,
       onUpload: onUpload as never,
       onUploadFailed: ({ message }) => {
-        if (typeof window !== "undefined") {
-          console.warn(`[attachments] ${message}`);
-        }
+        const error = new Error(message);
+        setSubmitError(formatRunErrorMessage(message));
+        reportDataFoundryRunError(error, bindings.activeThreadId, { source: "client" });
       },
     },
   });
@@ -465,7 +477,9 @@ function StableDataTaskChatInput({
   const reportRunError = useCallback((error: unknown) => {
     awaitingQueuedRunCompletionRef.current = false;
     queuedRunSawActiveRef.current = false;
-    reportDataFoundryRunError(error, bindings.activeThreadId);
+    const message = error instanceof Error ? error.message : String(error);
+    setSubmitError(formatRunErrorMessage(message));
+    reportDataFoundryRunError(error, bindings.activeThreadId, { source: "client" });
   }, [bindings.activeThreadId]);
 
   const dispatchRun = useCallback(
@@ -478,16 +492,18 @@ function StableDataTaskChatInput({
       attachments: ReturnType<typeof attachmentsApi.consumeAttachments>;
       forwardedProps: ReturnType<typeof bindings.getRunForwardedProps>;
     }) => {
-      if (!agent) return;
-      bindings.onUserMessageSubmitted(text);
-      agent.setState(buildAgentRunStatePatch(forwardedProps, agent.state));
-      if (attachments.length > 0) {
-        const content = buildMessageContent(text, attachments);
-        agent.addMessage({ id: crypto.randomUUID(), role: "user", content });
-      } else {
-        agent.addMessage({ id: crypto.randomUUID(), role: "user", content: text });
-      }
-      void copilotkit.runAgent({ agent, forwardedProps }).catch(reportRunError);
+      invokeWithReportedError(() => {
+        if (!agent) return;
+        bindings.onUserMessageSubmitted(text);
+        agent.setState(buildAgentRunStatePatch(forwardedProps, agent.state));
+        if (attachments.length > 0) {
+          const content = buildMessageContent(text, attachments);
+          agent.addMessage({ id: createClientId("msg"), role: "user", content });
+        } else {
+          agent.addMessage({ id: createClientId("msg"), role: "user", content: text });
+        }
+        void copilotkit.runAgent({ agent, forwardedProps }).catch(reportRunError);
+      }, reportRunError);
     },
     [agent, bindings, copilotkit, reportRunError],
   );
@@ -501,53 +517,57 @@ function StableDataTaskChatInput({
 
   const handleSubmitMessage = (value: string) => {
     setDraftText("");
-    const forwardedProps = bindings.getRunForwardedProps();
-    if (agent) {
-      const blockReason = resolveSendBlockReason(
-        bindings.workspaceConfig,
-        bindings.activeLlmId,
-        forwardedProps.datasourceId,
-      );
-      if (blockReason) {
-        reportRunError(new Error(blockReason));
-        return;
+    setSubmitError(null);
+    invokeWithReportedError(() => {
+      const forwardedProps = bindings.getRunForwardedProps();
+      if (agent) {
+        const blockReason = resolveSendBlockReason(
+          bindings.workspaceConfig,
+          bindings.activeLlmId,
+          forwardedProps.datasourceId,
+        );
+        if (blockReason) {
+          reportRunError(new Error(blockReason));
+          return;
+        }
       }
-    }
-    const ready = attachmentsApi.consumeAttachments();
-    if (agent) {
-      const submitMode = resolveQueuedSubmitMode({
-        agentIsRunning: Boolean(agent.isRunning),
-        liveRunStatus: bindings.liveRunStatus,
-      });
-      if (submitMode === "queue") {
-        setQueuedPrompts((current) => [
-          ...current,
-          createQueuedChatPrompt({
-            id: crypto.randomUUID(),
-            text: value,
-            attachments: ready,
-            forwardedProps,
-            createdAt: Date.now(),
-          }),
-        ]);
+      const ready = attachmentsApi.consumeAttachments();
+      if (agent) {
+        const submitMode = resolveQueuedSubmitMode({
+          agentIsRunning: Boolean(agent.isRunning),
+          liveRunStatus: bindings.liveRunStatus,
+        });
+        if (submitMode === "queue") {
+          setQueuedPrompts((current) => [
+            ...current,
+            createQueuedChatPrompt({
+              id: createClientId("queue"),
+              text: value,
+              attachments: ready,
+              forwardedProps,
+              createdAt: Date.now(),
+            }),
+          ]);
+        } else {
+          dispatchRun({ text: value, attachments: ready, forwardedProps });
+        }
       } else {
-        dispatchRun({ text: value, attachments: ready, forwardedProps });
+        inputProps.onSubmitMessage?.(value);
       }
-    } else {
-      inputProps.onSubmitMessage?.(value);
-    }
 
-    bindings.onClearPerRunMentions();
-    bindings.onClearPerRunFileMentions();
-    bindings.onClearEvidenceRefs();
-    requestAnimationFrame(scheduleChatTextareaResize);
+      bindings.onClearPerRunMentions();
+      bindings.onClearPerRunFileMentions();
+      bindings.onClearEvidenceRefs();
+      requestAnimationFrame(scheduleChatTextareaResize);
+    }, reportRunError);
   };
   const handleInputChange = useCallback(
     (value: string) => {
       setDraftText(value);
+      if (submitError) setSubmitError(null);
       inputProps.onChange?.(value);
     },
-    [inputProps],
+    [inputProps, submitError],
   );
   const handleStop = useMemo(
     () =>
@@ -635,6 +655,7 @@ function StableDataTaskChatInput({
       onEditQueuedPrompt={handleEditQueuedPrompt}
       onDeleteQueuedPrompt={handleDeleteQueuedPrompt}
       onSendQueuedPromptNow={handleSendQueuedPromptNow}
+      submitError={submitError}
       showDisclaimer={false}
     />
   );
@@ -2841,7 +2862,7 @@ function StepUserMessage(props: CopilotChatUserMessageProps) {
         const forwardedProps = bindings.getRunForwardedProps();
         bindings.onUserMessageSubmitted(text);
         agent.setState(buildAgentRunStatePatch(forwardedProps, agent.state));
-        agent.addMessage({ id: crypto.randomUUID(), role: "user", content: text });
+        agent.addMessage({ id: createClientId("msg"), role: "user", content: text });
         void copilotkit.runAgent({ agent, forwardedProps }).catch((error) => {
           reportDataFoundryRunError(error, chatConfig?.threadId);
         });
@@ -3667,6 +3688,7 @@ function StepSubPanel({
   onHeaderClick?: () => void;
   children: ReactNode;
 }) {
+  const t = useT();
   const styles =
     tone === "thought"
       ? {
@@ -6110,6 +6132,7 @@ function McpToolsManifest({
   tools: Array<Record<string, unknown>> | null;
   error: string | null;
 }) {
+  const t = useT();
   return (
     <div className="rounded-lg border border-slate-200 bg-white px-3 py-2.5 sm:col-span-2">
       <h5 className="text-xs font-semibold text-slate-700">Tools Manifest</h5>
@@ -6519,7 +6542,7 @@ function PendingBranchRunDispatcher({
       const forwardedProps = getRunForwardedProps();
       onUserMessageSubmitted(pending.text);
       agent.setState(buildAgentRunStatePatch(forwardedProps, agent.state));
-      agent.addMessage({ id: crypto.randomUUID(), role: "user", content: pending.text });
+      agent.addMessage({ id: createClientId("msg"), role: "user", content: pending.text });
       onDispatched();
       void copilotkit.runAgent({ agent, forwardedProps }).catch((error) => {
         reportDataFoundryRunError(error, chatConfig?.threadId);

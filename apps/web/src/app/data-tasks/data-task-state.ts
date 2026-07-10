@@ -283,11 +283,23 @@ function scopedStorageKey(
 const SCOPED_SESSIONS_STORAGE_SUFFIX = "sessions:v3";
 const SCOPED_ACTIVE_LLM_STORAGE_SUFFIX = "active-llm:v3";
 
-function newThreadId(): string {
-  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
-    return crypto.randomUUID();
+/**
+ * Client-side id generator that works outside secure contexts.
+ * `crypto.randomUUID` is unavailable (or throws) on plain HTTP hosts like LAN IPs.
+ */
+export function createClientId(prefix = "id"): string {
+  try {
+    if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+      return crypto.randomUUID();
+    }
+  } catch {
+    // Non-secure context or restricted Web Crypto.
   }
-  return `thread-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function newThreadId(): string {
+  return createClientId("thread");
 }
 
 export function createChatSession(title = "New data task"): ChatSession {
@@ -964,7 +976,7 @@ export function isFieldDisabled(
  * types shown as disabled placeholders until adapters land.
  */
 export const DB_TYPE_OPTIONS = [
-  { value: "duckdb", label: "DuckDB (built-in demo)" },
+  { value: "duckdb", label: "DuckDB (file)" },
   { value: "sqlite", label: "SQLite (file)" },
   { value: "csv", label: "CSV file" },
   { value: "xlsx", label: "Excel file" },
@@ -1166,14 +1178,18 @@ export function loadActiveLlmId(
   scopeKey?: string | null,
 ): string | null {
   const enabled = getEnabledLlmItems(workspaceConfig);
-  const fallback = enabled[0]?.id ?? null;
+  const usable = enabled.filter(isConfigItemUsable);
+  const fallback = usable[0]?.id ?? enabled[0]?.id ?? null;
   if (typeof window === "undefined") return fallback;
   try {
     const raw = window.localStorage.getItem(
       scopedStorageKey(ACTIVE_LLM_STORAGE_KEY, SCOPED_ACTIVE_LLM_STORAGE_SUFFIX, scopeKey),
     );
     if (!raw) return fallback;
-    return enabled.some((item) => item.id === raw) ? raw : fallback;
+    const stored = enabled.find((item) => item.id === raw);
+    if (!stored) return fallback;
+    if (isConfigItemUsable(stored) || usable.length === 0) return stored.id;
+    return fallback;
   } catch {
     return fallback;
   }
@@ -1191,13 +1207,22 @@ export function persistActiveLlmId(llmId: string, scopeKey?: string | null): voi
   }
 }
 
-/** Keeps a valid dialog selection; otherwise falls back to an available profile. */
+/** Keeps a valid dialog selection; otherwise falls back to an available profile.
+ * Prefer connectivity-proven (`connected`) profiles so failed defaults are not sticky.
+ */
 export function resolveActiveLlmProfileId(
   enabledProfiles: WorkspaceConfigItem[],
   activeLlmId: string | null,
   fallback: string | null,
 ): string | null {
   const enabledIds = new Set(enabledProfiles.map((profile) => profile.id));
+  const usable = enabledProfiles.filter(isConfigItemUsable);
+  const usableIds = new Set(usable.map((profile) => profile.id));
+
+  if (activeLlmId && usableIds.has(activeLlmId)) return activeLlmId;
+  if (fallback && usableIds.has(fallback)) return fallback;
+  if (usable[0]) return usable[0].id;
+
   if (activeLlmId && enabledIds.has(activeLlmId)) return activeLlmId;
   if (fallback && enabledIds.has(fallback)) return fallback;
   return enabledProfiles[0]?.id ?? null;
@@ -1329,11 +1354,12 @@ export const WORKSPACE_CONFIG_FIELDS: Record<
     {
       key: "filePath",
       label: "File path",
-      placeholder: "/data/sales.sqlite or /data/orders.csv",
-      helpText: "Local file path for SQLite / CSV / Excel. DuckDB is a built-in demo and needs no path.",
+      placeholder: "/data/sales.duckdb or /data/orders.csv",
+      helpText:
+        "Server-local path to the DuckDB / SQLite / CSV / Excel file. The API process must be able to read this path.",
       required: true,
       fullWidth: true,
-      visibleWhen: (s) => dbTypeOf(s) !== "duckdb" && !isDbServerType(s),
+      visibleWhen: (s) => !isDbServerType(s),
     },
     {
       key: "host",
@@ -2048,12 +2074,8 @@ export function createWorkspaceConfigItem(
   name: string,
   description: string,
 ): WorkspaceConfigItem {
-  const id =
-    typeof crypto !== "undefined" && "randomUUID" in crypto
-      ? crypto.randomUUID()
-      : `custom-${Date.now()}`;
   return {
-    id,
+    id: createClientId("custom"),
     name,
     description,
     enabled: true,

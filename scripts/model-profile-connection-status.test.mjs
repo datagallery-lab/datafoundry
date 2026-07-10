@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   llmEnvFingerprint,
   modelProfileConnectivityPayloadChanged,
+  preferConnectedResourceId,
   resolveModelProfileSaveStatus,
   serverDefaultConnectionStatus,
   isServerLlmEnvConfigured
@@ -121,4 +122,23 @@ test("isServerLlmEnvConfigured requires API key, base URL, and model", () => {
     false
   );
   assert.equal(isServerLlmEnvConfigured({}), false);
+});
+
+test("preferConnectedResourceId picks connected over earlier failed profiles", () => {
+  assert.equal(
+    preferConnectedResourceId([
+      { id: "glm-failed", status: "failed" },
+      { id: "deepseek-ok", status: "connected" },
+      { id: "qwen-failed", status: "failed" }
+    ]),
+    "deepseek-ok"
+  );
+  assert.equal(
+    preferConnectedResourceId([
+      { id: "glm-failed", status: "failed" },
+      { id: "qwen-untested", status: "untested" }
+    ]),
+    "glm-failed"
+  );
+  assert.equal(preferConnectedResourceId([]), undefined);
 });

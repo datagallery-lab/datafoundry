@@ -18,6 +18,15 @@ describe("formatRunErrorMessage", () => {
     expect(formatRunErrorMessage("Something broke")).toBe("Something broke");
   });
 
+  it("explains missing crypto.randomUUID on insecure HTTP", () => {
+    expect(
+      formatRunErrorMessage("crypto.randomUUID is not a function"),
+    ).toContain("secure context");
+    expect(
+      formatRunErrorMessage("Secure context required"),
+    ).toContain("HTTPS");
+  });
+
   it("falls back when message is empty", () => {
     expect(formatRunErrorMessage()).toBe("Agent run failed");
   });

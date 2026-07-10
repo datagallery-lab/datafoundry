@@ -1,5 +1,11 @@
 import { proxyToApi } from "../../../../lib/api-proxy";
 
+// AG-UI / CopilotKit is an SSE stream. These segment configs are the App Router
+// contract for a live passthrough — not optional caching knobs.
+export const dynamic = "force-dynamic";
+export const runtime = "nodejs";
+export const fetchCache = "force-no-store";
+
 type RouteContext = {
   params: Promise<{ path?: string[] }>;
 };

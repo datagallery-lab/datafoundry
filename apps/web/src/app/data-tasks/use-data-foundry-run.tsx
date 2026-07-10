@@ -31,6 +31,7 @@ import {
   type LiveRunStatus,
   type SessionUsageStats,
 } from "./live-run-state";
+import { formatRunErrorMessage } from "./run-error-message";
 import {
   isCollaborationEchoUserMessage,
   normalizeUserQuestionText,
@@ -464,13 +465,31 @@ export function LiveRunEventSubscriber({
 
   useEffect(() => {
     const onError = (event: Event) => {
-      const detail = (event as CustomEvent<{ message?: string; threadId?: string | null }>).detail;
+      const detail = (
+        event as CustomEvent<{
+          message?: string;
+          threadId?: string | null;
+          source?: "client" | "runtime";
+        }>
+      ).detail;
       if (!threadId || detail?.threadId !== threadId) {
         return;
       }
+      const isClientError = detail?.source === "client";
       setLiveRunForThread(threadId, (current) => {
-        if (shouldIgnoreIncomingRunError(current)) {
+        if (!isClientError && shouldIgnoreIncomingRunError(current)) {
           return current;
+        }
+        // After a finished run, still surface client-side send failures without
+        // rewriting the terminal status (stale AG-UI RUN_ERROR stays ignored).
+        if (
+          isClientError &&
+          (current.runStatus === "completed" || current.runStatus === "canceled")
+        ) {
+          return {
+            ...current,
+            errorMessage: formatRunErrorMessage(detail?.message),
+          };
         }
         const next = reduceLiveRunEvent(current, {
           type: "RUN_ERROR",

@@ -20,5 +20,12 @@ export function formatRunErrorMessage(message?: string): string {
     const profile = providerConfigMatch[1]?.trim() || "the selected model profile";
     return `Model provider configuration is missing for "${profile}". Check the model profile API key, base URL, and model name.`;
   }
+  if (
+    /randomUUID/i.test(trimmed) ||
+    /secure context required/i.test(trimmed) ||
+    (/is not a function/i.test(trimmed) && /crypto/i.test(trimmed))
+  ) {
+    return "This page is not a secure context (plain HTTP on a non-localhost host), so the browser blocked required Web APIs. Open the app via HTTPS or localhost, then retry.";
+  }
   return trimmed;
 }

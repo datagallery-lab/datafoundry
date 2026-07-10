@@ -64,6 +64,15 @@ export const isServerLlmEnvConfigured = (
 ): boolean =>
   Boolean(env.LLM_API_KEY?.trim() && env.LLM_BASE_URL?.trim() && env.LLM_MODEL?.trim());
 
+/**
+ * Prefer a connectivity-proven profile for run defaults / active selection.
+ * Falls back to the first enabled item when none are connected (caller may still block send).
+ */
+export const preferConnectedResourceId = (
+  items: Array<{ id: string; status: string }>,
+): string | undefined =>
+  items.find((item) => item.status === "connected")?.id ?? items[0]?.id;
+
 export const serverDefaultConnectionStatus = (input: {
   currentStatus?: string | undefined;
   storedFingerprint?: string | undefined;

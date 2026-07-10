@@ -72,4 +72,66 @@ describe("active LLM selection", () => {
     expect(resolveActiveLlmProfileId([], null, "server-default")).toBeNull();
     expect(resolveActiveLlmProfileId([], "stale-id", null)).toBeNull();
   });
+
+  it("switches away from a failed active profile to a connected one", () => {
+    const profiles = [
+      {
+        id: "glm-failed",
+        name: "GLM-5.2",
+        description: "",
+        enabled: true,
+        status: "failed" as const,
+      },
+      {
+        id: "deepseek-ok",
+        name: "deepseek-v4-pro",
+        description: "",
+        enabled: true,
+        status: "connected" as const,
+      },
+    ];
+
+    expect(
+      resolveActiveLlmProfileId(profiles, "glm-failed", "glm-failed"),
+    ).toBe("deepseek-ok");
+  });
+
+  it("prefers a connected fallback over an untested first profile", () => {
+    const profiles = [
+      {
+        id: "untested",
+        name: "qwen",
+        description: "",
+        enabled: true,
+        status: "untested" as const,
+      },
+      {
+        id: "connected",
+        name: "deepseek",
+        description: "",
+        enabled: true,
+        status: "connected" as const,
+      },
+    ];
+
+    expect(resolveActiveLlmProfileId(profiles, null, "untested")).toBe(
+      "connected",
+    );
+  });
+
+  it("keeps a failed selection when no connected profile exists", () => {
+    const profiles = [
+      {
+        id: "glm-failed",
+        name: "GLM-5.2",
+        description: "",
+        enabled: true,
+        status: "failed" as const,
+      },
+    ];
+
+    expect(
+      resolveActiveLlmProfileId(profiles, "glm-failed", null),
+    ).toBe("glm-failed");
+  });
 });

@@ -64,6 +64,8 @@ type DataTaskChatInputProps = CopilotChatInputProps & {
   onEditQueuedPrompt?: (id: string, text: string) => void;
   onDeleteQueuedPrompt?: (id: string) => void;
   onSendQueuedPromptNow?: (id: string) => void;
+  /** Client-side send/upload failure shown above the composer (never silent). */
+  submitError?: string | null;
 };
 
 export function DataTaskChatInput({
@@ -93,6 +95,7 @@ export function DataTaskChatInput({
   onEditQueuedPrompt,
   onDeleteQueuedPrompt,
   onSendQueuedPromptNow,
+  submitError = null,
   textArea,
   onChange,
   ...props
@@ -157,6 +160,7 @@ export function DataTaskChatInput({
           onEditQueuedPrompt={onEditQueuedPrompt}
           onDeleteQueuedPrompt={onDeleteQueuedPrompt}
           onSendQueuedPromptNow={onSendQueuedPromptNow}
+          submitError={submitError}
         />
       )}
     </CopilotChatInput>
@@ -203,6 +207,7 @@ function DataTaskChatInputLayout({
   onEditQueuedPrompt,
   onDeleteQueuedPrompt,
   onSendQueuedPromptNow,
+  submitError = null,
 }: {
   textArea: ReactNode;
   sendButton: ReactNode;
@@ -244,6 +249,7 @@ function DataTaskChatInputLayout({
   onEditQueuedPrompt?: (id: string, text: string) => void;
   onDeleteQueuedPrompt?: (id: string) => void;
   onSendQueuedPromptNow?: (id: string) => void;
+  submitError?: string | null;
 }) {
   const t = useT();
   const { chatColumnWidth, draftPromptRequest, onDraftPromptConsumed } =
@@ -363,6 +369,15 @@ function DataTaskChatInputLayout({
           onDelete={onDeleteQueuedPrompt}
           onSendNow={onSendQueuedPromptNow}
         />
+        {submitError ? (
+          <div
+            role="alert"
+            data-testid="chat-submit-error"
+            className="pointer-events-auto mb-2 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs leading-5 text-rose-700"
+          >
+            {submitError}
+          </div>
+        ) : null}
         <div
           data-guide-id="chat-input"
           data-testid="copilot-chat-input"
