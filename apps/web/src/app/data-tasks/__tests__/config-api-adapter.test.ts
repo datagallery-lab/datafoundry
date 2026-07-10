@@ -341,6 +341,7 @@ describe("config api adapter", () => {
       name: "datalink",
       transport: "streamable-http",
       serverUrl: "https://datalink.example/mcp",
+      apiUrl: "https://datalink.example",
       toolManifest: [
         { name: "datalink_show" },
         { name: "datalink_explore" },
@@ -351,6 +352,10 @@ describe("config api adapter", () => {
     expect(item.settings?.toolCount).toBe("3");
     expect(item.settings?.toolNames).toContain("datalink_show");
     expect(item.settings?.toolNames).toContain("add_table");
+    expect(item.settings?.apiUrl).toBe("https://datalink.example");
+    expect(itemToCreateBody("mcp", item)).toMatchObject({
+      apiUrl: "https://datalink.example",
+    });
   });
 
   it("builds skill resource binding bodies", () => {

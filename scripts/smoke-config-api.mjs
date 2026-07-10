@@ -88,6 +88,40 @@ await new Promise((resolve) => mcpServer.listen(0, "127.0.0.1", resolve));
 const mcpAddress = mcpServer.address();
 assert(mcpAddress && typeof mcpAddress === "object");
 
+const datalinkApiRequests = [];
+const datalinkApiServer = createHttpServer(async (request, response) => {
+  const chunks = [];
+  for await (const chunk of request) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  }
+  const text = Buffer.concat(chunks).toString("utf8");
+  const body = text ? JSON.parse(text) : undefined;
+  datalinkApiRequests.push({ method: request.method, path: request.url, body });
+
+  const responseBody = request.method === "GET" && request.url === "/show"
+    ? {
+        nodes: [{ id: "table:metrics", name: "metrics", properties: {}, type: "table" }],
+        edges: [],
+      }
+    : request.method === "POST" && request.url === "/explore"
+      ? "metrics table"
+      : request.method === "POST" && request.url === "/add-table"
+        ? { added_tables: ["metrics"] }
+        : request.method === "POST" && request.url === "/remove-table"
+          ? { removed_table: "metrics" }
+          : request.method === "POST" && request.url === "/rebuild"
+            ? { rebuilt: true }
+            : undefined;
+  const isTextResponse = typeof responseBody === "string";
+  response.writeHead(responseBody ? 200 : 404, {
+    "Content-Type": isTextResponse ? "text/plain; charset=utf-8" : "application/json",
+  });
+  response.end(isTextResponse ? responseBody : JSON.stringify(responseBody ?? { detail: "not found" }));
+});
+await new Promise((resolve) => datalinkApiServer.listen(0, "127.0.0.1", resolve));
+const datalinkApiAddress = datalinkApiServer.address();
+assert(datalinkApiAddress && typeof datalinkApiAddress === "object");
+
 const server = await createApiServer({ metadataStore, taskStateRuntime });
 await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
 const address = server.address();
@@ -776,6 +810,56 @@ try {
   assert.equal(mcpTools.body.data.length, 1);
   assert.equal(mcpTools.body.data[0].name, "echo");
 
+  const datalinkConfig = await requestJson("/api/v1/mcp-servers", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      id: "datalink",
+      name: "DataLink",
+      transport: "streamable-http",
+      serverUrl: `http://127.0.0.1:${mcpAddress.port}/mcp`,
+      apiUrl: `http://127.0.0.1:${datalinkApiAddress.port}`,
+    })
+  });
+  assert.equal(datalinkConfig.response.status, 201);
+  assert.equal(datalinkConfig.body.data.apiUrl, `http://127.0.0.1:${datalinkApiAddress.port}`);
+
+  const datalinkServers = await requestJson("/api/v1/datalink/servers");
+  assert.equal(datalinkServers.body.data.servers[0].apiUrl, `http://127.0.0.1:${datalinkApiAddress.port}`);
+  const datalinkGraph = await requestJson("/api/v1/datalink/datalink/graph");
+  assert.equal(datalinkGraph.body.data.graph.nodes[0].id, "table:metrics");
+  const datalinkExplore = await requestJson("/api/v1/datalink/datalink/explore", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ query: "metrics", focus: "schema" })
+  });
+  assert.equal(datalinkExplore.body.data.result, "metrics table");
+  await requestJson("/api/v1/datalink/datalink/tables", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ source: "/data/metrics.csv", sourceType: "csv" })
+  });
+  await requestJson("/api/v1/datalink/datalink/tables", {
+    method: "DELETE",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ tableId: "table:metrics" })
+  });
+  await requestJson("/api/v1/datalink/datalink/rebuild", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({})
+  });
+  assert.deepEqual(
+    datalinkApiRequests.map((entry) => [entry.method, entry.path]),
+    [
+      ["GET", "/show"],
+      ["POST", "/explore"],
+      ["POST", "/add-table"],
+      ["POST", "/remove-table"],
+      ["POST", "/rebuild"],
+    ],
+  );
+
   const skillForm = new FormData();
   skillForm.set("file", new Blob([
     "---\n",
@@ -1119,6 +1203,7 @@ try {
   );
 } finally {
   await closeHttpServer(server);
+  await closeHttpServer(datalinkApiServer);
   await closeHttpServer(mcpServer);
   await closeHttpServer(modelProviderServer);
   await taskStateRuntime.close();
