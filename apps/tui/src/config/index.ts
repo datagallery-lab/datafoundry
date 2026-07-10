@@ -27,5 +27,7 @@ export type {
   ConversationCheckpoint,
   ConversationToolCall,
   SessionConversation,
+  SessionArtifact,
+  SessionArtifactList,
   SessionTitle,
 } from "./config-client.js";

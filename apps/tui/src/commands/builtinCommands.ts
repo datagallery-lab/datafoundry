@@ -124,49 +124,14 @@ type ChoiceLoadResult = {
 };
 
 const SELECT_ACTIONS = new Set(['select', 'switch', 'use']);
-const LIST_ACTIONS = new Set(['list', 'ls', 'show']);
 const CURRENT_ACTIONS = new Set(['current', 'active']);
 
 const formatError = (error: unknown): string => {
   return error instanceof Error ? error.message : String(error);
 };
 
-const datasourceIdForItem = (item: WorkspaceConfigItem): string => {
-  return item.settings?.datasourceId?.trim() || item.id;
-};
-
-const firstEnabledDatasourceId = (items: WorkspaceConfigItem[]): string | undefined => {
-  const item = items.find((candidate) => candidate.enabled) ?? items[0];
-  return item ? datasourceIdForItem(item) : undefined;
-};
-
 const firstEnabledSkillId = (items: WorkspaceConfigItem[]): string | undefined => {
   return items.find((item) => item.enabled)?.id ?? items[0]?.id;
-};
-
-const localDatasourceChoices = (
-  items: WorkspaceConfigItem[],
-  activeDatasourceId?: string | undefined,
-): ResourceChoice[] => {
-  const activeId = activeDatasourceId ?? firstEnabledDatasourceId(items);
-  return items.map((item) => {
-    const id = datasourceIdForItem(item);
-    const type = item.settings?.type ?? 'unknown';
-    const status = item.status ?? (item.enabled ? 'enabled' : 'disabled');
-    const detailParts = [
-      `type=${type}`,
-      `status=${status}`,
-      item.builtin ? 'builtin' : undefined,
-    ].filter(Boolean);
-    return {
-      id,
-      name: item.name,
-      description: item.description,
-      enabled: item.enabled,
-      active: id === activeId,
-      detail: detailParts.join(', '),
-    };
-  });
 };
 
 const localSkillChoices = (
@@ -190,43 +155,6 @@ const localSkillChoices = (
       detail: detailParts.join(', '),
     };
   });
-};
-
-const loadDatasourceChoices = async (
-  context: Parameters<Command['execute']>[1],
-): Promise<ChoiceLoadResult> => {
-  if (!context.configClient) {
-    return {
-      choices: localDatasourceChoices(context.workspaceConfig.db, context.datasourceId),
-    };
-  }
-
-  try {
-    const datasources = await context.configClient.listDatasources();
-    return {
-      choices: datasources.map((item) => {
-        const enabled = item.defaultEnabled !== false;
-        const detailParts = [
-          `type=${item.type}`,
-          item.connectionStatus ? `status=${item.connectionStatus}` : undefined,
-          item.builtin ? 'builtin' : undefined,
-        ].filter(Boolean);
-        return {
-          id: item.id,
-          name: item.name,
-          description: item.description,
-          enabled,
-          active: item.id === context.datasourceId,
-          detail: detailParts.join(', '),
-        };
-      }),
-    };
-  } catch (error) {
-    return {
-      choices: localDatasourceChoices(context.workspaceConfig.db, context.datasourceId),
-      warning: `Backend datasource list failed: ${formatError(error)}`,
-    };
-  }
 };
 
 const loadSkillChoices = async (
@@ -312,9 +240,9 @@ const selectedMessage = (kind: string, choice: ResourceChoice): string => {
 
 export const datasourceCommand: Command = {
   name: 'datasource',
-  description: 'List or select available data sources',
+  description: 'Open datasource picker',
   aliases: ['ds'],
-  execute: async (args, context) => {
+  execute: async (args) => {
     const rawAction = args[0]?.trim();
     const action = rawAction?.toLowerCase() ?? 'list';
 
@@ -322,67 +250,25 @@ export const datasourceCommand: Command = {
       return {
         success: true,
         message: [
-          '/datasource - List or select data sources',
+          '/datasource - Open datasource picker',
           '',
           'Usage:',
           '  /datasource',
-          '  /datasource list',
-          '  /datasource current',
-          '  /datasource select <id>',
-          '  /datasource <id>',
         ].join('\n'),
       };
     }
 
-    const result = await loadDatasourceChoices(context);
-    const choices = result.choices;
-
-    if (LIST_ACTIONS.has(action)) {
-      return {
-        success: true,
-        message: formatChoiceList(
-          'Available Data Sources:',
-          choices,
-          'Use /datasource select <id> or /datasource <id> to choose.',
-          result.warning,
-        ),
-        data: { datasources: choices },
-      };
-    }
-
-    if (CURRENT_ACTIONS.has(action)) {
-      const active = choices.find((choice) => choice.active);
-      return {
-        success: true,
-        message: active ? active.name : 'No active datasource selected.',
-        data: active ? { datasourceId: active.id, datasource: active } : undefined,
-      };
-    }
-
-    const requestedId = SELECT_ACTIONS.has(action) ? args[1] : rawAction;
-    if (!requestedId) {
+    if (rawAction) {
       return {
         success: false,
-        message: 'Usage: /datasource select <id>',
-      };
-    }
-
-    const choice = findChoice(choices, requestedId);
-    if (!choice) {
-      return {
-        success: false,
-        message: `Datasource not found: ${requestedId}. Use /datasource list to see available data sources.`,
+        message: 'Usage: /datasource',
       };
     }
 
     return {
       success: true,
-      message: choice.name,
-      data: {
-        action: 'select_datasource',
-        datasourceId: choice.id,
-        label: choice.name,
-      },
+      message: 'Loading data sources...',
+      data: { action: 'open_datasource_picker' },
     };
   },
 };

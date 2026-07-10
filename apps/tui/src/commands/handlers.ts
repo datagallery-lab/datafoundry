@@ -80,7 +80,7 @@ General:
   /clear                - Clear conversation history
 
 Data Management:
-  /datasource <action>  - Manage data sources (list|add|switch|test)
+  /datasource           - Open data source picker
   /model <action>       - Manage LLM models (list|add|switch)
   /skill <action>       - Manage skills (list|add|switch)
   /mcp <action>         - Manage MCP servers (list|add|switch)
@@ -92,7 +92,7 @@ Session:
 Tips:
   - Type a message without '/' to chat with the agent
   - Use Tab for command auto-completion
-  - Most commands support subactions like 'list', 'add', 'switch'
+  - Some commands support subactions like 'list', 'add', 'switch'
 
 For detailed help on a command, use: /help <command>
 `.trim();
@@ -109,18 +109,13 @@ For detailed help on a command, use: /help <command>
 function getCommandHelp(commandName: string): string | null {
   const helps: Record<string, string> = {
     datasource: `
-/datasource - Manage data sources
+/datasource - Open data source picker
 
 Usage:
-  /datasource list              - List all configured data sources
-  /datasource add               - Start interactive data source creation
-  /datasource switch <id>       - Switch to a specific data source
-  /datasource test [id]         - Test connection to a data source
+  /datasource                   - Open the picker
 
 Examples:
-  /datasource list
-  /datasource switch api-duckdb-demo
-  /datasource test
+  /datasource
 `.trim(),
 
     model: `
@@ -214,114 +209,19 @@ Aliases: quit, q
  * /datasource command - Manage data sources
  */
 export function datasourceCommand(context: HandlerContext): CommandResult {
-  const { args, state, store } = context;
-  const action = args.positional[0] || 'list';
-
-  const workspaceConfig = state.workspaceConfig;
-
-  switch (action) {
-    case 'list': {
-      const datasources = workspaceConfig.db;
-      if (datasources.length === 0) {
-        return {
-          success: true,
-          message: 'No data sources configured.',
-        };
-      }
-
-      const lines = datasources.map((ds) => ds.name);
-
-      return {
-        success: true,
-        message: lines.join('\n'),
-        data: { datasources },
-      };
-    }
-
-    case 'add': {
-      return {
-        success: true,
-        message: `
-To add a new data source:
-1. Open the configuration UI (if available)
-2. Or manually edit workspace config
-
-Interactive data source creation is not yet implemented in CLI mode.
-Use the GUI configuration panel for now.
-`.trim(),
-        data: { action: 'interactive_add_datasource' },
-      };
-    }
-
-    case 'switch': {
-      const datasourceId = args.positional[1];
-      if (!datasourceId) {
-        return {
-          success: false,
-          message: 'Usage: /datasource switch <id>',
-        };
-      }
-
-      const datasource = workspaceConfig.db.find((ds) => ds.id === datasourceId);
-      if (!datasource) {
-        return {
-          success: false,
-          message: `Data source not found: ${datasourceId}`,
-        };
-      }
-
-      // Enable the selected datasource
-      const updatedDatasources = workspaceConfig.db.map((ds) => ({
-        ...ds,
-        enabled: ds.id === datasourceId,
-      }));
-
-      if (store) {
-        store.updateConfigKind('db', updatedDatasources);
-        const updatedConfig = store.getState().workspaceConfig;
-        persistWorkspaceConfig(updatedConfig);
-      }
-
-      return {
-        success: true,
-        message: `Switched to data source: ${datasource.name}`,
-        data: { datasourceId, datasource },
-      };
-    }
-
-    case 'test': {
-      const datasourceId = args.positional[1];
-      const targetDs = datasourceId
-        ? workspaceConfig.db.find((ds) => ds.id === datasourceId)
-        : workspaceConfig.db.find((ds) => ds.enabled);
-
-      if (!targetDs) {
-        return {
-          success: false,
-          message: datasourceId
-            ? `Data source not found: ${datasourceId}`
-            : 'No active data source to test.',
-        };
-      }
-
-      return {
-        success: true,
-        message: `
-Data source test functionality requires backend support.
-Target: ${targetDs.name} (${targetDs.id})
-
-This will be implemented when backend /api/v1/datasources/test endpoint is available.
-`.trim(),
-        data: { datasource: targetDs, action: 'test' },
-      };
-    }
-
-    default:
-      return {
-        success: false,
-        message: `Unknown action: ${action}. Use: list, add, switch, test`,
-      };
+  const action = context.args.positional[0];
+  if (action && action !== 'help') {
+    return {
+      success: false,
+      message: 'Usage: /datasource',
+    };
   }
+
+  return {
+    success: true,
+    message: 'Loading data sources...',
+    data: { action: 'open_datasource_picker' },
+  };
 }
 
 /**

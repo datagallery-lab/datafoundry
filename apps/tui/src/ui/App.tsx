@@ -30,7 +30,7 @@ import type { AgentClient, AgentMessage, RunAgentInput } from '../protocol/types
 import { classifyError, formatErrorMessage, errorLogger } from '../protocol/error-handler.js';
 import { commandProcessor } from '../commands/index.js';
 import type { CommandContext, CommandResult } from '../commands/types.js';
-import { ConfigClientError, type ConfigClient, type SessionListItem, type Skill } from '../config/index.js';
+import { ConfigClientError, type ConfigClient, type Datasource, type SessionListItem, type Skill } from '../config/index.js';
 
 interface AppProps {
   client: AgentClient;
@@ -152,6 +152,58 @@ const formatSkillApiError = (error: unknown): string => {
   return error instanceof Error ? error.message : String(error);
 };
 
+const formatDatasourceApiError = (error: unknown): string => {
+  return error instanceof Error ? error.message : String(error);
+};
+
+const localDatasourcePickerItems = (
+  items: WorkspaceConfigItem[],
+  activeDatasourceId?: string | undefined,
+): ResourcePickerItem[] => {
+  return items.map((item) => {
+    const id = datasourceIdForItem(item);
+    const type = item.settings?.type ?? 'unknown';
+    const status = item.status ?? (item.enabled ? 'enabled' : 'disabled');
+    const detailParts = [
+      `type=${type}`,
+      `status=${status}`,
+      item.builtin ? 'builtin' : undefined,
+    ].filter(Boolean);
+
+    return {
+      id,
+      name: item.name,
+      description: item.description,
+      detail: detailParts.join(', '),
+      enabled: item.enabled,
+      active: id === activeDatasourceId,
+    };
+  });
+};
+
+const apiDatasourcePickerItems = (
+  datasources: Datasource[],
+  activeDatasourceId?: string | undefined,
+): ResourcePickerItem[] => {
+  return datasources.map((datasource) => {
+    const enabled = datasource.defaultEnabled !== false;
+    const detailParts = [
+      `type=${datasource.type}`,
+      datasource.connectionStatus ? `status=${datasource.connectionStatus}` : undefined,
+      datasource.builtin ? 'builtin' : undefined,
+    ].filter(Boolean);
+
+    return {
+      id: datasource.id,
+      name: datasource.name,
+      description: datasource.description,
+      detail: detailParts.join(', '),
+      enabled,
+      active: datasource.id === activeDatasourceId,
+    };
+  });
+};
+
 const localSkillPickerItems = (
   items: WorkspaceConfigItem[],
   activeSkillId?: string | undefined,
@@ -231,6 +283,11 @@ export const App: React.FC<AppProps> = ({
   const [pickerError, setPickerError] = useState<string | undefined>(undefined);
   const [resumeLoadingSessionId, setResumeLoadingSessionId] = useState<string | null>(null);
   const [outputsOpen, setOutputsOpen] = useState(false);
+  const [datasourcePickerOpen, setDatasourcePickerOpen] = useState(false);
+  const [datasourcePickerItems, setDatasourcePickerItems] = useState<ResourcePickerItem[]>([]);
+  const [datasourcePickerLoading, setDatasourcePickerLoading] = useState(false);
+  const [datasourcePickerError, setDatasourcePickerError] = useState<string | undefined>(undefined);
+  const [datasourcePickerWarning, setDatasourcePickerWarning] = useState<string | undefined>(undefined);
   const [skillPickerOpen, setSkillPickerOpen] = useState(false);
   const [skillPickerItems, setSkillPickerItems] = useState<ResourcePickerItem[]>([]);
   const [skillShortcutItems, setSkillShortcutItems] = useState<ResourcePickerItem[]>(
@@ -276,7 +333,7 @@ export const App: React.FC<AppProps> = ({
     && !isRestoringSession
     ? startup
     : undefined;
-  const pickerOpen = sessionPickerOpen || skillPickerOpen || outputsOpen;
+  const pickerOpen = sessionPickerOpen || datasourcePickerOpen || skillPickerOpen || outputsOpen;
   const controlsLayoutKey = [
     'chat',
     isHomeScreen ? 'home' : 'workspace',
@@ -381,6 +438,11 @@ export const App: React.FC<AppProps> = ({
       return;
     }
 
+    if (datasourcePickerOpen) {
+      setDatasourcePickerOpen(false);
+      return;
+    }
+
     if (skillPickerOpen) {
       setSkillPickerOpen(false);
       return;
@@ -389,7 +451,7 @@ export const App: React.FC<AppProps> = ({
     if (clearInputDraft?.()) {
       return;
     }
-  }, [armCtrlCExit, ctrlCPressedOnce, exitApplication, sessionPickerOpen, skillPickerOpen]);
+  }, [armCtrlCExit, ctrlCPressedOnce, datasourcePickerOpen, exitApplication, sessionPickerOpen, skillPickerOpen]);
 
   useLayoutEffect(() => {
     const controlsNode = mainControlsRef.current;
@@ -579,8 +641,11 @@ export const App: React.FC<AppProps> = ({
         }
       }
 
-      const conversation = await configClient.getSessionConversation(sessionId);
-      const restored = restoreSessionConversation(conversation);
+      const [conversation, artifactList] = await Promise.all([
+        configClient.getSessionConversation(sessionId),
+        configClient.listSessionArtifacts(sessionId),
+      ]);
+      const restored = restoreSessionConversation(conversation, artifactList.artifacts);
       clearQueuedPrompts();
       store.restoreSession(restored);
       chatAreaRef.current?.reset();
@@ -617,7 +682,9 @@ export const App: React.FC<AppProps> = ({
 
     setCommandNotice(null);
     setSessionPickerOpen(true);
+    setDatasourcePickerOpen(false);
     setSkillPickerOpen(false);
+    setOutputsOpen(false);
     setPickerLoading(true);
     setPickerError(undefined);
     setPickerSessions([]);
@@ -632,10 +699,49 @@ export const App: React.FC<AppProps> = ({
     }
   }
 
+  async function openDatasourcePicker(): Promise<void> {
+    setCommandNotice(null);
+    setDatasourcePickerOpen(true);
+    setSessionPickerOpen(false);
+    setSkillPickerOpen(false);
+    setOutputsOpen(false);
+    setDatasourcePickerLoading(true);
+    setDatasourcePickerError(undefined);
+    setDatasourcePickerWarning(undefined);
+    setDatasourcePickerItems([]);
+
+    const localItems = localDatasourcePickerItems(
+      store.getState().workspaceConfig.db,
+      activeDatasourceId,
+    );
+
+    if (!configClient) {
+      setDatasourcePickerItems(localItems);
+      setDatasourcePickerLoading(false);
+      return;
+    }
+
+    try {
+      const datasources = await configClient.listDatasources();
+      setDatasourcePickerItems(apiDatasourcePickerItems(datasources, activeDatasourceId));
+    } catch (error) {
+      setDatasourcePickerItems(localItems);
+      if (localItems.length > 0) {
+        setDatasourcePickerWarning(`Backend datasource list failed: ${formatDatasourceApiError(error)}`);
+      } else {
+        setDatasourcePickerError(`Failed to load data sources: ${formatDatasourceApiError(error)}`);
+      }
+    } finally {
+      setDatasourcePickerLoading(false);
+    }
+  }
+
   async function openSkillPicker(): Promise<void> {
     setCommandNotice(null);
     setSkillPickerOpen(true);
     setSessionPickerOpen(false);
+    setDatasourcePickerOpen(false);
+    setOutputsOpen(false);
     setSkillPickerLoading(true);
     setSkillPickerError(undefined);
     setSkillPickerWarning(undefined);
@@ -902,6 +1008,9 @@ export const App: React.FC<AppProps> = ({
             return;
           } else if (action === 'open_skill_picker') {
             await openSkillPicker();
+            return;
+          } else if (action === 'open_datasource_picker') {
+            await openDatasourcePicker();
             return;
           } else if (action === 'select_datasource') {
             if (typeof commandData.datasourceId === 'string') {
@@ -1292,6 +1401,36 @@ export const App: React.FC<AppProps> = ({
             }}
             onCancel={() => {
               setSessionPickerOpen(false);
+            }}
+          />
+        </Box>
+      ) : datasourcePickerOpen ? (
+        <Box
+          flexDirection="column"
+          minHeight={terminalRows}
+          width={terminalColumns}
+          overflowY="hidden"
+          paddingX={1}
+        >
+          <ResourcePicker
+            title="Select a data source"
+            items={datasourcePickerItems}
+            loading={datasourcePickerLoading}
+            error={datasourcePickerError}
+            warning={datasourcePickerWarning}
+            columns={Math.max(20, terminalColumns - 2)}
+            rows={terminalRows}
+            emptyMessage="No data sources configured."
+            onSelect={(item) => {
+              setDatasourcePickerOpen(false);
+              selectDatasourceForSession(item.id);
+              setCommandNotice({
+                kind: 'info',
+                message: `Datasource selected: ${item.name} (${item.id}).`,
+              });
+            }}
+            onCancel={() => {
+              setDatasourcePickerOpen(false);
             }}
           />
         </Box>

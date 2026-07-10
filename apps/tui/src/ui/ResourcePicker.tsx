@@ -16,12 +16,16 @@ interface ResourcePickerProps {
   loading: boolean;
   error?: string | undefined;
   warning?: string | undefined;
+  columns?: number | undefined;
+  rows?: number | undefined;
   emptyMessage: string;
   onSelect: (item: ResourcePickerItem) => void;
   onCancel: () => void;
 }
 
 const WINDOW_SIZE = 10;
+const FULLSCREEN_RESERVED_LINES = 7;
+const FULLSCREEN_ITEM_HEIGHT = 2;
 
 const truncate = (value: string, maxLength: number): string => {
   if (value.length <= maxLength) return value;
@@ -34,12 +38,27 @@ export const ResourcePicker: React.FC<ResourcePickerProps> = ({
   loading,
   error,
   warning,
+  columns,
+  rows,
   emptyMessage,
   onSelect,
   onCancel,
 }) => {
   const [query, setQuery] = useState('');
   const [selectedIndex, setSelectedIndex] = useState(0);
+  const fullscreen = typeof columns === 'number' && typeof rows === 'number';
+  const panelWidth = fullscreen ? Math.max(24, columns) : undefined;
+  const panelHeight = fullscreen ? Math.max(8, rows - 1) : undefined;
+  const visibleItemCount = fullscreen
+    ? Math.max(
+        1,
+        Math.floor(((panelHeight ?? 8) - FULLSCREEN_RESERVED_LINES) / FULLSCREEN_ITEM_HEIGHT),
+      )
+    : WINDOW_SIZE;
+  const titleMaxWidth = fullscreen ? Math.max(1, (panelWidth ?? 24) - 6) : 42;
+  const idMaxWidth = fullscreen ? Math.min(32, Math.max(8, (panelWidth ?? 24) - 24)) : 24;
+  const detailMaxWidth = fullscreen ? Math.max(12, (panelWidth ?? 24) - 10) : 56;
+  const descriptionMaxWidth = fullscreen ? Math.max(12, (panelWidth ?? 24) - 8) : 70;
 
   const filteredItems = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
@@ -103,20 +122,23 @@ export const ResourcePicker: React.FC<ResourcePickerProps> = ({
   const windowStart = Math.max(
     0,
     Math.min(
-      selectedIndex - Math.floor(WINDOW_SIZE / 2),
-      Math.max(0, filteredItems.length - WINDOW_SIZE),
+      selectedIndex - Math.floor(visibleItemCount / 2),
+      Math.max(0, filteredItems.length - visibleItemCount),
     ),
   );
-  const visibleItems = filteredItems.slice(windowStart, windowStart + WINDOW_SIZE);
+  const visibleItems = filteredItems.slice(windowStart, windowStart + visibleItemCount);
 
   return (
     <Box
       flexDirection="column"
       borderStyle="single"
       borderColor="cyan"
+      width={panelWidth}
+      height={panelHeight}
+      overflow={fullscreen ? 'hidden' : undefined}
       paddingX={1}
       paddingY={1}
-      marginX={1}
+      marginX={fullscreen ? 0 : 1}
     >
       <Text bold color="cyan">{title}</Text>
       <Box>
@@ -131,7 +153,13 @@ export const ResourcePicker: React.FC<ResourcePickerProps> = ({
         </Box>
       ) : null}
 
-      <Box flexDirection="column" marginTop={1} minHeight={WINDOW_SIZE}>
+      <Box
+        flexDirection="column"
+        marginTop={1}
+        minHeight={fullscreen ? undefined : WINDOW_SIZE}
+        flexGrow={fullscreen ? 1 : undefined}
+        overflow={fullscreen ? 'hidden' : undefined}
+      >
         {loading ? (
           <Text dimColor>Loading...</Text>
         ) : error ? (
@@ -145,9 +173,9 @@ export const ResourcePicker: React.FC<ResourcePickerProps> = ({
             const absoluteIndex = windowStart + index;
             const selected = absoluteIndex === selectedIndex;
             const stateMarker = item.active ? '*' : item.enabled === false ? ' ' : '+';
-            const titleText = truncate(item.name || item.id, 42);
-            const idText = truncate(item.id, 24);
-            const detailText = item.detail ? truncate(item.detail, 56) : '';
+            const titleText = truncate(item.name || item.id, titleMaxWidth);
+            const idText = truncate(item.id, idMaxWidth);
+            const detailText = item.detail ? truncate(item.detail, detailMaxWidth) : '';
             const itemColor = selected ? 'cyan' : item.enabled === false ? 'gray' : 'white';
 
             return (
@@ -163,7 +191,7 @@ export const ResourcePicker: React.FC<ResourcePickerProps> = ({
                 {(item.description || detailText) ? (
                   <Box paddingLeft={4}>
                     <Text dimColor>
-                      {truncate(item.description ?? detailText, 70)}
+                      {truncate(item.description ?? detailText, descriptionMaxWidth)}
                       {item.description && detailText ? ` - ${detailText}` : ''}
                     </Text>
                   </Box>

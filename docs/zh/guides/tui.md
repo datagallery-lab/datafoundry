@@ -66,7 +66,7 @@ TUI 默认停留在 Chat。使用 `/outputs` 可以像 `/resume` 一样打开独
 | `/clear` | 清空当前聊天记录。 | `/clear` |
 | `/status` | 查看 thread、消息数、当前数据源和 Skill。 | `/status` |
 | `/outputs` | 打开当前会话的产出页。 | `/outputs` |
-| `/datasource` | 列出或选择数据源。 | `/datasource list` |
+| `/datasource` | 打开数据源选择器。 | `/datasource` |
 | `/skill` | 打开 Skill 选择器、列出或选择 Skill。 | `/skill show` |
 | `/reset` | 创建新的本地会话。 | `/reset` |
 | `/resume [latest\|list\|sessionId]` | 恢复服务端历史会话。 | `/resume list` |
@@ -76,10 +76,6 @@ TUI 默认停留在 Chat。使用 `/outputs` 可以像 `/resume` 一样打开独
 
 ```text
 /datasource
-/datasource list
-/datasource current
-/datasource select <id>
-/datasource <id>
 ```
 
 `/skill` 支持这些用法：
@@ -120,8 +116,8 @@ TUI 默认停留在 Chat。使用 `/outputs` 可以像 `/resume` 一样打开独
 
 1. 启动后端和 TUI。
 2. 运行 `/status` 查看当前 thread、数据源和 Skill。
-3. 运行 `/datasource list` 查看可用数据源。
-4. 需要指定数据源时，运行 `/datasource select api-duckdb-demo`。
+3. 运行 `/datasource` 打开数据源选择器。
+4. 需要指定数据源时，在选择器里选中 `api-duckdb-demo` 并按 Enter。
 5. 输入问题：
 
 ```text

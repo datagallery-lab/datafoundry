@@ -66,7 +66,7 @@ Type `/` and use `Tab` to complete. Built-in commands:
 | `/clear` | Clear current chat display. | `/clear` |
 | `/status` | Show thread, message count, current data source and Skill. | `/status` |
 | `/outputs` | Open the outputs page for the current session. | `/outputs` |
-| `/datasource` | List or select a data source. | `/datasource list` |
+| `/datasource` | Open the data source picker. | `/datasource` |
 | `/skill` | Open Skill picker, list, or select a Skill. | `/skill show` |
 | `/reset` | Create a new local session. | `/reset` |
 | `/resume [latest\|list\|sessionId]` | Restore a server session. | `/resume list` |
@@ -76,10 +76,6 @@ Type `/` and use `Tab` to complete. Built-in commands:
 
 ```text
 /datasource
-/datasource list
-/datasource current
-/datasource select <id>
-/datasource <id>
 ```
 
 `/skill` usage:
@@ -120,8 +116,8 @@ Demo mode uses local simulated events and built-in demo state. It does not call 
 
 1. Start backend and TUI.
 2. Run `/status` to see thread, data source, and Skill.
-3. Run `/datasource list` to see available sources.
-4. When needed: `/datasource select api-duckdb-demo`.
+3. Run `/datasource` to open the data source picker.
+4. When needed, select `api-duckdb-demo` in the picker and press Enter.
 5. Ask a question:
 
 ```text

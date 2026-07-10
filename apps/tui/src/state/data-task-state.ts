@@ -113,7 +113,7 @@ export interface DataArtifact {
   detail?: ArtifactDetail | undefined;
   /** When true, full preview can be fetched via artifact REST API. */
   previewAvailable?: boolean | undefined;
-  /** Milliseconds since epoch when the artifact event was received. */
+  /** Milliseconds since epoch when the artifact was recorded or restored. */
   recordedAtMs?: number | undefined;
 }
 

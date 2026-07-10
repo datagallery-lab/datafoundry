@@ -70,7 +70,7 @@ export function HomeSplash({ rows, columns, startup, input }: HomeSplashProps) {
         <Box width={promptWidth} flexDirection="column" alignItems="center">
           <Text color="yellow" wrap="truncate-end">
             ● Tip <Text color="gray">Run </Text>
-            <Text color="white">/datasource list</Text>
+            <Text color="white">/datasource</Text>
             <Text color="gray"> to choose data, then ask a business question</Text>
           </Text>
           <Text dimColor wrap="truncate-end">

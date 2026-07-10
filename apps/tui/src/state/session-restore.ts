@@ -1,8 +1,11 @@
 import type {
   ConversationMessage,
+  SessionArtifact,
   ConversationToolCall,
   SessionConversation,
 } from "../config/index.js";
+import type { DataArtifact } from "./data-task-state.js";
+import { dataArtifactFromArtifactValue } from "./live-run-state.js";
 import type { LiveToolCallRecord } from "./live-run-state.js";
 import type { DisplayMessage, MessageElement } from "./tui-state.js";
 
@@ -11,16 +14,43 @@ export type RestoredSessionConversation = {
   title?: string | undefined;
   messages: DisplayMessage[];
   toolCalls: LiveToolCallRecord[];
+  artifacts: DataArtifact[];
 };
 
 export function restoreSessionConversation(
   dto: SessionConversation,
+  artifacts: SessionArtifact[] = [],
 ): RestoredSessionConversation {
   return {
     threadId: dto.sessionId,
     ...(dto.title ? { title: dto.title } : {}),
     messages: conversationToDisplayMessages(dto),
     toolCalls: conversationToToolCalls(dto.toolCalls),
+    artifacts: sessionArtifactsToDataArtifacts(artifacts),
+  };
+}
+
+export function sessionArtifactsToDataArtifacts(artifacts: SessionArtifact[]): DataArtifact[] {
+  return [...artifacts].reverse().map(sessionArtifactToDataArtifact);
+}
+
+function sessionArtifactToDataArtifact(artifact: SessionArtifact): DataArtifact {
+  const dataArtifact = dataArtifactFromArtifactValue({
+    id: artifact.id,
+    type: artifact.type,
+    name: artifact.name,
+    title: artifact.name,
+    ...(artifact.fileId ? { file_id: artifact.fileId } : {}),
+    ...(artifact.downloadUrl ? { download_url: artifact.downloadUrl } : {}),
+    ...(artifact.preview_json !== undefined ? { preview_json: artifact.preview_json } : {}),
+    ...(artifact.preview_available !== undefined ? { preview_available: artifact.preview_available } : {}),
+    ...(artifact.runId ? { run_id: artifact.runId } : {}),
+    ...(artifact.toolCallId ? { tool_call_id: artifact.toolCallId } : {}),
+    ...(artifact.stepId ? { step_id: artifact.stepId } : {}),
+  });
+  return {
+    ...dataArtifact,
+    ...(artifact.createdAt ? { recordedAtMs: timestampFromIso(artifact.createdAt, Date.now()) } : {}),
   };
 }
 
