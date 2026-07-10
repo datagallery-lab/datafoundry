@@ -107,13 +107,33 @@ password 模式在 `/api/v1/auth/*` 下提供基于 Cookie 的会话、非安全
 
 产出由 Artifact 服务管理，常见类型包括表格、图表、SQL、报告和文件。Web 适合预览、下载和导出，TUI 适合命令行查看。
 
-## 本地开发与生产化边界
+## 正式态部署边界
 
-当前文档覆盖本地优先版本和内置 password auth 路径。生产化部署通常还需要补充：
+默认部署路径是正式态（`password` + `build` / `start`），不要跑 `npm run dev`。正式测试与真实生产启动命令相同：
+
+```bash
+npm run build && npm run build:web
+npm run start:api
+npm run start:web
+```
+
+| 环境 | 邮箱 | 公网地址 |
+| --- | --- | --- |
+| 正式测试 | `AUTH_EMAIL_DELIVERY=test` | 本机 / 内网 |
+| 真实生产 | `AUTH_EMAIL_DELIVERY=smtp` | 公网 HTTPS + 反代 |
+
+浏览器经 Next 同源 BFF 访问 REST 与 CopilotKit SSE。探针区分：
+
+- `GET /healthz`：进程存活
+- `GET /ready`：Mastra 与 builtin 资源就绪（响应含 `startup_ms` / `phases`）
+
+反代样例见 [`deploy/nginx.datafoundry.conf.example`](../../../deploy/nginx.datafoundry.conf.example)：静态资源压缩，SSE 路径不压缩、不缓冲。贡献者热更新见 [快速开始附录](../quick-start.md)。
+
+真实生产通常还需要补充：
 
 - Secret 管理服务，例如 KMS 或 Vault。
 - 更完整的部署、监控和审计策略。
 - 对外数据库的真实环境 E2E 验证。
 - 如果部署需要多个个人 workspace，还需要 RBAC、组织策略和多 workspace UI。
 
-这些不影响本地演示主路径，但在正式对外交付前需要单独评估。
+这些不影响正式测试验收主路径，但在对外交付前需要单独评估。

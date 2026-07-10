@@ -128,8 +128,8 @@ export function restoreCopilotChatScrollTopWithRetries(input: {
     // Branch restores can keep laying out for a few hundred ms; keep re-applying.
     attempts = 24,
     intervalMs = 50,
-    schedule = (callback) => requestAnimationFrame(callback),
-    delay = (callback, waitMs) => window.setTimeout(callback, waitMs),
+    schedule = (callback: () => void) => requestAnimationFrame(callback),
+    delay = (callback: () => void, waitMs: number) => window.setTimeout(callback, waitMs),
   } = input;
 
   let cancelled = false;
@@ -164,8 +164,8 @@ export function scrollCopilotChatToBottomWithRetries(input?: {
     root = document,
     attempts = 8,
     intervalMs = 50,
-    schedule = (callback) => requestAnimationFrame(callback),
-    delay = (callback, waitMs) => window.setTimeout(callback, waitMs),
+    schedule = (callback: () => void) => requestAnimationFrame(callback),
+    delay = (callback: () => void, waitMs: number) => window.setTimeout(callback, waitMs),
   } = input ?? {};
 
   let cancelled = false;

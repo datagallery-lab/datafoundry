@@ -1,7 +1,7 @@
 import { isConfigItemUsable, type WorkspaceConfigStore } from "./data-task-state";
 import type { LiveRunStatus } from "./live-run-state";
 import { LEFT_PANEL_MAX_WIDTH } from "./workspace-layout";
-import type { TranslateFn } from "../../../../i18n/types";
+import type { TranslateFn } from "../../i18n/types";
 
 function isDatalinkMcpItem(item: WorkspaceConfigStore["mcp"][number]): boolean {
   const name = item.name.toLowerCase();

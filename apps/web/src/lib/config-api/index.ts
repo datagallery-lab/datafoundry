@@ -67,5 +67,6 @@ export type {
   TraceDagEdgeKind,
   TraceDagNodeDto,
   TraceDagNodeKind,
+  TraceDagSectionDto,
   WorkspaceConfigDto,
 } from "./types";

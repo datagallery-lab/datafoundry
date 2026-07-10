@@ -57,9 +57,16 @@
 - 🔒 **安全可控，审计可追溯** — 默认只读查询、凭据隔离、字段脱敏、行数限制和超时控制；SQL、工具调用和事件流全程留痕、可回放，让每个结论都有据可查。
 - 🧩 **复杂数据任务深度优化** — 面向多表、多字段、长程分析和多步骤推理，把复杂问题逐步拆解、验证并收敛到可信结论，最终沉淀为表格、图表和报告等团队资产。
 
-## 🚀 5 分钟跑通
+## 🚀 正式态跑通
 
-不需要准备数据库，内置 DuckDB demo 数据源开箱即用。
+默认按**正式态**部署：`password` 认证 + `build` / `start`（不要跑 `npm run dev`）。不需要准备业务数据库，内置 DuckDB demo 数据源开箱即用。
+
+正式态分两种环境，**启动命令相同**：
+
+| 环境 | 用途 | 邮箱 | 公网地址 |
+| --- | --- | --- | --- |
+| **正式测试** | 本机 / 内网验收 | `AUTH_EMAIL_DELIVERY=test`（链接打控制台） | `http://127.0.0.1:3000` |
+| **真实生产** | 对外服务 | `AUTH_EMAIL_DELIVERY=smtp` | 公网 HTTPS + 反代 |
 
 ```bash
 git clone https://github.com/datagallery-lab/datafoundry.git
@@ -67,19 +74,41 @@ cd datafoundry
 npm install
 cp .env.example .env
 cp apps/web/.env.example apps/web/.env.local
-npm run dev
 ```
 
-在 `.env` 里配置任意 OpenAI-compatible 模型：
+在根目录 `.env` 配置模型，并按正式测试或真实生产填好认证（样例默认偏正式测试）：
 
 ```bash
 LLM_PROVIDER=openai-compatible
 LLM_MODEL=qwen-plus                # 或 deepseek-chat、gpt-4o……
 LLM_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
 LLM_API_KEY=replace-with-your-key
+
+DATAFOUNDRY_AUTH_MODE=password
+AUTH_SESSION_SECRET=replace-with-at-least-32-random-characters
+AUTH_PUBLIC_BASE_URL=http://127.0.0.1:3000   # 真实生产改为 https://你的域名
+AUTH_EMAIL_DELIVERY=test                     # 真实生产改为 smtp，并填 AUTH_SMTP_*
 ```
 
-打开 `http://127.0.0.1:3000/data-tasks`，直接提问：
+`apps/web/.env.local`：
+
+```bash
+NEXT_PUBLIC_DATAFOUNDRY_AUTH_MODE=password
+NEXT_PUBLIC_AGENT_RUNTIME_URL=
+NEXT_PUBLIC_CONFIG_API_URL=
+API_PROXY_TARGET=http://127.0.0.1:8787
+```
+
+构建并启动：
+
+```bash
+npm run build
+npm run build:web
+npm run start:api    # :8787  — /healthz 存活，/ready 就绪
+npm run start:web    # :3000  — password 模式走同源 BFF
+```
+
+打开 `http://127.0.0.1:3000/login` 注册登录后进入 `/data-tasks`，提问：
 
 ```text
 帮我查看数据源里有哪些表，并说明每张表的主要字段。
@@ -87,7 +116,9 @@ LLM_API_KEY=replace-with-your-key
 
 你会看到完整的一条链路：schema 检查 → 只读 SQL → SQL 审计 → 表格产出 → 可回放的 run history。
 
-> 更多细节见 [快速开始](docs/zh/quick-start.md)，接入自己的 PostgreSQL / MySQL / CSV 等见 [数据源指南](docs/zh/guides/data-sources.md)。
+真实生产请再配 SMTP 与反代：[`deploy/nginx.datafoundry.conf.example`](deploy/nginx.datafoundry.conf.example)（静态 gzip/brotli；`/api/copilotkit` 关压缩与缓冲以保护 SSE）。
+
+> 完整步骤与两种环境对照见 [快速开始](docs/zh/quick-start.md)；贡献者热更新（`npm run dev`）仅见该文档附录。接入自己的 PostgreSQL / MySQL / CSV 等见 [数据源指南](docs/zh/guides/data-sources.md)。
 
 ## 🆚 和 Coding Agent、SQL Chatbot 有什么不同
 

@@ -12,7 +12,11 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
-function isSqlExecutionShape(value: unknown): value is Record<string, unknown> {
+function isSqlExecutionShape(value: unknown): value is {
+  columns: unknown[];
+  rows: unknown[];
+  [key: string]: unknown;
+} {
   if (!isRecord(value)) return false;
   return Array.isArray(value.columns) && Array.isArray(value.rows);
 }

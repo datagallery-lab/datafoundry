@@ -23,8 +23,11 @@ import {
   type WorkspaceConfigKind,
   type WorkspaceConfigStore,
 } from "../data-task-state";
-
-const AUTO_TEST_KINDS: WorkspaceConfigKind[] = ["db", "llm", "mcp"];
+import {
+  collectUntestedAutoTestItems,
+  runAutoTestsWithConcurrency,
+  scheduleDeferredWork,
+} from "../workspace-config-bootstrap";
 
 function statusFromTestResult(result: Record<string, unknown>): ConfigItemStatus | null {
   if (result.tested === false) return null;
@@ -136,12 +139,18 @@ export function useWorkspaceConfigApi(): WorkspaceApiState & WorkspaceApiActions
     setLoading(true);
     setError(null);
     try {
-      await applyCapabilities();
-      const [workspace, defaults, datasourceTypes] = await Promise.all([
+      // Fetch capabilities in parallel with workspace payloads to save one RTT
+      // on production BFF (password mode) where each hop is expensive.
+      const [capsSettled, workspace, defaults, datasourceTypes] = await Promise.all([
+        applyCapabilities().then(
+          () => ({ ok: true as const }),
+          (err: unknown) => ({ ok: false as const, err }),
+        ),
         configApi.getWorkspaceConfig(),
         configApi.getRunDefaults(),
         configApi.listDatasourceTypes(),
       ]);
+      if (!capsSettled.ok) throw capsSettled.err;
       setLiveDatasourceTypes(datasourceTypes);
       setDatasourceTypes(datasourceTypes);
       setWorkspaceConfig(workspaceConfigDtoToStore(workspace));
@@ -210,66 +219,74 @@ export function useWorkspaceConfigApi(): WorkspaceApiState & WorkspaceApiActions
     [],
   );
 
-  // Auto-run connectivity tests for any untested config on load so that
-  // `failed`/`untested` items surface as unusable in the UI without manual
-  // action. Each item is probed once per session; the backend persists the
-  // resulting status, so a later refresh will no longer report it as untested.
+  // Auto-run connectivity tests for untested config after first paint so LLM/MCP
+  // probes (often multi-second) do not block chat interactivity. Bounded
+  // concurrency replaces the previous serial await chain.
   const autoTestedRef = useRef<Set<string>>(new Set());
   const autoTestingRef = useRef(false);
 
   useEffect(() => {
     if (loading || autoTestingRef.current) return;
 
-    const pending: Array<{ kind: WorkspaceConfigKind; id: string; key: string }> = [];
-    for (const kind of AUTO_TEST_KINDS) {
-      for (const item of workspaceConfig[kind]) {
-        const key = `${kind}:${item.id}`;
-        if (item.status === "untested" && !autoTestedRef.current.has(key)) {
-          pending.push({ kind, id: item.id, key });
-        }
-      }
-    }
+    const pending = collectUntestedAutoTestItems(workspaceConfig, autoTestedRef.current);
     if (pending.length === 0) return;
 
     for (const entry of pending) autoTestedRef.current.add(entry.key);
     autoTestingRef.current = true;
-    void (async () => {
-      for (const entry of pending) {
-        try {
-          const result = await runItemTest(entry.kind, entry.id);
-          const nextStatus = statusFromTestResult(result);
-          if (!nextStatus) continue;
-          setWorkspaceConfig((current) => {
-            if (!current[entry.kind].some((item) => item.id === entry.id)) {
-              return current;
+
+    let started = false;
+    const cancel = scheduleDeferredWork(() => {
+      started = true;
+      void (async () => {
+        await runAutoTestsWithConcurrency(
+          pending,
+          async (entry) => {
+            try {
+              const result = await runItemTest(entry.kind, entry.id);
+              const nextStatus = statusFromTestResult(result);
+              if (!nextStatus) return;
+              setWorkspaceConfig((current) => {
+                if (!current[entry.kind].some((item) => item.id === entry.id)) {
+                  return current;
+                }
+                return {
+                  ...current,
+                  [entry.kind]: current[entry.kind].map((item) =>
+                    item.id === entry.id ? { ...item, status: nextStatus } : item,
+                  ),
+                };
+              });
+            } catch (err) {
+              if (isNotFoundConfigError(err)) {
+                return;
+              }
+              setWorkspaceConfig((current) => {
+                if (!current[entry.kind].some((item) => item.id === entry.id)) {
+                  return current;
+                }
+                return {
+                  ...current,
+                  [entry.kind]: current[entry.kind].map((item) =>
+                    item.id === entry.id ? { ...item, status: "failed" as ConfigItemStatus } : item,
+                  ),
+                };
+              });
             }
-            return {
-              ...current,
-              [entry.kind]: current[entry.kind].map((item) =>
-                item.id === entry.id ? { ...item, status: nextStatus } : item,
-              ),
-            };
-          });
-        } catch (err) {
-          if (isNotFoundConfigError(err)) {
-            continue;
-          }
-          setWorkspaceConfig((current) => {
-            if (!current[entry.kind].some((item) => item.id === entry.id)) {
-              return current;
-            }
-            return {
-              ...current,
-              [entry.kind]: current[entry.kind].map((item) =>
-                item.id === entry.id ? { ...item, status: "failed" as ConfigItemStatus } : item,
-              ),
-            };
-          });
-        }
+          },
+          2,
+        );
+        await refreshQuiet();
+        autoTestingRef.current = false;
+      })();
+    });
+
+    return () => {
+      cancel();
+      if (!started) {
+        for (const entry of pending) autoTestedRef.current.delete(entry.key);
+        autoTestingRef.current = false;
       }
-      await refreshQuiet();
-      autoTestingRef.current = false;
-    })();
+    };
   }, [loading, workspaceConfig, runItemTest, refreshQuiet]);
 
   const replaceItemInStore = useCallback(

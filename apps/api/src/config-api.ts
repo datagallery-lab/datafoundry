@@ -83,6 +83,7 @@ import {
 } from "./session-branching.js";
 import { buildSessionTraceDag } from "./trace-dag.js";
 import { readMultipartFiles, readMultipartUpload } from "./upload-parser.js";
+import { knowledgeDocumentTextFromFile } from "./knowledge-document-text.js";
 
 const MAX_JSON_BODY_BYTES = 1024 * 1024;
 const DEFAULT_WORKSPACE_ID = "default";
@@ -115,6 +116,8 @@ const RESOURCE_PATHS: Record<string, ConfigResourceKind> = {
 };
 const CHAT_UPLOAD_MAX_FILES = 1;
 const CHAT_UPLOAD_MAX_FILE_BYTES = 20 * 1024 * 1024;
+const DATASOURCE_UPLOAD_MAX_FILES = 1;
+const DATASOURCE_UPLOAD_MAX_FILE_BYTES = 100 * 1024 * 1024;
 const XLSX_MIME_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
 const CHAT_UPLOAD_TYPES = new Set([
   "application/json",
@@ -125,6 +128,19 @@ const CHAT_UPLOAD_TYPES = new Set([
   "text/tab-separated-values"
 ]);
 const CHAT_UPLOAD_EXTENSIONS = new Set([".csv", ".json", ".parquet", ".pdf", ".tsv", ".txt", ".xlsx"]);
+const DATASOURCE_UPLOAD_EXTENSIONS = new Set([
+  ".accdb",
+  ".csv",
+  ".db",
+  ".duckdb",
+  ".mdb",
+  ".parquet",
+  ".sqlite",
+  ".sqlite3",
+  ".tsv",
+  ".xls",
+  ".xlsx"
+]);
 const DEFAULT_DATALINK_API_TIMEOUT_MS = 30_000;
 
 /** Handle one configuration REST request, or return undefined for a non-config path. */
@@ -355,6 +371,63 @@ const handleChatUpload = async (
   };
 };
 
+const handleDatasourceUpload = async (
+  request: IncomingMessage,
+  context: Required<ConfigApiContext>
+): Promise<ConfigApiResponse> => {
+  if (!isMultipart(request)) {
+    throw new Error("DATASOURCE_UPLOAD_MULTIPART_REQUIRED");
+  }
+  const upload = await readMultipartFiles(request, {
+    maxFileBytes: DATASOURCE_UPLOAD_MAX_FILE_BYTES,
+    maxFiles: DATASOURCE_UPLOAD_MAX_FILES,
+    maxTotalBytes: DATASOURCE_UPLOAD_MAX_FILE_BYTES
+  });
+  const file = upload.files[0];
+  if (!file) {
+    throw new Error("UPLOAD_FILE_REQUIRED");
+  }
+  if (file.content.length === 0) {
+    throw new Error("UPLOAD_FILE_EMPTY");
+  }
+  if (!isSupportedDatasourceUpload(file.filename)) {
+    throw new Error("UNSUPPORTED_FILE_TYPE");
+  }
+  const workspaceRoot = process.env.WORKSPACE_ROOT ?? join(process.env.STORAGE_ROOT_DIR ?? "storage", "workspaces");
+  const workspaceDir = resolveWorkspaceDir({
+    runContext: {
+      user_id: context.userId,
+      workspace_id: context.workspaceId,
+      session_id: "datasource-upload",
+      run_id: "datasource-upload",
+      user_input: "datasource upload",
+      chat_mode: "config",
+      model_name: "datasource-upload"
+    },
+    workspaceRoot
+  });
+  const uploadDir = resolve(workspaceDir, "datasources");
+  if (!uploadDir.startsWith(`${workspaceDir}${sep}`)) {
+    throw new Error("WORKSPACE_PATH_ESCAPE");
+  }
+  mkdirSync(uploadDir, { recursive: true });
+  const filename = uniqueUploadFilename(uploadDir, file.filename);
+  const targetPath = resolve(uploadDir, filename);
+  if (!targetPath.startsWith(`${uploadDir}${sep}`)) {
+    throw new Error("WORKSPACE_PATH_ESCAPE");
+  }
+  writeFileSync(targetPath, file.content);
+  return {
+    body: {
+      path: targetPath,
+      originalName: basename(file.filename) || filename,
+      size: file.content.length,
+      mimeType: file.mimeType || mimeTypeForFilename(filename)
+    },
+    status: 200
+  };
+};
+
 const handleSessionRequest = async (
   request: IncomingMessage,
   segments: string[],
@@ -580,6 +653,12 @@ const handleDatasourceRequest = async (
 ): Promise<ConfigApiResponse> => {
   const id = segments[0];
   const action = segments[1];
+  if (id === "uploads") {
+    if (request.method !== "POST") {
+      return methodNotAllowed();
+    }
+    return handleDatasourceUpload(request, context);
+  }
   if (!id && request.method === "GET") {
     return ok(context.metadataStore.dataSources.list({ user_id: context.userId }).map(dataSourceDto));
   }
@@ -1163,7 +1242,7 @@ const handleGenericResourceRequest = async (
           workspace_id: context.workspaceId,
           id: fileId
         });
-        const content = textContentFromFile(resolved.ref.filename, file.mimeType, file.body);
+        const content = knowledgeDocumentTextFromFile(resolved.ref.filename, file.mimeType, file.body);
         const document = await context.knowledgeService.ingestText({
           user_id: context.userId,
           workspace_id: context.workspaceId,
@@ -1200,11 +1279,23 @@ const handleGenericResourceRequest = async (
     const upload = isMultipart(request) ? await readMultipartUpload(request) : undefined;
     const body = upload ? upload.fields : await readJsonBody(request);
     const filename = upload?.file.filename ?? stringValue(body.filename) ?? "document.txt";
-    const content = upload?.file.content.toString("utf8") ?? stringValue(body.content);
+    const mimeType = upload?.file.mimeType ?? stringValue(body.mimeType) ?? "";
+    // Textual documents only — extension whitelist via knowledgeDocumentTextFromFile.
+    // JSON body path must use the same gate whenever a filename is present (incl. default),
+    // so `{filename:"doc.pdf", content:"..."}` cannot skip validation.
+    let content: string | undefined;
+    if (upload) {
+      content = knowledgeDocumentTextFromFile(filename, mimeType, upload.file.content);
+    } else {
+      const raw = stringValue(body.content);
+      if (!raw) {
+        throw new Error("KNOWLEDGE_DOCUMENT_CONTENT_REQUIRED");
+      }
+      content = knowledgeDocumentTextFromFile(filename, mimeType || "text/plain", Buffer.from(raw, "utf8"));
+    }
     if (!content) {
       throw new Error("KNOWLEDGE_DOCUMENT_CONTENT_REQUIRED");
     }
-    const mimeType = upload?.file.mimeType ?? stringValue(body.mimeType);
     const document = await context.knowledgeService.ingestText({
       user_id: context.userId,
       workspace_id: context.workspaceId,
@@ -3265,20 +3356,6 @@ const safeDownloadNameWithExtension = (name: string, extension: string): string 
   return `${dot > 0 ? safe.slice(0, dot) : safe}${extensionWithDot}`;
 };
 
-const textContentFromFile = (filename: string, mimeType: string, body: Buffer): string => {
-  const lower = filename.toLowerCase();
-  const textual = mimeType.startsWith("text/")
-    || mimeType.includes("json")
-    || lower.endsWith(".csv")
-    || lower.endsWith(".json")
-    || lower.endsWith(".md")
-    || lower.endsWith(".txt");
-  if (!textual) {
-    throw new Error(`KNOWLEDGE_FILE_TYPE_UNSUPPORTED:${filename}`);
-  }
-  return body.toString("utf8");
-};
-
 const numberFromEnv = (name: string, fallback: number): number => {
   const parsed = Number.parseInt(process.env[name] ?? "", 10);
   return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
@@ -3680,7 +3757,10 @@ const errorResponse = (error: unknown): ConfigApiResponse => {
   if (message.startsWith("ARTIFACT_PROMOTE_NO_FILE")) {
     return fail(422, "BAD_REQUEST", message);
   }
-  if (message.startsWith("UNSUPPORTED_FILE_TYPE")) {
+  if (
+    message.startsWith("UNSUPPORTED_FILE_TYPE")
+    || message.startsWith("KNOWLEDGE_FILE_TYPE_UNSUPPORTED")
+  ) {
     return fail(415, "UNSUPPORTED_FILE_TYPE", message);
   }
   if (message.startsWith("PROVIDER_") || message.startsWith("MODEL_FALLBACK")) {
@@ -3828,6 +3908,13 @@ const isSupportedChatUpload = (filename: string, mimeType: string): boolean => {
   return CHAT_UPLOAD_TYPES.has(mimeType.toLowerCase()) || CHAT_UPLOAD_EXTENSIONS.has(extension);
 };
 
+const isSupportedDatasourceUpload = (filename: string): boolean => {
+  const lowerName = filename.toLowerCase();
+  const dot = lowerName.lastIndexOf(".");
+  const extension = dot >= 0 ? lowerName.slice(dot) : "";
+  return DATASOURCE_UPLOAD_EXTENSIONS.has(extension);
+};
+
 const uniqueUploadFilename = (directory: string, filename: string): string => {
   const safe = safeUploadFilename(filename);
   const dot = safe.lastIndexOf(".");
@@ -3892,8 +3979,10 @@ const listMcpTools = async (
   resource: ConfigResourceRecord,
   context: Required<ConfigApiContext>
 ): Promise<Array<Record<string, unknown>>> => {
-  const urlOrCommand = stringValue(resource.payload.serverUrl) ?? stringValue(resource.payload.url);
   const transport = stringValue(resource.payload.transport) ?? "streamable-http";
+  const urlOrCommand = stringValue(resource.payload.serverUrl)
+    ?? stringValue(resource.payload.url)
+    ?? (transport === "stdio" ? stringValue(resource.payload.command) : undefined);
   if (!urlOrCommand || (transport !== "streamable-http" && transport !== "sse" && transport !== "stdio")) {
     throw new Error("MCP_SERVER_CONFIG_INVALID");
   }

@@ -83,19 +83,27 @@ Development identity endpoints:
 
 ## Password authentication mode
 
-Set `DATAFOUNDRY_AUTH_MODE=password` for cookie-based password authentication. Production mode uses `password` by default. Required settings:
+Set `DATAFOUNDRY_AUTH_MODE=password` for cookie-based password authentication. Formal mode uses `password` by default. Required settings:
 
 ```text
 AUTH_SESSION_SECRET=replace-with-at-least-32-random-characters
-AUTH_PUBLIC_BASE_URL=https://datafoundry.example.com
-AUTH_EMAIL_DELIVERY=smtp
+AUTH_PUBLIC_BASE_URL=http://127.0.0.1:3000
+AUTH_EMAIL_DELIVERY=test
 AUTH_EMAIL_FROM=DataFoundry <no-reply@example.com>
-AUTH_SMTP_HOST=smtp.example.com
 ```
+
+Two formal environments share the same start commands:
+
+| Environment | `AUTH_EMAIL_DELIVERY` | `AUTH_PUBLIC_BASE_URL` |
+| --- | --- | --- |
+| Formal test | `test` (links in API console) | Local or private URL |
+| Real production | `smtp` (plus `AUTH_SMTP_*`) | Public HTTPS origin |
 
 Password mode adds `/api/v1/auth/*` endpoints for registration, login, email verification, password reset, logout, session listing, and password change. Unsafe requests require `X-CSRF-Token` from the `df_csrf` cookie. The session cookie is `df_session`.
 
-Production deployment also needs secret management, audit export, access control, and operations monitoring.
+Also set `NEXT_PUBLIC_DATAFOUNDRY_AUTH_MODE=password` and leave `NEXT_PUBLIC_AGENT_RUNTIME_URL` / `NEXT_PUBLIC_CONFIG_API_URL` empty so the browser uses the same-origin Next BFF; point the upstream API with `API_PROXY_TARGET` in `apps/web/.env.local`. Start with `npm run build && npm run build:web && npm run start:api && npm run start:web`. Real-production reverse-proxy sample: `deploy/nginx.datafoundry.conf.example`.
+
+Real production also needs secret management, audit export, access control, and operations monitoring.
 
 ## Documentation release checks
 

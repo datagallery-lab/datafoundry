@@ -38,6 +38,8 @@ import { fileURLToPath } from "node:url";
 import { Observable } from "rxjs";
 
 import { handleConfigApiRequest } from "./config-api.js";
+import { createAsyncMemoByKey, createStartupTimer } from "./async-memo.js";
+import { ensureBuiltinDtcGrowthDatasource } from "./builtin-dtc-growth-datasource.js";
 import { loadPasswordAuthConfig, type PasswordAuthConfig } from "./auth/config.js";
 import { AuthService, type AuthIdentity } from "./auth/service.js";
 import { serverDefaultConnectionStatus, isServerLlmEnvConfigured } from "./model-profile-connection-status.js";
@@ -81,6 +83,11 @@ const DEFAULT_WORKSPACE_ID = "default";
 const SERVER_DIR = dirname(fileURLToPath(import.meta.url));
 const BUILTIN_SKILL_ROOT = join(SERVER_DIR, "../../../packages/skills/builtin");
 const skillCacheSignatures = new Map<string, string>();
+const legacyDemoRemovedUsers = new Set<string>();
+/** Set true only after createServer finishes required init (Mastra + builtins). */
+let serverReady = false;
+let startupTimings: Record<string, number> = {};
+let startupTotalMs = 0;
 
 const emitEarlyRunFailure = (
   subscriber: { complete(): void; next(event: BaseEvent): void },
@@ -153,12 +160,15 @@ export type CreateServerOptions = {
 };
 
 export const createServer = async (options: CreateServerOptions = {}): Promise<Server> => {
+  const timer = createStartupTimer();
+  serverReady = false;
+
   const envConfig = createEnvConfig(process.env);
   const authConfig = loadPasswordAuthConfig(process.env);
   const conversationMemoryMode =
     options.conversationMemoryMode
     ?? parseAgentMemoryMode(process.env.MASTRA_CONVERSATION_MEMORY_MODE, "working-memory-readonly");
-  const metadataStore =
+  const metadataStore = await timer.measure("metadata_store", () =>
     options.metadataStore ??
     createMetadataStore({
       database_path: process.env.METADATA_DB_PATH ?? join(envConfig.storage.root_dir, "metadata", "workbench.sqlite"),
@@ -169,7 +179,8 @@ export const createServer = async (options: CreateServerOptions = {}): Promise<S
         display_name: DEV_USER.display_name ?? "Dev User",
         dev_token: "dev-token"
       }
-    });
+    }),
+  );
   const fileAssetService = new LocalFileAssetService(metadataStore, {
     storageRoot: process.env.FILE_ASSET_STORAGE_ROOT ?? join(envConfig.storage.root_dir, "files")
   });
@@ -190,17 +201,32 @@ export const createServer = async (options: CreateServerOptions = {}): Promise<S
     }
   });
   const ownsTaskStateRuntime = options.taskStateRuntime === undefined;
-  const taskStateRuntime =
-    options.taskStateRuntime ??
-    await createTaskStateRuntime(
+  // Mastra init and builtin skill materialization are independent — overlap them.
+  const taskStateRuntimePromise =
+    options.taskStateRuntime
+    ?? createTaskStateRuntime(
       process.env.MASTRA_STORAGE_PATH ?? join(envConfig.storage.root_dir, "mastra", "agent-state.sqlite"),
       { conversationMemoryMode }
     );
   const runCancelRegistry = new RunCancelRegistry();
   const authService = new AuthService(metadataStore, authConfig);
   ensureDevUser(metadataStore);
-  removeLegacyBuiltinDemoDataSource(metadataStore, DEV_USER.id);
-  await ensureBuiltinConfigResources(fileAssetService, metadataStore, DEV_USER.id, DEFAULT_WORKSPACE_ID);
+  removeLegacyBuiltinDemoDataSourceOnce(metadataStore, DEV_USER.id);
+
+  const [taskStateRuntime] = await Promise.all([
+    timer.measure("mastra_runtime", () => taskStateRuntimePromise),
+    timer.measure("builtin_resources", () =>
+      ensureBuiltinConfigResourcesOnce(fileAssetService, metadataStore, DEV_USER.id, DEFAULT_WORKSPACE_ID),
+    ),
+  ]);
+
+  startupTimings = timer.timings();
+  startupTotalMs = timer.totalMs();
+  serverReady = true;
+  console.log(
+    `[startup] createServer ready in ${startupTotalMs}ms`,
+    JSON.stringify(startupTimings),
+  );
 
   const server = createHttpServer(async (request, response) => {
     try {
@@ -208,6 +234,19 @@ export const createServer = async (options: CreateServerOptions = {}): Promise<S
 
       if (request.method === "GET" && requestUrl.pathname === "/healthz") {
         sendJson(response, 200, createSuccessResult({ status: "ok" }));
+        return;
+      }
+
+      if (request.method === "GET" && requestUrl.pathname === "/ready") {
+        if (!serverReady) {
+          sendJson(response, 503, createErrorResult("INTERNAL_ERROR", "Server is still starting."));
+          return;
+        }
+        sendJson(response, 200, createSuccessResult({
+          status: "ready",
+          startup_ms: startupTotalMs,
+          phases: startupTimings,
+        }));
         return;
       }
 
@@ -232,8 +271,13 @@ export const createServer = async (options: CreateServerOptions = {}): Promise<S
       if (isPasswordAuth(authConfig) && isUnsafeMethod(request.method)) {
         authService.validateCsrf(authContext.identity, headerString(request.headers["x-csrf-token"]));
       }
-      removeLegacyBuiltinDemoDataSource(metadataStore, authContext.user.id);
-      await ensureBuiltinConfigResources(fileAssetService, metadataStore, authContext.user.id, authContext.workspaceId);
+      removeLegacyBuiltinDemoDataSourceOnce(metadataStore, authContext.user.id);
+      await ensureBuiltinConfigResourcesOnce(
+        fileAssetService,
+        metadataStore,
+        authContext.user.id,
+        authContext.workspaceId,
+      );
 
       const configResponse = await handleConfigApiRequest(request, requestUrl.pathname, {
         dataGateway,
@@ -1096,6 +1140,12 @@ const removeLegacyBuiltinDemoDataSource = (metadataStore: MetadataStore, userId:
   }
 };
 
+const removeLegacyBuiltinDemoDataSourceOnce = (metadataStore: MetadataStore, userId: string): void => {
+  if (legacyDemoRemovedUsers.has(userId)) return;
+  removeLegacyBuiltinDemoDataSource(metadataStore, userId);
+  legacyDemoRemovedUsers.add(userId);
+};
+
 const BUILTIN_SKILL_SOURCES = [
   { id: "data-analysis", path: join(BUILTIN_SKILL_ROOT, "data-analysis", "SKILL.md") }
 ] as const;
@@ -1152,6 +1202,12 @@ const ensureBuiltinConfigResources = async (
       id: "server-default"
     });
   }
+  ensureBuiltinDtcGrowthDatasource({
+    metadataStore,
+    userId,
+    workspaceId
+  });
+
   for (const source of BUILTIN_SKILL_SOURCES) {
     const content = readFileSync(source.path);
     const contentSha256 = createHash("sha256").update(content).digest("hex");
@@ -1197,6 +1253,15 @@ const ensureBuiltinConfigResources = async (
   }
   await materializeConfiguredSkillCache(fileAssetService, metadataStore, userId, workspaceId);
 };
+
+/**
+ * Builtins are idempotent for a process lifetime (content changes require redeploy).
+ * Memoize per user/workspace and coalesce concurrent first hits.
+ */
+const ensureBuiltinConfigResourcesOnce = createAsyncMemoByKey(
+  ensureBuiltinConfigResources,
+  (_fileAssetService, _metadataStore, userId, workspaceId) => `${userId}:${workspaceId}`,
+);
 
 const materializeConfiguredSkillCache = async (
   fileAssetService: LocalFileAssetService,

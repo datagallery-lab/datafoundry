@@ -9,7 +9,6 @@ import {
 } from "./adapters/enterprise-sql-adapters.js";
 import {
   CsvAdapter,
-  DuckDbDemoAdapter,
   XlsxAdapter
 } from "./adapters/local-dataset-adapters.js";
 import {
@@ -367,9 +366,7 @@ const DATA_SOURCE_ADAPTER_REGISTRY = createAdapterRegistry({
   csv: (config) => new CsvAdapter(config),
   databricks: (config) => new DatabricksSqlAdapter(config),
   doris: (config) => new DorisAdapter(config),
-  duckdb: (config) => stringConfig(config, "mode", "file") === "demo"
-    ? new DuckDbDemoAdapter(config)
-    : new DuckDbAdapter(config),
+  duckdb: (config) => new DuckDbAdapter(config),
   elasticsearch: (config) => new ElasticsearchAdapter(config),
   gaussdb: (config) => new GaussDbAdapter(config),
   greenplum: (config) => new GreenplumAdapter(config),
@@ -533,20 +530,6 @@ const stringArray = (value: unknown): string[] =>
 
 const positiveNumber = (value: unknown): number | undefined =>
   typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
-
-const stringConfig = (config: Record<string, unknown>, key: string, defaultValue?: string): string => {
-  const value = config[key];
-
-  if (typeof value === "string" && value.length > 0) {
-    return value;
-  }
-
-  if (defaultValue !== undefined) {
-    return defaultValue;
-  }
-
-  throw new Error(`Missing string config: ${key}`);
-};
 
 const writeSqlResultCsv = (auditId: string, result: TableResult): string => {
   const root = process.env.SQL_RESULT_EXPORT_ROOT ?? join(process.env.STORAGE_ROOT_DIR ?? "storage", "sql-results");

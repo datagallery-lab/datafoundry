@@ -57,9 +57,16 @@ Most tools reduce the problem to `prompt → SQL → answer` — impressive in a
 - 🔒 **Safe by default, auditable throughout** — Read-only queries, credential isolation, field masking, row limits, and timeouts by default; SQL, tool calls, and event streams are fully persisted and replayable, so every conclusion is backed by evidence.
 - 🧩 **Deep optimization for complex data tasks** — Built for multi-table, multi-field, long-horizon analysis and multi-step reasoning: complex questions get decomposed, verified, and converged into trustworthy conclusions, materialized as tables, charts, and reports the team can reuse.
 
-## 🚀 Run It In 5 Minutes
+## 🚀 Formal deploy
 
-No database required — a built-in DuckDB demo datasource works out of the box.
+Default path is the **formal** stack: `password` auth + `build` / `start` (do **not** run `npm run dev`). No business database required — a built-in DuckDB demo datasource works out of the box.
+
+Two formal environments share the **same startup commands**:
+
+| Environment | Use for | Email | Public URL |
+| --- | --- | --- | --- |
+| **Formal test** | Local / private acceptance | `AUTH_EMAIL_DELIVERY=test` (links in API console) | `http://127.0.0.1:3000` |
+| **Real production** | Public service | `AUTH_EMAIL_DELIVERY=smtp` | Public HTTPS + reverse proxy |
 
 ```bash
 git clone https://github.com/datagallery-lab/datafoundry.git
@@ -67,19 +74,41 @@ cd datafoundry
 npm install
 cp .env.example .env
 cp apps/web/.env.example apps/web/.env.local
-npm run dev
 ```
 
-Configure any OpenAI-compatible model in `.env`:
+Configure any OpenAI-compatible model in the root `.env`, plus auth for formal test or real production (sample defaults lean formal test):
 
 ```bash
 LLM_PROVIDER=openai-compatible
 LLM_MODEL=qwen-plus                # or deepseek-chat, gpt-4o, ...
 LLM_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
 LLM_API_KEY=replace-with-your-key
+
+DATAFOUNDRY_AUTH_MODE=password
+AUTH_SESSION_SECRET=replace-with-at-least-32-random-characters
+AUTH_PUBLIC_BASE_URL=http://127.0.0.1:3000   # real production: https://your.domain
+AUTH_EMAIL_DELIVERY=test                     # real production: smtp + AUTH_SMTP_*
 ```
 
-Open `http://127.0.0.1:3000/data-tasks` and ask:
+`apps/web/.env.local`:
+
+```bash
+NEXT_PUBLIC_DATAFOUNDRY_AUTH_MODE=password
+NEXT_PUBLIC_AGENT_RUNTIME_URL=
+NEXT_PUBLIC_CONFIG_API_URL=
+API_PROXY_TARGET=http://127.0.0.1:8787
+```
+
+Build and start:
+
+```bash
+npm run build
+npm run build:web
+npm run start:api    # :8787  — /healthz liveness, /ready readiness
+npm run start:web    # :3000  — password mode via same-origin BFF
+```
+
+Open `http://127.0.0.1:3000/login`, register or sign in, go to `/data-tasks`, and ask:
 
 ```text
 Show me the tables in this datasource and explain the main fields of each.
@@ -87,7 +116,9 @@ Show me the tables in this datasource and explain the main fields of each.
 
 You will see the full chain: schema inspection → read-only SQL → SQL audit → table output → replayable run history.
 
-> See the [Quick Start](docs/en/quick-start.md) for details, and the [Data Sources guide](docs/en/guides/data-sources.md) to connect your own PostgreSQL / MySQL / CSV and more.
+For real production, also configure SMTP and a reverse proxy: [`deploy/nginx.datafoundry.conf.example`](deploy/nginx.datafoundry.conf.example) (gzip/brotli static assets; keep `/api/copilotkit` uncompressed and unbuffered for SSE).
+
+> Full steps and the two-environment matrix: [Quick Start](docs/en/quick-start.md). Contributor hot-reload (`npm run dev`) is appendix-only. Connect your own PostgreSQL / MySQL / CSV and more: [Data Sources guide](docs/en/guides/data-sources.md).
 
 ## 🆚 How It Differs From Coding Agents And SQL Chatbots
 

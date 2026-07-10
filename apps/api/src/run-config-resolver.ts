@@ -525,9 +525,11 @@ const buildMcpServerConfig = (input: {
   if (transport !== "streamable-http" && transport !== "sse" && transport !== "stdio") {
     throw new Error(`MCP_TRANSPORT_UNSUPPORTED:${id}:${transport}`);
   }
-  const urlOrCommand = stringRecordValue(resource.payload, "serverUrl") ?? stringRecordValue(resource.payload, "url");
+  const urlOrCommand = stringRecordValue(resource.payload, "serverUrl")
+    ?? stringRecordValue(resource.payload, "url")
+    ?? (transport === "stdio" ? stringRecordValue(resource.payload, "command") : undefined);
   if (!urlOrCommand) {
-    throw new Error(`MCP_SERVER_URL_REQUIRED:${id}`);
+    throw new Error(transport === "stdio" ? `MCP_STDIO_COMMAND_REQUIRED:${id}` : `MCP_SERVER_URL_REQUIRED:${id}`);
   }
   const manifest = resource.payload.toolManifest;
   if (!Array.isArray(manifest)) {

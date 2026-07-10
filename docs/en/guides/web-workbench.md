@@ -4,41 +4,49 @@ This guide is for users trying DataFoundry in the browser. After reading it, you
 
 ## How to start
 
-Start the full local stack from the repository root:
+Default path is the **formal** stack (`password` + `build` / `start`). Formal test and real production share the same commands; email and public URL differ in the root `.env` — see [Quick start](../quick-start.md).
 
 ```bash
-npm run dev
+npm run build && npm run build:web
+npm run start:api
+npm run start:web
 ```
 
 Open:
 
 ```text
-http://127.0.0.1:3000/data-tasks
+http://127.0.0.1:3000/login
 ```
 
-Start frontend and backend separately:
+Then go to `/data-tasks` after sign-in.
+
+Formal frontend settings (`apps/web/.env.local`; re-run `build:web` after changing `NEXT_PUBLIC_*`):
 
 ```bash
-npm run dev:api
-npm run dev:web
+NEXT_PUBLIC_DATAFOUNDRY_AUTH_MODE=password
+NEXT_PUBLIC_AGENT_RUNTIME_URL=
+NEXT_PUBLIC_CONFIG_API_URL=
+API_PROXY_TARGET=http://127.0.0.1:8787
 ```
 
-The frontend connects to the local backend by default:
+The browser uses the same-origin Next BFF (`/api/v1/*`, `/api/copilotkit`). Point the BFF upstream with `API_PROXY_TARGET` (default `http://127.0.0.1:8787`).
 
-```bash
-NEXT_PUBLIC_AGENT_RUNTIME_URL=http://127.0.0.1:8787/api/copilotkit
-NEXT_PUBLIC_CONFIG_API_URL=http://127.0.0.1:8787
-```
+Probes:
 
-If you only set `NEXT_PUBLIC_AGENT_RUNTIME_URL`, the frontend derives the configuration API root from the `/api/copilotkit` URL.
+- Liveness: `GET /healthz`
+- Readiness: `GET /ready` (includes `startup_ms` / `phases`)
+
+Reverse-proxy sample (real production): [`deploy/nginx.datafoundry.conf.example`](../../../deploy/nginx.datafoundry.conf.example).
+
+Contributor hot-reload (not formal; do not mix with `start:*`): [Quick start appendix](../quick-start.md).
 
 ## Identity and first-run guide
 
-In local development, the Web workbench starts with a development user and the `default` workspace. The user menu at the bottom of the left pane shows the current user. Local development can switch users through the dev identity API; production password mode shows sign-in, account creation, password reset, and sign-out screens instead.
+Formal (`password`) mode shows sign-in, register, password reset, and sign-out. Formal test prints verification links in the API console; real production sends email via SMTP.
 
-The Web workbench sends the same identity to configuration REST calls and CopilotKit agent runs. When the user changes, the workbench remounts the data-task workspace so sessions, selected resources, files, artifacts, live run state, and quick-start progress stay scoped to that user.
+The Web workbench sends the same identity to configuration REST requests and CopilotKit agent runs. When the user changes, the workbench remounts the data-task area so sessions, selected resources, files, outputs, live run state, and onboarding progress stay in the current user scope.
 
-First-time users see a quick-start guide. Use the round `?` button near the user area to reopen it. The guide can fill an example prompt into the chat input and waits for you to send the task before moving to the console step.
+First-time users see the quick guide. Reopen it with the circular `?` near the user area. The guide can fill an example prompt and waits until you actually send a task before advancing to the console step.
 
 ## Layout
 

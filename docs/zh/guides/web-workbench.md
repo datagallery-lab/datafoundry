@@ -4,37 +4,45 @@
 
 ## 启动方式
 
-在仓库根目录启动完整本地服务：
+默认按**正式态**启动（`password` + `build` / `start`）。正式测试与真实生产启动命令相同，差别在根目录 `.env` 的邮箱与公网地址，见 [快速开始](../quick-start.md)。
 
 ```bash
-npm run dev
+npm run build && npm run build:web
+npm run start:api
+npm run start:web
 ```
 
 打开：
 
 ```text
-http://127.0.0.1:3000/data-tasks
+http://127.0.0.1:3000/login
 ```
 
-分开启动前后端：
+登录后进入 `/data-tasks`。
+
+正式态前端配置（`apps/web/.env.local`，改 `NEXT_PUBLIC_*` 后需重新 `build:web`）：
 
 ```bash
-npm run dev:api
-npm run dev:web
+NEXT_PUBLIC_DATAFOUNDRY_AUTH_MODE=password
+NEXT_PUBLIC_AGENT_RUNTIME_URL=
+NEXT_PUBLIC_CONFIG_API_URL=
+API_PROXY_TARGET=http://127.0.0.1:8787
 ```
 
-前端默认连接本地后端：
+浏览器走同源 Next BFF（`/api/v1/*`、`/api/copilotkit`）。BFF 上游用 `API_PROXY_TARGET`（默认 `http://127.0.0.1:8787`）。
 
-```bash
-NEXT_PUBLIC_AGENT_RUNTIME_URL=http://127.0.0.1:8787/api/copilotkit
-NEXT_PUBLIC_CONFIG_API_URL=http://127.0.0.1:8787
-```
+就绪探针：
 
-如果只配置 `NEXT_PUBLIC_AGENT_RUNTIME_URL`，前端会从 `/api/copilotkit` 地址推导配置 API 根地址。
+- 存活：`GET /healthz`
+- 就绪：`GET /ready`（含 `startup_ms` / `phases`）
+
+反代样例（真实生产）：[`deploy/nginx.datafoundry.conf.example`](../../../deploy/nginx.datafoundry.conf.example)。
+
+贡献者本地热更新（非正式态，勿与 `start:*` 混开）见 [快速开始附录](../quick-start.md)。
 
 ## 身份和首次引导
 
-本地开发时，Web 工作台使用开发用户和 `default` workspace。左侧底部用户菜单展示当前用户。本地开发可通过 dev identity API 切换用户；生产 password 模式展示登录、注册、密码重置和退出登录界面。
+正式态（`password`）展示登录、注册、密码重置和退出登录。正式测试下验证链接打在 API 控制台；真实生产走 SMTP。
 
 Web 工作台会把同一组身份发送给配置 REST 请求和 CopilotKit agent run。用户变化时，工作台会重新挂载数据任务区域，让 session、已选资源、文件、产出、live run 状态和快速引导进度都留在当前用户作用域。
 

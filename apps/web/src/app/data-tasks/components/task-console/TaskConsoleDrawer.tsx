@@ -4,7 +4,7 @@ import type { DataArtifact, TimelineEvent } from "../../data-task-state";
 import type { JobDto } from "../../../../lib/config-api";
 import type { LiveRun, SessionUsageStats } from "../../live-run-state";
 import type { ProcessToolGroup } from "../../process-tool-groups";
-import type { TaskSelection } from "../../page";
+import type { TaskSelection } from "../../data-tasks-app";
 import { overlayBackdropClass, overlayPanelClass } from "../../ui-tokens";
 import { TaskConsolePanel } from "./TaskConsolePanel";
 
