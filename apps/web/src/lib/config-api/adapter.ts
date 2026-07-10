@@ -184,6 +184,7 @@ export function mcpServerDtoToItem(dto: McpServerDto): WorkspaceConfigItem {
     settings: {
       transport: dto.transport ?? "streamable-http",
       serverUrl: dto.serverUrl ?? "",
+      apiUrl: dto.apiUrl ?? "",
       authType: dto.authType ?? "none",
       apiKey: "",
       toolAllowlist: Array.isArray(dto.toolAllowlist) ? dto.toolAllowlist.join(", ") : dto.toolAllowlist ?? "",
@@ -474,6 +475,7 @@ export function itemToCreateBody(
         ...base,
         transport: settings.transport ?? "streamable-http",
         serverUrl: settings.serverUrl?.trim() ?? "",
+        ...(settings.apiUrl?.trim() ? { apiUrl: settings.apiUrl.trim() } : {}),
         ...(settings.authType?.trim() ? { authType: settings.authType.trim() } : {}),
         ...(splitCsv(settings.toolAllowlist) ? { toolAllowlist: splitCsv(settings.toolAllowlist) } : {}),
         ...(parseNumber(settings.timeoutMs) !== undefined ? { timeoutMs: parseNumber(settings.timeoutMs) } : {}),
@@ -655,6 +657,7 @@ export function itemToPatchBody(
     case "mcp":
       if (settings.transport?.trim()) body.transport = settings.transport.trim();
       if (settings.serverUrl?.trim()) body.serverUrl = settings.serverUrl.trim();
+      if (settings.apiUrl?.trim()) body.apiUrl = settings.apiUrl.trim();
       if (settings.authType?.trim()) body.authType = settings.authType.trim();
       if (splitCsv(settings.toolAllowlist)) {
         body.toolAllowlist = splitCsv(settings.toolAllowlist);

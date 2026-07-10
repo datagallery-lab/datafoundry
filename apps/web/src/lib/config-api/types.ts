@@ -174,6 +174,7 @@ export type McpServerDto = {
   description?: string;
   transport?: string;
   serverUrl?: string;
+  apiUrl?: string;
   authType?: string;
   toolManifest?: unknown[];
   toolAllowlist?: string[] | string;
@@ -198,6 +199,7 @@ export type DatalinkServerDto = {
   description?: string;
   healthStatus?: string;
   serverUrl?: string;
+  apiUrl?: string;
   transport?: string;
   toolCount?: number;
   toolNames?: string[];

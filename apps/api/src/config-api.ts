@@ -125,14 +125,7 @@ const CHAT_UPLOAD_TYPES = new Set([
   "text/tab-separated-values"
 ]);
 const CHAT_UPLOAD_EXTENSIONS = new Set([".csv", ".json", ".parquet", ".pdf", ".tsv", ".txt", ".xlsx"]);
-const DATALINK_TOOL_ALIASES = {
-  addTable: ["add_table"],
-  explore: ["datalink_explore", "datagraph_explore"],
-  rebuild: ["rebuild"],
-  removeTable: ["remove_table"],
-  show: ["datalink_show", "datagraph_show"]
-} as const;
-type DatalinkToolOperation = keyof typeof DATALINK_TOOL_ALIASES;
+const DEFAULT_DATALINK_API_TIMEOUT_MS = 30_000;
 
 /** Handle one configuration REST request, or return undefined for a non-config path. */
 export const handleConfigApiRequest = async (
@@ -700,7 +693,7 @@ const handleDatalinkRequest = async (
   const serverId = decodeURIComponent(target);
   const resource = getDatalinkServer(context, serverId);
   if (action === "graph" && request.method === "GET") {
-    const result = await callDatalinkMcpTool(resource, context, "show", {});
+    const result = await callDatalinkApi(resource, context, "/show");
     return ok({
       graph: normalizeDatalinkGraph(result),
       server: datalinkServerDto(resource)
@@ -714,11 +707,10 @@ const handleDatalinkRequest = async (
     }
     const maxNodes = numberValue(body.maxNodes) ?? numberValue(body.max_nodes);
     const focus = stringValue(body.focus);
-    const result = await callDatalinkMcpTool(resource, context, "explore", {
+    const result = await callDatalinkApi(resource, context, "/explore", {
       query,
       ...(maxNodes !== undefined ? { max_nodes: Math.floor(maxNodes) } : {}),
-      ...(focus ? { focus } : {}),
-      mask_credential: booleanValue(body.maskCredential ?? body.mask_credential, true)
+      ...(focus ? { focus } : {})
     });
     return ok({ result: result.text, server: datalinkServerDto(resource) });
   }
@@ -728,7 +720,7 @@ const handleDatalinkRequest = async (
     if (!source) {
       throw new Error("DATALINK_SOURCE_REQUIRED");
     }
-    const result = await callDatalinkMcpTool(resource, context, "addTable", {
+    const result = await callDatalinkApi(resource, context, "/add-table", {
       source,
       table: stringValue(body.table) ?? null,
       source_type: stringValue(body.sourceType ?? body.source_type) ?? "csv",
@@ -742,21 +734,24 @@ const handleDatalinkRequest = async (
     if (!tableId) {
       throw new Error("DATALINK_TABLE_ID_REQUIRED");
     }
-    const result = await callDatalinkMcpTool(resource, context, "removeTable", {
+    const result = await callDatalinkApi(resource, context, "/remove-table", {
       table_id: tableId,
       cleanup_orphans: booleanValue(body.cleanupOrphans ?? body.cleanup_orphans, true)
     });
     return ok({ result: result.text, server: datalinkServerDto(resource) });
   }
   if (action === "rebuild" && request.method === "POST") {
-    const result = await callDatalinkMcpTool(resource, context, "rebuild", {});
+    const body = await readJsonBody(request);
+    const result = await callDatalinkApi(resource, context, "/rebuild", {
+      ...(stringValue(body.mode) ? { mode: stringValue(body.mode) } : {})
+    });
     return ok({ result: result.text, server: datalinkServerDto(resource) });
   }
   return methodNotAllowed();
 };
 
-type DatalinkToolCallResult = {
-  structuredContent?: unknown;
+type DatalinkApiCallResult = {
+  data: unknown;
   text: string;
 };
 
@@ -804,6 +799,7 @@ const datalinkServerDto = (resource: ConfigResourceRecord): Record<string, unkno
     description: resource.description ?? "",
     healthStatus: resource.status,
     serverUrl: stringValue(resource.payload.serverUrl) ?? stringValue(resource.payload.url) ?? "",
+    apiUrl: stringValue(resource.payload.apiUrl) ?? "",
     transport: stringValue(resource.payload.transport) ?? "streamable-http",
     toolCount: tools.length,
     toolNames: tools.map((tool) => tool.name),
@@ -829,105 +825,61 @@ const datalinkToolManifest = (resource: ConfigResourceRecord): Array<{ name: str
   });
 };
 
-const callDatalinkMcpTool = async (
+const callDatalinkApi = async (
   resource: ConfigResourceRecord,
   context: Required<ConfigApiContext>,
-  operation: DatalinkToolOperation,
-  args: Record<string, unknown>
-): Promise<DatalinkToolCallResult> => {
-  const config = datalinkMcpClientConfig(resource, context);
-  let client: Client | undefined;
+  path: string,
+  body?: Record<string, unknown>
+): Promise<DatalinkApiCallResult> => {
+  const url = datalinkApiEndpoint(resource, path);
+  const headers = new Headers(datalinkMcpHeaders(resource, context));
+  headers.set("Accept", "application/json");
+  if (body !== undefined) {
+    headers.set("Content-Type", "application/json");
+  }
+  const timeoutMs = numberValue(resource.payload.timeoutMs) ?? DEFAULT_DATALINK_API_TIMEOUT_MS;
+  let response: Response;
   try {
-    client = await connectPolicyMcpClient(config);
-    const toolName = await resolveDatalinkToolName(resource, client, operation);
-    const result = await client.callTool({ name: toolName, arguments: args });
-    const text = datalinkToolText(result);
-    if (isRecord(result) && result.isError === true) {
-      throw new Error(`DATALINK_TOOL_FAILED:${toolName}:${text}`);
-    }
-    return {
-      ...(isRecord(result) && result.structuredContent !== undefined
-        ? { structuredContent: result.structuredContent }
-        : {}),
-      text
-    };
-  } finally {
-    await client?.close().catch(() => undefined);
+    response = await fetch(url, {
+      method: body === undefined ? "GET" : "POST",
+      headers,
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      signal: AbortSignal.timeout(timeoutMs)
+    });
+  } catch (error) {
+    throw new Error(`DATALINK_API_REQUEST_FAILED:${error instanceof Error ? error.message : String(error)}`);
+  }
+  const text = await response.text();
+  if (!response.ok) {
+    throw new Error(`DATALINK_API_FAILED:${response.status}:${text}`);
+  }
+  if (!response.headers.get("content-type")?.includes("application/json")) {
+    return { data: text, text };
+  }
+  try {
+    const data = text ? JSON.parse(text) : {};
+    return { data, text: datalinkApiResponseText(data) };
+  } catch {
+    throw new Error("DATALINK_API_INVALID_RESPONSE");
   }
 };
 
-const resolveDatalinkToolName = async (
-  resource: ConfigResourceRecord,
-  client: Client,
-  operation: DatalinkToolOperation
-): Promise<string> => {
-  const liveToolNames = await listDatalinkMcpToolNames(client);
-  const toolName = pickDatalinkToolName(operation, liveToolNames);
-  if (!toolName) {
-    throw new Error(`DATALINK_TOOL_UNAVAILABLE:${operation}:${liveToolNames.join(",")}`);
+const datalinkApiEndpoint = (resource: ConfigResourceRecord, path: string): string => {
+  const rawUrl = stringValue(resource.payload.apiUrl);
+  if (!rawUrl) {
+    throw new Error("DATALINK_API_URL_REQUIRED");
   }
-  ensureDatalinkToolAllowed(resource, toolName);
-  return toolName;
-};
-
-const listDatalinkMcpToolNames = async (client: Client): Promise<string[]> => {
-  const result = await client.listTools();
-  return result.tools.flatMap((tool) => typeof tool.name === "string" ? [tool.name] : []);
-};
-
-const pickDatalinkToolName = (operation: DatalinkToolOperation, toolNames: string[]): string | undefined => {
-  const available = new Set(toolNames);
-  const preferred = DATALINK_TOOL_ALIASES[operation].find((toolName) => available.has(toolName));
-  if (preferred) {
-    return preferred;
+  let baseUrl: URL;
+  try {
+    baseUrl = new URL(rawUrl);
+  } catch {
+    throw new Error("DATALINK_API_URL_INVALID");
   }
-  return toolNames.find((toolName) => matchesDatalinkOperation(toolName, operation));
-};
-
-const matchesDatalinkOperation = (toolName: string, operation: DatalinkToolOperation): boolean => {
-  if (operation === "show") {
-    return toolName.endsWith("_show");
+  if (baseUrl.protocol !== "http:" && baseUrl.protocol !== "https:") {
+    throw new Error("DATALINK_API_URL_INVALID");
   }
-  if (operation === "explore") {
-    return toolName.endsWith("_explore");
-  }
-  return DATALINK_TOOL_ALIASES[operation].some((candidate) => candidate === toolName);
-};
-
-const ensureDatalinkToolAllowed = (resource: ConfigResourceRecord, toolName: string): void => {
-  const allowlist = mcpToolAllowlistValue(resource.payload.toolAllowlist);
-  if (!matchesMcpToolAllowlist(resource.id, toolName, allowlist)) {
-    throw new Error(`DATALINK_TOOL_NOT_ALLOWED:${toolName}`);
-  }
-};
-
-const datalinkMcpClientConfig = (
-  resource: ConfigResourceRecord,
-  context: Required<ConfigApiContext>
-): PolicyMcpClientConfig => {
-  const urlOrCommand = stringValue(resource.payload.serverUrl) ?? stringValue(resource.payload.url);
-  const transport = stringValue(resource.payload.transport) ?? "streamable-http";
-  if (!urlOrCommand || (transport !== "streamable-http" && transport !== "sse" && transport !== "stdio")) {
-    throw new Error("DATALINK_MCP_CONFIG_INVALID");
-  }
-  const timeoutMs = numberValue(resource.payload.timeoutMs);
-  if (transport === "stdio") {
-    const command = resolveStdioCommand(resource.payload, urlOrCommand);
-    return {
-      serverId: resource.id,
-      type: "stdio",
-      ...command,
-      ...(timeoutMs !== undefined ? { timeoutMs } : {})
-    };
-  }
-  const headers = datalinkMcpHeaders(resource, context);
-  return {
-    serverId: resource.id,
-    type: transport === "sse" ? "sse" : "http",
-    url: urlOrCommand,
-    ...(headers ? { headers } : {}),
-    ...(timeoutMs !== undefined ? { timeoutMs } : {})
-  };
+  const normalizedBase = baseUrl.href.endsWith("/") ? baseUrl.href : `${baseUrl.href}/`;
+  return new URL(path.replace(/^\/+/, ""), normalizedBase).toString();
 };
 
 const datalinkMcpHeaders = (
@@ -949,26 +901,16 @@ const datalinkMcpHeaders = (
   return configured;
 };
 
-const datalinkToolText = (result: unknown): string => {
-  const record = recordValue(result) ?? {};
-  const content = arrayValue(record.content);
-  const textParts = content?.flatMap((part) => {
-    const item = recordValue(part);
-    return item?.type === "text" && typeof item.text === "string" ? [item.text] : [];
-  }) ?? [];
-  if (textParts.length > 0) {
-    return textParts.join("\n");
+const datalinkApiResponseText = (data: unknown): string => {
+  if (typeof data === "string") {
+    return data;
   }
-  const structured = recordValue(record.structuredContent);
-  const structuredResult = structured ? stringValue(structured.result) : undefined;
-  if (structuredResult) {
-    return structuredResult;
-  }
-  return JSON.stringify(record.structuredContent ?? result);
+  const result = stringValue(recordValue(data)?.result);
+  return result ?? JSON.stringify(data);
 };
 
-const normalizeDatalinkGraph = (result: DatalinkToolCallResult): Record<string, unknown> => {
-  const parsed = tryParseRecord(result.text) ?? recordValue(result.structuredContent) ?? {};
+const normalizeDatalinkGraph = (result: DatalinkApiCallResult): Record<string, unknown> => {
+  const parsed = recordValue(result.data) ?? {};
   const graph = recordValue(parsed.graph) ?? parsed;
   const nodes = arrayValue(graph.nodes);
   const edges = arrayValue(graph.edges);

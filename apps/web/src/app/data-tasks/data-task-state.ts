@@ -1240,6 +1240,7 @@ export function normalizeMcpSettings(
 ): {
   transport: string;
   serverUrl: string;
+  apiUrl: string;
   apiKey: string;
   authType: string;
   toolAllowlist: string;
@@ -1252,6 +1253,7 @@ export function normalizeMcpSettings(
   return {
     transport: settings?.transport ?? "sse",
     serverUrl: settings?.serverUrl ?? settings?.url ?? settings?.endpoint ?? "",
+    apiUrl: settings?.apiUrl ?? "",
     apiKey: settings?.apiKey ?? settings?.api_key ?? settings?.token ?? "",
     authType: settings?.authType ?? "none",
     toolAllowlist: settings?.toolAllowlist ?? "",
@@ -1667,6 +1669,14 @@ export const WORKSPACE_CONFIG_FIELDS: Record<
       fullWidth: true,
     },
     {
+      key: "apiUrl",
+      label: "Data API endpoint",
+      placeholder: "https://example.com",
+      helpText: "Used by the DataLink workspace graph. Leave empty for MCP-only services.",
+      visibleWhen: (settings) => !isMcpStdioTransport(settings),
+      fullWidth: true,
+    },
+    {
       key: "command",
       label: "Executable",
       placeholder: "/usr/bin/npx",
@@ -1925,6 +1935,7 @@ export function defaultSettingsForKind(
       return {
         transport: "sse",
         serverUrl: name ? `https://${name}` : "",
+        apiUrl: "",
         apiKey: "",
         authType: "none",
         command: "",
