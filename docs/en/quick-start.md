@@ -131,7 +131,7 @@ After changing any `NEXT_PUBLIC_*` value in `apps/web/.env.local`, run `npm run 
 On `/data-tasks`:
 
 1. Click **New data task**.
-2. Keep the built-in DuckDB demo data source.
+2. Select the built-in **DTC Growth Review** data source (or keep the DuckDB demo for a minimal smoke test).
 3. Select **Server default** or your configured model next to the input box.
 4. Send your first question.
 
@@ -144,7 +144,7 @@ Show me the tables in this datasource and explain the main fields of each.
 Aggregation prompt:
 
 ```text
-Count orders and total GMV by channel in the orders table.
+Compare GMV, gross margin, ad spend, and refunds by channel. Explain which channel should receive the next budget increment.
 ```
 
 When you see schema inspection, SQL execution, and result output, the path is working.

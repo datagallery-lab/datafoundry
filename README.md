@@ -14,7 +14,7 @@
 </p>
 
 <p align="center">
-  <a href="#-run-it-in-5-minutes"><strong>Quick Start</strong></a>
+  <a href="#-formal-deploy"><strong>Quick Start</strong></a>
   ·
   <a href="https://datagallery-lab.github.io/datafoundry/"><strong>Docs</strong></a>
   ·
@@ -57,9 +57,21 @@ Most tools reduce the problem to `prompt → SQL → answer` — impressive in a
 - 🔒 **Safe by default, auditable throughout** — Read-only queries, credential isolation, field masking, row limits, and timeouts by default; SQL, tool calls, and event streams are fully persisted and replayable, so every conclusion is backed by evidence.
 - 🧩 **Deep optimization for complex data tasks** — Built for multi-table, multi-field, long-horizon analysis and multi-step reasoning: complex questions get decomposed, verified, and converged into trustworthy conclusions, materialized as tables, charts, and reports the team can reuse.
 
+## 🆕 What's New In v0.2.0
+
+DataFoundry 0.2 turns the first usable workbench into a more complete, stateful data-agent workflow:
+
+- **Branchable, concurrent analysis** — Keep multiple sessions running, queue follow-up prompts, restore completed work, and branch from an earlier question or checkpoint without overwriting the original path.
+- **Evidence-first follow-ups** — Reference a complete output or a selected table/text region in the next question; resolved evidence is carried into the governed run context with diagnostics.
+- **Semantic trace and Data Link** — Inspect checkpoint-backed run structure in a semantic Trace DAG, and explore tables, columns, concepts, entities, and relationships through a configured Data Link service.
+- **Reusable outputs and workspace assets** — Preview and export tables, charts, reports, SQL, and files; upload files into an active session, then promote supported files for reuse across sessions.
+- **Production-facing Web foundation** — Built-in password authentication, same-origin API proxying, bilingual UI, model connection tests, onboarding, and an auto-provisioned DTC growth analysis case.
+
+See the [v0.2.0 release notes](docs/en/releases/v0.2.0.md) for the complete capability and documentation audit.
+
 ## 🚀 Formal deploy
 
-Default path is the **formal** stack: `password` auth + `build` / `start` (do **not** run `npm run dev`). No business database required — a built-in DuckDB demo datasource works out of the box.
+Default path is the **formal** stack: `password` auth + `build` / `start` (do **not** run `npm run dev`). No business database required — built-in demo data sources, including the DTC Growth Review case, work out of the box.
 
 Two formal environments share the **same startup commands**:
 
@@ -166,7 +178,7 @@ The **Web workbench** fits day-to-day analysis and demos, the **TUI** fits termi
 
 ## 🗄️ Bring Your Data Stack, No Rebuild
 
-Connect through Data Gateway adapters: the built-in DuckDB demo works out of the box; SQLite, CSV, Excel, PostgreSQL, and MySQL fit local trials; cloud warehouses, search engines, and NoSQL systems plug in with their own services and credentials.
+Connect through Data Gateway adapters: built-in DuckDB and DTC Growth Review demos work out of the box; SQLite, CSV, Excel, PostgreSQL, and MySQL fit local trials; cloud warehouses, search engines, and NoSQL systems plug in with their own services and credentials.
 
 <p align="center">
   <img src="docs/assets/readme/database-wall.png" alt="Supported DataFoundry data sources" width="100%">

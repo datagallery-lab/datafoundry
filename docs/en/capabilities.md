@@ -18,15 +18,22 @@ Status is based on current code:
 | --- | --- | --- | --- | --- |
 | Natural-language data analysis | Ready to try | Ready to try | Ready to try | Configure LLM key and ask questions with `api-duckdb-demo`. |
 | Built-in DuckDB demo | Ready to try | Ready to try | Ready to try | Data source list includes `api-duckdb-demo`. |
+| Built-in DTC growth case | Ready to try | Ready to try | Ready to try | Data source list includes `DTC Growth Review`; each user gets a read-only workspace copy. |
 | Data source registration and test | Ready to try | Select configured sources | Ready to try | `GET /api/v1/datasource-types`, `POST /api/v1/datasources/:id/test`. |
 | Schema fetch and table preview | Ready to try | Via agent tool results | Ready to try | `POST /api/v1/datasources/:id/introspect`, `GET /schema`, `GET /tables/:table/preview`. |
 | Read-only SQL analysis | Ready to try | Ready to try | Ready to try | Agent run inspects schema first, then runs queries through tools. |
 | Model configuration | Requires configuration | Uses server model config | Requires configuration | `.env` or `/api/v1/model-profiles`. |
+| Model connection test | Ready to try | Uses server model config | Ready to try | `POST /api/v1/model-profiles/:id/test`. |
 | Analysis trace | Ready to try | Ready to try | Ready to try | View steps, tool calls, run events, and SQL audit. |
+| Semantic Trace DAG | Ready to try | No graph view | Ready to try | Open the Web trace graph or `GET /api/v1/sessions/:id/trace-dag`. |
 | Artifact outputs | Ready to try | View session outputs | Capability-controlled | `artifact.list`, `artifact.export`, `artifact.promote`. |
 | Session history | Ready to try | Resume with `/resume` | Capability-controlled | `conversation.memory`, `conversation.title`. |
+| Concurrent sessions and queued prompts | Ready to try | One active terminal flow | Ready to try | Start runs in separate sessions; submit another prompt during an active Web run. |
+| Checkpoint branches | Ready to try | No branch controls | Ready to try | Re-ask from an earlier turn or `POST /api/v1/sessions/:id/branches`. |
+| Evidence references | Ready to try | No selection UI | Ready to try | Reference an output or selection and inspect `evidenceRefs` diagnostics. |
+| Data Link graph | Requires configuration | No graph view | Requires configuration | Configure a compatible Data Link MCP server, then open **Data Link**. |
 | User identity | Local dev switcher and password auth screens | Uses backend identity | Ready to try | `GET /api/v1/me`, `/api/v1/dev/*`, `/api/v1/auth/*`. |
-| Workspace files | View, download, delete | Use enabled files via run_config | Capability-controlled | `files`, `GET/POST /api/v1/files`. |
+| Workspace files | Upload, view, download, delete, reuse | Use enabled files via run_config | Capability-controlled | `files`, `GET/POST /api/v1/files`, `POST /api/v1/files/:id/promote`. |
 | Chat attachments | Ready to try | No attachment upload command | Capability-controlled | `chat.fileUpload`, `POST /api/v1/chat/uploads`. |
 | Image input | Input controlled by switch | No image input command | Capability-controlled | `chat.imageInput`. |
 | Knowledge bases | Requires configuration | Enabled resources via run_config | Capability-controlled | `knowledge`, `kb.chunking`, `kb.citationPolicy`. |
@@ -73,9 +80,10 @@ The Web workbench suits local demos and daily analysis:
 
 - Left panel: sessions and workspace resources.
 - Center: conversation, step cards, and human confirmations.
-- Right: overview, trace, outputs, step details, and workspace files.
-- Input box: model selection, resource toggles, `@` mentions, attachments, and stop run.
-- Session list restores history via server `/api/v1/sessions`.
+- Right: overview, semantic trace, outputs, evidence-aware step details, and workspace files.
+- Input box: model selection, resource toggles, `@` mentions, attachments, evidence chips, queued prompts, and stop run.
+- Session list restores history via server `/api/v1/sessions`; earlier turns and checkpoints can create persistent branches.
+- Data Link opens a workspace graph when a compatible MCP service is configured.
 
 See [Web workbench guide](guides/web-workbench.md).
 
