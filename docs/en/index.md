@@ -30,7 +30,7 @@ Review a realistic growth spike with schema inspection, read-only SQL, and trace
 ## Recommended path
 
 1. Read [Product overview](overview.md) to confirm the problem space and capability boundaries.
-2. Follow [Quick start](quick-start.md) to configure a model API key and run the built-in DTC Growth Review or DuckDB demo.
+2. Follow [Quick start](quick-start.md) to configure a model API key and run the built-in DTC Growth Review.
 3. Read [Capabilities](capabilities.md) to see coverage across Web, TUI, and backend API.
 4. Choose [Web workbench guide](guides/web-workbench.md) or [TUI guide](guides/tui.md) based on your entry point.
 5. When you need your own data, read [Data sources guide](guides/data-sources.md).

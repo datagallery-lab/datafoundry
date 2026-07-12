@@ -38,6 +38,19 @@ for (const pkg of missingNativeCssPackages(root)) {
 }
 
 try {
+  execSync("node scripts/seed-dtc-growth-demo.mjs", {
+    cwd: root,
+    stdio: "inherit",
+    env: { ...process.env, SKIP_DTC_GROWTH_REGISTER: "1" },
+    shell: true,
+  });
+} catch {
+  console.warn(
+    "[postinstall] DTC Growth fixture generation failed — run `npm run seed:dtc-growth-demo` manually.",
+  );
+}
+
+try {
   execSync("npm run build", {
     cwd: root,
     stdio: "inherit",

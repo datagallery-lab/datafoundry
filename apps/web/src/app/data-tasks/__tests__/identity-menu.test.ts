@@ -29,7 +29,10 @@ describe("data task identity menu", () => {
   });
 
   it("expands the collapsed rail before opening settings from the compact avatar", () => {
-    const page = readFileSync(join(process.cwd(), "src/app/data-tasks/page.tsx"), "utf8");
+    const page = readFileSync(
+      join(process.cwd(), "src/app/data-tasks/data-tasks-app.tsx"),
+      "utf8",
+    );
 
     expect(page).toContain("DataTaskUserBar");
     expect(page).toContain("compact");

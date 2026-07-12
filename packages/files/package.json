@@ -1,6 +1,6 @@
 {
   "name": "@datafoundry/files",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "main": "dist/index.js",
@@ -10,6 +10,6 @@
     "typecheck": "tsc -p tsconfig.json --noEmit false"
   },
   "dependencies": {
-    "@datafoundry/metadata": "0.1.0"
+    "@datafoundry/metadata": "0.2.0"
   }
 }

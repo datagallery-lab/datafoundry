@@ -4007,7 +4007,7 @@ const listMcpTools = async (
   const token = stringValue(secret.token) ?? stringValue(secret.apiKey);
   const headers = token ? { Authorization: `Bearer ${token}` } : undefined;
   const requestOptions = headers ? { requestInit: { headers } } : undefined;
-  const client = new Client({ name: "open-data-foundry-config", version: "0.1.0" });
+  const client = new Client({ name: "datafoundry-config", version: "0.2.0" });
   try {
     const clientTransport = transport === "stdio"
       ? new StdioClientTransport({

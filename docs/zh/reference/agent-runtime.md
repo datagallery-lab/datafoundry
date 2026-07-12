@@ -36,8 +36,8 @@ POST /api/copilotkit
   ],
   "forwardedProps": {
     "run_config": {
-      "activeDatasourceId": "api-duckdb-demo",
-      "enabledDatasourceIds": ["api-duckdb-demo"],
+      "activeDatasourceId": "dtc-growth-demo",
+      "enabledDatasourceIds": ["dtc-growth-demo"],
       "activeLlmProfileId": "server-default"
     }
   }

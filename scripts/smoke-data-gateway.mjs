@@ -36,13 +36,6 @@ assert(clickHouseAddress && typeof clickHouseAddress === "object", "clickhouse f
 try {
   await gateway.registerDataSource({
     user_id,
-    id: "duckdb-demo",
-    name: "DuckDB Demo",
-    type: "duckdb",
-    config: { mode: "demo" }
-  });
-  await gateway.registerDataSource({
-    user_id,
     id: "sqlite-orders",
     name: "SQLite Orders",
     type: "sqlite",
@@ -92,11 +85,10 @@ try {
   );
 
   const list = await gateway.listDataSources({ user_id });
-  assert(list.length === 6, `expected 6 data sources, got ${list.length}`);
+  assert(list.length === 5, `expected 5 data sources, got ${list.length}`);
   assert(!JSON.stringify(list).includes("file_path"), "data source list leaked config file_path");
 
   for (const datasource_id of [
-    "duckdb-demo",
     "duckdb-orders",
     "sqlite-orders",
     "csv-orders",
@@ -107,7 +99,6 @@ try {
     assert(test.ok, `${datasource_id} test-connect failed`);
   }
 
-  const duckdbSchema = await gateway.inspectSchema({ user_id, datasource_id: "duckdb-demo" });
   const realDuckdbSchema = await gateway.inspectSchema({ user_id, datasource_id: "duckdb-orders" });
   const sqliteSchema = await gateway.inspectSchema({ user_id, datasource_id: "sqlite-orders" });
   const csvPreview = await gateway.previewTable({
@@ -136,7 +127,6 @@ try {
     limit: 20
   });
 
-  assert(duckdbSchema.tables.some((table) => table.name === "orders"), "duckdb orders schema missing");
   assert(realDuckdbSchema.tables.some((table) => table.name === "orders"), "real duckdb orders schema missing");
   assert(sqliteSchema.tables.some((table) => table.name === "orders"), "sqlite orders schema missing");
   assert(clickHouseSchema.tables.some((table) => table.name === "orders"), "clickhouse orders schema missing");
@@ -146,8 +136,8 @@ try {
   assert(clickHouseSql.row_count === 2, `expected 2 ClickHouse SQL rows, got ${clickHouseSql.row_count}`);
 
   console.log(
-    `Data Gateway smoke OK: sources=${list.length}, duckdb_tables=${duckdbSchema.tables.length}, ` +
-      `real_duckdb_tables=${realDuckdbSchema.tables.length}, ` +
+    `Data Gateway smoke OK: sources=${list.length}, ` +
+      `duckdb_tables=${realDuckdbSchema.tables.length}, ` +
       `sqlite_tables=${sqliteSchema.tables.length}, csv_rows=${csvPreview.row_count}, ` +
       `xlsx_rows=${xlsxPreview.row_count}, clickhouse_rows=${clickHouseSql.row_count}`
   );

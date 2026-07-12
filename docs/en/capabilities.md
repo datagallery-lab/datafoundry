@@ -6,7 +6,7 @@ Status is based on current code:
 
 | Status | How to verify |
 | --- | --- |
-| Ready to try | After local `npm run dev`, with a model key configured, the built-in DuckDB demo runs end to end. |
+| Ready to try | After local startup, with a model key configured, the built-in DTC Growth Review runs end to end. |
 | Requires configuration | Feature entry exists but needs a model key, database credentials, files, MCP server, or Skill package. |
 | Capability-controlled | Read `GET /api/v1/capabilities` and enable or hide related entry points from the response. |
 | Local development boundary | Default local identity and default workspace work out of the box; Web can switch local dev users for isolation testing. |
@@ -16,8 +16,7 @@ Status is based on current code:
 
 | Capability | Web workbench | TUI | Backend/API | How to verify |
 | --- | --- | --- | --- | --- |
-| Natural-language data analysis | Ready to try | Ready to try | Ready to try | Configure LLM key and ask questions with `api-duckdb-demo`. |
-| Built-in DuckDB demo | Ready to try | Ready to try | Ready to try | Data source list includes `api-duckdb-demo`. |
+| Natural-language data analysis | Ready to try | Ready to try | Ready to try | Configure an LLM key and ask questions with `dtc-growth-demo`. |
 | Built-in DTC growth case | Ready to try | Ready to try | Ready to try | Data source list includes `DTC Growth Review`; each user gets a read-only workspace copy. |
 | Data source registration and test | Ready to try | Select configured sources | Ready to try | `GET /api/v1/datasource-types`, `POST /api/v1/datasources/:id/test`. |
 | Schema fetch and table preview | Ready to try | Via agent tool results | Ready to try | `POST /api/v1/datasources/:id/introspect`, `GET /schema`, `GET /tables/:table/preview`. |

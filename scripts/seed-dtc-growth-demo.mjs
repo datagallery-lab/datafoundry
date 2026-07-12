@@ -205,7 +205,9 @@ try {
   db.close();
 }
 
-await tryRegisterDatasource();
+if (process.env.SKIP_DTC_GROWTH_REGISTER !== "1") {
+  await tryRegisterDatasource();
+}
 
 function insertRows(database, table, rows) {
   const placeholders = rows[0].map(() => "?").join(", ");

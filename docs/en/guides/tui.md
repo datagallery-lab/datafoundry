@@ -25,7 +25,7 @@ npm run start:tui -- --runtime-url http://127.0.0.1:8787/api/copilotkit
 Set default data source and agent name:
 
 ```bash
-npm run start:tui -- --datasource-id api-duckdb-demo --agent dataFoundry
+npm run start:tui -- --datasource-id dtc-growth-demo --agent dataFoundry
 ```
 
 Resume the latest server session:
@@ -117,7 +117,7 @@ Demo mode uses local simulated events and built-in demo state. It does not call 
 1. Start backend and TUI.
 2. Run `/status` to see thread, data source, and Skill.
 3. Run `/datasource` to open the data source picker.
-4. When needed, select `api-duckdb-demo` in the picker and press Enter.
+4. When needed, select `dtc-growth-demo` in the picker and press Enter.
 5. Ask a question:
 
 ```text

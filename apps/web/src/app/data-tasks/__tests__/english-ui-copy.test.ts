@@ -8,6 +8,7 @@ const dataTasksRoot = join(process.cwd(), "src/app/data-tasks");
 
 const shellFiles = [
   "page.tsx",
+  "data-tasks-app.tsx",
   "data-task-identity.tsx",
   "session-pane-ui.ts",
   "components/chat/SessionConfigBar.tsx",
@@ -43,7 +44,7 @@ describe("workbench shell i18n", () => {
   });
 
   it("mounts LocaleProvider at the data-tasks page root", () => {
-    const source = readFileSync(join(dataTasksRoot, "page.tsx"), "utf8");
+    const source = readFileSync(join(dataTasksRoot, "data-tasks-app.tsx"), "utf8");
     expect(source).toContain("<LocaleProvider>");
     expect(source).toContain('useT()');
     expect(source).toContain('t("sidebar.newTask")');

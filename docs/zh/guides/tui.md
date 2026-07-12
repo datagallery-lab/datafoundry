@@ -25,7 +25,7 @@ npm run start:tui -- --runtime-url http://127.0.0.1:8787/api/copilotkit
 指定默认数据源和 Agent 名称：
 
 ```bash
-npm run start:tui -- --datasource-id api-duckdb-demo --agent dataFoundry
+npm run start:tui -- --datasource-id dtc-growth-demo --agent dataFoundry
 ```
 
 恢复最近的服务端会话：
@@ -117,7 +117,7 @@ TUI 默认停留在 Chat。使用 `/outputs` 可以像 `/resume` 一样打开独
 1. 启动后端和 TUI。
 2. 运行 `/status` 查看当前 thread、数据源和 Skill。
 3. 运行 `/datasource` 打开数据源选择器。
-4. 需要指定数据源时，在选择器里选中 `api-duckdb-demo` 并按 Enter。
+4. 需要指定数据源时，在选择器里选中 `dtc-growth-demo` 并按 Enter。
 5. 输入问题：
 
 ```text
