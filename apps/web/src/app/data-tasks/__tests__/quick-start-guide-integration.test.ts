@@ -6,7 +6,7 @@ const source = (path: string) => readFileSync(join(process.cwd(), path), "utf8")
 
 describe("quick start guide integration", () => {
   it("mounts the quick start guide from the data tasks page", () => {
-    const page = source("src/app/data-tasks/page.tsx");
+    const page = source("src/app/data-tasks/data-tasks-app.tsx");
 
     expect(page).toContain("QuickStartGuide");
     expect(page).toContain("quickStartGuide=");
@@ -15,7 +15,7 @@ describe("quick start guide integration", () => {
   });
 
   it("places the quick-start launcher in the user bar as a round question button", () => {
-    const page = source("src/app/data-tasks/page.tsx");
+    const page = source("src/app/data-tasks/data-tasks-app.tsx");
     const guide = source(
       "src/app/data-tasks/components/guide/QuickStartGuide.tsx",
     );
@@ -29,7 +29,7 @@ describe("quick start guide integration", () => {
   });
 
   it("provides stable guide anchors for the quick-start path", () => {
-    const page = source("src/app/data-tasks/page.tsx");
+    const page = source("src/app/data-tasks/data-tasks-app.tsx");
     const chatInput = source(
       "src/app/data-tasks/components/chat/DataTaskChatInput.tsx",
     );
@@ -70,7 +70,7 @@ describe("quick start guide integration", () => {
   });
 
   it("renders an explicit empty chat welcome overlay outside CopilotChat internals", () => {
-    const page = source("src/app/data-tasks/page.tsx");
+    const page = source("src/app/data-tasks/data-tasks-app.tsx");
     const welcome = source("src/app/data-tasks/components/chat/DataTaskWelcome.tsx");
 
     expect(page).toContain("ChatWelcomeOverlay");
@@ -81,7 +81,7 @@ describe("quick start guide integration", () => {
   });
 
   it("clears draft prompt requests when switching or creating sessions", () => {
-    const page = source("src/app/data-tasks/page.tsx");
+    const page = source("src/app/data-tasks/data-tasks-app.tsx");
 
     expect(page).toContain("clearDraftPromptRequest");
     expect(page).toContain("onCreateSession={createSession}");
@@ -89,7 +89,7 @@ describe("quick start guide integration", () => {
   });
 
   it("shows guide progress and blocks the send step until a task starts", () => {
-    const page = source("src/app/data-tasks/page.tsx");
+    const page = source("src/app/data-tasks/data-tasks-app.tsx");
     const guide = source(
       "src/app/data-tasks/components/guide/QuickStartGuide.tsx",
     );

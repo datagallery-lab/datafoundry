@@ -65,6 +65,10 @@ const modelProviderServer = createHttpServer(async (request, response) => {
 await new Promise((resolve) => modelProviderServer.listen(0, "127.0.0.1", resolve));
 const modelProviderAddress = modelProviderServer.address();
 assert(modelProviderAddress && typeof modelProviderAddress === "object");
+process.env.LLM_PROVIDER = "openai-compatible";
+process.env.LLM_MODEL = "smoke-model";
+process.env.LLM_BASE_URL = `http://127.0.0.1:${modelProviderAddress.port}`;
+process.env.LLM_API_KEY = "smoke-model-key";
 
 const mcpServer = createHttpServer(async (request, response) => {
   const server = new McpServer({ name: "config-smoke-mcp", version: "1.0.0" });
@@ -1069,7 +1073,7 @@ try {
   assert.equal(modelProbeRequest.body.model, "smoke-model");
   assert.equal(modelProbeRequest.body.messages.some((message) => message.role === "system"), true);
   const resolvedModelRun = resolveRunConfig({
-    defaultDatasourceId: "api-duckdb-demo",
+    defaultDatasourceId: "dtc-growth-demo",
     metadataStore,
     runInput: {
       threadId: "model-profile-session",
@@ -1102,7 +1106,7 @@ try {
   assert.equal(resolvedModelRun.reasoningModel, true);
   assert.equal(resolvedModelRun.runTimeoutMs, 5000);
   const skillBoundRun = resolveRunConfig({
-    defaultDatasourceId: "api-duckdb-demo",
+    defaultDatasourceId: "dtc-growth-demo",
     metadataStore,
     runInput: {
       threadId: "skill-bound-session",
@@ -1114,7 +1118,7 @@ try {
       state: {},
       forwardedProps: {
         run_config: {
-          enabledDatasourceIds: ["api-duckdb-demo"],
+          enabledDatasourceIds: ["dtc-growth-demo"],
           enabledKnowledgeIds: [],
           enabledMcpServerIds: [],
           enabledSkillIds: [skill.body.data.id],
@@ -1166,7 +1170,7 @@ try {
     currentModelProfileResource.revision
   );
   const explicitResourceRun = resolveRunConfig({
-    defaultDatasourceId: "api-duckdb-demo",
+    defaultDatasourceId: "dtc-growth-demo",
     metadataStore,
     runInput: {
       threadId: "skill-explicit-session",
@@ -1178,8 +1182,8 @@ try {
       state: {},
       forwardedProps: {
         run_config: {
-          activeDatasourceId: "api-duckdb-demo",
-          enabledDatasourceIds: ["api-duckdb-demo"],
+          activeDatasourceId: "dtc-growth-demo",
+          enabledDatasourceIds: ["dtc-growth-demo"],
           enabledKnowledgeIds: [],
           enabledMcpServerIds: [],
           enabledSkillIds: [skill.body.data.id],
@@ -1191,7 +1195,7 @@ try {
     userInput: "use smoke skill to inspect schema",
     workspaceId: "default"
   });
-  assert.equal(explicitResourceRun.effectiveRunConfig.activeDatasourceId, "api-duckdb-demo");
+  assert.equal(explicitResourceRun.effectiveRunConfig.activeDatasourceId, "dtc-growth-demo");
   assert(explicitResourceRun.effectiveRunConfig.enabledDatasourceIds.includes("local-sqlite"));
   const testedModelProfile = await requestJson("/api/v1/model-profiles/smoke-openai-compatible");
   assert.equal(testedModelProfile.body.data.connectionStatus, "connected");
@@ -1253,7 +1257,7 @@ try {
     }],
     state: {},
     forwardedProps: {}
-  }, metadataStore, "dev-user", "api-duckdb-demo");
+  }, metadataStore, "dev-user", "dtc-growth-demo");
   assert.equal(effective.activeSkillId, undefined);
   assert.equal(effective.resourceRevisions["datasource:local-sqlite"], sampleDisabledPatch.body.data.revision);
   assert.equal(effective.resourceRevisions["model-profile:server-default"] > 0, true);
@@ -1297,7 +1301,7 @@ try {
   assert.equal(download.headers.get("content-type"), "text/csv; charset=utf-8");
   assert.equal((await download.text()).includes("revenue,42"), true);
 
-  const builtinDelete = await requestJson("/api/v1/datasources/api-duckdb-demo", { method: "DELETE" });
+  const builtinDelete = await requestJson("/api/v1/datasources/dtc-growth-demo", { method: "DELETE" });
   assert.equal(builtinDelete.response.status, 200);
   assert.equal(builtinDelete.body.data.deleted, true);
 

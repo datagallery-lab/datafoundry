@@ -63,7 +63,7 @@ DataFoundry 0.2 turns the first usable workbench into a more complete, stateful 
 
 - **Branchable, concurrent analysis** — Keep multiple sessions running, queue follow-up prompts, restore completed work, and branch from an earlier question or checkpoint without overwriting the original path.
 - **Evidence-first follow-ups** — Reference a complete output or a selected table/text region in the next question; resolved evidence is carried into the governed run context with diagnostics.
-- **Semantic trace and Data Link** — Inspect checkpoint-backed run structure in a semantic Trace DAG, and explore tables, columns, concepts, entities, and relationships through a configured Data Link service.
+- **Semantic trace and first-party Data Link** — Inspect checkpoint-backed run structure in a semantic Trace DAG. With our newly open-sourced [Data Link](https://github.com/datagallery-lab/datalink), connect tables and columns to business concepts, entities, joinable paths, and confidence-scored relationships for stronger agent grounding.
 - **Reusable outputs and workspace assets** — Preview and export tables, charts, reports, SQL, and files; upload files into an active session, then promote supported files for reuse across sessions.
 - **Production-facing Web foundation** — Built-in password authentication, same-origin API proxying, bilingual UI, model connection tests, onboarding, and an auto-provisioned DTC growth analysis case.
 
@@ -178,7 +178,7 @@ The **Web workbench** fits day-to-day analysis and demos, the **TUI** fits termi
 
 ## 🗄️ Bring Your Data Stack, No Rebuild
 
-Connect through Data Gateway adapters: built-in DuckDB and DTC Growth Review demos work out of the box; SQLite, CSV, Excel, PostgreSQL, and MySQL fit local trials; cloud warehouses, search engines, and NoSQL systems plug in with their own services and credentials.
+Connect through Data Gateway adapters: the built-in DTC Growth Review case works out of the box; DuckDB, SQLite, CSV, Excel, PostgreSQL, and MySQL fit local trials; cloud warehouses, search engines, and NoSQL systems plug in with their own services and credentials.
 
 <p align="center">
   <img src="docs/assets/readme/database-wall.png" alt="Supported DataFoundry data sources" width="100%">

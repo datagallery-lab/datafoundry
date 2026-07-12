@@ -6,7 +6,7 @@
 
 | 状态 | 判断方式 |
 | --- | --- |
-| 可直接试用 | 本地 `npm run dev` 后，配好模型 Key，用内置 DuckDB demo 可以跑通。 |
+| 可直接试用 | 本地启动后，配好模型 Key，用内置 DTC Growth Review 可以跑通。 |
 | 需要配置 | 功能入口已接入，需要你提供模型 Key、数据库凭据、文件、MCP Server 或 Skill package。 |
 | 受 capability 控制 | 读取 `GET /api/v1/capabilities`，按返回值启用或隐藏相关入口。 |
 | 本地开发边界 | 本地默认身份和默认 workspace 可用；Web 可切换本地开发用户用于隔离验证。 |
@@ -16,8 +16,7 @@
 
 | 能力 | Web 工作台 | TUI | 后端/API | 检查方式 |
 | --- | --- | --- | --- | --- |
-| 自然语言数据分析 | 可直接试用 | 可直接试用 | 可直接试用 | 配好 LLM Key，使用 `api-duckdb-demo` 提问。 |
-| 内置 DuckDB demo | 可直接试用 | 可直接试用 | 可直接试用 | 数据源列表包含 `api-duckdb-demo`。 |
+| 自然语言数据分析 | 可直接试用 | 可直接试用 | 可直接试用 | 配好 LLM Key，使用 `dtc-growth-demo` 提问。 |
 | 内置 DTC 增长案例 | 可直接试用 | 可直接试用 | 可直接试用 | 数据源列表包含 `DTC Growth Review`；每个用户获得只读 workspace 副本。 |
 | 数据源注册与测试 | 可直接试用 | 可选择已配置数据源 | 可直接试用 | `GET /api/v1/datasource-types`，`POST /api/v1/datasources/:id/test`。 |
 | schema 抓取与表预览 | 可直接试用 | 通过 Agent 工具查看结果 | 可直接试用 | `POST /api/v1/datasources/:id/introspect`，`GET /schema`，`GET /tables/:table/preview`。 |

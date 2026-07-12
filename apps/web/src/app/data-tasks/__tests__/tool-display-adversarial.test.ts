@@ -87,7 +87,7 @@ describe("empty and malformed tool payloads", () => {
   });
 
   it("keeps the middle-column SQL card on the shared result renderer", () => {
-    const pageSource = readFileSync(new URL("../page.tsx", import.meta.url), "utf8");
+    const pageSource = readFileSync(new URL("../data-tasks-app.tsx", import.meta.url), "utf8");
     const sqlCardSource = pageSource.slice(
       pageSource.indexOf("function SqlToolCard"),
       pageSource.indexOf("type SchemaColumn"),

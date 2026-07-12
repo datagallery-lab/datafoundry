@@ -33,7 +33,7 @@ Discover supported data source types
 6. Run schema inspection and confirm tables and fields are visible.
 7. Return to the data task and confirm the source is enabled below the input box.
 
-For a first run, use the built-in DuckDB demo—no custom database required.
+For a first run, use the built-in DTC Growth Review—no custom database required.
 
 ## In the TUI
 
@@ -147,7 +147,7 @@ The backend injects the selected source into run context. The agent can access i
 | `oceanbase` | OceanBase MySQL-compatible. |
 | `greenplum` | Greenplum PostgreSQL-compatible. |
 
-External services need reachable hosts, network access, and credentials. For public demos, prefer DuckDB demo, SQLite, CSV / Excel, PostgreSQL, or MySQL.
+External services need reachable hosts, network access, and credentials. For public demos, prefer the built-in DTC Growth Review, or configure DuckDB, SQLite, CSV / Excel, PostgreSQL, or MySQL.
 
 ## Non-SQL source boundaries
 

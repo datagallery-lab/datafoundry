@@ -1,6 +1,6 @@
 {
   "name": "@datafoundry/providers",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "main": "dist/index.js",
@@ -11,6 +11,6 @@
   },
   "dependencies": {
     "@ai-sdk/openai": "^3.0.73",
-    "@datafoundry/contracts": "0.1.0"
+    "@datafoundry/contracts": "0.2.0"
   }
 }

@@ -1,6 +1,6 @@
 # Quick start
 
-This guide is for first-time DataFoundry deployers. After reading it, you can start the Web workbench in the **formal** stack (`build` + `start`, `password` auth), configure a model service, and run a data analysis task against the built-in DuckDB demo data source.
+This guide is for first-time DataFoundry deployers. After reading it, you can start the Web workbench in the **formal** stack (`build` + `start`, `password` auth), configure a model service, and run a data analysis task against the built-in DTC Growth Review data source.
 
 Formal mode has two environments. **Startup commands are the same**; the main differences are email delivery and the public base URL:
 
@@ -31,7 +31,7 @@ node -v
 npm install
 ```
 
-`node -v` must report 22 or higher. The first install compiles workspace dependencies; time depends on your machine and network.
+`node -v` must report 22 or higher. The first install generates the local DTC Growth Review SQLite fixture and compiles workspace dependencies; time depends on your machine and network.
 
 ## 2. Configure environment variables
 
@@ -131,7 +131,7 @@ After changing any `NEXT_PUBLIC_*` value in `apps/web/.env.local`, run `npm run 
 On `/data-tasks`:
 
 1. Click **New data task**.
-2. Select the built-in **DTC Growth Review** data source (or keep the DuckDB demo for a minimal smoke test).
+2. Select the built-in **DTC Growth Review** data source.
 3. Select **Server default** or your configured model next to the input box.
 4. Send your first question.
 

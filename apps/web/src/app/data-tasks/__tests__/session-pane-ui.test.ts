@@ -33,7 +33,7 @@ const workspaceConfig: WorkspaceConfigStore = {
 const t = createTranslator("en");
 
 const dataTasksPageSource = () =>
-  readFileSync(join(process.cwd(), "src/app/data-tasks/page.tsx"), "utf8");
+  readFileSync(join(process.cwd(), "src/app/data-tasks/data-tasks-app.tsx"), "utf8");
 const schemaPreviewSource = () =>
   readFileSync(
     join(process.cwd(), "src/app/data-tasks/components/SchemaBrowserPanel.tsx"),

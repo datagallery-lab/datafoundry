@@ -63,7 +63,7 @@ On narrow windows, the right console collapses into a drawer. Use the console en
 ## Run your first task
 
 1. Click **New data task** on the left.
-2. Keep the built-in DuckDB demo data source.
+2. Select the built-in **DTC Growth Review** data source.
 3. Select **Server default** or your configured model next to the input box.
 4. Enter a question and send.
 
