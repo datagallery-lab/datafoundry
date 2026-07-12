@@ -85,6 +85,8 @@ nav:
       - Configuration API: en/reference/configuration-api.md
       - Agent Runtime: en/reference/agent-runtime.md
       - Supported data sources: en/reference/supported-datasources.md
+  - Release Notes:
+      - v0.2.0: en/releases/v0.2.0.md
   - Community:
       - en/community/index.md
       - Contact us: en/community/contact-us.md

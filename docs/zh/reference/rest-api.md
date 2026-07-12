@@ -113,7 +113,11 @@ curl http://127.0.0.1:8787/api/v1/capabilities
 | GET | `/api/v1/sessions` | 列出服务端会话。支持 `limit`、`cursor`。 |
 | PATCH | `/api/v1/sessions/:sessionId` | 更新会话标题。 |
 | GET | `/api/v1/sessions/:sessionId/conversation` | 读取服务端权威对话历史。支持 `limit`。 |
-| POST | `/api/v1/sessions/:sessionId/branches` | 从已结束 run 创建持久分支。请求体：`{ "runId": "..." }`。 |
+| GET | `/api/v1/sessions/:sessionId/checkpoints` | 列出已持久化的上下文 checkpoint。支持 `limit`。 |
+| GET | `/api/v1/sessions/:sessionId/trace-dag` | 读取 run/step/tool/output 语义图。支持 `limit`。 |
+| POST | `/api/v1/sessions/:sessionId/branches` | 从已结束 run 或 checkpoint 创建持久分支。请求体：`{ "runId": "..." }` 或 `{ "checkpointId": "..." }`。 |
+| GET | `/api/v1/checkpoints/:checkpointId` | 读取 checkpoint 元数据。 |
+| GET | `/api/v1/checkpoints/:checkpointId/context-package` | 读取 checkpoint 元数据及上下文快照。 |
 
 会话接口用于 Web/TUI 恢复历史、显示标题、读取 tool-call 配对，并支持从 checkpoint 重新提问。`conversation` 响应包含 `messages`、`runEventRefs`、`toolCalls`，并可包含 `checkpoints`、`branch` 和 `branches`。每个 checkpoint 从现有 run、message 和 run event 派生，包含 `runId`、`status`、消息位置范围、事件 seq 范围、开始/结束时间和可选错误信息；它表示一轮 run 的可恢复历史边界。分支会话引用父会话到 fork checkpoint 之前的历史，不复制旧消息；读取分支时返回可见父前缀加上分支自身消息。
 
@@ -124,6 +128,21 @@ curl http://127.0.0.1:8787/api/v1/capabilities
 | GET | `/api/v1/workspace-config` | 读取工作区资源默认配置。 |
 | PATCH | `/api/v1/workspace-config` | 更新默认启用状态。 |
 | GET | `/api/v1/run-defaults` | 读取 run 默认配置。 |
+
+## Data Link
+
+这些路由代理当前 workspace 中已配置的兼容 Data Link 或 DataGraph MCP 资源，不提供内置图服务。
+
+| Method | Path | 用途 |
+| --- | --- | --- |
+| GET | `/api/v1/datalink/servers` | 列出已配置的兼容服务。 |
+| GET | `/api/v1/datalink/:serverId/graph` | 读取并标准化 workspace 图。 |
+| POST | `/api/v1/datalink/:serverId/explore` | 使用自然语言查询探索图。 |
+| POST | `/api/v1/datalink/:serverId/tables` | 通过已配置服务添加表数据源。 |
+| DELETE | `/api/v1/datalink/:serverId/tables/:tableId` | 通过已配置服务移除表。 |
+| POST | `/api/v1/datalink/:serverId/rebuild` | 重建外部图。 |
+
+`/api/v1/datagraph/*` 可作为 `/api/v1/datalink/*` 的别名。
 
 ## 数据源
 

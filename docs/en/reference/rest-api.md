@@ -113,7 +113,11 @@ curl http://127.0.0.1:8787/api/v1/capabilities
 | GET | `/api/v1/sessions` | List server sessions. Supports `limit`, `cursor`. |
 | PATCH | `/api/v1/sessions/:sessionId` | Update session title. |
 | GET | `/api/v1/sessions/:sessionId/conversation` | Read authoritative server conversation history. Supports `limit`. |
-| POST | `/api/v1/sessions/:sessionId/branches` | Create a persistent branch from an ended run. Body: `{ "runId": "..." }`. |
+| GET | `/api/v1/sessions/:sessionId/checkpoints` | List persisted context checkpoints. Supports `limit`. |
+| GET | `/api/v1/sessions/:sessionId/trace-dag` | Read the semantic run/step/tool/output graph. Supports `limit`. |
+| POST | `/api/v1/sessions/:sessionId/branches` | Create a persistent branch from an ended run or checkpoint. Body: `{ "runId": "..." }` or `{ "checkpointId": "..." }`. |
+| GET | `/api/v1/checkpoints/:checkpointId` | Read checkpoint metadata. |
+| GET | `/api/v1/checkpoints/:checkpointId/context-package` | Read checkpoint metadata and its context snapshot. |
 
 Session APIs restore history for Web/TUI, display titles, read tool-call pairings, and support re-asking from checkpoints. The `conversation` response includes `messages`, `runEventRefs`, `toolCalls`, and may include `checkpoints`, `branch`, and `branches`. Each checkpoint is derived from existing run, message, and run-event records and includes `runId`, `status`, message position bounds, event seq bounds, start/finish times, and optional error text; it marks the recoverable history boundary for one run. Branch sessions reference parent history up to the fork checkpoint instead of copying messages, so reading a branch returns the visible parent prefix plus the branch's own messages.
 
@@ -124,6 +128,21 @@ Session APIs restore history for Web/TUI, display titles, read tool-call pairing
 | GET | `/api/v1/workspace-config` | Read workspace resource defaults. |
 | PATCH | `/api/v1/workspace-config` | Update default enablement. |
 | GET | `/api/v1/run-defaults` | Read run default configuration. |
+
+## Data Link
+
+These routes proxy a compatible Data Link or DataGraph MCP resource configured in the current workspace. They do not provide an embedded graph service.
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| GET | `/api/v1/datalink/servers` | List compatible configured servers. |
+| GET | `/api/v1/datalink/:serverId/graph` | Read and normalize the workspace graph. |
+| POST | `/api/v1/datalink/:serverId/explore` | Explore the graph from a natural-language query. |
+| POST | `/api/v1/datalink/:serverId/tables` | Add a table source through the configured service. |
+| DELETE | `/api/v1/datalink/:serverId/tables/:tableId` | Remove a table through the configured service. |
+| POST | `/api/v1/datalink/:serverId/rebuild` | Rebuild the external graph. |
+
+`/api/v1/datagraph/*` is accepted as an alias for `/api/v1/datalink/*`.
 
 ## Data sources
 

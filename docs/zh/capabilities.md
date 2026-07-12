@@ -18,15 +18,22 @@
 | --- | --- | --- | --- | --- |
 | 自然语言数据分析 | 可直接试用 | 可直接试用 | 可直接试用 | 配好 LLM Key，使用 `api-duckdb-demo` 提问。 |
 | 内置 DuckDB demo | 可直接试用 | 可直接试用 | 可直接试用 | 数据源列表包含 `api-duckdb-demo`。 |
+| 内置 DTC 增长案例 | 可直接试用 | 可直接试用 | 可直接试用 | 数据源列表包含 `DTC Growth Review`；每个用户获得只读 workspace 副本。 |
 | 数据源注册与测试 | 可直接试用 | 可选择已配置数据源 | 可直接试用 | `GET /api/v1/datasource-types`，`POST /api/v1/datasources/:id/test`。 |
 | schema 抓取与表预览 | 可直接试用 | 通过 Agent 工具查看结果 | 可直接试用 | `POST /api/v1/datasources/:id/introspect`，`GET /schema`，`GET /tables/:table/preview`。 |
 | 只读 SQL 分析 | 可直接试用 | 可直接试用 | 可直接试用 | Agent run 先检查 schema，再通过工具执行查询。 |
 | 模型配置 | 需要配置 | 使用服务端模型配置 | 需要配置 | `.env` 或 `/api/v1/model-profiles`。 |
+| 模型连接测试 | 可直接试用 | 使用服务端模型配置 | 可直接试用 | `POST /api/v1/model-profiles/:id/test`。 |
 | 分析追溯 | 可直接试用 | 可直接试用 | 可直接试用 | 查看步骤、工具调用、run events 和 SQL audit。 |
+| 语义 Trace DAG | 可直接试用 | 无图形视图 | 可直接试用 | 打开 Web trace graph，或 `GET /api/v1/sessions/:id/trace-dag`。 |
 | Artifact 产出 | 可直接试用 | 可查看会话产出 | 受 capability 控制 | `artifact.list`、`artifact.export`、`artifact.promote`。 |
 | 会话历史 | 可直接试用 | 可用 `/resume` 恢复 | 受 capability 控制 | `conversation.memory`、`conversation.title`。 |
+| 并发会话与提问队列 | 可直接试用 | 单个活跃终端流 | 可直接试用 | 在不同会话启动 run；Web run 执行中再提交问题。 |
+| Checkpoint 分支 | 可直接试用 | 无分支控件 | 可直接试用 | 从早期问题重问，或 `POST /api/v1/sessions/:id/branches`。 |
+| 证据引用 | 可直接试用 | 无选区 UI | 可直接试用 | 引用完整产出或选区，查看 `evidenceRefs` 诊断。 |
+| Data Link 图 | 需要配置 | 无图形视图 | 需要配置 | 配置兼容的 Data Link MCP Server，再打开「Data Link」。 |
 | 用户身份 | 本地开发用户切换和 password auth 界面 | 使用后端身份 | 可直接试用 | `GET /api/v1/me`、`/api/v1/dev/*`、`/api/v1/auth/*`。 |
-| 工作区文件 | 可查看、下载、删除 | 通过 run_config 使用已启用文件 | 受 capability 控制 | `files`，`GET/POST /api/v1/files`。 |
+| 工作区文件 | 可上传、查看、下载、删除、复用 | 通过 run_config 使用已启用文件 | 受 capability 控制 | `files`、`GET/POST /api/v1/files`、`POST /api/v1/files/:id/promote`。 |
 | 对话附件 | 可直接试用 | 不提供附件上传命令 | 受 capability 控制 | `chat.fileUpload`，`POST /api/v1/chat/uploads`。 |
 | 图片输入 | 输入组件受开关控制 | 不提供图片输入命令 | 受 capability 控制 | `chat.imageInput`。 |
 | 知识库 | 需要配置 | 可随启用资源进入 run_config | 受 capability 控制 | `knowledge`、`kb.chunking`、`kb.citationPolicy`。 |
@@ -73,9 +80,10 @@ Web 工作台适合本地演示和日常分析：
 
 - 左侧管理会话和工作区资源。
 - 中间展示对话、步骤卡片和人工确认。
-- 右侧展示概览、追溯、产出、步骤详情和工作区文件。
-- 输入框支持模型选择、资源开关、`@` 提及、附件上传和停止运行。
-- 会话列表通过服务端 `/api/v1/sessions` 恢复历史。
+- 右侧展示概览、语义追溯、产出、可引用证据的步骤详情和工作区文件。
+- 输入框支持模型选择、资源开关、`@` 提及、附件、证据 chip、提问队列和停止运行。
+- 会话列表通过服务端 `/api/v1/sessions` 恢复历史；早期问题和 checkpoint 可创建持久化分支。
+- 配置兼容的 MCP 服务后，Data Link 可打开工作区图。
 
 详见 [Web 工作台指南](guides/web-workbench.md)。
 

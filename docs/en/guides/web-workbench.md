@@ -117,6 +117,8 @@ Click a step card to open its details in the right console. Use this path to ver
 | File upload | Upload attachments needed for this analysis. |
 | Stop run | Cancel the running agent run. |
 
+If you submit another question while a run is active, the Web workbench keeps it in a prompt queue instead of mixing it into the current run. You can edit or remove queued prompts, send one immediately, or let the next prompt dispatch after the active run reaches a terminal state. Queues belong to the current task session.
+
 Resource selection has three layers:
 
 1. Workspace defaults: long-term configuration in the left resource panel.
@@ -133,14 +135,14 @@ Overview shows the current question, step count, success rate, output count, tok
 
 ### Trace
 
-Trace shows the agent execution chain in time order. Common entries:
+Trace provides both a time-ordered execution list and a semantic DAG backed by persisted checkpoints. The graph connects runs, steps, tool calls, outputs, and their parent relationships, while the list remains the fastest way to scan chronological progress. Common entries:
 
 1. Start run.
 2. Inspect data source schema.
 3. Run read-only SQL or read files.
 4. Create table, chart, SQL, report, or file outputs.
 
-When you need to explain where a result came from, start with trace, then open step details.
+When you need to explain where a result came from, start with trace, then open step details. Restored sessions rebuild this view from server records rather than treating the browser transcript as the source of truth.
 
 ### Outputs
 
@@ -156,6 +158,8 @@ Outputs are reusable results left by the agent:
 
 File outputs can be promoted to cross-session workspace files with **Add to workspace**. Table and chart download/export use `/api/v1/artifacts/:id/download` and `/api/v1/artifacts/:id/export`.
 
+Open an output to reference it in a follow-up. You can reference the complete artifact or, for supported tables and text, select only the relevant region. The selected evidence appears beside the input and is resolved by the server before the next run starts.
+
 ### Details
 
 Details show inputs, outputs, token usage, tool call arguments, and tool results for a single step. Open details from a center step card or from the trace list.
@@ -164,6 +168,7 @@ Details show inputs, outputs, token usage, tool call arguments, and tool results
 
 The workspace files panel supports:
 
+- Uploading files into the active session and promoting successful uploads into the workspace.
 - Listing reusable files.
 - Downloading file content.
 - Deleting file references.
@@ -203,6 +208,18 @@ The Web workbench restores history through server session APIs:
 | `GET /api/v1/artifacts?sessionId=:id` | Restore outputs for that session. |
 
 After refresh or reopening the workbench, restore prior tasks from the left task list. The center shows conversation history; the right console can replay run events and outputs. New questions continue the session context for that task.
+
+### Re-ask and branch
+
+For a completed historical turn, edit or re-ask the earlier question to create a persistent child branch. You can also branch from a checkpoint exposed by the restored conversation. DataFoundry keeps the original history, switches the workbench to the child session, and exposes branch navigation at the fork point so alternative analyses remain comparable.
+
+Branch creation requires a terminal run or persisted checkpoint. A running or suspended turn is not treated as a stable fork boundary.
+
+## Data Link
+
+**Data Link** opens a workspace graph for tables, columns, concepts, entities, and their relationships. It is available when the workspace has a compatible Data Link or DataGraph MCP server with the expected tools. Use the graph to search entry nodes, expand related structure, and inspect semantic context before asking the agent to analyze it.
+
+DataFoundry does not embed a semantic graph service. If no compatible MCP server is configured, the panel cannot provide graph data; configure the integration under Agent Tools first.
 
 ## Example questions
 
