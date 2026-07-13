@@ -648,7 +648,7 @@ try {
 
   const datasource = await requestJson("/api/v1/datasources/local-sqlite");
   assert.equal(JSON.stringify(datasource.body).includes("password"), false);
-  const datasourceRevision = datasource.body.data.revision;
+  let datasourceRevision = datasource.body.data.revision;
   const connection = await requestJson("/api/v1/datasources/local-sqlite/test", { method: "POST" });
   assert.equal(connection.body.success, true);
 
@@ -663,6 +663,53 @@ try {
   assert.equal(introspection.body.data.id, repeatedIntrospection.body.data.id);
   const schema = await requestJson("/api/v1/datasources/local-sqlite/schema");
   assert(datasourceSchemaTables(schema.body.data).some((table) => table.name === "metrics"));
+
+  const metadataOnlyPatch = await requestJson("/api/v1/datasources/local-sqlite", {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      revision: datasourceRevision,
+      description: "Local metrics source",
+      config: { path: datasourcePath }
+    })
+  });
+  assert.equal(metadataOnlyPatch.response.status, 200);
+  assert.equal(metadataOnlyPatch.body.data.connectionStatus, "connected");
+  datasourceRevision = metadataOnlyPatch.body.data.revision;
+
+  const tablePreview = await requestJson("/api/v1/datasources/local-sqlite/tables/metrics/preview?limit=1&offset=0");
+  assert.equal(tablePreview.response.status, 200);
+  assert.deepEqual(tablePreview.body.data.columns.map((column) => column.name), ["name", "value", "secret"]);
+  assert.equal(tablePreview.body.data.rows.length, 1);
+  assert.equal(tablePreview.body.data.rows[0].name, "revenue");
+
+  const cacheSource = new DatabaseSync(datasourcePath);
+  cacheSource.exec("CREATE TABLE cache_invalidated_metrics (name TEXT, value INTEGER);");
+  cacheSource.close();
+  const schemaAfterMetadataPatch = await requestJson("/api/v1/datasources/local-sqlite/schema");
+  assert.equal(
+    datasourceSchemaTables(schemaAfterMetadataPatch.body.data)
+      .some((table) => table.name === "cache_invalidated_metrics"),
+    false,
+    "unchanged connection settings should preserve the cached schema snapshot"
+  );
+  const cacheInvalidationPatch = await requestJson("/api/v1/datasources/local-sqlite", {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      revision: datasourceRevision,
+      config: { schema: "main" }
+    })
+  });
+  assert.equal(cacheInvalidationPatch.response.status, 200);
+  assert.equal(cacheInvalidationPatch.body.data.connectionStatus, "untested");
+  datasourceRevision = cacheInvalidationPatch.body.data.revision;
+  const schemaAfterConfigPatch = await requestJson("/api/v1/datasources/local-sqlite/schema");
+  assert(
+    datasourceSchemaTables(schemaAfterConfigPatch.body.data).some((table) => table.name === "cache_invalidated_metrics"),
+    "datasource config changes should invalidate the cached schema snapshot"
+  );
+
   const refreshPatch = await requestJson("/api/v1/datasources/local-sqlite", {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
@@ -1321,6 +1368,12 @@ try {
     workspace_id: "default",
     user_id: "dev-user"
   }), /SECRET_NOT_FOUND/u);
+  assert.equal(metadataStore.configResources.find({
+    id: "local-sqlite",
+    workspace_id: "default",
+    user_id: "dev-user",
+    kind: "datasource-schema"
+  }), undefined);
 
   console.log(
     "Config API smoke OK: secrets, datasource/types/policies, chat upload, datasource upload, conversation, revision, "

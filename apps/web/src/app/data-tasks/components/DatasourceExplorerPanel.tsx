@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { configApi } from "../../../lib/config-api";
 import type {
   DatasourceSchemaDto,
@@ -76,6 +76,8 @@ export function DatasourceExplorerPanel({
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [actionBusy, setActionBusy] = useState(false);
+  const schemaRequestVersionRef = useRef(0);
+  const previewRequestVersionRef = useRef(0);
 
   const settings = item.settings ?? {};
   const type = settings.type ?? "unknown";
@@ -89,7 +91,8 @@ export function DatasourceExplorerPanel({
       [
         tableNameOf(table),
         table.description ?? "",
-        ...table.columns.map((column) => `${column.name} ${column.type ?? ""}`),
+        ...table.columns.map((column) =>
+          `${column.name} ${column.type ?? ""} ${column.description ?? ""}`),
       ]
         .join(" ")
         .toLowerCase()
@@ -104,6 +107,12 @@ export function DatasourceExplorerPanel({
   const selectedName = selectedTable ? tableNameOf(selectedTable) : "";
 
   const loadSchema = async () => {
+    const requestVersion = schemaRequestVersionRef.current + 1;
+    schemaRequestVersionRef.current = requestVersion;
+    previewRequestVersionRef.current += 1;
+    setPreview(null);
+    setPreviewError(null);
+    setPreviewLoading(false);
     setSchemaLoading(true);
     setSchemaError(null);
     try {
@@ -111,6 +120,7 @@ export function DatasourceExplorerPanel({
         q: query.trim() || undefined,
         includeStats: true,
       });
+      if (schemaRequestVersionRef.current !== requestVersion) return;
       setSchema(next);
       const firstName = next.tables[0] ? tableNameOf(next.tables[0]) : "";
       setSelectedTableName((current) =>
@@ -119,23 +129,31 @@ export function DatasourceExplorerPanel({
           : firstName,
       );
     } catch (error) {
+      if (schemaRequestVersionRef.current !== requestVersion) return;
       setSchemaError(error instanceof Error ? error.message : "Failed to load schema");
     } finally {
-      setSchemaLoading(false);
+      if (schemaRequestVersionRef.current === requestVersion) {
+        setSchemaLoading(false);
+      }
     }
   };
 
   const loadPreview = async () => {
     if (!selectedName) return;
+    const requestVersion = previewRequestVersionRef.current + 1;
+    previewRequestVersionRef.current = requestVersion;
     setPreviewLoading(true);
     setPreviewError(null);
     try {
       const next = await configApi.getDatasourceTablePreview(item.id, selectedName, {
+        schema: settings.schema?.trim() || undefined,
         limit: 50,
         offset: 0,
       });
+      if (previewRequestVersionRef.current !== requestVersion) return;
       setPreview(next);
     } catch (error) {
+      if (previewRequestVersionRef.current !== requestVersion) return;
       setPreview(null);
       setPreviewError(
         error instanceof Error
@@ -143,7 +161,9 @@ export function DatasourceExplorerPanel({
           : "Datasource row preview API is not available yet.",
       );
     } finally {
-      setPreviewLoading(false);
+      if (previewRequestVersionRef.current === requestVersion) {
+        setPreviewLoading(false);
+      }
     }
   };
 
@@ -151,6 +171,10 @@ export function DatasourceExplorerPanel({
     void loadSchema();
     // Load once per datasource. Search uses the explicit Search/Refresh button.
     // eslint-disable-next-line react-hooks/exhaustive-deps
+    return () => {
+      schemaRequestVersionRef.current += 1;
+      previewRequestVersionRef.current += 1;
+    };
   }, [item.id]);
 
   const previewTable = preview
@@ -253,9 +277,11 @@ export function DatasourceExplorerPanel({
                     key={name}
                     type="button"
                     onClick={() => {
+                      previewRequestVersionRef.current += 1;
                       setSelectedTableName(name);
                       setPreview(null);
                       setPreviewError(null);
+                      setPreviewLoading(false);
                     }}
                     className={[
                       "w-full cursor-pointer rounded-lg border px-3 py-2 text-left transition-colors duration-150",
@@ -265,6 +291,11 @@ export function DatasourceExplorerPanel({
                     ].join(" ")}
                   >
                     <span className="block truncate text-xs font-semibold">{name}</span>
+                    {table.description ? (
+                      <span className="mt-0.5 block truncate text-[10px] text-slate-600">
+                        {table.description}
+                      </span>
+                    ) : null}
                     <span className="mt-0.5 block truncate text-[10px] text-slate-500">
                       {table.columns.length} columns · {formatStats(table)}
                     </span>
@@ -281,6 +312,11 @@ export function DatasourceExplorerPanel({
               <h4 className="truncate text-sm font-semibold text-slate-950">
                 {selectedName || "No object selected"}
               </h4>
+              {selectedTable?.description ? (
+                <p className="mt-0.5 text-xs leading-5 text-slate-700">
+                  {selectedTable.description}
+                </p>
+              ) : null}
               <p className="text-xs text-slate-500">{formatStats(selectedTable)}</p>
             </div>
             <div className="inline-flex rounded-lg border border-border bg-slate-50 p-0.5">

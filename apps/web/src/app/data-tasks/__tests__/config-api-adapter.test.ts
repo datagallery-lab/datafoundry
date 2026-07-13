@@ -90,6 +90,7 @@ describe("config api adapter", () => {
         host: "127.0.0.1",
         port: 5432,
         database: "sales",
+        ssl: true,
         queryPolicy: { maxRows: 500, timeoutMs: 5000 },
       },
       hasSecret: true,
@@ -99,9 +100,72 @@ describe("config api adapter", () => {
     });
 
     expect(item.settings?.host).toBe("127.0.0.1");
+    expect(item.settings?.ssl).toBe("true");
     expect(item.settings?.maxRows).toBe("500");
     expect(item.hasSecret).toBe(true);
     expect(item.revision).toBe(2);
+  });
+
+  it("does not turn absent datasource policy and schema fields into clears", () => {
+    const item = datasourceDtoToItem({
+      id: "sales-pg",
+      name: "Sales PG",
+      type: "postgresql",
+      config: {
+        host: "127.0.0.1",
+        port: 5432,
+        database: "sales",
+        username: "readonly",
+      },
+    });
+
+    expect(item.settings).not.toHaveProperty("schema");
+    expect(item.settings).not.toHaveProperty("maxRows");
+    expect(item.settings).not.toHaveProperty("timeoutMs");
+    expect(item.settings).not.toHaveProperty("tableAllowlist");
+    expect(item.settings).not.toHaveProperty("refreshIntervalSec");
+    expect(item.settings).not.toHaveProperty("maskFields");
+    expect(item.settings).not.toHaveProperty("maxSampleRows");
+
+    const body = itemToPatchBody("db", item);
+    expect(body.config).not.toHaveProperty("schema");
+    expect(body.queryPolicy).not.toHaveProperty("maxRows");
+    expect(body.queryPolicy).not.toHaveProperty("timeoutMs");
+    expect(body.introspection).toBeUndefined();
+    expect(body.maskFields).toBeUndefined();
+    expect(body.samplePolicy).toBeUndefined();
+  });
+
+  it("keeps explicit empty datasource policy and schema fields idempotent", () => {
+    const item = datasourceDtoToItem({
+      id: "sales-pg",
+      name: "Sales PG",
+      type: "postgresql",
+      config: {
+        schema: "",
+        queryPolicy: { maxRows: null, timeoutMs: null },
+        introspection: { tableAllowlist: [], refreshIntervalSec: null },
+        maskFields: [],
+        samplePolicy: { maxSampleRows: null },
+      },
+    });
+
+    expect(item.settings).toMatchObject({
+      schema: "",
+      maxRows: "",
+      timeoutMs: "",
+      tableAllowlist: "",
+      refreshIntervalSec: "",
+      maskFields: "",
+      maxSampleRows: "",
+    });
+
+    const body = itemToPatchBody("db", item);
+    expect(body.config).toMatchObject({ schema: "" });
+    expect(body.queryPolicy).toMatchObject({ maxRows: null, timeoutMs: null });
+    expect(body.introspection).toEqual({ tableAllowlist: [], refreshIntervalSec: null });
+    expect(body.maskFields).toEqual([]);
+    expect(body.samplePolicy).toEqual({ maxSampleRows: null });
   });
 
   it("builds create body with credentials separated from config", () => {
@@ -118,6 +182,7 @@ describe("config api adapter", () => {
         database: "sales",
         username: "readonly",
         password: "secret",
+        ssl: "true",
         secure: "true",
       },
     });
@@ -126,9 +191,96 @@ describe("config api adapter", () => {
     expect(body.config).toMatchObject({
       host: "127.0.0.1",
       database: "sales",
+      ssl: true,
       secure: true,
     });
     expect(JSON.stringify(body.config)).not.toContain("secret");
+  });
+
+  it("sends an explicit empty schema when clearing a datasource schema", () => {
+    const body = itemToPatchBody("db", {
+      id: "sales-pg",
+      name: "Sales PG",
+      description: "",
+      enabled: true,
+      settings: {
+        type: "postgresql",
+        schema: "",
+        ssl: "false",
+      },
+    });
+
+    expect(body.config).toEqual({ schema: "", ssl: false });
+  });
+
+  it("clears saved datasource credentials only when explicitly requested", () => {
+    const body = itemToPatchBody("db", {
+      id: "sales-pg",
+      name: "Sales PG",
+      description: "",
+      enabled: true,
+      hasSecret: true,
+      settings: {
+        type: "postgresql",
+        password: "",
+        clearCredentials: "true",
+      },
+    });
+
+    expect(body.clearCredentials).toBe(true);
+    expect(body.credentials).toBeUndefined();
+  });
+
+  it("sends explicit empty datasource policy lists when cleared", () => {
+    const body = itemToPatchBody("db", {
+      id: "sales-pg",
+      name: "Sales PG",
+      description: "",
+      enabled: true,
+      settings: {
+        type: "postgresql",
+        tableAllowlist: "",
+        maskFields: "   ",
+      },
+    });
+
+    expect(body.introspection).toEqual({ tableAllowlist: [] });
+    expect(body.maskFields).toEqual([]);
+  });
+
+  it("sends null for datasource policy numbers when cleared", () => {
+    const body = itemToPatchBody("db", {
+      id: "sales-pg",
+      name: "Sales PG",
+      description: "",
+      enabled: true,
+      settings: {
+        type: "postgresql",
+        maxRows: "",
+        timeoutMs: "  ",
+        refreshIntervalSec: "",
+        maxSampleRows: "\t",
+      },
+    });
+
+    expect(body.queryPolicy).toEqual({ maxRows: null, timeoutMs: null });
+    expect(body.introspection).toEqual({ refreshIntervalSec: null });
+    expect(body.samplePolicy).toEqual({ maxSampleRows: null });
+  });
+
+  it("omits datasource policy fields that are not present in the draft", () => {
+    const body = itemToPatchBody("db", {
+      id: "sales-pg",
+      name: "Sales PG",
+      description: "",
+      enabled: true,
+      settings: { type: "postgresql" },
+    });
+
+    expect(body.queryPolicy).toBeUndefined();
+    expect(body.introspection).toBeUndefined();
+    expect(body.maskFields).toBeUndefined();
+    expect(body.samplePolicy).toBeUndefined();
   });
 
   it("includes revision on patch body", () => {

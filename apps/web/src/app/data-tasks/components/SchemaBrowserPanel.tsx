@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import React, { useEffect, useState } from "react";
 import { useT } from "../../../i18n/locale-context";
 import { configApi } from "../../../lib/config-api";
 import type { DatasourceSchemaDto } from "../../../lib/config-api";
@@ -126,6 +126,11 @@ export function DatasourceSchemaPreviewPopover({
                       <div className="truncate text-xs font-semibold text-foreground">
                         {tableName}
                       </div>
+                      {table.description ? (
+                        <p className="mt-1 text-[11px] leading-4 text-muted">
+                          {table.description}
+                        </p>
+                      ) : null}
                       <div className="mt-1 flex flex-wrap gap-2 text-[10px] text-muted-light">
                         {table.sampleAvailable ? <span>Sample available</span> : null}
                         {formatStats(table) ? <span>{formatStats(table)}</span> : null}
@@ -139,7 +144,7 @@ export function DatasourceSchemaPreviewPopover({
                       {copied === tableName ? t("common.copied") : t("schema.copyTableName")}
                     </button>
                   </div>
-                  <div className="mt-2 flex flex-wrap gap-1.5">
+                  <div className="mt-2 grid gap-1.5 sm:grid-cols-2">
                     {table.columns.map((column) => {
                       const columnRef = `${tableName}.${column.name}`;
                       return (
@@ -147,12 +152,19 @@ export function DatasourceSchemaPreviewPopover({
                           key={columnRef}
                           type="button"
                           onClick={() => void handleCopy(columnRef)}
-                          className="rounded-full border border-border bg-surface px-2 py-1 text-[11px] text-muted transition hover:border-primary-light/40 hover:text-foreground"
+                          className="min-w-0 rounded-lg border border-border bg-surface px-2 py-1.5 text-left text-[11px] text-muted transition hover:border-primary-light/40 hover:text-foreground"
                           title={column.description}
                         >
-                          {column.name}
-                          {column.type ? (
-                            <span className="text-muted-light"> · {column.type}</span>
+                          <span className="block truncate">
+                            {column.name}
+                            {column.type ? (
+                              <span className="text-muted-light"> · {column.type}</span>
+                            ) : null}
+                          </span>
+                          {column.description ? (
+                            <span className="mt-0.5 block truncate text-[10px] text-muted-light">
+                              {column.description}
+                            </span>
                           ) : null}
                         </button>
                       );

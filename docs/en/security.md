@@ -56,7 +56,8 @@ When creating resources through REST API, put credentials in resource configurat
 - Grant minimum permissions for PostgreSQL, MySQL, SQL Server, Oracle, Snowflake, BigQuery, and other external services.
 - Set reasonable `maxRows` and `timeoutMs` for queries.
 - Configure `maskFields` for email, phone, ID numbers, and similar fields.
-- Use allowlists for sensitive databases and tables.
+- Use table allowlists as defense in depth. Enforce sensitive-table access with database grants and restrict
+  `EXECUTE` on functions that can run dynamic SQL.
 - SQLite, CSV, Excel, and DuckDB file paths must be accessible to the backend process.
 
 ## Local development boundaries

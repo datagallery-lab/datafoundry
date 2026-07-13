@@ -817,7 +817,7 @@ export type ConfigFieldDef = {
   label: string;
   placeholder?: string;
   helpText?: string;
-  inputType?: "text" | "password" | "url" | "select" | "number" | "boolean" | "textarea";
+  inputType?: "text" | "password" | "url" | "select" | "number" | "boolean" | "toggle" | "textarea";
   options?: Array<{ value: string; label: string }>;
   /** Select option values rendered disabled until pendingCapability activates. */
   pendingOptionValues?: string[];
@@ -1432,6 +1432,13 @@ export const WORKSPACE_CONFIG_FIELDS: Record<
         isDbServerType(s) && !isDbBigQueryType(s) && !isDbSnowflakeType(s) && !isDbClickHouseType(s),
       pendingWhen: isDbExtendedPendingType,
       pendingCapability: "datasource.extendedTypes",
+    },
+    {
+      key: "ssl",
+      label: "SSL",
+      inputType: "toggle",
+      requiresCapability: "datasource.server",
+      visibleWhen: (s) => dbTypeOf(s) === "postgresql",
     },
     {
       key: "username",

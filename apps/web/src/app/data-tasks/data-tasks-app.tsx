@@ -97,6 +97,8 @@ import {
   resolveToolStepActionLabel,
 } from "./step-display-label";
 import { JobProgressBanner } from "./components/JobProgressBanner";
+import { ConfigItemActionBar } from "./components/ConfigItemActionBar";
+import { DatasourceCredentialClearControl } from "./components/DatasourceCredentialClearControl";
 import {
   formatConfigTestError,
   formatConfigTestResult,
@@ -5717,6 +5719,8 @@ function ConfigItemDetailView({
     !isDirty ||
     saveBusy ||
     !isWorkspaceConfigItemValid(panel, item, settings);
+  const clearDatasourceCredentials =
+    panel === "db" && settings.clearCredentials === "true";
 
   return (
     <div className={`space-y-4 ${CONFIG_DETAIL_MAX_WIDTH_CLASS}`}>
@@ -5741,27 +5745,26 @@ function ConfigItemDetailView({
       ) : null}
 
       {mode === "edit" && (onTest || onIntrospect || onReindex || onValidateSkill || onDelete) ? (
-        <section className="flex flex-wrap gap-2 rounded-xl border border-border bg-white px-5 py-4">
-          {onTest ? (
-            <ActionButton
-              label={testBusy ? t("configPanel.testing") : t("configPanel.testConnection")}
-              disabled={testBusy}
-              onClick={() => void onTest()}
-            />
-          ) : null}
-          {onIntrospect ? (
-            <ActionButton label={t("configPanel.syncSchema")} onClick={() => void onIntrospect()} />
-          ) : null}
-          {onReindex ? (
-            <ActionButton label={t("configPanel.reindex")} onClick={() => void onReindex()} />
-          ) : null}
-          {onValidateSkill ? (
-            <ActionButton label={t("configPanel.validateSemantics")} onClick={() => void onValidateSkill()} />
-          ) : null}
-          {onDelete ? (
-            <ActionButton label={t("common.delete")} tone="danger" onClick={() => void onDelete()} />
-          ) : null}
-        </section>
+        <ConfigItemActionBar
+          blockPersistedActions={panel === "db" && isDirty}
+          labels={{
+            delete: t("common.delete"),
+            reindex: t("configPanel.reindex"),
+            saveBeforeDatasourceActions: t("configPanel.saveBeforeDatasourceActions"),
+            saveBeforeSchemaSyncTitle: t("configPanel.saveBeforeSchemaSyncTitle"),
+            saveBeforeTestTitle: t("configPanel.saveBeforeTestTitle"),
+            syncSchema: t("configPanel.syncSchema"),
+            testConnection: t("configPanel.testConnection"),
+            testing: t("configPanel.testing"),
+            validateSemantics: t("configPanel.validateSemantics"),
+          }}
+          onDelete={onDelete}
+          onIntrospect={onIntrospect}
+          onReindex={onReindex}
+          onTest={onTest}
+          onValidateSkill={onValidateSkill}
+          testBusy={testBusy}
+        />
       ) : null}
 
       {testResult ? <ConfigTestResultCard result={testResult} /> : null}
@@ -5808,6 +5811,9 @@ function ConfigItemDetailView({
                 field.inputType === "password" ||
                 field.key === "apiKey" ||
                 field.key === "embeddingApiKey";
+              const isDatasourceCredentialField =
+                panel === "db" &&
+                (field.key === "password" || field.key === "credentialsJson");
               const secretPlaceholder =
                 mode === "edit" &&
                 item.hasSecret &&
@@ -5857,14 +5863,39 @@ function ConfigItemDetailView({
                 fullWidth={field.fullWidth}
                 required={field.required && !pending}
                 readOnly={lockField ? (field.readOnly?.(item) ?? false) : false}
-                disabled={disabled}
+                disabled={disabled || (clearDatasourceCredentials && isDatasourceCredentialField)}
                 pending={pending}
-                onChange={(value) =>
-                  onUpdate({ settings: { [field.key]: value } })
-                }
+                onChange={(value) => {
+                  onUpdate({
+                    settings: {
+                      [field.key]: value,
+                      ...(isDatasourceCredentialField && value.trim()
+                        ? { clearCredentials: "" }
+                        : {}),
+                    },
+                  });
+                }}
               />
               );
             })}
+            {panel === "db" &&
+            mode === "edit" &&
+            item.hasSecret &&
+            settings.type === "postgresql" ? (
+              <DatasourceCredentialClearControl
+                checked={clearDatasourceCredentials}
+                helpText={t("configPanel.preserveSavedCredentialsHelp")}
+                label={t("configPanel.removeSavedCredentials")}
+                onChange={(checked) =>
+                  onUpdate({
+                    settings: {
+                      clearCredentials: checked ? "true" : "",
+                      ...(checked ? { password: "", credentialsJson: "" } : {}),
+                    },
+                  })
+                }
+              />
+            ) : null}
           </div>
         </section>
       )}
@@ -6342,7 +6373,7 @@ function EditableField({
   pending?: boolean;
   required?: boolean;
   multiline?: boolean;
-  inputType?: "text" | "password" | "url" | "select" | "number" | "boolean" | "textarea";
+  inputType?: "text" | "password" | "url" | "select" | "number" | "boolean" | "toggle" | "textarea";
   options?: Array<{ value: string; label: string }>;
   isOptionPending?: (value: string) => boolean;
   fullWidth?: boolean;
@@ -6366,7 +6397,21 @@ function EditableField({
           </span>
         ) : null}
       </span>
-      {inputType === "boolean" ? (
+      {inputType === "toggle" ? (
+        <span className="flex h-9 items-center">
+          <input
+            type="checkbox"
+            checked={value === "true"}
+            disabled={isLocked}
+            onChange={(event) => onChange(event.target.checked ? "true" : "false")}
+            className="peer sr-only"
+          />
+          <span
+            aria-hidden
+            className="relative h-6 w-11 shrink-0 rounded-full border border-slate-300 bg-slate-200 transition-colors after:absolute after:left-0.5 after:top-0.5 after:h-5 after:w-5 after:rounded-full after:bg-white after:shadow-sm after:transition-transform peer-checked:border-primary peer-checked:bg-primary peer-checked:after:translate-x-5 peer-focus-visible:ring-2 peer-focus-visible:ring-primary/30 peer-disabled:cursor-not-allowed peer-disabled:opacity-50"
+          />
+        </span>
+      ) : inputType === "boolean" ? (
         <select
           value={value === "true" ? "true" : "false"}
           disabled={isLocked}

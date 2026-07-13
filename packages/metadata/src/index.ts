@@ -1439,6 +1439,18 @@ export class DataSourceRepository {
     return this.get({ user_id: input.user_id, datasource_id: input.datasource_id });
   }
 
+  /** Clear stale connectivity state after connection settings or credentials change. */
+  resetTest(input: { user_id: string; datasource_id: string }): DataSourceRecord {
+    const now = new Date().toISOString();
+    this.db.prepare(`
+      UPDATE data_sources
+      SET status = 'ready', last_test_at = NULL, updated_at = ?
+      WHERE user_id = ? AND id = ?
+    `).run(now, input.user_id, input.datasource_id);
+
+    return this.get(input);
+  }
+
   /** Tombstone one datasource while preserving SQL audit foreign-key history. */
   delete(input: { user_id: string; datasource_id: string }): void {
     const result = this.db.prepare(`

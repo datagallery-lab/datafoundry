@@ -56,7 +56,7 @@ replace-with-your-key
 - 给 PostgreSQL、MySQL、SQL Server、Oracle、Snowflake、BigQuery 等外部服务配置最小权限。
 - 为查询设置合理的 `maxRows` 和 `timeoutMs`。
 - 对邮箱、手机号、身份证号等字段配置 `maskFields`。
-- 对敏感库表使用 allowlist。
+- 将表 allowlist 作为纵深防护；敏感库表仍需使用数据库授权，并限制可执行动态 SQL 的函数 `EXECUTE` 权限。
 - SQLite、CSV、Excel、DuckDB 文件路径必须是后端进程可访问的路径。
 
 ## 本地开发边界

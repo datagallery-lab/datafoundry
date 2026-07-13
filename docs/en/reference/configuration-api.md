@@ -87,13 +87,19 @@ Updates may send `revision` or `If-Match`. Conflicts return `REVISION_CONFLICT`.
     "host": "127.0.0.1",
     "port": 5432,
     "database": "sales",
+    "schema": "reporting",
     "username": "readonly",
+    "ssl": false
+  },
+  "credentials": {
     "password": "replace-with-your-key"
   }
 }
 ```
 
 Field shapes for each type come from `GET /api/v1/datasource-types`. See [Supported data sources](supported-datasources.md).
+For PostgreSQL, `schema` is used for introspection, table preview, and the session-local `search_path` of read-only SQL.
+Changing connection settings or credentials clears the previous connection-test state and cached schema snapshot.
 
 ### Model profile
 
@@ -162,6 +168,16 @@ curl -X POST http://127.0.0.1:8787/api/v1/mcp-servers/local-tools/test
 ```
 
 Test responses should return status, latency, and diagnostics—not plaintext credentials.
+
+PostgreSQL schema browsing and first-page table preview use:
+
+```text
+GET /api/v1/datasources/:id/schema
+GET /api/v1/datasources/:id/tables/:table/preview?limit=50&offset=0
+```
+
+The schema response includes table and column `description` values when PostgreSQL comments are present. Save draft
+connection changes before testing or synchronizing schema; those actions always use the last persisted configuration.
 
 ## Connecting to agent runs
 

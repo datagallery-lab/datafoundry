@@ -23,7 +23,7 @@ DataFoundry 通过 Data Gateway 管理数据源。客户端负责注册、测试
 | `sqlite` | `path` | 无 | 本地 SQLite 文件。 |
 | `csv` | `file_path` | 无 | CSV 文件，作为表格数据源。 |
 | `xlsx` | `file_path` | 无 | Excel 文件。 |
-| `postgresql` | `host`, `port`, `database`, `schema`, `username`, `password` | `password` | PostgreSQL 只读连接。 |
+| `postgresql` | `host`, `port`, `database`, `schema`, `username`, `ssl` | 可选 `password` | PostgreSQL 只读连接，支持 trust/证书等无密码认证。 |
 | `mysql` | `host`, `port`, `database`, `schema`, `username`, `password` | `password` | MySQL 只读连接。 |
 | `clickhouse` | `host`, `port`, `database`, `username`, `password`, `secure` | `password` | ClickHouse HTTP JSON 接口。 |
 | `snowflake` | `account`, `warehouse`, `database`, `schema`, `role`, `username`, `password` | `password` | Snowflake 数据仓库。 |

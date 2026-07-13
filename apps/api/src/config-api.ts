@@ -52,6 +52,7 @@ import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import type { IncomingMessage } from "node:http";
 import { basename, join, resolve, sep } from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import writeXlsxFile, { type SheetData } from "write-excel-file/node";
 
 import { resolveEffectiveRunConfig } from "./run-input.js";
@@ -87,6 +88,7 @@ import { knowledgeDocumentTextFromFile } from "./knowledge-document-text.js";
 
 const MAX_JSON_BODY_BYTES = 1024 * 1024;
 const DEFAULT_WORKSPACE_ID = "default";
+const DATASOURCE_SCHEMA_ADAPTER_VERSION = 2;
 
 /**
  * Map the user-facing `origin` label (R-021) to the internal FileAssetRefSource enum
@@ -734,6 +736,32 @@ const handleDatasourceRequest = async (
       query: requestUrl.searchParams.get("q") ?? undefined
     }));
   }
+  if (action === "tables" && segments[2] && segments[3] === "preview" && request.method === "GET") {
+    const table = decodeURIComponent(segments[2]);
+    const requestUrl = new URL(request.url ?? "/", "http://127.0.0.1");
+    const offset = clampInteger(Number.parseInt(requestUrl.searchParams.get("offset") ?? "", 10), 0, 10_000, 0);
+    if (offset !== 0 || requestUrl.searchParams.has("orderBy")) {
+      return fail(400, "BAD_REQUEST", "Datasource preview currently supports only the first unordered page.");
+    }
+    const datasource = context.metadataStore.dataSources.get({ user_id: context.userId, datasource_id: id });
+    const requestedSchema = requestUrl.searchParams.get("schema")?.trim();
+    const configuredSchema = stringValue(parseRecord(datasource.config_json).schema) ?? "public";
+    if (datasource.type === "postgresql" && requestedSchema && requestedSchema !== configuredSchema) {
+      return fail(400, "BAD_REQUEST", "Preview schema must match the datasource configuration.");
+    }
+    const limit = clampInteger(Number.parseInt(requestUrl.searchParams.get("limit") ?? "", 10), 1, 200, 50);
+    const result = await context.dataGateway.previewTable({
+      user_id: context.userId,
+      workspace_id: context.workspaceId,
+      datasource_id: id,
+      table,
+      limit
+    });
+    return ok({
+      columns: result.columns.map((name) => ({ name })),
+      rows: result.rows.map((row) => Object.fromEntries(result.columns.map((column, index) => [column, row[index]])))
+    });
+  }
   if (request.method === "GET") {
     return ok(dataSourceDto(context.metadataStore.dataSources.get({ user_id: context.userId, datasource_id: id })));
   }
@@ -741,16 +769,19 @@ const handleDatasourceRequest = async (
     return ok(await saveDatasource(await readJsonBody(request), id, context));
   }
   if (request.method === "DELETE") {
-    const current = context.metadataStore.dataSources.get({ user_id: context.userId, datasource_id: id });
-    if (current.credential_ref) {
-      context.metadataStore.secrets.delete({
-        ref: current.credential_ref,
-        workspace_id: context.workspaceId,
-        user_id: context.userId
-      });
-    }
-    context.metadataStore.dataSources.delete({ user_id: context.userId, datasource_id: id });
-    return ok({ deleted: true, id });
+    return ok(withConfigTransaction(context.metadataStore, () => {
+      const current = context.metadataStore.dataSources.get({ user_id: context.userId, datasource_id: id });
+      if (current.credential_ref) {
+        context.metadataStore.secrets.delete({
+          ref: current.credential_ref,
+          workspace_id: context.workspaceId,
+          user_id: context.userId
+        });
+      }
+      invalidateDatasourceSchemaSnapshot(id, context);
+      context.metadataStore.dataSources.delete({ user_id: context.userId, datasource_id: id });
+      return { deleted: true, id };
+    }));
   }
   return methodNotAllowed();
 };
@@ -1018,7 +1049,11 @@ const resolveDatasourceSchemaSnapshot = async (
     user_id: context.userId,
     kind: "datasource-schema"
   });
-  if (!snapshot || isDatasourceSchemaExpired(datasourceId, snapshot, context)) {
+  if (
+    !snapshot
+    || snapshot.payload.adapterSchemaVersion !== DATASOURCE_SCHEMA_ADAPTER_VERSION
+    || isDatasourceSchemaExpired(datasourceId, snapshot, context)
+  ) {
     return refreshDatasourceSchemaSnapshot(datasourceId, context);
   }
   return snapshot;
@@ -1028,20 +1063,38 @@ const refreshDatasourceSchemaSnapshot = async (
   datasourceId: string,
   context: Required<ConfigApiContext>
 ): Promise<ConfigResourceRecord> => {
-  const schema = await context.dataGateway.inspectSchema({
-    user_id: context.userId,
-    workspace_id: context.workspaceId,
-    datasource_id: datasourceId
-  });
-  return context.metadataStore.configResources.upsert({
-    id: datasourceId,
-    workspace_id: context.workspaceId,
-    user_id: context.userId,
-    kind: "datasource-schema",
-    name: datasourceId,
-    payload: { schema, adapterSchemaVersion: 1, inspectedAt: new Date().toISOString() },
-    status: "ready"
-  });
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const startedRevision = context.metadataStore.dataSources.get({
+      user_id: context.userId,
+      datasource_id: datasourceId
+    }).revision;
+    const schema = await context.dataGateway.inspectSchema({
+      user_id: context.userId,
+      workspace_id: context.workspaceId,
+      datasource_id: datasourceId
+    });
+    const currentRevision = context.metadataStore.dataSources.get({
+      user_id: context.userId,
+      datasource_id: datasourceId
+    }).revision;
+    if (currentRevision !== startedRevision) {
+      continue;
+    }
+    return context.metadataStore.configResources.upsert({
+      id: datasourceId,
+      workspace_id: context.workspaceId,
+      user_id: context.userId,
+      kind: "datasource-schema",
+      name: datasourceId,
+      payload: {
+        schema,
+        adapterSchemaVersion: DATASOURCE_SCHEMA_ADAPTER_VERSION,
+        inspectedAt: new Date().toISOString()
+      },
+      status: "ready"
+    });
+  }
+  throw new Error("DATASOURCE_SCHEMA_CHANGED_DURING_INTROSPECTION");
 };
 
 const schemaBrowserDto = (
@@ -1058,16 +1111,20 @@ const schemaBrowserDto = (
         return true;
       }
       const tableName = stringValue(table.name)?.toLowerCase() ?? "";
+      const tableDescription = stringValue(table.description)?.toLowerCase() ?? "";
       const columns = Array.isArray(table.columns) ? table.columns : [];
-      return tableName.includes(query) || columns.some((column) =>
-        isRecord(column) && typeof column.name === "string" && column.name.toLowerCase().includes(query)
+      return tableName.includes(query) || tableDescription.includes(query) || columns.some((column) =>
+        isRecord(column) && (
+          (typeof column.name === "string" && column.name.toLowerCase().includes(query))
+          || (typeof column.description === "string" && column.description.toLowerCase().includes(query))
+        )
       );
     });
   return {
     ...(datasourceId ? { datasourceId, datasource_id: datasourceId } : {}),
     tables,
     inspectedAt: stringValue(payload.inspectedAt),
-    adapterSchemaVersion: payload.adapterSchemaVersion ?? 1
+    adapterSchemaVersion: payload.adapterSchemaVersion ?? DATASOURCE_SCHEMA_ADAPTER_VERSION
   };
 };
 
@@ -1179,7 +1236,23 @@ const saveDatasourceInTransaction = (
     builtin: booleanValue(body.builtin, booleanValue(existingConfig.builtin, false)),
     mode: "readonly"
   };
-  const record = context.metadataStore.dataSources.create({
+  const typeChanged = Boolean(existing) && type !== existing?.type;
+  const connectionConfigChanged = Boolean(existing) && !isDeepStrictEqual(
+    datasourceConnectionConfig(existingConfig),
+    datasourceConnectionConfig(config)
+  );
+  const credentialsChanged = credentials !== undefined
+    || (body.clearCredentials === true && existing?.credential_ref !== undefined);
+  const introspectionChanged = Boolean(existing) && !isDeepStrictEqual(
+    recordValue(existingConfig.introspection) ?? {},
+    recordValue(config.introspection) ?? {}
+  );
+  const shouldResetTest = Boolean(existing) && (
+    typeChanged
+    || connectionConfigChanged
+    || credentialsChanged
+  );
+  let record = context.metadataStore.dataSources.create({
     user_id: context.userId,
     id,
     name: stringValue(body.name) ?? existing?.name ?? id,
@@ -1190,7 +1263,43 @@ const saveDatasourceInTransaction = (
     status: existing?.status ?? "ready",
     ...(expectedRevision !== undefined ? { expected_revision: expectedRevision } : {})
   });
+  if (shouldResetTest) {
+    record = context.metadataStore.dataSources.resetTest({ user_id: context.userId, datasource_id: id });
+  }
+  if (typeChanged || connectionConfigChanged || credentialsChanged || introspectionChanged) {
+    invalidateDatasourceSchemaSnapshot(id, context);
+  }
   return dataSourceDto(record);
+};
+
+const DATASOURCE_NON_CONNECTION_CONFIG_KEYS = new Set([
+  "builtin",
+  "defaultEnabled",
+  "introspection",
+  "maskFields",
+  "mode",
+  "queryPolicy",
+  "samplePolicy"
+]);
+
+const datasourceConnectionConfig = (config: Record<string, unknown>): Record<string, unknown> =>
+  Object.fromEntries(Object.entries(config).filter(([key, value]) =>
+    value !== undefined && !DATASOURCE_NON_CONNECTION_CONFIG_KEYS.has(key)
+  ));
+
+const invalidateDatasourceSchemaSnapshot = (
+  datasourceId: string,
+  context: Required<ConfigApiContext>
+): void => {
+  const input = {
+    id: datasourceId,
+    workspace_id: context.workspaceId,
+    user_id: context.userId,
+    kind: "datasource-schema" as const
+  };
+  if (context.metadataStore.configResources.find(input)) {
+    context.metadataStore.configResources.delete(input);
+  }
 };
 
 const handleGenericResourceRequest = async (
