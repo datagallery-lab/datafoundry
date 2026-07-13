@@ -20,6 +20,38 @@ type MastraToolExecuteOptions = {
   agent?: { toolCallId?: string };
 };
 
+const explicitBooleanToolInputSchema = z.preprocess((value) => {
+  if (typeof value !== "string") {
+    return value;
+  }
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "true") {
+    return true;
+  }
+  if (normalized === "false") {
+    return false;
+  }
+  return value;
+}, z.boolean());
+
+const positiveIntegerToolInputSchema = (maximum?: number) => z.preprocess((value) => {
+  if (typeof value !== "string") {
+    return value;
+  }
+  const normalized = value.trim();
+  if (!/^[1-9]\d*$/.test(normalized)) {
+    return value;
+  }
+  const parsed = Number(normalized);
+  return maximum === undefined ? parsed : Math.min(parsed, maximum);
+}, maximum === undefined
+  ? z.number().int().positive()
+  : z.number().int().positive().max(maximum));
+
+const previewLimitToolInputSchema = positiveIntegerToolInputSchema();
+const sqlLimitToolInputSchema = positiveIntegerToolInputSchema(1000);
+const sqlTimeoutToolInputSchema = positiveIntegerToolInputSchema(30000);
+
 const toolCallIdFromOptions = (options?: MastraToolExecuteOptions): string | undefined =>
   typeof options?.agent?.toolCallId === "string" && options.agent.toolCallId.length > 0
     ? options.agent.toolCallId
@@ -315,10 +347,15 @@ const createMastraDataTools = (executors: DataToolExecutors): ToolRegistry["mast
   list_data_sources: createTool({
     id: "list_data_sources",
     description: "List datasources enabled for this run.",
-    inputSchema: z.object({ enabled_only: z.boolean().optional() }),
-    execute: (toolInput) => executors.listDataSources({
-      ...(toolInput.enabled_only !== undefined ? { enabled_only: toolInput.enabled_only } : {})
-    })
+    inputSchema: z.object({ enabled_only: explicitBooleanToolInputSchema.optional() }),
+    execute: (toolInput) => {
+      const enabledOnly = toolInput.enabled_only === undefined
+        ? undefined
+        : explicitBooleanToolInputSchema.parse(toolInput.enabled_only);
+      return executors.listDataSources({
+        ...(enabledOnly !== undefined ? { enabled_only: enabledOnly } : {})
+      });
+    }
   }),
   inspect_schema: createTool({
     id: "inspect_schema",
@@ -343,13 +380,18 @@ const createMastraDataTools = (executors: DataToolExecutors): ToolRegistry["mast
     inputSchema: z.object({
       schema_id: z.string(),
       table: z.string().min(1),
-      limit: z.number().int().positive().optional()
+      limit: previewLimitToolInputSchema.optional()
     }),
-    execute: (toolInput) => executors.previewTable({
-      schema_id: toolInput.schema_id,
-      table: toolInput.table,
-      ...(toolInput.limit ? { limit: toolInput.limit } : {})
-    })
+    execute: (toolInput) => {
+      const limit = toolInput.limit === undefined
+        ? undefined
+        : previewLimitToolInputSchema.parse(toolInput.limit);
+      return executors.previewTable({
+        schema_id: toolInput.schema_id,
+        table: toolInput.table,
+        ...(limit !== undefined ? { limit } : {})
+      });
+    }
   }),
   run_sql_readonly: createTool({
     id: "run_sql_readonly",
@@ -357,19 +399,26 @@ const createMastraDataTools = (executors: DataToolExecutors): ToolRegistry["mast
     inputSchema: z.object({
       schema_id: z.string(),
       sql: z.string(),
-      limit: z.number().int().positive().max(1000).optional(),
-      timeout_ms: z.number().int().positive().max(30000).optional()
+      limit: sqlLimitToolInputSchema.optional(),
+      timeout_ms: sqlTimeoutToolInputSchema.optional()
     }),
-    execute: (toolInput, options) =>
-      executors.runSqlReadonly(
+    execute: (toolInput, options) => {
+      const limit = toolInput.limit === undefined
+        ? undefined
+        : sqlLimitToolInputSchema.parse(toolInput.limit);
+      const timeoutMs = toolInput.timeout_ms === undefined
+        ? undefined
+        : sqlTimeoutToolInputSchema.parse(toolInput.timeout_ms);
+      return executors.runSqlReadonly(
         {
           schema_id: toolInput.schema_id,
           sql: toolInput.sql,
-          ...(toolInput.limit ? { limit: toolInput.limit } : {}),
-          ...(toolInput.timeout_ms ? { timeout_ms: toolInput.timeout_ms } : {}),
+          ...(limit !== undefined ? { limit } : {}),
+          ...(timeoutMs !== undefined ? { timeout_ms: timeoutMs } : {}),
         },
         executionOptionsFromMastra(options),
-      ),
+      );
+    },
   })
 });
 
