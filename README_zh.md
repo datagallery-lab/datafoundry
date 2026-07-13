@@ -94,6 +94,7 @@ cp apps/web/.env.example apps/web/.env.local
 LLM_PROVIDER=openai-compatible
 LLM_MODEL=qwen-plus                # 或 deepseek-chat、gpt-4o……
 LLM_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
+LLM_CONNECT_TIMEOUT_MS=30000       # TCP/TLS 连接超时，与整个 run 的超时相互独立
 LLM_API_KEY=replace-with-your-key
 
 DATAFOUNDRY_AUTH_MODE=password

@@ -273,6 +273,7 @@ const resolveRunModelProvider = (
       provider: stringRecordValue(profile.payload, "provider") ?? "openai-compatible",
       model: stringRecordValue(profile.payload, "modelName") ?? stringRecordValue(profile.payload, "model") ?? "",
       base_url: stringRecordValue(profile.payload, "baseUrl") ?? stringRecordValue(profile.payload, "base_url") ?? "",
+      ...modelConnectTimeoutConfig(profile.payload),
       ...(apiKey ? { api_key: apiKey } : {})
     });
     if (provider.kind === "mock") {
@@ -291,6 +292,7 @@ const resolveRunModelProvider = (
   }
   return {
     kind: primary.kind,
+    connect_timeout_ms: primary.connect_timeout_ms,
     model_name: profileIds.join(" -> "),
     model: providers.map((provider, index) => ({
       id: profileIds[index] as string,
@@ -299,6 +301,14 @@ const resolveRunModelProvider = (
       enabled: true
     }))
   };
+};
+
+const modelConnectTimeoutConfig = (
+  payload: Record<string, unknown>
+): { connect_timeout_ms?: number } => {
+  const timeoutMs = numericRecordValue(payload, "connectTimeoutMs")
+    ?? numericRecordValue(payload, "connect_timeout_ms");
+  return timeoutMs !== undefined ? { connect_timeout_ms: timeoutMs } : {};
 };
 
 const validateEffectiveResources = (

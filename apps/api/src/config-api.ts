@@ -4224,12 +4224,21 @@ const resolveProfileProvider = (
         provider: stringValue(resource.payload.provider) ?? "openai-compatible",
         model: stringValue(resource.payload.modelName) ?? stringValue(resource.payload.model) ?? "",
         base_url: stringValue(resource.payload.baseUrl) ?? stringValue(resource.payload.base_url) ?? "",
+        ...profileConnectTimeout(resource),
         ...profileApiKey(resource, context)
       });
   if (provider.kind === "mock") {
     throw new Error(`PROVIDER_CONFIG_MISSING:${resource.id}`);
   }
   return provider;
+};
+
+const profileConnectTimeout = (
+  resource: ConfigResourceRecord
+): { connect_timeout_ms?: number } => {
+  const timeoutMs = numberValue(resource.payload.connectTimeoutMs)
+    ?? numberValue(resource.payload.connect_timeout_ms);
+  return timeoutMs !== undefined ? { connect_timeout_ms: timeoutMs } : {};
 };
 
 const profileApiKey = (

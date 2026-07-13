@@ -310,6 +310,7 @@ export type EnvConfig = {
     provider: string;
     model: string;
     base_url: string;
+    connect_timeout_ms: number;
     api_key?: string;
   };
   embedding: {
@@ -345,6 +346,12 @@ export const ENV_VARIABLE_SPECS: EnvVariableSpec[] = [
   },
   { name: "LLM_MODEL", required: false, default_value: "qwen-plus", description: "Chat model name." },
   { name: "LLM_BASE_URL", required: true, description: "OpenAI-compatible chat completions base URL." },
+  {
+    name: "LLM_CONNECT_TIMEOUT_MS",
+    required: false,
+    default_value: "30000",
+    description: "TCP/TLS connection timeout for chat provider requests in ms."
+  },
   {
     name: "AGENT_MODEL_CONTEXT_WINDOW",
     required: false,
@@ -386,6 +393,7 @@ export const createEnvConfig = (env: Record<string, string | undefined>): EnvCon
     provider: env.LLM_PROVIDER ?? "openai-compatible",
     model: env.LLM_MODEL ?? "qwen-plus",
     base_url: env.LLM_BASE_URL ?? "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    connect_timeout_ms: Number.parseInt(env.LLM_CONNECT_TIMEOUT_MS ?? "30000", 10),
     ...(env.LLM_API_KEY ? { api_key: env.LLM_API_KEY } : {})
   },
   embedding: {

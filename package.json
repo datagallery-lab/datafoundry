@@ -98,6 +98,7 @@
     "test:ingress-messages": "npm run build && node scripts/test-ingress-messages.mjs",
     "test:data-tool-input-compat": "npm run build && node --test scripts/data-tool-input-compat.test.mjs",
     "test:mastra-stream": "npm run build && node scripts/test-mastra-stream-normalizer.mjs",
+    "test:model-provider-transport": "npm run build && node --test scripts/model-provider-transport.test.mjs",
     "test:workspace-adapters": "npm run build && node scripts/test-workspace-adapters.mjs",
     "test:evidence-selection": "npm run build && node scripts/test-evidence-selection.mjs",
     "test:builtin-dtc-growth": "npm run build && node --test scripts/test-builtin-dtc-growth-datasource.mjs",

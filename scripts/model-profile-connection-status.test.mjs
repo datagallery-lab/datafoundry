@@ -55,6 +55,13 @@ test("modelProfileConnectivityPayloadChanged detects provider and model updates"
     ),
     false
   );
+  assert.equal(
+    modelProfileConnectivityPayloadChanged(
+      { provider: "openai-compatible", connectTimeoutMs: 30000 },
+      { provider: "openai-compatible", connectTimeoutMs: 45000 }
+    ),
+    true
+  );
 });
 
 test("serverDefaultConnectionStatus invalidates stale connected status", () => {
@@ -86,6 +93,14 @@ test("serverDefaultConnectionStatus invalidates stale connected status", () => {
       currentStatus: "connected",
       storedFingerprint: undefined,
       env
+    }),
+    "untested"
+  );
+  assert.equal(
+    serverDefaultConnectionStatus({
+      currentStatus: "connected",
+      storedFingerprint: fingerprint,
+      env: { ...env, LLM_CONNECT_TIMEOUT_MS: "45000" }
     }),
     "untested"
   );

@@ -7,7 +7,11 @@ export const modelProfileTestFailureMessage = (error: unknown): string => {
   }
   if (
     error instanceof Error
-    && (error.name === "TimeoutError" || error.name === "AbortError" || /timed?\s*out|aborted/iu.test(trimmed))
+    && (
+      error.name === "TimeoutError"
+      || error.name === "AbortError"
+      || /timed?\s*out|timeout|aborted|UND_ERR_CONNECT_TIMEOUT/iu.test(trimmed)
+    )
   ) {
     return "PROVIDER_TEST_FAILED:Connection timed out while reaching the model provider.";
   }

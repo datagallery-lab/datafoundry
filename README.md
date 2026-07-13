@@ -94,6 +94,7 @@ Configure any OpenAI-compatible model in the root `.env`, plus auth for formal t
 LLM_PROVIDER=openai-compatible
 LLM_MODEL=qwen-plus                # or deepseek-chat, gpt-4o, ...
 LLM_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
+LLM_CONNECT_TIMEOUT_MS=30000       # TCP/TLS connect timeout; separate from whole-run timeout
 LLM_API_KEY=replace-with-your-key
 
 DATAFOUNDRY_AUTH_MODE=password

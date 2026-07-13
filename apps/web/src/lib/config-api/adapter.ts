@@ -227,6 +227,7 @@ export function modelProfileDtoToItem(dto: ModelProfileDto): WorkspaceConfigItem
       presencePenalty: asString(dto.presencePenalty ?? ""),
       maxTokens: asString(dto.maxTokens ?? ""),
       timeoutMs: asString(dto.timeoutMs ?? ""),
+      connectTimeoutMs: asString(dto.connectTimeoutMs ?? ""),
       contextLength: asString(dto.contextLength ?? ""),
       reasoningModel: dto.reasoningModel === true ? "true" : dto.reasoningModel === false ? "false" : "",
       connectionStatus: dto.connectionStatus ?? "untested",
@@ -500,6 +501,9 @@ export function itemToCreateBody(
         ...(parseNumber(settings.timeoutMs) !== undefined
           ? { timeoutMs: parseNumber(settings.timeoutMs) }
           : {}),
+        ...(parseNumber(settings.connectTimeoutMs) !== undefined
+          ? { connectTimeoutMs: parseNumber(settings.connectTimeoutMs) }
+          : {}),
         ...(parseNumber(settings.temperature) !== undefined
           ? { temperature: parseNumber(settings.temperature) }
           : {}),
@@ -684,6 +688,9 @@ export function itemToPatchBody(
       }
       if (parseNumber(settings.timeoutMs) !== undefined) {
         body.timeoutMs = parseNumber(settings.timeoutMs);
+      }
+      if (parseNumber(settings.connectTimeoutMs) !== undefined) {
+        body.connectTimeoutMs = parseNumber(settings.connectTimeoutMs);
       }
       if (parseNumber(settings.temperature) !== undefined) {
         body.temperature = parseNumber(settings.temperature);

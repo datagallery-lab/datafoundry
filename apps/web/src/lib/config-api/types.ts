@@ -261,6 +261,7 @@ export type ModelProfileDto = {
   temperature?: number;
   topP?: number;
   timeoutMs?: number;
+  connectTimeoutMs?: number;
   secretRef?: string | null;
   hasSecret?: boolean;
   defaultEnabled?: boolean;

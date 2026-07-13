@@ -14,6 +14,15 @@ describe("formatRunErrorMessage", () => {
     );
   });
 
+  it("explains provider connect timeouts without exposing the upstream stack", () => {
+    expect(
+      formatRunErrorMessage("Cannot connect to API: Connect Timeout Error (timeout: 10000ms)"),
+    ).toContain("Connection timeout (ms)");
+    expect(formatRunErrorMessage("UND_ERR_CONNECT_TIMEOUT")).toContain(
+      "HTTPS_PROXY",
+    );
+  });
+
   it("passes through unknown messages", () => {
     expect(formatRunErrorMessage("Something broke")).toBe("Something broke");
   });

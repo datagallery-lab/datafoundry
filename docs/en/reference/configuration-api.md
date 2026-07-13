@@ -104,11 +104,14 @@ Field shapes for each type come from `GET /api/v1/datasource-types`. See [Suppor
   "provider": "openai-compatible",
   "model": "qwen-plus",
   "baseUrl": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+  "connectTimeoutMs": 30000,
   "apiKey": "replace-with-your-key"
 }
 ```
 
-The server default model can also be configured through `.env` without creating a model resource.
+`connectTimeoutMs` controls TCP/TLS connection establishment for each model request and is independent of the
+whole-run `timeoutMs`. It defaults to 30 seconds and is clamped to 1–120 seconds. The server default model can also
+be configured through `.env` without creating a model resource.
 
 ### Knowledge base
 

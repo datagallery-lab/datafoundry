@@ -226,6 +226,8 @@ npm run start:api
 - 检查 `.env` 中的 `LLM_API_KEY`。
 - 检查 `LLM_BASE_URL` 是否以模型服务的兼容接口为准。
 - 检查 `LLM_MODEL` 是否在你的账号下可用。
+- 遇到 `UND_ERR_CONNECT_TIMEOUT` 时，提高 `LLM_CONNECT_TIMEOUT_MS`（默认 `30000`）或模型配置中的
+  `Connection timeout (ms)`；网络必须经过代理时，在 `.env` 配置 `HTTPS_PROXY` 和 `NO_PROXY`。
 - 在 Web 工作台的模型配置里执行测试动作。
 
 ### 端口冲突

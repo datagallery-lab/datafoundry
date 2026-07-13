@@ -226,6 +226,8 @@ Fix:
 - Check `LLM_API_KEY` in `.env`.
 - Confirm `LLM_BASE_URL` matches your provider's compatible endpoint.
 - Confirm `LLM_MODEL` is available on your account.
+- For `UND_ERR_CONNECT_TIMEOUT`, increase `LLM_CONNECT_TIMEOUT_MS` (default `30000`) or the profile's
+  `Connection timeout (ms)`. If your network requires a proxy, set `HTTPS_PROXY` and `NO_PROXY` in `.env`.
 - Run the test action in the Web workbench model configuration.
 
 ### Port conflict

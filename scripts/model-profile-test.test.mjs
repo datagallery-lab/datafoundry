@@ -27,6 +27,10 @@ test("modelProfileTestFailureMessage maps timeout errors", () => {
     modelProfileTestFailureMessage(timeout),
     "PROVIDER_TEST_FAILED:Connection timed out while reaching the model provider."
   );
+  assert.equal(
+    modelProfileTestFailureMessage(new Error("Cannot connect to API: Connect Timeout Error (timeout: 10000ms)")),
+    "PROVIDER_TEST_FAILED:Connection timed out while reaching the model provider."
+  );
 });
 
 test("modelProfileTestSuccessReason includes model and response", () => {

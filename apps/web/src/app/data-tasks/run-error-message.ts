@@ -20,6 +20,9 @@ export function formatRunErrorMessage(message?: string): string {
     const profile = providerConfigMatch[1]?.trim() || "the selected model profile";
     return `Model provider configuration is missing for "${profile}". Check the model profile API key, base URL, and model name.`;
   }
+  if (/UND_ERR_CONNECT_TIMEOUT|connect timeout|cannot connect to API.*timeout/iu.test(trimmed)) {
+    return "Could not establish a connection to the model provider. Check the Base URL and network, or increase the profile Connection timeout (ms). If this network requires a proxy, configure HTTPS_PROXY on the API server.";
+  }
   if (
     /randomUUID/i.test(trimmed) ||
     /secure context required/i.test(trimmed) ||

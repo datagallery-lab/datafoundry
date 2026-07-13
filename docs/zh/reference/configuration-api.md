@@ -104,11 +104,13 @@ CopilotKit /api/copilotkit -> Authorization / X-Dev-Token / X-Workspace-Id
   "provider": "openai-compatible",
   "model": "qwen-plus",
   "baseUrl": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+  "connectTimeoutMs": 30000,
   "apiKey": "replace-with-your-key"
 }
 ```
 
-服务端默认模型也可以通过 `.env` 配置，不一定需要创建模型资源。
+`connectTimeoutMs` 控制每次模型请求建立 TCP/TLS 连接的等待时间，与整个 run 的 `timeoutMs` 相互独立；
+默认 30 秒，允许范围为 1–120 秒。服务端默认模型也可以通过 `.env` 配置，不一定需要创建模型资源。
 
 ### 知识库
 

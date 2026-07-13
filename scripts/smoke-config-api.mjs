@@ -1043,6 +1043,7 @@ try {
       presencePenalty: -0.25,
       contextLength: 64000,
       reasoningModel: true,
+      connectTimeoutMs: 45000,
       timeoutMs: 5000
     })
   });
@@ -1050,6 +1051,7 @@ try {
   assert.equal(modelProfile.body.data.hasSecret, true);
   assert.equal(modelProfile.body.data.contextLength, 64000);
   assert.equal(modelProfile.body.data.reasoningModel, true);
+  assert.equal(modelProfile.body.data.connectTimeoutMs, 45000);
   assert.equal(JSON.stringify(modelProfile.body).includes("smoke-model-key"), false);
   assert.equal(modelProfile.body.data.connectionStatus, "untested");
 
@@ -1104,6 +1106,7 @@ try {
   assert.equal(resolvedModelRun.modelContextProfile?.contextWindow, 64000);
   assert.equal(resolvedModelRun.modelContextProfile?.outputReserve, 4096);
   assert.equal(resolvedModelRun.reasoningModel, true);
+  assert.equal(resolvedModelRun.modelProvider.connect_timeout_ms, 45000);
   assert.equal(resolvedModelRun.runTimeoutMs, 5000);
   const skillBoundRun = resolveRunConfig({
     defaultDatasourceId: "dtc-growth-demo",

@@ -155,11 +155,13 @@ describe("config api adapter", () => {
         modelName: "qwen-long",
         baseUrl: "https://example.com/v1",
         contextLength: "128000",
+        connectTimeoutMs: "45000",
         reasoningModel: "true",
       },
     });
 
     expect(body.contextLength).toBe(128000);
+    expect(body.connectTimeoutMs).toBe(45000);
     expect(body.reasoningModel).toBe(true);
   });
 
@@ -169,6 +171,7 @@ describe("config api adapter", () => {
       name: "DeepSeek",
       provider: "deepseek",
       modelName: "deepseek-chat",
+      connectTimeoutMs: 60000,
     });
     const createBody = itemToCreateBody("llm", {
       id: "qwen",
@@ -182,12 +185,14 @@ describe("config api adapter", () => {
       name: "Qwen",
       description: "",
       enabled: true,
-      settings: { provider: "bailian" },
+      settings: { provider: "bailian", connectTimeoutMs: "60000" },
     });
 
     expect(item.settings?.provider).toBe("openai-compatible");
+    expect(item.settings?.connectTimeoutMs).toBe("60000");
     expect(createBody.provider).toBe("openai-compatible");
     expect(patchBody.provider).toBe("openai-compatible");
+    expect(patchBody.connectTimeoutMs).toBe(60000);
   });
 
   it("maps workspace config dto to store buckets", () => {

@@ -7,11 +7,17 @@ export const MODEL_PROFILE_CONNECTIVITY_PAYLOAD_KEYS = [
   "modelName",
   "model",
   "model_name",
+  "connectTimeoutMs",
+  "connect_timeout_ms",
   "fallbackProfileId"
 ] as const;
 
-const stringValue = (value: unknown): string | undefined =>
-  typeof value === "string" && value.trim() ? value.trim() : undefined;
+const connectivityValue = (value: unknown): string | undefined => {
+  if (typeof value === "string" && value.trim()) {
+    return value.trim();
+  }
+  return typeof value === "number" && Number.isFinite(value) ? String(value) : undefined;
+};
 
 /** True when persisted model-profile fields that affect provider resolution changed. */
 export const modelProfileConnectivityPayloadChanged = (
@@ -19,8 +25,8 @@ export const modelProfileConnectivityPayloadChanged = (
   next: Record<string, unknown>
 ): boolean =>
   MODEL_PROFILE_CONNECTIVITY_PAYLOAD_KEYS.some((key) => {
-    const currentValue = stringValue(current[key]);
-    const nextValue = stringValue(next[key]);
+    const currentValue = connectivityValue(current[key]);
+    const nextValue = connectivityValue(next[key]);
     return currentValue !== nextValue;
   });
 
@@ -49,6 +55,10 @@ export const llmEnvFingerprint = (env: Record<string, string | undefined>): stri
     env.LLM_PROVIDER ?? "",
     env.LLM_BASE_URL ?? "",
     env.LLM_MODEL ?? "",
+    env.LLM_CONNECT_TIMEOUT_MS ?? "",
+    env.HTTP_PROXY ?? env.http_proxy ?? "",
+    env.HTTPS_PROXY ?? env.https_proxy ?? "",
+    env.NO_PROXY ?? env.no_proxy ?? "",
     env.LLM_API_KEY ? "key:set" : "key:missing"
   ].join("\0");
   return createHash("sha256").update(material).digest("hex").slice(0, 16);

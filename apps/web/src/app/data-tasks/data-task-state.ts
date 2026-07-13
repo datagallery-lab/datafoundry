@@ -1320,6 +1320,7 @@ export function normalizeLlmSettingsExtended(
     ...base,
     fallbackProfileId: settings?.fallbackProfileId ?? "",
     timeoutMs: settings?.timeoutMs ?? "300000",
+    connectTimeoutMs: settings?.connectTimeoutMs ?? "30000",
     temperature: settings?.temperature ?? "",
     maxTokens: settings?.maxTokens ?? "",
     topP: settings?.topP ?? "",
@@ -1837,6 +1838,14 @@ export const WORKSPACE_CONFIG_FIELDS: Record<
       helpText:
         "Whole-run timeout for multi-step agent tasks (not just a single LLM call). " +
         "Use 300000–600000 for deep analysis.",
+    },
+    {
+      key: "connectTimeoutMs",
+      label: "Connection timeout (ms)",
+      inputType: "number",
+      placeholder: "30000",
+      helpText:
+        "TCP/TLS connection limit for each model request. Increase this when the provider takes more than 10 seconds to establish a connection.",
     },
     {
       key: "temperature",

@@ -11,6 +11,7 @@
   },
   "dependencies": {
     "@ai-sdk/openai": "^3.0.73",
-    "@datafoundry/contracts": "0.2.0"
+    "@datafoundry/contracts": "0.2.0",
+    "undici": "^7.28.0"
   }
 }
