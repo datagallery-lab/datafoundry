@@ -163,13 +163,18 @@ const buildTuiRunConfig = (
     ...(activeSkillId ? [activeSkillId] : []),
     ...enabledItemIds(state.workspaceConfig.skill),
   ]);
+  const datasourceSelection = enabledDatasourceIds.length > 0
+    ? {
+        enabledDatasourceIds,
+        ...(activeDatasourceId ? { activeDatasourceId } : {}),
+      }
+    : {};
 
   return {
-    enabledDatasourceIds,
+    ...datasourceSelection,
     enabledKnowledgeIds: enabledItemIds(state.workspaceConfig.kb),
     enabledMcpServerIds: enabledItemIds(state.workspaceConfig.mcp),
     enabledSkillIds,
-    ...(activeDatasourceId ? { activeDatasourceId } : {}),
     ...(activeSkillId ? { activeSkillId } : {}),
     mentioned: {
       db: activeDatasourceId ? [activeDatasourceId] : [],
@@ -315,7 +320,7 @@ export const App: React.FC<AppProps> = ({
   const [inputFocused, setInputFocused] = useState(false);
   const [commandNotice, setCommandNotice] = useState<CommandNotice | null>(null);
   const [activeDatasourceId, setActiveDatasourceId] = useState<string | undefined>(
-    () => datasourceId || firstEnabledDatasourceId(store.getState()),
+    () => datasourceId ?? (configClient ? undefined : firstEnabledDatasourceId(store.getState())),
   );
   const [activeSkillId, setActiveSkillId] = useState<string | undefined>(
     () => firstEnabledSkillId(store.getState()),
@@ -350,6 +355,9 @@ export const App: React.FC<AppProps> = ({
   const ctrlCTimerRef = useRef<NodeJS.Timeout | null>(null);
   const applyChatScrollDeltaRef = useRef<(delta: number) => void>(() => {});
   const startupResumeAttempted = useRef(false);
+  const activeDatasourceIdRef = useRef(activeDatasourceId);
+  const datasourceSelectionLockedRef = useRef(Boolean(datasourceId));
+  const defaultDatasourcePromiseRef = useRef<Promise<string | undefined> | null>(null);
   const queuedPromptsRef = useRef<string[]>([]);
   const drainingQueuedPromptRef = useRef(false);
   const handleAgentQueryRef = useRef<((input: string) => Promise<void>) | null>(null);
@@ -413,6 +421,35 @@ export const App: React.FC<AppProps> = ({
     ]),
     [skillShortcutItems],
   );
+
+  const resolveDefaultDatasourceId = useCallback(async (): Promise<string | undefined> => {
+    if (!configClient || datasourceSelectionLockedRef.current || activeDatasourceIdRef.current) {
+      return activeDatasourceIdRef.current;
+    }
+
+    if (!defaultDatasourcePromiseRef.current) {
+      defaultDatasourcePromiseRef.current = configClient.getRunDefaults()
+        .then((defaults) => defaults.activeDatasourceId ?? defaults.enabledDatasourceIds[0])
+        .then((defaultDatasourceId) => {
+          if (
+            defaultDatasourceId
+            && !datasourceSelectionLockedRef.current
+            && !activeDatasourceIdRef.current
+          ) {
+            activeDatasourceIdRef.current = defaultDatasourceId;
+            setActiveDatasourceId(defaultDatasourceId);
+          }
+          return defaultDatasourceId;
+        })
+        .catch(() => {
+          defaultDatasourcePromiseRef.current = null;
+          return undefined;
+        });
+    }
+
+    await defaultDatasourcePromiseRef.current;
+    return activeDatasourceIdRef.current;
+  }, [configClient]);
 
   const requestControlsMeasurement = useCallback((inputBoxRows?: number) => {
     if (typeof inputBoxRows === 'number') {
@@ -510,13 +547,21 @@ export const App: React.FC<AppProps> = ({
   }, [controlsLayoutKey]);
 
   useEffect(() => {
-    if (!activeDatasourceId) {
+    activeDatasourceIdRef.current = activeDatasourceId;
+  }, [activeDatasourceId]);
+
+  useEffect(() => {
+    void resolveDefaultDatasourceId();
+  }, [resolveDefaultDatasourceId]);
+
+  useEffect(() => {
+    if (!activeDatasourceId && !configClient) {
       setActiveDatasourceId(firstEnabledDatasourceId(state));
     }
     if (!activeSkillId) {
       setActiveSkillId(firstEnabledSkillId(state));
     }
-  }, [activeDatasourceId, activeSkillId, state.workspaceConfig]);
+  }, [activeDatasourceId, activeSkillId, configClient, state.workspaceConfig]);
 
   const scrollChatBy = (delta: number): void => {
     if (delta === 0) return;
@@ -875,6 +920,8 @@ export const App: React.FC<AppProps> = ({
   }
 
   function selectDatasourceForSession(nextDatasourceId: string): void {
+    datasourceSelectionLockedRef.current = true;
+    activeDatasourceIdRef.current = nextDatasourceId;
     setActiveDatasourceId(nextDatasourceId);
 
     const currentConfig = store.getState().workspaceConfig;
@@ -1097,6 +1144,7 @@ export const App: React.FC<AppProps> = ({
   // Handle agent query execution
   const handleAgentQuery = async (input: string) => {
     setCommandNotice(null);
+    const resolvedActiveDatasourceId = activeDatasourceId ?? await resolveDefaultDatasourceId();
     store.addUserMessage(input);
     store.clearInputBuffer();
     // Reset after the message enters history so the startup banner no longer
@@ -1119,13 +1167,13 @@ export const App: React.FC<AppProps> = ({
 
     const createRunInput = (): RunAgentInput => {
       const runId = `run-${Date.now()}-${Math.random().toString(36).substring(7)}`;
-      const runConfig = buildTuiRunConfig(currentState, activeDatasourceId, activeSkillId);
+      const runConfig = buildTuiRunConfig(currentState, resolvedActiveDatasourceId, activeSkillId);
       const context: NonNullable<RunAgentInput['context']> = [
-        ...(activeDatasourceId
+        ...(resolvedActiveDatasourceId
           ? [
               {
                 description: 'datasource_id',
-                value: activeDatasourceId,
+                value: resolvedActiveDatasourceId,
               },
             ]
           : []),
@@ -1142,10 +1190,10 @@ export const App: React.FC<AppProps> = ({
         tools: [],
         context,
         state: {
-          ...(activeDatasourceId
+          ...(resolvedActiveDatasourceId
             ? {
-                datasourceId: activeDatasourceId,
-                selectedDatasourceId: activeDatasourceId,
+                datasourceId: resolvedActiveDatasourceId,
+                selectedDatasourceId: resolvedActiveDatasourceId,
               }
             : {}),
           runId,
@@ -1154,7 +1202,7 @@ export const App: React.FC<AppProps> = ({
           run_config: runConfig,
         },
         forwardedProps: {
-          ...(activeDatasourceId ? { datasourceId: activeDatasourceId } : {}),
+          ...(resolvedActiveDatasourceId ? { datasourceId: resolvedActiveDatasourceId } : {}),
           run_config: runConfig,
         },
       };

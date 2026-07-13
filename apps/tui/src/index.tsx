@@ -24,7 +24,7 @@ Options:
   --runtime-url <url>     CopilotKit runtime URL
                           (default: http://127.0.0.1:8787/api/copilotkit)
   --datasource-id <id>    Datasource ID
-                          (default: api-duckdb-demo)
+                          (default: backend run-defaults; demo: api-duckdb-demo)
   --agent <name>          Agent name
                           (default: dataFoundry)
   --resume [sessionId]    Resume the latest server session, or a specific session
@@ -82,9 +82,11 @@ const runtimeUrl = getArg(
   "--runtime-url",
   "http://127.0.0.1:8787/api/copilotkit"
 );
-const datasourceId = getArg("--datasource-id", "api-duckdb-demo");
+const explicitDatasourceId = getOptionalArg("--datasource-id");
 const agent = getArg("--agent", "dataFoundry");
 const demoMode = args.includes("--demo");
+const demoDatasourceId = explicitDatasourceId ?? "api-duckdb-demo";
+const datasourceId = demoMode ? demoDatasourceId : explicitDatasourceId;
 const initialResume = resolveResumeRequest();
 const configClient = demoMode
   ? undefined
@@ -118,7 +120,7 @@ async function main(): Promise<void> {
       store.setThreadId(randomUUID());
     }
     if (demoMode) {
-      seedDemoState(datasourceId);
+      seedDemoState(demoDatasourceId);
     }
 
     const restoreTerminalRedrawOptimizer = process.stdout.isTTY

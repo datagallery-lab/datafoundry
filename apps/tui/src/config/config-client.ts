@@ -268,6 +268,7 @@ const RunDefaultsSchema = z.object({
   enabledDatasourceIds: z.array(z.string()),
   enabledKnowledgeIds: z.array(z.string()),
   enabledMcpServerIds: z.array(z.string()),
+  activeDatasourceId: z.string().optional(),
   activeLlmProfileId: z.string().optional(),
   activeSkillId: z.string().optional(),
 });
