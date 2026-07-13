@@ -47,11 +47,54 @@ type CommandNotice = {
   kind: 'info' | 'error';
 };
 type RuntimeEvent = { type?: string; [key: string]: unknown };
+const REASONING_START_EVENTS = new Set([
+  'REASONING_START',
+  'REASONING_MESSAGE_START',
+  'THINKING_START',
+  'THINKING_TEXT_MESSAGE_START',
+]);
+const REASONING_CONTENT_EVENTS = new Set([
+  'REASONING_MESSAGE_CONTENT',
+  'REASONING_MESSAGE_CHUNK',
+  'THINKING_TEXT_MESSAGE_CONTENT',
+  'THINKING_TEXT_MESSAGE_CHUNK',
+]);
+const REASONING_END_EVENTS = new Set([
+  'REASONING_END',
+  'REASONING_MESSAGE_END',
+  'THINKING_END',
+  'THINKING_TEXT_MESSAGE_END',
+]);
 const SCROLL_FRAME_MS = 16;
 const SCROLL_ROWS_PER_FRAME = 3;
 const MAX_PENDING_SCROLL_ROWS = 120;
 const CTRL_EXIT_PROMPT_DURATION_MS = 1000;
 type ClearInputDraft = () => boolean;
+
+function eventType(event: RuntimeEvent): string {
+  return typeof event.type === 'string' ? event.type : '';
+}
+
+function isReasoningStartEvent(event: RuntimeEvent): boolean {
+  return REASONING_START_EVENTS.has(eventType(event));
+}
+
+function isReasoningContentEvent(event: RuntimeEvent): boolean {
+  return REASONING_CONTENT_EVENTS.has(eventType(event));
+}
+
+function isReasoningEndEvent(event: RuntimeEvent): boolean {
+  return REASONING_END_EVENTS.has(eventType(event));
+}
+
+function isToolCallEvent(event: RuntimeEvent): boolean {
+  return eventType(event).startsWith('TOOL_CALL_');
+}
+
+function reasoningDeltaFromEvent(event: RuntimeEvent): string | undefined {
+  const delta = event.delta ?? event.content ?? event.text ?? event.message;
+  return typeof delta === 'string' ? delta : undefined;
+}
 
 const createThreadId = (): string => {
   try {
@@ -300,6 +343,8 @@ export const App: React.FC<AppProps> = ({
   const [controlsHeight, setControlsHeight] = useState(0);
   const [reportedInputBoxRows, setReportedInputBoxRows] = useState<number | null>(null);
   const [ctrlCPressedOnce, setCtrlCPressedOnce] = useState(false);
+  const [compactMode, setCompactMode] = useState(true);
+  const [thoughtExpanded, setThoughtExpanded] = useState(false);
   const chatAreaRef = useRef<ChatAreaRef>(null);
   const mainControlsRef = useRef<DOMElement | null>(null);
   const ctrlCTimerRef = useRef<NodeJS.Timeout | null>(null);
@@ -890,6 +935,16 @@ export const App: React.FC<AppProps> = ({
       return;
     }
 
+    if (!pickerOpen && key.ctrl && input === 'o') {
+      setCompactMode((value) => !value);
+      return;
+    }
+
+    if (!pickerOpen && key.meta && input.toLowerCase() === 't') {
+      setThoughtExpanded((value) => !value);
+      return;
+    }
+
     // Ignore input when typing in the input box
     if (pickerOpen || inputFocused) return;
 
@@ -1194,7 +1249,19 @@ export const App: React.FC<AppProps> = ({
           }
 
           // Handle specific event types for message streaming
-          if (event.type === 'TEXT_MESSAGE_CONTENT' || event.type === 'TEXT_MESSAGE_CHUNK') {
+          if (isReasoningStartEvent(runtimeEvent)) {
+            flushTextBuffer();
+            store.appendReasoningMessage('', true);
+          } else if (isReasoningContentEvent(runtimeEvent)) {
+            flushTextBuffer();
+            const delta = reasoningDeltaFromEvent(runtimeEvent);
+            if (delta !== undefined) {
+              store.appendReasoningMessage(delta, true);
+            }
+          } else if (isReasoningEndEvent(runtimeEvent)) {
+            flushTextBuffer();
+            store.finalizeReasoningMessage();
+          } else if (event.type === 'TEXT_MESSAGE_CONTENT' || event.type === 'TEXT_MESSAGE_CHUNK') {
             const delta = (event as { delta?: unknown }).delta;
             if (typeof delta === 'string') {
               if (!textBuffer.append(delta)) {
@@ -1211,9 +1278,11 @@ export const App: React.FC<AppProps> = ({
             flushTextBuffer(false);
           } else if (event.type === 'RUN_FINISHED') {
             flushTextBuffer(false);
+            store.finalizeReasoningMessage();
             storeCurrentRunEvent(runtimeEvent);
           } else if (event.type === 'RUN_ERROR') {
             flushTextBuffer();
+            store.finalizeReasoningMessage();
             const message = (event as { message?: unknown }).message;
             const errorMessage = typeof message === 'string' ? message : 'Agent run failed';
             storeCurrentRunEvent(runtimeEvent);
@@ -1225,8 +1294,9 @@ export const App: React.FC<AppProps> = ({
             // Display user-friendly error message
             const friendlyMessage = formatErrorMessage(classifiedError);
             store.updateAssistantMessage(`Error: ${friendlyMessage}`, false);
-          } else if (event.type === 'TOOL_CALL_START') {
+          } else if (isToolCallEvent(runtimeEvent)) {
             startNextTextSegment();
+            store.finalizeReasoningMessage();
             storeCurrentRunEvent(runtimeEvent);
           } else {
             // Feed non-text events into the state reducer. Text chunks are
@@ -1235,6 +1305,7 @@ export const App: React.FC<AppProps> = ({
           }
         }
         flushTextBuffer(false);
+        store.finalizeReasoningMessage();
         if (!isCurrentRun()) {
           return;
         }
@@ -1250,6 +1321,7 @@ export const App: React.FC<AppProps> = ({
         setRetryCount(0);
       } catch (error) {
         flushTextBuffer();
+        store.finalizeReasoningMessage();
         if (!isCurrentRun()) {
           return;
         }
@@ -1563,6 +1635,8 @@ export const App: React.FC<AppProps> = ({
                         viewportRows={chatViewportRowCount}
                         columns={terminalColumns}
                         startup={transcriptStartup}
+                        compactMode={compactMode}
+                        thoughtExpanded={thoughtExpanded}
                       />
                     </Box>
 
@@ -1625,6 +1699,8 @@ export const App: React.FC<AppProps> = ({
                   runStatus={state.runStatus}
                   modelName={modelName}
                   directory={directory}
+                  compactMode={compactMode}
+                  thoughtExpanded={thoughtExpanded}
                 />
               )}
             </Box>

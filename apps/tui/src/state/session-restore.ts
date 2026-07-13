@@ -79,7 +79,7 @@ export function conversationToDisplayMessages(
     const entry = sortedMessages[index];
 
     if (entry.role !== "assistant") {
-      const content = entry.contentText.trim();
+      const content = displayTextForEntry(entry);
       if (content) {
         const timestamp = timestampFromIso(entry.createdAt, Date.now());
         messages.push({
@@ -120,7 +120,7 @@ export function conversationToDisplayMessages(
   return messages;
 }
 
-type AssistantSegment = { entry: ConversationMessage; content: string };
+type AssistantSegment = { entry: ConversationMessage; elements: MessageElement[] };
 
 /**
  * Build a single assistant turn for one run, interleaving each text segment with
@@ -132,16 +132,15 @@ function buildAssistantRunBlock(
   runToolCalls: ConversationToolCall[],
   runStartTimestamp: number | undefined,
 ): DisplayMessage | undefined {
+  const fallbackTimestamp = timestampFromIso(runEntries[0]?.createdAt, Date.now());
+  const timestamp = runStartTimestamp ?? fallbackTimestamp;
   const segments: AssistantSegment[] = runEntries
-    .map((entry) => ({ entry, content: entry.contentText.trim() }))
-    .filter((segment) => segment.content.length > 0);
+    .map((entry) => ({ entry, elements: assistantElementsForEntry(entry, timestamp) }))
+    .filter((segment) => segment.elements.length > 0);
 
   if (segments.length === 0 && runToolCalls.length === 0) {
     return undefined;
   }
-
-  const fallbackTimestamp = timestampFromIso(runEntries[0]?.createdAt, Date.now());
-  const timestamp = runStartTimestamp ?? fallbackTimestamp;
 
   const elements: MessageElement[] = [];
 
@@ -160,7 +159,7 @@ function buildAssistantRunBlock(
   } else {
     const toolsBySegment = assignToolCallsToSegments(segments, runToolCalls);
     segments.forEach((segment, segmentIndex) => {
-      elements.push({ type: "text", content: segment.content, timestamp });
+      elements.push(...segment.elements);
       for (const toolCall of toolsBySegment[segmentIndex] ?? []) {
         elements.push({
           type: "tool_call",
@@ -186,6 +185,49 @@ function buildAssistantRunBlock(
     timestamp,
     elements,
   };
+}
+
+function assistantElementsForEntry(
+  entry: ConversationMessage,
+  timestamp: number,
+): MessageElement[] {
+  const parts = contentPartsForEntry(entry);
+  if (parts.length === 0) {
+    const content = entry.contentText.trim();
+    return content ? [{ type: "text", content, timestamp }] : [];
+  }
+
+  const elements: MessageElement[] = [];
+  for (const part of parts) {
+    const content = part.text.trim();
+    if (!content) {
+      continue;
+    }
+    elements.push({
+      type: part.type,
+      content,
+      timestamp,
+    });
+  }
+
+  return elements;
+}
+
+function displayTextForEntry(entry: ConversationMessage): string {
+  const parts = contentPartsForEntry(entry).filter((part) => part.type === "text");
+  if (parts.length === 0) {
+    return entry.contentText.trim();
+  }
+  return parts
+    .map((part) => part.text.trim())
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+function contentPartsForEntry(
+  entry: ConversationMessage,
+): Array<{ type: "reasoning" | "text"; text: string }> {
+  return entry.contentParts ?? entry.content?.parts ?? [];
 }
 
 /**
@@ -299,6 +341,12 @@ function conversationToolCallToLiveRecord(toolCall: ConversationToolCall): LiveT
   }
   if (result !== undefined) {
     record.result = result;
+  }
+  if (toolCall.args !== undefined) {
+    record.args = toolCall.args;
+  }
+  if (toolCall.resultPreview !== undefined) {
+    record.resultPreview = toolCall.resultPreview;
   }
   return record;
 }

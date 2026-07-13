@@ -14,8 +14,10 @@ import {
   addUserMessage,
   addAssistantMessage,
   appendToLastAssistantMessage,
+  appendReasoningToLastAssistantMessage,
   clearMessages,
   finalizeLastAssistantMessage,
+  finalizeLastReasoningElement,
   updateLastAssistantMessage,
   insertToolCallIntoLastMessage,
   updateToolCallInMessages,
@@ -293,6 +295,22 @@ class StateStore {
   updateAssistantMessage(content: string, isStreaming = false): void {
     const newState = updateLastAssistantMessage(this.state, content, isStreaming);
     this.setState(newState as TuiAppState, !isStreaming);
+  }
+
+  /**
+   * Append reasoning to the last assistant message.
+   */
+  appendReasoningMessage(delta: string, isStreaming = true): void {
+    const newState = appendReasoningToLastAssistantMessage(this.state, delta, isStreaming);
+    this.setState(newState as TuiAppState, !isStreaming);
+  }
+
+  /**
+   * Finalize the last reasoning block without finalizing the whole message.
+   */
+  finalizeReasoningMessage(): void {
+    const newState = finalizeLastReasoningElement(this.state);
+    this.setState(newState as TuiAppState, true);
   }
 
   /**

@@ -101,6 +101,8 @@ interface StatusFooterProps {
   runStatus: LiveRunStatus;
   modelName: string;
   directory: string;
+  compactMode?: boolean | undefined;
+  thoughtExpanded?: boolean | undefined;
 }
 
 export const StatusFooter: React.FC<StatusFooterProps> = ({
@@ -108,6 +110,8 @@ export const StatusFooter: React.FC<StatusFooterProps> = ({
   runStatus,
   modelName,
   directory,
+  compactMode,
+  thoughtExpanded,
 }) => {
   const connDisplay = getConnectionDisplay(connectionStatus);
   const runDisplay = getRunDisplay(runStatus);
@@ -125,6 +129,18 @@ export const StatusFooter: React.FC<StatusFooterProps> = ({
       <Text color={runDisplay.color}>
         {runDisplay.icon} {runDisplay.text}
       </Text>
+      {compactMode !== undefined && (
+        <>
+          <Text dimColor> | </Text>
+          <Text dimColor>{compactMode ? 'Compact' : 'Full'}</Text>
+        </>
+      )}
+      {thoughtExpanded !== undefined && (
+        <>
+          <Text dimColor> · </Text>
+          <Text dimColor>{thoughtExpanded ? 'Thinking open' : 'Thinking closed'}</Text>
+        </>
+      )}
     </Box>
   );
 };

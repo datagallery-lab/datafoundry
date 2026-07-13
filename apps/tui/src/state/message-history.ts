@@ -229,6 +229,72 @@ export function updateLastAssistantMessage(
 }
 
 /**
+ * Append reasoning delta to the last assistant message.
+ */
+export function appendReasoningToLastAssistantMessage(
+  state: TuiSessionState,
+  delta: string,
+  isStreaming = true,
+): TuiSessionState {
+  const messages = [...state.messages];
+  const lastIndex = messages.length - 1;
+
+  const makeElement = (content: string, timestamp: number): MessageElement => ({
+    type: 'reasoning',
+    content,
+    timestamp,
+    ...(isStreaming ? { isStreaming: true } : {}),
+  });
+
+  if (lastIndex >= 0) {
+    const lastMsg = messages[lastIndex];
+    if (lastMsg && lastMsg.role === "assistant") {
+      const now = Date.now();
+      const elements = [...lastMsg.elements];
+      const lastElement = elements[elements.length - 1];
+
+      if (lastElement?.type === 'reasoning') {
+        elements[elements.length - 1] = makeElement(
+          lastElement.content + delta,
+          lastElement.timestamp,
+        );
+      } else {
+        elements.push(makeElement(delta, now));
+      }
+
+      messages[lastIndex] = {
+        ...lastMsg,
+        elements,
+        isStreaming: true,
+      };
+    } else {
+      const now = Date.now();
+      messages.push({
+        id: generateMessageId(),
+        role: "assistant",
+        timestamp: now,
+        isStreaming: true,
+        elements: [makeElement(delta, now)],
+      });
+    }
+  } else {
+    const now = Date.now();
+    messages.push({
+      id: generateMessageId(),
+      role: "assistant",
+      timestamp: now,
+      isStreaming: true,
+      elements: [makeElement(delta, now)],
+    });
+  }
+
+  return {
+    ...state,
+    messages,
+  };
+}
+
+/**
  * Insert a tool call element into the last assistant message
  */
 export function insertToolCallIntoLastMessage(
@@ -356,6 +422,55 @@ export function finalizeLastAssistantMessage(
       };
     }
   }
+
+  return {
+    ...state,
+    messages,
+  };
+}
+
+/**
+ * Mark the last reasoning element as complete without ending the assistant turn.
+ */
+export function finalizeLastReasoningElement(
+  state: TuiSessionState,
+): TuiSessionState {
+  const messages = [...state.messages];
+  const lastIndex = messages.length - 1;
+
+  if (lastIndex < 0) {
+    return state;
+  }
+
+  const lastMsg = messages[lastIndex];
+  if (!lastMsg || lastMsg.role !== "assistant") {
+    return state;
+  }
+
+  const reasoningIndex = [...lastMsg.elements]
+    .reverse()
+    .findIndex((element) => element.type === 'reasoning');
+  if (reasoningIndex < 0) {
+    return state;
+  }
+
+  const elementIndex = lastMsg.elements.length - 1 - reasoningIndex;
+  const element = lastMsg.elements[elementIndex];
+  if (!element || element.type !== 'reasoning') {
+    return state;
+  }
+
+  const elements = [...lastMsg.elements];
+  elements[elementIndex] = {
+    type: 'reasoning',
+    content: element.content,
+    timestamp: element.timestamp,
+  };
+
+  messages[lastIndex] = {
+    ...lastMsg,
+    elements,
+  };
 
   return {
     ...state,

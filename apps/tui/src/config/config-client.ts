@@ -321,6 +321,11 @@ const SessionListResponseSchema = z.object({
   nextCursor: z.string().optional(),
 });
 
+const ConversationContentPartSchema = z.object({
+  type: z.enum(["reasoning", "text"]),
+  text: z.string(),
+});
+
 const ConversationMessageSchema = z.object({
   id: z.string(),
   runId: z.string(),
@@ -328,6 +333,14 @@ const ConversationMessageSchema = z.object({
   source: z.enum(["agent", "client"]),
   messageId: z.string().optional(),
   contentText: z.string(),
+  contentParts: z.array(ConversationContentPartSchema).optional(),
+  content: z
+    .object({
+      parts: z.array(ConversationContentPartSchema).optional(),
+    })
+    .passthrough()
+    .nullable()
+    .optional(),
   position: z.number(),
   createdAt: z.string(),
 });

@@ -11,6 +11,12 @@ export type ConnectionStatus = "connected" | "disconnected" | "error";
 export type MessageElement =
   | { type: 'text'; content: string; timestamp: number }
   | {
+      type: 'reasoning';
+      content: string;
+      timestamp: number;
+      isStreaming?: boolean | undefined;
+    }
+  | {
       type: 'tool_call';
       toolCallId: string;
       timestamp: number;
