@@ -111,10 +111,12 @@ export type SchemaSummary = {
   datasource_id: string;
   tables: Array<{
     name: string;
+    description?: string;
     columns: Array<{
       name: string;
       type: string;
       nullable?: boolean;
+      description?: string;
     }>;
   }>;
 };
@@ -123,6 +125,16 @@ export type TableResult = {
   columns: string[];
   rows: unknown[][];
   row_count: number;
+};
+
+export type TableColumnOrigin = {
+  schema: string;
+  table: string;
+  column: string;
+};
+
+export type AdapterTableResult = TableResult & {
+  column_origins?: Array<TableColumnOrigin | null>;
 };
 
 export type SqlExecutionResult = TableResult & {
@@ -161,8 +173,8 @@ export type DataSourceRuntimePolicy = {
 
 export type DataSourceAdapter = {
   inspectSchema(input?: AdapterExecutionInput): Promise<Omit<SchemaSummary, "datasource_id">>;
-  previewTable(input: AdapterPreviewInput): Promise<TableResult>;
-  runSqlReadonly(input: AdapterSqlInput): Promise<TableResult>;
+  previewTable(input: AdapterPreviewInput): Promise<AdapterTableResult>;
+  runSqlReadonly(input: AdapterSqlInput): Promise<AdapterTableResult>;
 };
 
 export type AdapterExecutionInput = {

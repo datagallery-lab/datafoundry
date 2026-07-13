@@ -87,13 +87,19 @@ CopilotKit /api/copilotkit -> Authorization / X-Dev-Token / X-Workspace-Id
     "host": "127.0.0.1",
     "port": 5432,
     "database": "sales",
+    "schema": "reporting",
     "username": "readonly",
+    "ssl": false
+  },
+  "credentials": {
     "password": "replace-with-your-key"
   }
 }
 ```
 
 不同数据源的字段来自 `GET /api/v1/datasource-types`。详见 [支持的数据源](supported-datasources.md)。
+对 PostgreSQL 而言，`schema` 同时用于元数据抓取、表预览和只读 SQL 会话的本地 `search_path`。
+修改连接配置或凭据后，旧的连接测试状态和 schema 快照会失效。
 
 ### 模型配置
 
@@ -164,6 +170,16 @@ curl -X POST http://127.0.0.1:8787/api/v1/mcp-servers/local-tools/test
 ```
 
 测试响应应返回状态、延迟和诊断信息，不返回明文凭据。
+
+PostgreSQL schema 浏览和表数据首页预览使用：
+
+```text
+GET /api/v1/datasources/:id/schema
+GET /api/v1/datasources/:id/tables/:table/preview?limit=50&offset=0
+```
+
+如果 PostgreSQL 中存在表注释或列注释，schema 响应会通过 `description` 返回。测试连接或同步 schema
+始终使用最后一次已保存的配置，因此应先保存编辑草稿。
 
 ## 与 Agent run 衔接
 

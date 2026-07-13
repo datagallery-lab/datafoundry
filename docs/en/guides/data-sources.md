@@ -77,7 +77,8 @@ curl -X POST http://127.0.0.1:8787/api/v1/datasources \
       "port": 5432,
       "database": "sales",
       "schema": "public",
-      "username": "readonly"
+      "username": "readonly",
+      "ssl": false
     },
     "credentials": {
       "password": "replace-with-your-key"
@@ -98,6 +99,24 @@ curl -X POST http://127.0.0.1:8787/api/v1/datasources/sales-pg/test
 curl -X POST http://127.0.0.1:8787/api/v1/datasources/sales-pg/introspect
 curl http://127.0.0.1:8787/api/v1/datasources/sales-pg/schema
 ```
+
+The configured PostgreSQL `schema` is the only schema exposed by inspection and preview, and is installed as the
+transaction-local `search_path` for agent read-only SQL. Table and column comments are returned as `description`
+fields. Preview the first page of a table with:
+
+```bash
+curl "http://127.0.0.1:8787/api/v1/datasources/sales-pg/tables/orders/preview?limit=50&offset=0"
+```
+
+Saving changed connection settings invalidates the old schema snapshot and marks the source untested. Run the
+connection test again before using it in an agent run.
+
+For PostgreSQL, `maxRows` is enforced when rows are fetched from a server-side cursor, even when submitted SQL has a
+larger `LIMIT`. `maskFields` follows direct column aliases by PostgreSQL column origin; derived columns without a
+verifiable origin are masked conservatively whenever a mask policy is active. When `tableAllowlist` is configured,
+queries whose `FROM` relations cannot be verified are rejected. Database account permissions remain the primary
+security boundary. The allowlist cannot inspect SQL executed dynamically inside database functions, so use a
+least-privilege role and revoke `EXECUTE` on functions that can run arbitrary SQL.
 
 ## Selecting a source in an agent run
 
@@ -166,5 +185,6 @@ Complex Mongo aggregation, Redis commands, and Elasticsearch DSL are not exposed
 - Use read-only accounts.
 - Set reasonable `maxRows` and `timeoutMs`.
 - Configure `maskFields` for email, phone, ID numbers, and similar fields.
-- Use allowlists for sensitive tables.
+- Use table allowlists as defense in depth; protect sensitive tables with database grants and restricted function
+  execution.
 - Do not paste database passwords, tokens, or private keys into question text or AG-UI payloads.

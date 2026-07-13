@@ -23,7 +23,7 @@ DataFoundry manages data sources through Data Gateway. Clients register, test, a
 | `sqlite` | `path` | None | Local SQLite file. |
 | `csv` | `file_path` | None | CSV file as tabular source. |
 | `xlsx` | `file_path` | None | Excel file. |
-| `postgresql` | `host`, `port`, `database`, `schema`, `username`, `password` | `password` | Read-only PostgreSQL connection. |
+| `postgresql` | `host`, `port`, `database`, `schema`, `username`, `ssl` | Optional `password` | Read-only PostgreSQL connection; passwordless trust/certificate auth is supported. |
 | `mysql` | `host`, `port`, `database`, `schema`, `username`, `password` | `password` | Read-only MySQL connection. |
 | `clickhouse` | `host`, `port`, `database`, `username`, `password`, `secure` | `password` | ClickHouse HTTP JSON interface. |
 | `snowflake` | `account`, `warehouse`, `database`, `schema`, `role`, `username`, `password` | `password` | Snowflake warehouse. |

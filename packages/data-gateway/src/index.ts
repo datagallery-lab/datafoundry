@@ -48,7 +48,12 @@ import {
 } from "./adapters/search-adapters.js";
 import { createAdapterRegistry, createRegisteredAdapter } from "./adapter-registry.js";
 import { guardReadonlySql, stripQuotedSql } from "./readonly-guard.js";
+import {
+  parsePostgreSqlTableReferences,
+  SqlTableReferenceParseError
+} from "./sql-table-references.js";
 import { SUPPORTED_DATA_SOURCE_TYPES } from "./supported-types.js";
+import { applyTableResultMask } from "./table-result-policy.js";
 import type {
   AdapterExecutionInput,
   AdapterPreviewInput,
@@ -158,14 +163,16 @@ export class LocalDataGateway implements DataGateway {
 
     return {
       datasource_id: input.datasource_id,
-      tables: tableNames.size > 0 ? schema.tables.filter((table) => tableNames.has(table.name)) : schema.tables
+      tables: tableNames === undefined
+        ? schema.tables
+        : schema.tables.filter((table) => tableNames.has(table.name))
     };
   }
 
   async previewTable(input: PreviewTableInput): Promise<TableResult> {
     throwIfAborted(input.signal);
     const dataSource = this.metadataStore.dataSources.get(input);
-    const adapter = this.createAdapter(dataSource);
+    const adapter = this.createAdapter(dataSource, input.workspace_id);
     const resourcePolicy = dataSourcePolicy(dataSource);
     assertTableAllowed(input.table, resourcePolicy);
     if (resourcePolicy.allowSample === false) {
@@ -181,7 +188,7 @@ export class LocalDataGateway implements DataGateway {
       ),
       signal: input.signal
     });
-    return maskTableResult(result, resourcePolicy.maskFields);
+    return applyTableResultMask(result, resourcePolicy.maskFields);
   }
 
   async runSqlReadonly(input: RunSqlReadonlyInput): Promise<SqlExecutionResult> {
@@ -208,7 +215,22 @@ export class LocalDataGateway implements DataGateway {
     }
 
     const resourcePolicy = dataSourcePolicy(dataSource);
-    assertSqlTablesAllowed(guard.normalized_sql, resourcePolicy);
+    try {
+      assertSqlTablesAllowed(guard.normalized_sql, resourcePolicy, dataSource);
+    } catch (error) {
+      this.metadataStore.sqlAuditLogs.create({
+        user_id: input.user_id,
+        id: auditLogId,
+        datasource_id: input.datasource_id,
+        sql_text: guard.normalized_sql,
+        status: "blocked",
+        blocked_reason: error instanceof Error ? error.message : "Unable to verify table policy",
+        ...(input.run_id ? { run_id: input.run_id } : {}),
+        elapsed_ms: Date.now() - startedAt
+      });
+      auditLogCreated = true;
+      throw error;
+    }
     const limit = Math.min(
       input.limit ?? this.policy.defaultLimit,
       this.policy.maxLimit,
@@ -232,7 +254,7 @@ export class LocalDataGateway implements DataGateway {
         timeoutMs,
         input.signal
       );
-      const maskedResult = normalizeTableResult(maskTableResult(result, resourcePolicy.maskFields));
+      const maskedResult = normalizeTableResult(applyTableResultMask(result, resourcePolicy.maskFields));
       const elapsedMs = Date.now() - startedAt;
       const audit = this.metadataStore.sqlAuditLogs.create({
         user_id: input.user_id,
@@ -428,12 +450,16 @@ const dataSourcePolicy = (dataSource: DataSourceRecord): DataSourceRuntimePolicy
   };
 };
 
-const allowedTableSet = (requestedTables: string[] | undefined, policyTables: string[]): Set<string> => {
+const allowedTableSet = (
+  requestedTables: string[] | undefined,
+  policyTables: string[]
+): Set<string> | undefined => {
   const requested = requestedTables ?? [];
   if (requested.length > 0 && policyTables.length > 0) {
     return new Set(requested.filter((table) => policyTables.includes(table)));
   }
-  return new Set(requested.length > 0 ? requested : policyTables);
+  const effectiveTables = requested.length > 0 ? requested : policyTables;
+  return effectiveTables.length > 0 ? new Set(effectiveTables) : undefined;
 };
 
 const assertTableAllowed = (table: string, policy: DataSourceRuntimePolicy): void => {
@@ -442,12 +468,56 @@ const assertTableAllowed = (table: string, policy: DataSourceRuntimePolicy): voi
   }
 };
 
-const assertSqlTablesAllowed = (sql: string, policy: DataSourceRuntimePolicy): void => {
+const assertSqlTablesAllowed = (
+  sql: string,
+  policy: DataSourceRuntimePolicy,
+  dataSource: DataSourceRecord
+): void => {
   if (policy.tableAllowlist.length === 0) {
+    return;
+  }
+  if (dataSource.type === "postgresql") {
+    assertPostgreSqlTablesAllowed(sql, policy, dataSource);
     return;
   }
   const tableNames = extractSqlTableNames(sql);
   const blocked = tableNames.filter((table) => !policy.tableAllowlist.includes(table));
+  if (blocked.length > 0) {
+    throw new Error(`TABLE_NOT_ALLOWED:${blocked.join(",")}`);
+  }
+};
+
+const assertPostgreSqlTablesAllowed = (
+  sql: string,
+  policy: DataSourceRuntimePolicy,
+  dataSource: DataSourceRecord
+): void => {
+  let references: ReturnType<typeof parsePostgreSqlTableReferences>;
+  try {
+    references = parsePostgreSqlTableReferences(sql);
+  } catch (error) {
+    if (error instanceof SqlTableReferenceParseError) {
+      throw new Error(`TABLE_POLICY_UNVERIFIABLE:${error.message}`);
+    }
+    throw error;
+  }
+
+  const config = parseConfig(dataSource);
+  const configuredSchema = typeof config.schema === "string" && config.schema.length > 0
+    ? config.schema
+    : "public";
+  const blocked = references
+    .filter(({ parts }) => {
+      const table = parts.at(-1);
+      if (table === undefined || !policy.tableAllowlist.includes(table)) {
+        return true;
+      }
+      if (parts.length === 1) {
+        return false;
+      }
+      return parts.length !== 2 || parts[0] !== configuredSchema;
+    })
+    .map(({ parts }) => parts.join("."));
   if (blocked.length > 0) {
     throw new Error(`TABLE_NOT_ALLOWED:${blocked.join(",")}`);
   }
@@ -470,25 +540,6 @@ const extractSqlTableNames = (sql: string): string[] => {
 const unqualifiedTableName = (value: string): string => {
   const segment = value.split(".").at(-1) ?? value;
   return unquoteIdentifier(segment.trim().replace(/^`|`$/gu, ""));
-};
-
-const maskTableResult = (result: TableResult, maskFields: string[]): TableResult => {
-  if (maskFields.length === 0) {
-    return result;
-  }
-  const maskedColumnNames = new Set(maskFields.map((field) => field.toLowerCase()));
-  const maskedIndexes = result.columns
-    .map((column, index) => ({ column, index }))
-    .filter(({ column }) => maskedColumnNames.has(column.toLowerCase()))
-    .map(({ index }) => index);
-  if (maskedIndexes.length === 0) {
-    return result;
-  }
-  return {
-    ...result,
-    rows: result.rows.map((row) =>
-      row.map((value, index) => maskedIndexes.includes(index) && value !== null ? "[MASKED]" : value))
-  };
 };
 
 const normalizeTableResult = (result: TableResult): TableResult => ({

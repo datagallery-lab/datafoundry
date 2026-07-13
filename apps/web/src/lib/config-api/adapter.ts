@@ -47,6 +47,10 @@ function pickBooleanString(record: Record<string, unknown>, key: string): string
   return "";
 }
 
+function hasOwn(record: Record<string, unknown>, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(record, key);
+}
+
 function mapConnectionStatus(status?: string): ConfigItemStatus {
   if (status === "connected" || status === "ready") return "connected";
   if (status === "failed") return "failed";
@@ -107,21 +111,30 @@ export function datasourceDtoToItem(dto: DatasourceDto): WorkspaceConfigItem {
       host: pickString(config, "host"),
       port: pickString(config, "port"),
       database: pickString(config, "database"),
-      schema: pickString(config, "schema"),
+      ...(hasOwn(config, "schema") ? { schema: pickString(config, "schema") } : {}),
       username: pickString(config, "username"),
+      ssl: pickBooleanString(config, "ssl"),
       secure: pickBooleanString(config, "secure"),
       projectId: pickString(config, "projectId"),
       dataset: pickString(config, "dataset"),
       account: pickString(config, "account"),
       warehouse: pickString(config, "warehouse"),
-      maxRows: pickString(queryPolicy, "maxRows"),
-      timeoutMs: pickString(queryPolicy, "timeoutMs"),
-      tableAllowlist,
-      refreshIntervalSec: pickString(introspection, "refreshIntervalSec"),
+      ...(hasOwn(queryPolicy, "maxRows")
+        ? { maxRows: pickString(queryPolicy, "maxRows") }
+        : {}),
+      ...(hasOwn(queryPolicy, "timeoutMs")
+        ? { timeoutMs: pickString(queryPolicy, "timeoutMs") }
+        : {}),
+      ...(hasOwn(introspection, "tableAllowlist") ? { tableAllowlist } : {}),
+      ...(hasOwn(introspection, "refreshIntervalSec")
+        ? { refreshIntervalSec: pickString(introspection, "refreshIntervalSec") }
+        : {}),
       denyWrite: pickBooleanString(queryPolicy, "denyWrite") || "true",
-      maskFields,
+      ...(hasOwn(config, "maskFields") ? { maskFields } : {}),
       allowSample: pickBooleanString(samplePolicy, "allowSample"),
-      maxSampleRows: pickString(samplePolicy, "maxSampleRows"),
+      ...(hasOwn(samplePolicy, "maxSampleRows")
+        ? { maxSampleRows: pickString(samplePolicy, "maxSampleRows") }
+        : {}),
       connectionStatus: dto.connectionStatus ?? "untested",
     },
   };
@@ -393,6 +406,10 @@ export function itemToCreateBody(
         if (settings[key]?.trim()) config[key] = settings[key].trim();
       }
       const maxRows = parseNumber(settings.maxRows);
+      const ssl = parseBoolean(settings.ssl);
+      if (type === "postgresql" && ssl !== undefined) {
+        config.ssl = ssl;
+      }
       const secure = parseBoolean(settings.secure);
       if (secure !== undefined) {
         config.secure = secure;
@@ -567,7 +584,6 @@ export function itemToPatchBody(
         "host",
         "port",
         "database",
-        "schema",
         "username",
         "projectId",
         "dataset",
@@ -576,44 +592,80 @@ export function itemToPatchBody(
       ] as const) {
         if (settings[key]?.trim()) config[key] = settings[key].trim();
       }
+      if (settings.type === "postgresql" && settings.schema !== undefined) {
+        config.schema = settings.schema.trim();
+      }
       const maxRows = parseNumber(settings.maxRows);
+      const maxRowsCleared = settings.maxRows !== undefined && !settings.maxRows.trim();
+      const ssl = parseBoolean(settings.ssl);
+      if (settings.type === "postgresql" && ssl !== undefined) {
+        config.ssl = ssl;
+      }
       const secure = parseBoolean(settings.secure);
       if (secure !== undefined) {
         config.secure = secure;
       }
       const timeoutMs = parseNumber(settings.timeoutMs);
+      const timeoutMsCleared = settings.timeoutMs !== undefined && !settings.timeoutMs.trim();
       const denyWrite = parseBoolean(settings.denyWrite);
-      if (maxRows !== undefined || timeoutMs !== undefined || denyWrite !== undefined) {
+      if (
+        maxRows !== undefined
+        || maxRowsCleared
+        || timeoutMs !== undefined
+        || timeoutMsCleared
+        || denyWrite !== undefined
+      ) {
         body.queryPolicy = {
-          ...(maxRows !== undefined ? { maxRows } : {}),
-          ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+          ...(maxRows !== undefined ? { maxRows } : maxRowsCleared ? { maxRows: null } : {}),
+          ...(timeoutMs !== undefined ? { timeoutMs } : timeoutMsCleared ? { timeoutMs: null } : {}),
           ...(denyWrite !== undefined ? { denyWrite } : {}),
         };
       }
       const tableAllowlist = splitCsv(settings.tableAllowlist);
       const refreshIntervalSec = parseNumber(settings.refreshIntervalSec);
-      if (tableAllowlist || refreshIntervalSec !== undefined) {
+      const refreshIntervalSecCleared =
+        settings.refreshIntervalSec !== undefined && !settings.refreshIntervalSec.trim();
+      if (
+        settings.tableAllowlist !== undefined
+        || refreshIntervalSec !== undefined
+        || refreshIntervalSecCleared
+      ) {
         body.introspection = {
-          ...(tableAllowlist ? { tableAllowlist } : {}),
-          ...(refreshIntervalSec !== undefined ? { refreshIntervalSec } : {}),
+          ...(settings.tableAllowlist !== undefined
+            ? { tableAllowlist: tableAllowlist ?? [] }
+            : {}),
+          ...(refreshIntervalSec !== undefined
+            ? { refreshIntervalSec }
+            : refreshIntervalSecCleared
+              ? { refreshIntervalSec: null }
+              : {}),
         };
       }
       const maskFields = splitCsv(settings.maskFields);
-      if (maskFields) {
-        body.maskFields = maskFields;
+      if (settings.maskFields !== undefined) {
+        body.maskFields = maskFields ?? [];
       }
       const allowSample = parseBoolean(settings.allowSample);
       const maxSampleRows = parseNumber(settings.maxSampleRows);
-      if (allowSample !== undefined || maxSampleRows !== undefined) {
+      const maxSampleRowsCleared =
+        settings.maxSampleRows !== undefined && !settings.maxSampleRows.trim();
+      if (allowSample !== undefined || maxSampleRows !== undefined || maxSampleRowsCleared) {
         body.samplePolicy = {
           ...(allowSample !== undefined ? { allowSample } : {}),
-          ...(maxSampleRows !== undefined ? { maxSampleRows } : {}),
+          ...(maxSampleRows !== undefined
+            ? { maxSampleRows }
+            : maxSampleRowsCleared
+              ? { maxSampleRows: null }
+              : {}),
         };
       }
       if (Object.keys(config).length > 0) body.config = config;
       const password = settings.password?.trim();
       const credentialsJson = settings.credentialsJson?.trim();
-      if (password || credentialsJson) {
+      const clearCredentials = parseBoolean(settings.clearCredentials) === true;
+      if (clearCredentials) {
+        body.clearCredentials = true;
+      } else if (password || credentialsJson) {
         body.credentials = {
           ...(password ? { password } : {}),
           ...(credentialsJson ? { credentialsJson } : {}),
@@ -749,6 +801,10 @@ export function mergeItemFromDto(
           : kind === "llm"
             ? modelProfileDtoToItem(dto as ModelProfileDto)
             : skillDtoToItem(dto as SkillDto);
+
+  if (kind === "db") {
+    return mapped;
+  }
 
   return {
     ...mapped,

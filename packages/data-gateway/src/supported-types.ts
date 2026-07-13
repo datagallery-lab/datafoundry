@@ -36,7 +36,7 @@ export const SUPPORTED_DATA_SOURCE_TYPES: SupportedDataSourceType[] = [
     enabled: true,
     label: "PostgreSQL",
     description: "PostgreSQL read-only datasource.",
-    parameters: serverDatabaseParameters(5432)
+    parameters: postgresqlParameters()
   },
   {
     name: "mysql",
@@ -262,6 +262,18 @@ function serverDatabaseParameters(defaultPort: number): ConfigurableParam[] {
     { name: "schema", label: "Schema", type: "string", required: false },
     { name: "username", label: "Username", type: "string", required: true },
     { name: "password", label: "Password", type: "password", required: true }
+  ];
+}
+
+function postgresqlParameters(): ConfigurableParam[] {
+  return [
+    { name: "host", label: "Host", type: "string", required: true },
+    { name: "port", label: "Port", type: "number", required: true, default_value: 5432 },
+    { name: "database", label: "Database", type: "string", required: true },
+    { name: "schema", label: "Schema", type: "string", required: false, default_value: "public" },
+    { name: "username", label: "Username", type: "string", required: true },
+    { name: "password", label: "Password", type: "password", required: false },
+    { name: "ssl", label: "Use SSL", type: "boolean", required: false, default_value: false }
   ];
 }
 
