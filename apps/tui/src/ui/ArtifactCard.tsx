@@ -2,13 +2,68 @@ import React from 'react';
 import { Box, Text } from 'ink';
 import type { DataArtifact } from '../state/index.js';
 import { TableView } from './components/TableView.js';
+import { MarkdownView } from './components/MarkdownView.js';
 
 interface ArtifactCardProps {
   artifact: DataArtifact;
   keyboardActive?: boolean;
+  contentWidth?: number | undefined;
+  previewRows?: number | undefined;
+  previewLoading?: boolean | undefined;
+  previewError?: string | undefined;
 }
 
-export const ArtifactCard: React.FC<ArtifactCardProps> = ({ artifact, keyboardActive = false }) => {
+export function isMarkdownFilePath(path: string): boolean {
+  return /\.(?:md|markdown|mdx)$/iu.test(path);
+}
+
+export function artifactMarkdownContent(artifact: DataArtifact): string | undefined {
+  const detail = artifact.detail;
+  if (detail?.type === 'report') {
+    if (detail.sections.length === 1) {
+      return detail.sections[0]?.body;
+    }
+    return detail.sections
+      .map((section) => {
+        const body = section.body.trim();
+        const heading = section.heading.trim();
+        return heading ? `## ${heading}\n\n${body}` : body;
+      })
+      .filter((section) => section.length > 0)
+      .join('\n\n');
+  }
+
+  if (detail?.type === 'file' && detail.content && isMarkdownArtifact(artifact)) {
+    return detail.content;
+  }
+
+  return undefined;
+}
+
+export function isMarkdownArtifact(artifact: DataArtifact): boolean {
+  const mimeType = artifact.mimeType?.toLowerCase() ?? '';
+  const path = artifact.detail?.type === 'file' ? artifact.detail.path : artifact.title;
+  return (
+    artifact.type === 'report' ||
+    artifact.detail?.type === 'report' ||
+    mimeType.includes('markdown') ||
+    mimeType === 'text/x-markdown' ||
+    isMarkdownFilePath(path) ||
+    isMarkdownFilePath(artifact.title)
+  );
+}
+
+export const ArtifactCard: React.FC<ArtifactCardProps> = ({
+  artifact,
+  keyboardActive = false,
+  contentWidth = 80,
+  previewRows,
+  previewLoading = false,
+  previewError,
+}) => {
+  const markdownContent = artifactMarkdownContent(artifact);
+  const previewWidth = Math.max(8, contentWidth - 8);
+
   // Get artifact icon based on kind
   const getArtifactIcon = (kind: DataArtifact['kind']) => {
     switch (kind) {
@@ -92,6 +147,16 @@ export const ArtifactCard: React.FC<ArtifactCardProps> = ({ artifact, keyboardAc
             <Text dimColor>
               Sections: {artifact.detail.sections.length}
             </Text>
+            {markdownContent && (
+              <Box flexDirection="column" marginTop={1}>
+                <MarkdownView
+                  content={markdownContent}
+                  width={previewWidth}
+                  maxRows={previewRows}
+                  keyboardActive={keyboardActive}
+                />
+              </Box>
+            )}
           </Box>
         );
 
@@ -105,7 +170,16 @@ export const ArtifactCard: React.FC<ArtifactCardProps> = ({ artifact, keyboardAc
             </Text>
             {artifact.detail.content && (
               <Box flexDirection="column" marginTop={1}>
-                <Text dimColor>{artifact.detail.content.slice(0, 240)}</Text>
+                {markdownContent ? (
+                  <MarkdownView
+                    content={markdownContent}
+                    width={previewWidth}
+                    maxRows={previewRows}
+                    keyboardActive={keyboardActive}
+                  />
+                ) : (
+                  <Text dimColor>{artifact.detail.content.slice(0, 240)}</Text>
+                )}
               </Box>
             )}
           </Box>
@@ -154,6 +228,18 @@ export const ArtifactCard: React.FC<ArtifactCardProps> = ({ artifact, keyboardAc
 
       {/* Artifact details */}
       {renderDetail()}
+
+      {previewLoading && (
+        <Box paddingLeft={2}>
+          <Text dimColor>Loading preview...</Text>
+        </Box>
+      )}
+
+      {previewError && (
+        <Box paddingLeft={2}>
+          <Text color="red">Preview error: {previewError}</Text>
+        </Box>
+      )}
 
       {/* Version and timestamp */}
       <Box justifyContent="space-between" marginTop={0}>

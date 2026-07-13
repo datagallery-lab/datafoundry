@@ -1,8 +1,18 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Box, Text, useInput } from 'ink';
-import type { DataArtifact, TimelineEvent } from '../state/index.js';
+import {
+  artifactDetailFromPreview,
+  artifactDetailNeedsPreviewFetch,
+  mergeArtifactDetail,
+  type DataArtifact,
+  type TimelineEvent,
+} from '../state/index.js';
 import { isMouseInput } from '../input/mouse-wheel.js';
-import { ArtifactCard } from './ArtifactCard.js';
+import {
+  ArtifactCard,
+  artifactMarkdownContent,
+  isMarkdownArtifact,
+} from './ArtifactCard.js';
 import { textWidth, truncateToWidth } from './text-width.js';
 
 interface OutputsViewProps {
@@ -19,8 +29,15 @@ interface OutputsScreenProps {
   events: TimelineEvent[];
   columns?: number | undefined;
   rows?: number | undefined;
+  fetchArtifactPreview?: ((id: string) => Promise<unknown>) | undefined;
   onCancel: () => void;
 }
+
+type PreviewState = {
+  detail?: DataArtifact['detail'] | undefined;
+  loading?: boolean | undefined;
+  error?: string | undefined;
+};
 
 const RESERVED_LINES = 5;
 const ITEM_HEIGHT = 4;
@@ -101,6 +118,47 @@ function artifactMetadata(artifact: DataArtifact, events: TimelineEvent[]): stri
   ].filter(Boolean).join(' - ');
 }
 
+function previewErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function mergePreviewStateDetail(
+  artifact: DataArtifact,
+  previewState: PreviewState | undefined,
+): DataArtifact['detail'] | undefined {
+  if (!previewState?.detail) return artifact.detail;
+  return mergeArtifactDetail(artifact.detail, previewState.detail);
+}
+
+function withPreviewState(
+  artifact: DataArtifact | undefined,
+  previewState: PreviewState | undefined,
+): DataArtifact | undefined {
+  if (!artifact) return undefined;
+  const detail = mergePreviewStateDetail(artifact, previewState);
+  return { ...artifact, detail };
+}
+
+function detailFooterText(
+  artifact: DataArtifact | undefined,
+  previewState: PreviewState | undefined,
+): string {
+  if (!artifact) return 'Esc/Backspace list - q close';
+  if (previewState?.loading) {
+    return 'Esc/Backspace list - q close - loading preview';
+  }
+  if (previewState?.error) {
+    return 'Esc/Backspace list - q close';
+  }
+  if (artifactMarkdownContent(artifact) || isMarkdownArtifact(artifact)) {
+    return 'Esc/Backspace list - q close - Up/Down/PageUp/PageDown scroll';
+  }
+  if (artifact.detail?.type === 'dataset') {
+    return 'Esc/Backspace list - q close - PageUp/PageDown table';
+  }
+  return 'Esc/Backspace list - q close';
+}
+
 export const OutputsView: React.FC<OutputsViewProps> = ({
   artifacts,
   events,
@@ -128,7 +186,7 @@ export const OutputsView: React.FC<OutputsViewProps> = ({
         <Box flexDirection="column" flexGrow={1} overflow="hidden">
           <Box marginBottom={1}>
             <Text dimColor wrap="truncate-end">
-              {truncate('最新产出排在前面。上下选择，Enter 查看详细表格。', contentWidth)}
+              {truncate('最新产出排在前面。上下选择，Enter 查看详情。', contentWidth)}
             </Text>
           </Box>
           {visibleArtifacts.map((artifact, index) => {
@@ -193,7 +251,18 @@ const OutputsDetailView: React.FC<{
   events: TimelineEvent[];
   index: number;
   contentWidth: number;
-}> = ({ artifact, events, index, contentWidth }) => {
+  previewRows: number;
+  previewLoading?: boolean | undefined;
+  previewError?: string | undefined;
+}> = ({
+  artifact,
+  events,
+  index,
+  contentWidth,
+  previewRows,
+  previewLoading,
+  previewError,
+}) => {
   return (
     <Box flexDirection="column" flexGrow={1} paddingX={1} overflow="hidden">
       <Box>
@@ -203,7 +272,14 @@ const OutputsDetailView: React.FC<{
         </Text>
       </Box>
       <Box flexDirection="column" flexGrow={1} overflow="hidden">
-        <ArtifactCard artifact={artifact} keyboardActive />
+        <ArtifactCard
+          artifact={artifact}
+          keyboardActive
+          contentWidth={contentWidth}
+          previewRows={previewRows}
+          previewLoading={previewLoading}
+          previewError={previewError}
+        />
       </Box>
     </Box>
   );
@@ -214,16 +290,19 @@ export const OutputsScreen: React.FC<OutputsScreenProps> = ({
   events,
   columns = 100,
   rows = 40,
+  fetchArtifactPreview,
   onCancel,
 }) => {
   const [selectedArtifactId, setSelectedArtifactId] = useState<string | null>(
     () => artifacts[0]?.id ?? null,
   );
   const [detailOpen, setDetailOpen] = useState(false);
+  const [previewStateById, setPreviewStateById] = useState<Record<string, PreviewState>>({});
   const panelWidth = Math.max(24, columns);
   const panelHeight = Math.max(8, rows - 1);
   const contentWidth = Math.max(10, panelWidth - 4);
   const separatorWidth = Math.max(0, panelWidth - 2);
+  const previewRows = Math.max(4, panelHeight - 13);
   const maxVisibleItems = Math.max(
     1,
     Math.floor((panelHeight - RESERVED_LINES) / ITEM_HEIGHT),
@@ -233,7 +312,11 @@ export const OutputsScreen: React.FC<OutputsScreenProps> = ({
     const index = artifacts.findIndex((artifact) => artifact.id === selectedArtifactId);
     return index >= 0 ? index : 0;
   }, [artifacts, selectedArtifactId]);
-  const selectedArtifact = selectedIndex >= 0 ? artifacts[selectedIndex] : undefined;
+  const selectedBaseArtifact = selectedIndex >= 0 ? artifacts[selectedIndex] : undefined;
+  const selectedPreviewState = selectedBaseArtifact
+    ? previewStateById[selectedBaseArtifact.id]
+    : undefined;
+  const selectedArtifact = withPreviewState(selectedBaseArtifact, selectedPreviewState);
   const windowStart = Math.max(
     0,
     Math.min(
@@ -249,7 +332,7 @@ export const OutputsScreen: React.FC<OutputsScreenProps> = ({
     Math.max(1, contentWidth - textWidth(headerSuffix)),
   );
   const footerText = detailOpen
-    ? 'Esc/Backspace list - q close - PageUp/PageDown table'
+    ? detailFooterText(selectedArtifact, selectedPreviewState)
     : 'Up/Down/j/k navigate - Enter view - Esc/q close';
 
   useEffect(() => {
@@ -263,6 +346,62 @@ export const OutputsScreen: React.FC<OutputsScreenProps> = ({
       setSelectedArtifactId(artifacts[0]?.id ?? null);
     }
   }, [artifacts, selectedArtifactId]);
+
+  useEffect(() => {
+    if (!detailOpen || !selectedBaseArtifact || !fetchArtifactPreview) return;
+
+    const previewState = previewStateById[selectedBaseArtifact.id];
+    if (previewState?.loading || previewState?.detail || previewState?.error) return;
+
+    const currentDetail = mergePreviewStateDetail(selectedBaseArtifact, previewState);
+    if (!artifactDetailNeedsPreviewFetch(selectedBaseArtifact, currentDetail)) return;
+
+    let cancelled = false;
+    const artifactId = selectedBaseArtifact.id;
+
+    setPreviewStateById((current) => {
+      const existing = current[artifactId];
+      if (existing?.loading || existing?.detail || existing?.error) return current;
+      return {
+        ...current,
+        [artifactId]: { ...existing, loading: true, error: undefined },
+      };
+    });
+
+    fetchArtifactPreview(artifactId)
+      .then((preview) => {
+        if (cancelled) return;
+        const detail = artifactDetailFromPreview(selectedBaseArtifact, preview);
+        setPreviewStateById((current) => ({
+          ...current,
+          [artifactId]: detail
+            ? { detail, loading: false }
+            : {
+                loading: false,
+                error: 'Preview data is empty or unsupported.',
+              },
+        }));
+      })
+      .catch((error: unknown) => {
+        if (cancelled) return;
+        setPreviewStateById((current) => ({
+          ...current,
+          [artifactId]: {
+            loading: false,
+            error: previewErrorMessage(error),
+          },
+        }));
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    detailOpen,
+    fetchArtifactPreview,
+    previewStateById,
+    selectedBaseArtifact,
+  ]);
 
   useInput((input, key) => {
     if (isMouseInput(input)) {
@@ -337,6 +476,9 @@ export const OutputsScreen: React.FC<OutputsScreenProps> = ({
               events={events}
               index={selectedIndex}
               contentWidth={contentWidth}
+              previewRows={previewRows}
+              previewLoading={selectedPreviewState?.loading}
+              previewError={selectedPreviewState?.error}
             />
           ) : (
             <OutputsView

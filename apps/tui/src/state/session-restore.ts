@@ -42,6 +42,7 @@ function sessionArtifactToDataArtifact(artifact: SessionArtifact): DataArtifact 
     title: artifact.name,
     ...(artifact.fileId ? { file_id: artifact.fileId } : {}),
     ...(artifact.downloadUrl ? { download_url: artifact.downloadUrl } : {}),
+    ...(artifact.mimeType ? { mimeType: artifact.mimeType } : {}),
     ...(artifact.preview_json !== undefined ? { preview_json: artifact.preview_json } : {}),
     ...(artifact.preview_available !== undefined ? { preview_available: artifact.preview_available } : {}),
     ...(artifact.runId ? { run_id: artifact.runId } : {}),

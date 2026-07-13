@@ -8,6 +8,8 @@ import type {
 } from "./data-task-state.js";
 import { dataStepKindForTool, emptyStepPayload } from "./data-task-state.js";
 
+type ArtifactDetailValue = NonNullable<DataArtifact["detail"]>;
+
 export type LiveTaskStatus = "pending" | "running" | "completed" | "failed";
 
 export type LivePlanTask = {
@@ -853,6 +855,110 @@ function parseChartPreview(
   };
 }
 
+function previewPayload(value: unknown): unknown {
+  const record = recordValue(value);
+  return recordValue(record?.preview_json) ?? recordValue(record?.preview) ?? value;
+}
+
+export function artifactDetailNeedsPreviewFetch(
+  artifact: Pick<DataArtifact, "previewAvailable" | "fileId" | "type">,
+  detail: ArtifactDetailValue | undefined,
+): boolean {
+  const fileBacked = Boolean(artifact.fileId);
+  if (!artifact.previewAvailable && !fileBacked) return false;
+  if (!detail) return true;
+  if (detail.type === "file" && !detail.content) return true;
+  if (detail.type === "report") {
+    return !detail.sections.some((section) => section.body.trim().length > 0);
+  }
+  return false;
+}
+
+export function mergeArtifactDetail(
+  existing: ArtifactDetailValue | undefined,
+  loaded: ArtifactDetailValue,
+): ArtifactDetailValue {
+  if (!existing) return loaded;
+  if (existing.type === "file" && loaded.type === "file") {
+    return {
+      ...loaded,
+      path: loaded.path || existing.path,
+      size: loaded.size ?? existing.size,
+      mtime: loaded.mtime ?? existing.mtime,
+      tool: loaded.tool ?? existing.tool,
+      content: loaded.content ?? existing.content,
+    };
+  }
+  if (existing.type === "report" && loaded.type === "report") {
+    const hasExistingBody = existing.sections.some(
+      (section) => section.body.trim().length > 0,
+    );
+    return hasExistingBody ? existing : loaded;
+  }
+  return loaded;
+}
+
+export function artifactDetailFromPreview(
+  artifact: Pick<DataArtifact, "type" | "kind" | "title">,
+  preview: unknown,
+): ArtifactDetailValue | undefined {
+  const previewRecord = recordValue(preview);
+  const payload = previewPayload(preview);
+  const payloadRecord = recordValue(payload);
+  const backendType =
+    stringValue(previewRecord?.type) ??
+    (artifact.type === "dataset"
+      ? "table"
+      : artifact.type === "file"
+        ? "file"
+        : artifact.type === "report"
+          ? "markdown"
+          : artifact.type);
+
+  const tablePreview = parseTablePreview(payload);
+  if (backendType === "table" || tablePreview) {
+    if (!tablePreview) return undefined;
+    return {
+      type: "dataset",
+      columns: tablePreview.columns,
+      rows: tablePreview.rows,
+    };
+  }
+
+  if (backendType === "chart") {
+    return parseChartPreview(payload) ?? undefined;
+  }
+
+  if (backendType === "file") {
+    const filePath = stringValue(payloadRecord?.path) ?? artifact.title;
+    const fileSize = numberValue(payloadRecord?.size);
+    const fileMtime = stringValue(payloadRecord?.mtime);
+    const fileTool = stringValue(payloadRecord?.tool);
+    const fileContent = stringValue(payloadRecord?.content);
+    return {
+      type: "file",
+      path: filePath,
+      ...(fileSize !== undefined ? { size: fileSize } : {}),
+      ...(fileMtime ? { mtime: fileMtime } : {}),
+      ...(fileTool ? { tool: fileTool } : {}),
+      ...(fileContent ? { content: fileContent } : {}),
+    };
+  }
+
+  const textContent =
+    stringValue(payloadRecord?.content) ??
+    stringValue(payloadRecord?.body) ??
+    (typeof payload === "string" && backendType !== "table" ? payload : undefined);
+  if (textContent) {
+    return {
+      type: "report",
+      sections: [{ heading: "预览", body: textContent }],
+    };
+  }
+
+  return undefined;
+}
+
 export function dataArtifactFromArtifactValue(value: Record<string, unknown>): DataArtifact {
   const id =
     stringValue(value.id) ??
@@ -866,6 +972,11 @@ export function dataArtifactFromArtifactValue(value: Record<string, unknown>): D
     stringValue(value.download_url) ?? stringValue(value.downloadUrl);
   const preview = value.preview_json;
   const previewRecord = recordValue(preview);
+  const mimeType =
+    stringValue(value.mime_type) ??
+    stringValue(value.mimeType) ??
+    stringValue(previewRecord?.mime_type) ??
+    stringValue(previewRecord?.mimeType);
   const rowCount = numberValue(previewRecord?.row_count);
 
   let type: DataArtifact["type"];
@@ -940,9 +1051,11 @@ export function dataArtifactFromArtifactValue(value: Record<string, unknown>): D
     version: stringValue(value.version) ?? "v1",
     fileId: fileId ?? undefined,
     downloadUrl: downloadUrl ?? undefined,
+    mimeType: mimeType ?? undefined,
     detail: detail ?? undefined,
     previewAvailable:
       value.preview_available === true ||
+      Boolean(fileId) ||
       (preview !== undefined && preview !== null),
     recordedAtMs: Date.now(),
   };

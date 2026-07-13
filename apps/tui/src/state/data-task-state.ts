@@ -109,6 +109,8 @@ export interface DataArtifact {
   fileId?: string | undefined;
   /** Backend download URL for file-backed artifacts, when available. */
   downloadUrl?: string | undefined;
+  /** Backend MIME type for file-backed artifacts, when available. */
+  mimeType?: string | undefined;
   createdByEventId?: string | undefined;
   detail?: ArtifactDetail | undefined;
   /** When true, full preview can be fetched via artifact REST API. */

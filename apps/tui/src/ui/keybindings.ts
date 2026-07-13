@@ -246,6 +246,7 @@ export function getStatusBarShortcuts(): Array<{ key: string; action: string }> 
  */
 export const DEFAULT_COMMANDS = [
   '/outputs',
+  '/output',
   '/datasource',
   '/skill',
   '/skill list',
