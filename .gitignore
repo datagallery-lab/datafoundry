@@ -23,3 +23,7 @@ storage/
 !.env.example
 *.tsbuildinfo
 docs/public/assets/
+
+.idea
+.codegraph
+AGENTS.md
