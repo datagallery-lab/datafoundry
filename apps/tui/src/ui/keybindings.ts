@@ -178,6 +178,8 @@ export const KEYBINDINGS: KeybindingAction[] = [
   // System shortcuts
   { key: 'Ctrl+C', description: 'Clear input, press again to exit', category: 'system' },
   { key: 'Ctrl+L', description: 'Clear screen', category: 'system' },
+  { key: 'Ctrl+O', description: 'Toggle compact tool/thinking view', category: 'system' },
+  { key: 'Alt+T', description: 'Toggle thinking expansion', category: 'system' },
 
   // Session shortcuts
   { key: 'Ctrl+N', description: 'New session', category: 'session' },
@@ -235,6 +237,8 @@ export function getKeybindingsHelp(): string {
 export function getStatusBarShortcuts(): Array<{ key: string; action: string }> {
   return [
     { key: '↑/↓', action: 'History' },
+    { key: 'Alt+T', action: 'Thinking' },
+    { key: 'Ctrl+O', action: 'Compact' },
     { key: 'Ctrl+N', action: 'New' },
     { key: 'Ctrl+L', action: 'Clear' },
     { key: 'Ctrl+C', action: 'Clear / Exit' },

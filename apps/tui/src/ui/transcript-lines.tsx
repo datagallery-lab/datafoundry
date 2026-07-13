@@ -53,17 +53,29 @@ export interface BuildChatLinesInput {
   maxMessageContentLength?: number | undefined;
   columns?: number | undefined;
   startup?: StartupInfo | undefined;
+  compactMode?: boolean | undefined;
+  thoughtExpanded?: boolean | undefined;
 }
 
 type ToolCallElement = Extract<DisplayMessage["elements"][number], { type: "tool_call" }>;
+type ReasoningElement = Extract<DisplayMessage["elements"][number], { type: "reasoning" }>;
 
 const INDENT = '  ';
 const INDENT_WIDTH = 2;
+const TOOL_DETAIL_INDENT = '  ';
 const USER_MESSAGE_BORDER = '┃ ';
 const USER_MESSAGE_BORDER_WIDTH = textWidth(USER_MESSAGE_BORDER);
 const MAX_ELEMENT_LINES = 1000;
+const MAX_REASONING_LINES = 120;
+const MAX_TOOL_PAYLOAD_LINES = 28;
 const MAX_TABLE_ROWS = 12;
 const MIN_TABLE_CELL_WIDTH = 3;
+const TOOL_BLOCK_BACKGROUND = '#181818';
+const TOOL_BLOCK_LABEL_COLOR = '#7dd3fc';
+const TOOL_BLOCK_FIELD_COLOR = '#93c5fd';
+const TOOL_BLOCK_VALUE_COLOR = '#e5e7eb';
+const TOOL_BLOCK_MUTED_COLOR = '#9ca3af';
+const TOOL_BLOCK_ERROR_COLOR = '#f87171';
 const STARTUP_BANNER_ART = [
   ' ____        _        _____                     _            ',
   '|  _ \\  __ _| |_ __ _|  ___|__  _   _ _ __   __| |_ __ _   _ ',
@@ -93,6 +105,8 @@ export function buildChatLines(input: BuildChatLinesInput): VisualLine[] {
   const bodyWidth = Math.max(1, contentWidth - INDENT_WIDTH);
   const toolCalls = input.toolCalls ?? [];
   const messageCount = input.totalMessageCount ?? input.messages.length;
+  const compactMode = input.compactMode ?? false;
+  const thoughtExpanded = input.thoughtExpanded ?? false;
 
   const lines: VisualLine[] = [];
   const push = (key: string, node: React.ReactNode) => {
@@ -120,7 +134,7 @@ export function buildChatLines(input: BuildChatLinesInput): VisualLine[] {
   }
 
   for (const message of input.messages) {
-    pushMessageLines(message, toolCalls, bodyWidth, push);
+    pushMessageLines(message, toolCalls, bodyWidth, push, compactMode, thoughtExpanded);
     push(`m:${message.id}:after`, blankNode(`m:${message.id}:after`));
   }
 
@@ -181,6 +195,8 @@ function pushMessageLines(
   toolCalls: LiveToolCallRecord[],
   bodyWidth: number,
   push: (key: string, node: React.ReactNode) => void,
+  compactMode: boolean,
+  thoughtExpanded: boolean,
 ): void {
   const isUser = message.role === 'user';
   const headerKey = `m:${message.id}:h`;
@@ -232,6 +248,13 @@ function pushMessageLines(
       pushLine(key, blankNode(key));
     }
   };
+  const pushContentLine = (key: string, node: React.ReactNode): void => {
+    if (emittedLines >= MAX_ELEMENT_LINES) {
+      return;
+    }
+    emittedLines += 1;
+    pushLine(key, node);
+  };
 
   message.elements.forEach((element, elementIndex) => {
     const keyBase = `m:${message.id}:e${elementIndex}`;
@@ -243,13 +266,35 @@ function pushMessageLines(
       }
       separate(`${keyBase}:gap`);
       blocksEmitted += 1;
-      pushMarkdownLines(normalized, messageBodyWidth, keyBase, (key, node) => {
-        if (emittedLines >= MAX_ELEMENT_LINES) {
+      pushMarkdownLines(normalized, messageBodyWidth, keyBase, pushContentLine);
+      return;
+    }
+
+    if (element.type === 'reasoning') {
+      const normalized = normalizeBlankLines(element.content);
+      if (compactMode) {
+        if (!element.isStreaming) {
           return;
         }
-        emittedLines += 1;
-        pushLine(key, node);
-      });
+        separate(`${keyBase}:gap`);
+        blocksEmitted += 1;
+        pushContentLine(`${keyBase}:thinking`, <ThinkingLine key={`${keyBase}:thinking`} />);
+        return;
+      }
+
+      if (normalized === '' && !element.isStreaming) {
+        return;
+      }
+
+      separate(`${keyBase}:gap`);
+      blocksEmitted += 1;
+      pushReasoningLines(
+        element,
+        messageBodyWidth,
+        keyBase,
+        thoughtExpanded,
+        pushContentLine,
+      );
       return;
     }
 
@@ -261,12 +306,7 @@ function pushMessageLines(
     const key = `${keyBase}:tool`;
     separate(`${key}:gap`);
     blocksEmitted += 1;
-    pushLine(
-      key,
-      <Box key={key} paddingLeft={INDENT_WIDTH}>
-        <InlineToolCall toolCall={toolCall} showName />
-      </Box>,
-    );
+    pushToolCallLines(toolCall, messageBodyWidth, key, compactMode, pushContentLine);
   });
 
   if (message.isStreaming && message.elements.length > 0) {
@@ -292,6 +332,420 @@ function resolveToolCallForElement(
   }
 
   return toolCalls.find((candidate) => candidate.id === element.toolCallId);
+}
+
+function pushReasoningLines(
+  element: ReasoningElement,
+  bodyWidth: number,
+  keyBase: string,
+  thoughtExpanded: boolean,
+  push: (key: string, node: React.ReactNode) => void,
+): void {
+  const normalized = normalizeBlankLines(element.content);
+  const firstLine = normalized
+    .split('\n')
+    .map((line) => line.trim())
+    .find((line) => line.length > 0);
+  const header = thoughtExpanded
+    ? element.isStreaming ? 'Thinking...' : 'Thinking'
+    : firstLine
+      ? `Thinking: ${firstLine}`
+      : element.isStreaming ? 'Thinking...' : 'Thinking';
+
+  push(
+    `${keyBase}:reasoning:h`,
+    <StyledLine
+      key={`${keyBase}:reasoning:h`}
+      segments={[{ text: truncateToWidth(header, bodyWidth), dimColor: true }]}
+    />,
+  );
+
+  if (!thoughtExpanded || normalized === '') {
+    return;
+  }
+
+  const rows = textRows(normalized, bodyWidth);
+  const visibleRows = rows.slice(0, MAX_REASONING_LINES);
+  visibleRows.forEach((row, rowIndex) => {
+    const key = `${keyBase}:reasoning:r${rowIndex}`;
+    push(
+      key,
+      <StyledLine key={key} segments={[{ text: row, dimColor: true }]} />,
+    );
+  });
+
+  if (rows.length > visibleRows.length) {
+    const hidden = rows.length - visibleRows.length;
+    const key = `${keyBase}:reasoning:more`;
+    push(
+      key,
+      <StyledLine
+        key={key}
+        segments={[{ text: `... ${hidden} more thinking lines hidden ...`, dimColor: true }]}
+      />,
+    );
+  }
+}
+
+function pushToolCallLines(
+  toolCall: LiveToolCallRecord,
+  bodyWidth: number,
+  keyBase: string,
+  compactMode: boolean,
+  push: (key: string, node: React.ReactNode) => void,
+): void {
+  push(
+    keyBase,
+    <Box key={keyBase} width={bodyWidth} backgroundColor={TOOL_BLOCK_BACKGROUND}>
+      <Text>{TOOL_DETAIL_INDENT}</Text>
+      <InlineToolCall toolCall={toolCall} showName />
+    </Box>,
+  );
+
+  if (compactMode) {
+    return;
+  }
+
+  const parameterRows = toolParameterRows(toolCall);
+  if (parameterRows.length > 0) {
+    pushPayloadBlock('Parameters', parameterRows, bodyWidth, `${keyBase}:args`, push);
+  }
+
+  const resultRows = toolResultRows(toolCall);
+  if (resultRows.length > 0) {
+    pushPayloadBlock('Result', resultRows, bodyWidth, `${keyBase}:result`, push);
+  }
+}
+
+function pushPayloadBlock(
+  label: string,
+  rows: string[],
+  bodyWidth: number,
+  keyBase: string,
+  push: (key: string, node: React.ReactNode) => void,
+): void {
+  const key = `${keyBase}:label`;
+  push(
+    key,
+    <ToolBlockLine
+      key={key}
+      width={bodyWidth}
+      segments={[
+        { text: TOOL_DETAIL_INDENT, color: TOOL_BLOCK_MUTED_COLOR },
+        { text: label, color: TOOL_BLOCK_LABEL_COLOR, bold: true },
+      ]}
+    />,
+  );
+
+  const detailIndent = `${TOOL_DETAIL_INDENT}  `;
+  const detailWidth = Math.max(1, bodyWidth - textWidth(detailIndent));
+  const wrappedRows = rows.flatMap((row) => textRows(row, detailWidth));
+  const visibleRows = wrappedRows.slice(0, MAX_TOOL_PAYLOAD_LINES);
+  visibleRows.forEach((row, rowIndex) => {
+    const rowKey = `${keyBase}:r${rowIndex}`;
+    push(
+      rowKey,
+      <ToolBlockLine
+        key={rowKey}
+        width={bodyWidth}
+        segments={detailRowSegments(detailIndent, row)}
+      />,
+    );
+  });
+
+  if (wrappedRows.length > visibleRows.length) {
+    const hidden = wrappedRows.length - visibleRows.length;
+    const moreKey = `${keyBase}:more`;
+    push(
+      moreKey,
+      <ToolBlockLine
+        key={moreKey}
+        width={bodyWidth}
+        segments={[
+          {
+            text: `${detailIndent}... ${hidden} more lines hidden ...`,
+            color: TOOL_BLOCK_MUTED_COLOR,
+          },
+        ]}
+      />,
+    );
+  }
+}
+
+function detailRowSegments(indent: string, row: string): StyledSegment[] {
+  const separatorIndex = row.indexOf(': ');
+  if (separatorIndex <= 0) {
+    return [
+      { text: indent, color: TOOL_BLOCK_MUTED_COLOR },
+      { text: row, color: TOOL_BLOCK_VALUE_COLOR },
+    ];
+  }
+
+  const field = row.slice(0, separatorIndex + 1);
+  const value = row.slice(separatorIndex + 2);
+  const fieldName = row.slice(0, separatorIndex).toLowerCase();
+  const valueColor = fieldName === 'error' ? TOOL_BLOCK_ERROR_COLOR : TOOL_BLOCK_VALUE_COLOR;
+
+  return [
+    { text: indent, color: TOOL_BLOCK_MUTED_COLOR },
+    { text: field, color: TOOL_BLOCK_FIELD_COLOR, bold: true },
+    { text: ' ', color: TOOL_BLOCK_MUTED_COLOR },
+    { text: value, color: valueColor },
+  ];
+}
+
+function toolParameterRows(toolCall: LiveToolCallRecord): string[] {
+  if (toolCall.args === undefined) {
+    return [];
+  }
+
+  const value = parsePayloadValue(toolCall.args);
+  if (!isRecord(value)) {
+    return compactTextRows('input', String(value));
+  }
+
+  const rows: string[] = [];
+  const sql = stringField(value, 'sql') ?? stringField(value, 'query');
+  if (sql) {
+    rows.push(`sql: ${compactWhitespace(sql)}`);
+  }
+
+  const datasource =
+    stringField(value, 'datasource_id') ??
+    stringField(value, 'datasourceId') ??
+    stringField(value, 'source');
+  if (datasource) {
+    rows.push(`datasource: ${datasource}`);
+  }
+
+  const tables = arrayField(value, 'table_names') ?? arrayField(value, 'tables');
+  if (tables) {
+    rows.push(`tables: ${tables.map(formatValueSummary).join(', ')}`);
+  }
+
+  appendRecordSummaryRows(rows, value, new Set([
+    'sql',
+    'query',
+    'datasource_id',
+    'datasourceId',
+    'source',
+    'table_names',
+    'tables',
+  ]));
+
+  return rows.length > 0 ? rows : compactObjectRows(value);
+}
+
+function toolResultRows(toolCall: LiveToolCallRecord): string[] {
+  const rawResult = toolCall.result ?? toolCall.resultPreview;
+  if (rawResult === undefined) {
+    return [];
+  }
+
+  const value = parsePayloadValue(rawResult);
+  if (!isRecord(value)) {
+    return compactTextRows('output', String(value));
+  }
+
+  const rows: string[] = [];
+  const error =
+    stringField(value, 'error') ??
+    stringField(value, 'message');
+  const isError = value.isError === true || value.error === true;
+  const hasExplicitErrorField = value.error !== undefined && value.error !== false;
+  if ((isError || hasExplicitErrorField || toolCall.status === 'failed') && error) {
+    rows.push(`error: ${compactWhitespace(error)}`);
+  }
+
+  const rowCount =
+    numberField(value, 'row_count') ??
+    numberField(value, 'rowCount') ??
+    numberField(value, 'rows_scanned');
+  if (rowCount !== undefined) {
+    rows.push(`rows: ${rowCount.toLocaleString('en-US')}`);
+  }
+
+  const elapsedMs =
+    numberField(value, 'elapsed_ms') ??
+    numberField(value, 'elapsedMs') ??
+    numberField(value, 'duration_ms');
+  if (elapsedMs !== undefined) {
+    rows.push(`elapsed: ${formatDurationMs(elapsedMs)}`);
+  }
+
+  const tables = arrayField(value, 'tables');
+  if (tables) {
+    rows.push(...schemaTableRows(tables));
+  }
+
+  appendRecordSummaryRows(rows, value, new Set([
+    'error',
+    ...(error ? ['message'] : []),
+    'isError',
+    'row_count',
+    'rowCount',
+    'rows_scanned',
+    'elapsed_ms',
+    'elapsedMs',
+    'duration_ms',
+    'tables',
+  ]));
+
+  return rows.length > 0 ? rows : compactObjectRows(value);
+}
+
+function parsePayloadValue(payload: unknown): unknown {
+  if (typeof payload !== 'string') {
+    return payload;
+  }
+
+  const trimmed = payload.trim();
+  if (!trimmed) {
+    return '';
+  }
+  if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) {
+    return payload;
+  }
+
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    return payload;
+  }
+}
+
+function compactTextRows(label: string, text: string): string[] {
+  return text
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .slice(0, 6)
+    .map((line, index) => `${index === 0 ? label : 'line'}: ${compactWhitespace(line)}`);
+}
+
+function compactObjectRows(record: Record<string, unknown>): string[] {
+  const rows: string[] = [];
+  appendRecordSummaryRows(rows, record, new Set());
+  return rows.length > 0 ? rows : ['value: {}'];
+}
+
+function appendRecordSummaryRows(
+  rows: string[],
+  record: Record<string, unknown>,
+  excludedKeys: Set<string>,
+): void {
+  for (const [key, value] of Object.entries(record)) {
+    if (rows.length >= 8) {
+      break;
+    }
+    if (excludedKeys.has(key) || value === undefined || value === null) {
+      continue;
+    }
+    if (isRecord(value) && Object.keys(value).length === 0) {
+      continue;
+    }
+    if (Array.isArray(value) && value.length === 0) {
+      continue;
+    }
+    rows.push(`${humanizeKey(key)}: ${formatValueSummary(value)}`);
+  }
+}
+
+function schemaTableRows(tables: unknown[]): string[] {
+  const rows: string[] = [];
+  const visibleTables = tables.slice(0, 5);
+  for (const table of visibleTables) {
+    if (!isRecord(table)) {
+      rows.push(`table: ${formatValueSummary(table)}`);
+      continue;
+    }
+    const name = stringField(table, 'name') ?? stringField(table, 'table_name') ?? 'table';
+    const columns = arrayField(table, 'columns');
+    if (!columns) {
+      rows.push(`table: ${name}`);
+      continue;
+    }
+    const columnNames = columns
+      .slice(0, 4)
+      .map((column) => isRecord(column)
+        ? stringField(column, 'name') ?? stringField(column, 'column_name') ?? ''
+        : String(column))
+      .filter(Boolean);
+    const suffix = columnNames.length > 0 ? ` (${columnNames.join(', ')})` : '';
+    rows.push(`table: ${name} · ${columns.length} columns${suffix}`);
+  }
+  if (tables.length > visibleTables.length) {
+    rows.push(`more: ${tables.length - visibleTables.length} tables hidden`);
+  }
+  return rows;
+}
+
+function formatValueSummary(value: unknown): string {
+  if (value === undefined) return 'undefined';
+  if (value === null) return 'null';
+  if (typeof value === 'string') return compactWhitespace(value);
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  if (Array.isArray(value)) {
+    if (value.length === 0) return '[]';
+    const preview = value.slice(0, 4).map(formatValueSummary).join(', ');
+    return value.length > 4 ? `[${preview}, ... +${value.length - 4}]` : `[${preview}]`;
+  }
+  if (isRecord(value)) {
+    const entries = Object.entries(value).filter(([, item]) => item !== undefined && item !== null);
+    if (entries.length === 0) return '{}';
+    const preview = entries
+      .slice(0, 3)
+      .map(([key, item]) => `${humanizeKey(key)}=${formatValueSummary(item)}`)
+      .join(', ');
+    return entries.length > 3 ? `{${preview}, ...}` : `{${preview}}`;
+  }
+  return String(value);
+}
+
+function compactWhitespace(value: string): string {
+  return value.replace(/\s+/g, ' ').trim();
+}
+
+function humanizeKey(key: string): string {
+  return key
+    .replace(/_/g, ' ')
+    .replace(/([a-z])([A-Z])/g, '$1 $2')
+    .toLowerCase();
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function stringField(record: Record<string, unknown>, key: string): string | undefined {
+  const value = record[key];
+  return typeof value === 'string' && value.trim() ? value : undefined;
+}
+
+function numberField(record: Record<string, unknown>, key: string): number | undefined {
+  const value = record[key];
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+function arrayField(record: Record<string, unknown>, key: string): unknown[] | undefined {
+  const value = record[key];
+  return Array.isArray(value) ? value : undefined;
+}
+
+function formatDurationMs(ms: number): string {
+  if (ms < 1000) return `${Math.round(ms)}ms`;
+  if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`;
+  const minutes = Math.floor(ms / 60000);
+  const seconds = Math.floor((ms % 60000) / 1000);
+  return `${minutes}m ${seconds}s`;
+}
+
+function textRows(content: string, width: number): string[] {
+  const rows: string[] = [];
+  for (const rawLine of content.split('\n')) {
+    rows.push(...wrapToWidth(rawLine.length === 0 ? ' ' : rawLine, width));
+  }
+  return rows.length > 0 ? rows : [' '];
 }
 
 /**
@@ -707,14 +1161,44 @@ const StyledLine: React.FC<{ segments: StyledSegment[] }> = ({ segments }) => (
   </Text>
 );
 
+const ToolBlockLine: React.FC<{ segments: StyledSegment[]; width: number }> = ({
+  segments,
+  width,
+}) => {
+  const fillWidth = Math.max(0, width - segmentsWidth(segments));
+  const blockSegments: StyledSegment[] = [
+    ...segments.map((segment) => ({
+      ...segment,
+      backgroundColor: segment.backgroundColor ?? TOOL_BLOCK_BACKGROUND,
+    })),
+    ...(fillWidth > 0
+      ? [{ text: ' '.repeat(fillWidth), backgroundColor: TOOL_BLOCK_BACKGROUND }]
+      : []),
+  ];
+
+  return (
+    <Text>
+      {blockSegments.map((segment, index) => renderSegment(segment, index))}
+    </Text>
+  );
+};
+
 function renderSegment(segment: StyledSegment, key: number): React.ReactNode {
   const color = segment.color ?? (segment.code ? 'yellow' : undefined);
-  const props: { bold?: boolean; color?: string; dimColor?: boolean } = {};
+  const props: {
+    bold?: boolean;
+    color?: string;
+    backgroundColor?: string;
+    dimColor?: boolean;
+  } = {};
   if (segment.bold) {
     props.bold = true;
   }
   if (color !== undefined) {
     props.color = color;
+  }
+  if (segment.backgroundColor !== undefined) {
+    props.backgroundColor = segment.backgroundColor;
   }
   if (segment.dimColor) {
     props.dimColor = true;

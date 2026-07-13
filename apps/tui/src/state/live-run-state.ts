@@ -43,8 +43,12 @@ export type LiveToolCallRecord = {
   runId?: string | undefined;
   /** Linked ACTIVITY STEP step_id when correlated with a backend tool wrapper. */
   stepId?: string | undefined;
+  /** Raw AG-UI tool arguments from TOOL_CALL_START / TOOL_CALL_ARGS. */
+  args?: unknown | undefined;
   /** Raw payload from AG-UI TOOL_CALL_RESULT when CopilotKit thread lacks tool message. */
   result?: string | undefined;
+  /** Short result preview restored from persisted conversation metadata. */
+  resultPreview?: string | undefined;
   startedAtMs?: number | undefined;
   finishedAtMs?: number | undefined;
 };
@@ -491,20 +495,41 @@ function reduceToolEvent(state: LiveRun, event: AgUiLikeEvent): LiveRun {
     nextState = rekeyToolCall(nextState, correlatedToolCall.id, explicitId);
   }
 
+  const incomingArgs = event.args ?? event.parameters;
   const resultPayload = resultPayloadString(event.result ?? event.content);
   if (eventType === "TOOL_CALL_START") {
     const existing = nextState.toolCalls.find((item) => item.id === id);
+    const recordArgs = incomingArgs !== undefined ? incomingArgs : existing?.args;
     nextState = upsertToolCallRecord(nextState, {
       id,
       name: toolName,
       status: "running",
       ...optionalRunId(recordRunId),
       ...(existing?.stepId ? { stepId: existing.stepId } : {}),
+      ...(recordArgs !== undefined ? { args: recordArgs } : {}),
+      ...(existing?.result ? { result: existing.result } : {}),
+      ...(existing?.resultPreview ? { resultPreview: existing.resultPreview } : {}),
       startedAtMs: existing?.startedAtMs ?? Date.now(),
+    });
+  } else if (eventType === "TOOL_CALL_ARGS") {
+    const existing = nextState.toolCalls.find((item) => item.id === id);
+    const recordArgs = incomingArgs !== undefined ? incomingArgs : existing?.args;
+    nextState = upsertToolCallRecord(nextState, {
+      id,
+      name: toolName,
+      status: existing?.status ?? "running",
+      ...optionalRunId(recordRunId),
+      startedAtMs: existing?.startedAtMs ?? Date.now(),
+      ...(existing?.stepId ? { stepId: existing.stepId } : {}),
+      ...(existing?.finishedAtMs ? { finishedAtMs: existing.finishedAtMs } : {}),
+      ...(recordArgs !== undefined ? { args: recordArgs } : {}),
+      ...(existing?.result ? { result: existing.result } : {}),
+      ...(existing?.resultPreview ? { resultPreview: existing.resultPreview } : {}),
     });
   } else if (eventType === "TOOL_CALL_END") {
     const existing = nextState.toolCalls.find((item) => item.id === id);
     const status = existing && existing.status !== "running" ? existing.status : "running";
+    const recordArgs = incomingArgs !== undefined ? incomingArgs : existing?.args;
     nextState = upsertToolCallRecord(nextState, {
       id,
       name: toolName,
@@ -513,12 +538,15 @@ function reduceToolEvent(state: LiveRun, event: AgUiLikeEvent): LiveRun {
       startedAtMs: existing?.startedAtMs ?? Date.now(),
       ...(existing?.stepId ? { stepId: existing.stepId } : {}),
       ...(existing?.finishedAtMs ? { finishedAtMs: existing.finishedAtMs } : {}),
+      ...(recordArgs !== undefined ? { args: recordArgs } : {}),
       ...(existing?.result ? { result: existing.result } : {}),
+      ...(existing?.resultPreview ? { resultPreview: existing.resultPreview } : {}),
     });
   } else if (eventType === "TOOL_CALL_RESULT") {
     const existing = nextState.toolCalls.find((item) => item.id === id);
     const parsed = parseResultObject(resultPayload);
     const failed = toolResultPayloadLooksFailed(parsed);
+    const recordArgs = incomingArgs !== undefined ? incomingArgs : existing?.args;
     nextState = upsertToolCallRecord(nextState, {
       id,
       name: toolName,
@@ -526,7 +554,10 @@ function reduceToolEvent(state: LiveRun, event: AgUiLikeEvent): LiveRun {
       ...optionalRunId(recordRunId),
       startedAtMs: existing?.startedAtMs ?? Date.now(),
       finishedAtMs: Date.now(),
+      ...(existing?.stepId ? { stepId: existing.stepId } : {}),
+      ...(recordArgs !== undefined ? { args: recordArgs } : {}),
       ...(resultPayload ? { result: resultPayload } : {}),
+      ...(existing?.resultPreview ? { resultPreview: existing.resultPreview } : {}),
     });
   }
 
@@ -537,7 +568,7 @@ function reduceToolEvent(state: LiveRun, event: AgUiLikeEvent): LiveRun {
       : toolName === "inspect_schema"
         ? "检查数据源 Schema"
         : toolName;
-  const args = recordValue(event.args) ?? recordValue(event.parameters);
+  const args = recordValue(incomingArgs);
   const sql = stringValue(args?.sql) ?? stringValue(event.delta) ?? "";
   const result = resultPayload;
 
@@ -1344,7 +1375,9 @@ function rekeyToolCall(
     startedAtMs: fromCall.startedAtMs ?? toCall?.startedAtMs,
     finishedAtMs: toCall?.finishedAtMs ?? fromCall.finishedAtMs,
     stepId: toCall?.stepId ?? fromCall.stepId,
+    args: toCall?.args ?? fromCall.args,
     result: toCall?.result ?? fromCall.result,
+    resultPreview: toCall?.resultPreview ?? fromCall.resultPreview,
   };
 
   const toolCalls = state.toolCalls.filter(
@@ -1700,7 +1733,9 @@ function mergeToolCallRecord(
       stepId: existing.stepId ?? incoming.stepId,
       startedAtMs: existing.startedAtMs ?? incoming.startedAtMs,
       finishedAtMs: existing.finishedAtMs ?? incoming.finishedAtMs,
+      args: existing.args ?? incoming.args,
       result: existing.result ?? incoming.result,
+      resultPreview: existing.resultPreview ?? incoming.resultPreview,
     };
   }
 
@@ -1711,7 +1746,9 @@ function mergeToolCallRecord(
       stepId: existing.stepId ?? incoming.stepId,
       startedAtMs: existing.startedAtMs ?? incoming.startedAtMs,
       finishedAtMs: existing.finishedAtMs ?? incoming.finishedAtMs,
+      args: existing.args ?? incoming.args,
       result: existing.result ?? incoming.result,
+      resultPreview: existing.resultPreview ?? incoming.resultPreview,
     };
   }
 

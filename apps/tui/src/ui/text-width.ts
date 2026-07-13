@@ -179,6 +179,7 @@ export interface StyledSegment {
   bold?: boolean | undefined;
   code?: boolean | undefined;
   color?: string | undefined;
+  backgroundColor?: string | undefined;
   dimColor?: boolean | undefined;
 }
 

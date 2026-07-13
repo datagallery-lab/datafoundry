@@ -31,6 +31,8 @@ interface ChatAreaProps {
   scrollbackRows?: number;
   columns?: number;
   startup?: StartupInfo | undefined;
+  compactMode?: boolean | undefined;
+  thoughtExpanded?: boolean | undefined;
 }
 
 export type ChatAreaRef = {
@@ -60,6 +62,8 @@ const ChatAreaComponent = forwardRef<ChatAreaRef, ChatAreaProps>(({
   scrollbackRows,
   columns = 100,
   startup,
+  compactMode = false,
+  thoughtExpanded = false,
 }, ref) => {
   const scrollAnchor = useRef(new ScrollAnchor());
   const [internalScrollbackRows, setInternalScrollbackRows] = useState(
@@ -74,6 +78,8 @@ const ChatAreaComponent = forwardRef<ChatAreaRef, ChatAreaProps>(({
     maxMessageContentLength,
     columns,
     startup,
+    compactMode,
+    thoughtExpanded,
   }), [
     messages,
     artifacts,
@@ -82,6 +88,8 @@ const ChatAreaComponent = forwardRef<ChatAreaRef, ChatAreaProps>(({
     maxMessageContentLength,
     columns,
     startup,
+    compactMode,
+    thoughtExpanded,
   ]);
 
   const viewport = viewportRows === undefined ? undefined : Math.max(0, viewportRows);

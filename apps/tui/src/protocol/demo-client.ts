@@ -42,9 +42,27 @@ export class DemoCopilotKitClient implements AgentClient {
     });
 
     yield event({
+      type: "REASONING_MESSAGE_START",
+      messageId: `${messageId}-reasoning-1`,
+    });
+    yield event({
+      type: "REASONING_MESSAGE_CONTENT",
+      messageId: `${messageId}-reasoning-1`,
+      delta: "I should inspect the datasource schema first, then run a narrow aggregate query.",
+    });
+    yield event({
+      type: "REASONING_MESSAGE_END",
+      messageId: `${messageId}-reasoning-1`,
+    });
+
+    yield event({
       type: "TOOL_CALL_START",
       toolCallId: "demo-schema",
       toolCallName: "inspect_schema",
+      args: {
+        datasource_id: datasourceId,
+        table_names: ["orders"],
+      },
     });
     await delay(180);
     yield event({
