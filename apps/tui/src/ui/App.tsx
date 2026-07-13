@@ -1475,6 +1475,11 @@ export const App: React.FC<AppProps> = ({
             events={state.events}
             columns={Math.max(20, terminalColumns - 2)}
             rows={terminalRows}
+            fetchArtifactPreview={
+              configClient
+                ? (artifactId) => configClient.getArtifactPreview(artifactId)
+                : undefined
+            }
             onCancel={() => {
               setOutputsOpen(false);
             }}

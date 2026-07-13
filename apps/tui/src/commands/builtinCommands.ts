@@ -65,6 +65,7 @@ export const statusCommand: Command = {
 export const outputsCommand: Command = {
   name: 'outputs',
   description: 'Show outputs for the current session',
+  aliases: ['output'],
   execute: async () => ({
     success: true,
     message: 'Opening outputs...',

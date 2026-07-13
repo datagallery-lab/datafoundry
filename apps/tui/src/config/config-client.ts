@@ -722,6 +722,13 @@ export class ConfigClient {
     });
   }
 
+  async getArtifactPreview(id: string): Promise<unknown> {
+    return this.request<unknown>(
+      "GET",
+      `/api/v1/artifacts/${encodeURIComponent(id)}/preview`
+    );
+  }
+
   async patchSessionTitle(sessionId: string, title: string): Promise<SessionTitle> {
     return this.request<SessionTitle>(
       "PATCH",
