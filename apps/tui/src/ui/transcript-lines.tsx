@@ -76,6 +76,7 @@ const TOOL_BLOCK_FIELD_COLOR = '#93c5fd';
 const TOOL_BLOCK_VALUE_COLOR = '#e5e7eb';
 const TOOL_BLOCK_MUTED_COLOR = '#9ca3af';
 const TOOL_BLOCK_ERROR_COLOR = '#f87171';
+const TOOL_DETAIL_INDENT_WIDTH = textWidth(TOOL_DETAIL_INDENT);
 const STARTUP_BANNER_ART = [
   ' ____        _        _____                     _            ',
   '|  _ \\  __ _| |_ __ _|  ___|__  _   _ _ __   __| |_ __ _   _ ',
@@ -394,11 +395,15 @@ function pushToolCallLines(
   compactMode: boolean,
   push: (key: string, node: React.ReactNode) => void,
 ): void {
+  const blockWidth = toolBlockBackgroundWidth(bodyWidth);
+
   push(
     keyBase,
-    <Box key={keyBase} width={bodyWidth} backgroundColor={TOOL_BLOCK_BACKGROUND}>
+    <Box key={keyBase} width={bodyWidth}>
       <Text>{TOOL_DETAIL_INDENT}</Text>
-      <InlineToolCall toolCall={toolCall} showName />
+      <Box width={blockWidth} backgroundColor={TOOL_BLOCK_BACKGROUND}>
+        <InlineToolCall toolCall={toolCall} showName />
+      </Box>
     </Box>,
   );
 
@@ -424,21 +429,21 @@ function pushPayloadBlock(
   keyBase: string,
   push: (key: string, node: React.ReactNode) => void,
 ): void {
+  const blockWidth = toolBlockBackgroundWidth(bodyWidth);
   const key = `${keyBase}:label`;
   push(
     key,
     <ToolBlockLine
       key={key}
-      width={bodyWidth}
+      width={blockWidth}
       segments={[
-        { text: TOOL_DETAIL_INDENT, color: TOOL_BLOCK_MUTED_COLOR },
         { text: label, color: TOOL_BLOCK_LABEL_COLOR, bold: true },
       ]}
     />,
   );
 
-  const detailIndent = `${TOOL_DETAIL_INDENT}  `;
-  const detailWidth = Math.max(1, bodyWidth - textWidth(detailIndent));
+  const detailIndent = TOOL_DETAIL_INDENT;
+  const detailWidth = Math.max(1, blockWidth - textWidth(detailIndent));
   const wrappedRows = rows.flatMap((row) => textRows(row, detailWidth));
   const visibleRows = wrappedRows.slice(0, MAX_TOOL_PAYLOAD_LINES);
   visibleRows.forEach((row, rowIndex) => {
@@ -447,7 +452,7 @@ function pushPayloadBlock(
       rowKey,
       <ToolBlockLine
         key={rowKey}
-        width={bodyWidth}
+        width={blockWidth}
         segments={detailRowSegments(detailIndent, row)}
       />,
     );
@@ -460,7 +465,7 @@ function pushPayloadBlock(
       moreKey,
       <ToolBlockLine
         key={moreKey}
-        width={bodyWidth}
+        width={blockWidth}
         segments={[
           {
             text: `${detailIndent}... ${hidden} more lines hidden ...`,
@@ -470,6 +475,10 @@ function pushPayloadBlock(
       />,
     );
   }
+}
+
+function toolBlockBackgroundWidth(bodyWidth: number): number {
+  return Math.max(1, bodyWidth - TOOL_DETAIL_INDENT_WIDTH);
 }
 
 function detailRowSegments(indent: string, row: string): StyledSegment[] {
@@ -1178,6 +1187,7 @@ const ToolBlockLine: React.FC<{ segments: StyledSegment[]; width: number }> = ({
 
   return (
     <Text>
+      {TOOL_DETAIL_INDENT}
       {blockSegments.map((segment, index) => renderSegment(segment, index))}
     </Text>
   );
