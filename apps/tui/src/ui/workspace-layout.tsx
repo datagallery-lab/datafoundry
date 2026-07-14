@@ -1,6 +1,7 @@
 import React from 'react';
 import { Box, Text } from 'ink';
 import { queuedPromptDisplayRows } from './components/QueuedPromptDisplay.js';
+import { inkColors } from './theme.js';
 
 export type WorkspaceTab = 'chat' | 'stats' | 'config' | 'outputs';
 
@@ -23,8 +24,8 @@ export function WorkspaceFrame({
     return (
       <Box flexDirection="column" height={rows} width={safeColumns}>
         <Box paddingX={1} flexDirection="column">
-          <Text color="yellow" bold>Terminal too small</Text>
-          <Text color="gray">Resize to at least 80x20 for the DataFoundry TUI.</Text>
+          <Text color={inkColors.warning} bold>Terminal too small</Text>
+          <Text dimColor>Resize to at least 80x20 for the DataFoundry TUI.</Text>
         </Box>
       </Box>
     );

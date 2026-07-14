@@ -3,6 +3,7 @@ import { Box, Text } from 'ink';
 import type { DataArtifact } from '../state/index.js';
 import { TableView } from './components/TableView.js';
 import { MarkdownView } from './components/MarkdownView.js';
+import { inkColors } from './theme.js';
 
 interface ArtifactCardProps {
   artifact: DataArtifact;
@@ -200,7 +201,7 @@ export const ArtifactCard: React.FC<ArtifactCardProps> = ({
     <Box
       flexDirection="column"
       borderStyle="round"
-      borderColor="cyan"
+      borderColor={keyboardActive ? inkColors.accent : inkColors.border}
       paddingX={1}
       marginTop={1}
     >
@@ -237,7 +238,7 @@ export const ArtifactCard: React.FC<ArtifactCardProps> = ({
 
       {previewError && (
         <Box paddingLeft={2}>
-          <Text color="red">Preview error: {previewError}</Text>
+          <Text color={inkColors.error}>Preview error: {previewError}</Text>
         </Box>
       )}
 

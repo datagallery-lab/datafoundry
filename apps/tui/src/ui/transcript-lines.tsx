@@ -24,6 +24,7 @@ import {
   parseMarkdownLines,
   type TableAlignment,
 } from './markdown.js';
+import { inkColors } from './theme.js';
 
 /**
  * A single terminal row. The chat viewport renders these one-per-row and slices
@@ -70,12 +71,11 @@ const MAX_REASONING_LINES = 120;
 const MAX_TOOL_PAYLOAD_LINES = 28;
 const MAX_TABLE_ROWS = 12;
 const MIN_TABLE_CELL_WIDTH = 3;
-const TOOL_BLOCK_BACKGROUND = '#181818';
-const TOOL_BLOCK_LABEL_COLOR = '#7dd3fc';
-const TOOL_BLOCK_FIELD_COLOR = '#93c5fd';
-const TOOL_BLOCK_VALUE_COLOR = '#e5e7eb';
-const TOOL_BLOCK_MUTED_COLOR = '#9ca3af';
-const TOOL_BLOCK_ERROR_COLOR = '#f87171';
+const TOOL_BLOCK_LABEL_COLOR = inkColors.accent;
+const TOOL_BLOCK_FIELD_COLOR = inkColors.muted;
+const TOOL_BLOCK_VALUE_COLOR = inkColors.text;
+const TOOL_BLOCK_MUTED_COLOR = inkColors.muted;
+const TOOL_BLOCK_ERROR_COLOR = inkColors.error;
 const TOOL_DETAIL_INDENT_WIDTH = textWidth(TOOL_DETAIL_INDENT);
 const STARTUP_BANNER_ART = [
   ' ____        _        _____                     _            ',
@@ -90,9 +90,21 @@ const STARTUP_BANNER_ART_WIDTH = Math.max(
 );
 const STARTUP_BANNER_MAX_WIDTH = 72;
 
-/** Total display-column budget for a single chat row (mirrors the old estimate). */
+/**
+ * Total display-column budget for a single chat row.
+ *
+ * 优化说明：
+ * - 限制最大宽度为 115 格，避免宽屏时文本过长难以阅读
+ * - 窄屏时使用全宽（减去 padding），保持响应式
+ * - 宽屏时自然留白，提升阅读舒适度
+ */
 export function chatContentWidth(columns: number): number {
-  return Math.max(20, columns - 4);
+  const minWidth = 20;
+  const maxWidth = 115; // 限制最大宽度，优化宽屏阅读体验
+  const padding = 4;
+
+  const availableWidth = columns - padding;
+  return Math.max(minWidth, Math.min(maxWidth, availableWidth));
 }
 
 /**
@@ -142,16 +154,6 @@ export function buildChatLines(input: BuildChatLinesInput): VisualLine[] {
   // Restored sessions can report a count without hydrated messages yet.
   if (!hasMessages && messageCount > 0) {
     push('spacer:0', blankNode('spacer:0'));
-  }
-
-  if (input.artifacts.length > 0) {
-    // The preceding message/spacer already trails a blank row, so emit the
-    // notice directly to keep a single-line gap consistent with the rest.
-    const text = truncateToWidth(
-      `New outputs available (${input.artifacts.length}). Use /outputs to view them.`,
-      contentWidth,
-    );
-    push('artifacts:0', <Text key="artifacts:0" color="magenta">{text}</Text>);
   }
 
   return lines;
@@ -214,7 +216,7 @@ function pushMessageLines(
       push(
         key,
         <Box key={`box-${key}`}>
-          <Text color="blue">{USER_MESSAGE_BORDER}</Text>
+          <Text color={inkColors.accent}>{USER_MESSAGE_BORDER}</Text>
           {node}
         </Box>,
       );
@@ -401,8 +403,8 @@ function pushToolCallLines(
     keyBase,
     <Box key={keyBase} width={bodyWidth}>
       <Text>{TOOL_DETAIL_INDENT}</Text>
-      <Box width={blockWidth} backgroundColor={TOOL_BLOCK_BACKGROUND}>
-        <InlineToolCall toolCall={toolCall} showName />
+      <Box width={blockWidth}>
+        <InlineToolCall toolCall={toolCall} showName maxWidth={blockWidth} />
       </Box>
     </Box>,
   );
@@ -790,7 +792,7 @@ function pushMarkdownLines(
       case 'heading':
         pushStyledRows(parseInlineRuns(line.text), bodyWidth, lineKey, push, {
           bold: true,
-          blockColor: 'cyan',
+          blockColor: inkColors.accent,
         });
         return;
       case 'paragraph':
@@ -798,23 +800,23 @@ function pushMarkdownLines(
         return;
       case 'bullet':
         pushStyledRows(parseInlineRuns(line.text), bodyWidth, lineKey, push, {
-          firstPrefix: { text: '- ', color: 'cyan' },
+          firstPrefix: { text: '- ', color: inkColors.muted },
           contPrefix: { text: '  ' },
         });
         return;
       case 'ordered': {
         const marker = `${line.index} `;
         pushStyledRows(parseInlineRuns(line.text), bodyWidth, lineKey, push, {
-          firstPrefix: { text: marker, color: 'cyan' },
+          firstPrefix: { text: marker, color: inkColors.muted },
           contPrefix: { text: ' '.repeat(textWidth(marker)) },
         });
         return;
       }
       case 'quote':
         pushStyledRows(parseInlineRuns(line.text), bodyWidth, lineKey, push, {
-          firstPrefix: { text: '│ ', color: 'gray' },
-          contPrefix: { text: '│ ', color: 'gray' },
-          blockColor: 'gray',
+          firstPrefix: { text: '│ ', color: inkColors.muted },
+          contPrefix: { text: '│ ', color: inkColors.muted },
+          blockColor: inkColors.muted,
         });
         return;
       case 'table':
@@ -894,16 +896,16 @@ function pushCodeLines(
 function codeColor(text: string, lang: string): string {
   if (lang === 'diff') {
     if (text.startsWith('+')) {
-      return 'green';
+      return inkColors.success;
     }
     if (text.startsWith('-')) {
-      return 'red';
+      return inkColors.error;
     }
     if (text.startsWith('@@')) {
-      return 'cyan';
+      return inkColors.accent;
     }
   }
-  return 'yellow';
+  return inkColors.accent;
 }
 
 function pushTableLines(
@@ -1017,7 +1019,7 @@ function inlinePaddedCell(
     text: run.text,
     bold: isHeader || run.bold,
     code: run.code,
-    color: isHeader && !run.code ? 'cyan' : undefined,
+    color: isHeader && !run.code ? inkColors.accent : undefined,
   }));
   const content = truncateSegmentsWithEllipsis(rawSegments, width);
   const visible = segmentsWidth(content);
@@ -1178,10 +1180,10 @@ const ToolBlockLine: React.FC<{ segments: StyledSegment[]; width: number }> = ({
   const blockSegments: StyledSegment[] = [
     ...segments.map((segment) => ({
       ...segment,
-      backgroundColor: segment.backgroundColor ?? TOOL_BLOCK_BACKGROUND,
+      // 移除背景色，使用缩进表达层级
     })),
     ...(fillWidth > 0
-      ? [{ text: ' '.repeat(fillWidth), backgroundColor: TOOL_BLOCK_BACKGROUND }]
+      ? [{ text: ' '.repeat(fillWidth) }]
       : []),
   ];
 
@@ -1194,7 +1196,7 @@ const ToolBlockLine: React.FC<{ segments: StyledSegment[]; width: number }> = ({
 };
 
 function renderSegment(segment: StyledSegment, key: number): React.ReactNode {
-  const color = segment.color ?? (segment.code ? 'yellow' : undefined);
+  const color = segment.color ?? (segment.code ? inkColors.accent : undefined);
   const props: {
     bold?: boolean;
     color?: string;
@@ -1233,9 +1235,9 @@ function pushStartupLines(
   const statusText = `${conn.icon} ${conn.text} | ${run.icon} ${run.text}`;
   const showArt = bannerWidth >= STARTUP_BANNER_ART_WIDTH + 4;
 
-  push('startup:border:top', <Text key="startup:border:top" color="cyan">{border}</Text>);
+  push('startup:border:top', <Text key="startup:border:top" color={inkColors.accent}>{border}</Text>);
   push('startup:title', (
-    <Text key="startup:title" bold color="cyan">
+    <Text key="startup:title" bold color={inkColors.accent}>
       {bannerContent('DataFoundry', bannerWidth)}
     </Text>
   ));
@@ -1245,7 +1247,7 @@ function pushStartupLines(
       const key = `startup:art:${index}`;
       push(
         key,
-        <Text key={key} color="cyan">
+        <Text key={key} color={inkColors.accent}>
           {bannerContent(padToWidth(line.trimEnd(), STARTUP_BANNER_ART_WIDTH), bannerWidth)}
         </Text>,
       );
@@ -1270,7 +1272,7 @@ function pushStartupLines(
       {bannerContent(statusText, bannerWidth)}
     </Text>,
   );
-  push('startup:border:bottom', <Text key="startup:border:bottom" color="cyan">{border}</Text>);
+  push('startup:border:bottom', <Text key="startup:border:bottom" color={inkColors.accent}>{border}</Text>);
   push('startup:after', blankNode('startup:after'));
 }
 
@@ -1305,7 +1307,7 @@ const MessageHeader: React.FC<MessageHeaderProps> = ({ message }) => {
     <Text>
       {INDENT}
       <Text bold color={roleColor(message.role)}>{roleLabel(message.role)}</Text>
-      <Text dimColor> • {formatTimestamp(message.timestamp)}</Text>
+      <Text dimColor>  {formatTimestamp(message.timestamp)}</Text>
       {message.isStreaming ? <Text dimColor> • working...</Text> : null}
     </Text>
   );
@@ -1321,31 +1323,31 @@ const ThinkingLine: React.FC = () => {
   const text = `thinking${'.'.repeat(dotCount)}${' '.repeat(3 - dotCount)}`;
   const bright = tick % 2 === 0;
   return (
-    <Text color={bright ? 'white' : 'gray'} dimColor={!bright}>{INDENT + text}</Text>
+    <Text color={bright ? inkColors.text : inkColors.muted} dimColor={!bright}>{INDENT + text}</Text>
   );
 };
 
 function roleColor(role: DisplayMessage['role']): string {
   switch (role) {
     case 'user':
-      return 'blue';
+      return inkColors.accent;
     case 'assistant':
-      return 'green';
+      return inkColors.text;
     case 'system':
-      return 'yellow';
+      return inkColors.muted;
     default:
-      return 'gray';
+      return inkColors.muted;
   }
 }
 
 function roleLabel(role: DisplayMessage['role']): string {
   switch (role) {
     case 'user':
-      return 'You';
+      return 'YOU';
     case 'assistant':
-      return 'Agent';
+      return 'AGENT';
     case 'system':
-      return 'System';
+      return 'SYSTEM';
     default:
       return 'Unknown';
   }
@@ -1359,7 +1361,6 @@ function formatTimestamp(timestamp: number): string {
     return date.toLocaleTimeString('en-US', {
       hour: '2-digit',
       minute: '2-digit',
-      second: '2-digit',
       hour12: false,
     });
   }
@@ -1375,27 +1376,27 @@ function formatTimestamp(timestamp: number): string {
 function connectionDisplay(status: ConnectionStatus): { color: string; icon: string; text: string } {
   switch (status) {
     case 'connected':
-      return { color: 'green', icon: '●', text: 'Connected' };
+      return { color: inkColors.success, icon: '●', text: 'Connected' };
     case 'disconnected':
-      return { color: 'gray', icon: '○', text: 'Disconnected' };
+      return { color: inkColors.muted, icon: '○', text: 'Disconnected' };
     case 'error':
-      return { color: 'red', icon: '✖', text: 'Error' };
+      return { color: inkColors.error, icon: '✖', text: 'Error' };
     default:
-      return { color: 'gray', icon: '○', text: 'Unknown' };
+      return { color: inkColors.muted, icon: '○', text: 'Unknown' };
   }
 }
 
 function runDisplay(status: LiveRunStatus): { color: string; icon: string; text: string } {
   switch (status) {
     case 'idle':
-      return { color: 'gray', icon: '○', text: 'Idle' };
+      return { color: inkColors.muted, icon: '○', text: 'Idle' };
     case 'running':
-      return { color: 'yellow', icon: '◐', text: 'Running' };
+      return { color: inkColors.warning, icon: '◐', text: 'Running' };
     case 'completed':
-      return { color: 'green', icon: '✓', text: 'Completed' };
+      return { color: inkColors.success, icon: '✓', text: 'Completed' };
     case 'failed':
-      return { color: 'red', icon: '✖', text: 'Failed' };
+      return { color: inkColors.error, icon: '✖', text: 'Failed' };
     default:
-      return { color: 'gray', icon: '○', text: 'Unknown' };
+      return { color: inkColors.muted, icon: '○', text: 'Unknown' };
   }
 }

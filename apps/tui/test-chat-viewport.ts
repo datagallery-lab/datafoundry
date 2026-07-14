@@ -112,7 +112,7 @@ check(wrapToWidth('', 10).length === 1, 'empty line still yields one row');
 check(textWidth(truncateToWidth('中文测试内容很长', 5)) <= 5, 'truncate fits within width');
 
 // --- layout helpers ---
-check(chatContentWidth(120) === 116, 'content width is columns - 4');
+check(chatContentWidth(120) === 115, 'content width is capped for wide terminals');
 check(estimateControlsRows({ commandNotice: false, activeTab: 'chat' }) === 5, 'controls estimate matches empty enhanced input height');
 check(estimateControlsRows({ commandNotice: true, activeTab: 'chat' }) === 6, 'controls estimate includes command notice');
 check(estimateControlsRows({ commandNotice: false, activeTab: 'chat', inputBoxRows: 9 }) === 9, 'controls estimate follows expanded input height');
@@ -168,7 +168,7 @@ check(
   'short message = top padding + header + 1 line + trailing blank (5 rows)',
 );
 
-// bodyWidth = 116 - 2 = 114 -> 57 CJK chars per row -> 60 chars wrap to 2 rows.
+// bodyWidth = 115 - 2 = 113 -> 56 CJK chars per row -> 60 chars wrap to 2 rows.
 check(
   countChatLines({ messages: [textMessage('m2', '中'.repeat(60))], artifacts: [], columns }) === 6,
   '60 CJK chars wrap to 2 rows (top padding + header + 2 + blank = 6)',

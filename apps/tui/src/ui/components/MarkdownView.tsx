@@ -15,6 +15,7 @@ import {
   type StyledRun,
   type StyledSegment,
 } from '../text-width.js';
+import { inkColors } from '../theme.js';
 
 interface MarkdownViewProps {
   content: string;
@@ -126,7 +127,7 @@ function markdownRows(content: string, width: number): MarkdownRow[] {
       case 'heading':
         pushStyledRows(parseInlineRuns(line.text), width, lineKey, push, {
           bold: true,
-          blockColor: 'cyan',
+          blockColor: inkColors.accent,
         });
         return;
       case 'paragraph':
@@ -134,14 +135,14 @@ function markdownRows(content: string, width: number): MarkdownRow[] {
         return;
       case 'bullet':
         pushStyledRows(parseInlineRuns(line.text), width, lineKey, push, {
-          firstPrefix: { text: '- ', color: 'cyan' },
+          firstPrefix: { text: '- ', color: inkColors.muted },
           contPrefix: { text: '  ' },
         });
         return;
       case 'ordered': {
         const marker = `${line.index} `;
         pushStyledRows(parseInlineRuns(line.text), width, lineKey, push, {
-          firstPrefix: { text: marker, color: 'cyan' },
+          firstPrefix: { text: marker, color: inkColors.muted },
           contPrefix: { text: ' '.repeat(textWidth(marker)) },
         });
         return;
@@ -211,11 +212,11 @@ function pushCodeRows(
 
 function codeColor(text: string, lang: string): string {
   if (lang === 'diff') {
-    if (text.startsWith('+')) return 'green';
-    if (text.startsWith('-')) return 'red';
-    if (text.startsWith('@@')) return 'cyan';
+    if (text.startsWith('+')) return inkColors.success;
+    if (text.startsWith('-')) return inkColors.error;
+    if (text.startsWith('@@')) return inkColors.accent;
   }
-  return 'yellow';
+  return inkColors.accent;
 }
 
 function pushTableRows(
@@ -300,7 +301,7 @@ function inlinePaddedCell(
     text: run.text,
     bold: isHeader || run.bold,
     code: run.code,
-    color: isHeader && !run.code ? 'cyan' : undefined,
+    color: isHeader && !run.code ? inkColors.accent : undefined,
   }));
   const content = truncateSegmentsWithEllipsis(rawSegments, width);
   const visible = segmentsWidth(content);
@@ -418,7 +419,7 @@ const StyledLine: React.FC<{ segments: StyledSegment[] }> = ({ segments }) => (
 );
 
 function renderSegment(segment: StyledSegment, key: number): React.ReactNode {
-  const color = segment.color ?? (segment.code ? 'yellow' : undefined);
+  const color = segment.color ?? (segment.code ? inkColors.accent : undefined);
   const props: { bold?: boolean; color?: string; dimColor?: boolean } = {};
   if (segment.bold) props.bold = true;
   if (color !== undefined) props.color = color;

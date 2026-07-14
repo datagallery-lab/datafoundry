@@ -31,7 +31,7 @@ export const ActiveToolCalls: React.FC<ActiveToolCallsProps> = ({ toolCalls }) =
       {toolCalls.map((toolCall) => (
         <Box key={toolCall.id} marginBottom={0}>
           <Text dimColor>● </Text>
-          <Text color="yellow">{getToolDisplayName(toolCall.name)}</Text>
+          <Text dimColor>{getToolDisplayName(toolCall.name)}</Text>
           {toolCall.startedAtMs && (
             <Text dimColor> ({getElapsedTime(toolCall.startedAtMs)})</Text>
           )}

@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Box, Text, useInput } from 'ink';
+import { inkColors } from './theme.js';
 
 export interface ResourcePickerItem {
   id: string;
@@ -132,7 +133,7 @@ export const ResourcePicker: React.FC<ResourcePickerProps> = ({
     <Box
       flexDirection="column"
       borderStyle="single"
-      borderColor="cyan"
+      borderColor={inkColors.border}
       width={panelWidth}
       height={panelHeight}
       overflow={fullscreen ? 'hidden' : undefined}
@@ -140,7 +141,7 @@ export const ResourcePicker: React.FC<ResourcePickerProps> = ({
       paddingY={1}
       marginX={fullscreen ? 0 : 1}
     >
-      <Text bold color="cyan">{title}</Text>
+      <Text bold color={inkColors.accent}>{title}</Text>
       <Box>
         <Text dimColor>Type to search: </Text>
         <Text>{query}</Text>
@@ -149,7 +150,7 @@ export const ResourcePicker: React.FC<ResourcePickerProps> = ({
 
       {warning ? (
         <Box marginTop={1}>
-          <Text color="yellow">{warning}</Text>
+          <Text color={inkColors.warning}>{warning}</Text>
         </Box>
       ) : null}
 
@@ -163,7 +164,7 @@ export const ResourcePicker: React.FC<ResourcePickerProps> = ({
         {loading ? (
           <Text dimColor>Loading...</Text>
         ) : error ? (
-          <Text color="red">{error}</Text>
+          <Text color={inkColors.error}>{error}</Text>
         ) : items.length === 0 ? (
           <Text dimColor>{emptyMessage}</Text>
         ) : filteredItems.length === 0 ? (
@@ -176,12 +177,12 @@ export const ResourcePicker: React.FC<ResourcePickerProps> = ({
             const titleText = truncate(item.name || item.id, titleMaxWidth);
             const idText = truncate(item.id, idMaxWidth);
             const detailText = item.detail ? truncate(item.detail, detailMaxWidth) : '';
-            const itemColor = selected ? 'cyan' : item.enabled === false ? 'gray' : 'white';
+            const itemColor = selected ? inkColors.accent : item.enabled === false ? inkColors.muted : inkColors.text;
 
             return (
               <Box key={item.id} flexDirection="column">
                 <Box>
-                  <Text color={selected ? 'cyan' : 'white'}>{selected ? '>' : ' '} </Text>
+                  <Text color={selected ? inkColors.accent : inkColors.text}>{selected ? '>' : ' '} </Text>
                   <Text dimColor>{stateMarker} </Text>
                   <Text color={itemColor} bold={selected}>
                     {titleText}

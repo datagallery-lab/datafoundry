@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Box, Text } from 'ink';
 import type { LivePlanTask, LiveTaskStatus } from '../../state/index.js';
+import { getStatusColor, inkColors } from '../theme.js';
 
 /**
  * Progress bar component for long-running operations
@@ -32,12 +33,12 @@ export const ProgressBar: React.FC<ProgressBarProps> = ({
   const barColor =
     color ||
     (status === 'success'
-      ? 'green'
+      ? inkColors.success
       : status === 'error'
-        ? 'red'
+        ? inkColors.error
         : status === 'warning'
-          ? 'yellow'
-          : 'cyan');
+          ? inkColors.warning
+          : inkColors.accent);
 
   const filled = '█'.repeat(filledWidth);
   const empty = '░'.repeat(emptyWidth);
@@ -71,7 +72,7 @@ interface SpinnerProps {
   color?: string;
 }
 
-export const Spinner: React.FC<SpinnerProps> = ({ type = 'dots', color = 'cyan' }) => {
+export const Spinner: React.FC<SpinnerProps> = ({ type = 'dots', color = inkColors.accent }) => {
   const [frame, setFrame] = useState(0);
 
   const animations = {
@@ -123,16 +124,7 @@ export const TaskItem: React.FC<TaskItemProps> = ({
   };
 
   const getTaskColor = (status: LiveTaskStatus): string => {
-    switch (status) {
-      case 'pending':
-        return 'gray';
-      case 'running':
-        return 'yellow';
-      case 'completed':
-        return 'green';
-      case 'failed':
-        return 'red';
-    }
+    return getStatusColor(status);
   };
 
   const icon = getTaskIcon(task.status);
@@ -242,9 +234,9 @@ export const TaskList: React.FC<TaskListProps> = ({
       {!compact && total > 0 && (failed > 0 || (completed === total && total > 0)) && (
         <Box marginTop={1} borderStyle="round" paddingX={1}>
           {completed === total && failed === 0 ? (
-            <Text color="green">✓ All tasks completed successfully</Text>
+            <Text color={inkColors.success}>✓ All tasks completed successfully</Text>
           ) : failed > 0 ? (
-            <Text color="red">
+            <Text color={inkColors.error}>
               ✖ {failed} task{failed > 1 ? 's' : ''} failed
             </Text>
           ) : null}
@@ -275,26 +267,26 @@ export const CompactProgress: React.FC<CompactProgressProps> = ({
   const getStatusIcon = (): React.ReactNode => {
     switch (status) {
       case 'idle':
-        return <Text color="gray">○</Text>;
+        return <Text color={inkColors.muted}>○</Text>;
       case 'running':
-        return showSpinner ? <Spinner type="dots" color="yellow" /> : <Text color="yellow">◐</Text>;
+        return showSpinner ? <Spinner type="dots" color={inkColors.warning} /> : <Text color={inkColors.warning}>◐</Text>;
       case 'completed':
-        return <Text color="green">✓</Text>;
+        return <Text color={inkColors.success}>✓</Text>;
       case 'failed':
-        return <Text color="red">✖</Text>;
+        return <Text color={inkColors.error}>✖</Text>;
     }
   };
 
   const getStatusColor = (): string => {
     switch (status) {
       case 'idle':
-        return 'gray';
+        return inkColors.muted;
       case 'running':
-        return 'yellow';
+        return inkColors.warning;
       case 'completed':
-        return 'green';
+        return inkColors.success;
       case 'failed':
-        return 'red';
+        return inkColors.error;
     }
   };
 
@@ -362,7 +354,7 @@ export const ProgressView: React.FC<ProgressViewProps> = ({
       {showOverallProgress && (
         <Box flexDirection="column" marginBottom={1}>
           <Box>
-            <Text bold underline color="cyan">
+            <Text bold underline color={inkColors.accent}>
               {title}
             </Text>
             {running > 0 && !compact && (
@@ -411,26 +403,26 @@ export const ProgressView: React.FC<ProgressViewProps> = ({
             <Box width={15}>
               <Text>Completed:</Text>
             </Box>
-            <Text color="green">{completed}</Text>
+            <Text color={inkColors.success}>{completed}</Text>
           </Box>
           <Box>
             <Box width={15}>
               <Text>Running:</Text>
             </Box>
-            <Text color="yellow">{running}</Text>
+            <Text color={inkColors.warning}>{running}</Text>
           </Box>
           <Box>
             <Box width={15}>
               <Text>Pending:</Text>
             </Box>
-            <Text color="gray">{total - completed - running - failed}</Text>
+            <Text color={inkColors.muted}>{total - completed - running - failed}</Text>
           </Box>
           {failed > 0 && (
             <Box>
               <Box width={15}>
                 <Text>Failed:</Text>
               </Box>
-              <Text color="red">{failed}</Text>
+              <Text color={inkColors.error}>{failed}</Text>
             </Box>
           )}
         </Box>

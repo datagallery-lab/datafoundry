@@ -7,6 +7,7 @@ import {
   truncateToWidth,
   type StyledSegment as TextStyledSegment,
 } from '../text-width.js';
+import { inkColors } from '../theme.js';
 
 type Alignment = 'left' | 'right' | 'center';
 type ColumnKind = 'text' | 'number' | 'currency' | 'percent' | 'boolean' | 'date' | 'badge';
@@ -300,7 +301,7 @@ function valueSegments(rawValue: string, meta: ColumnMeta, dimRow: boolean): Sty
     if (numericValue === null || numericValue === 0) {
       segment.dimColor = true;
     } else {
-      segment.color = numericValue < 0 ? 'red' : 'green';
+      segment.color = numericValue < 0 ? inkColors.error : inkColors.success;
     }
     return [segment];
   }
@@ -308,12 +309,12 @@ function valueSegments(rawValue: string, meta: ColumnMeta, dimRow: boolean): Sty
   if (meta.kind === 'boolean') {
     const parsed = parseBooleanValue(rawValue);
     segment.bold = true;
-    segment.color = parsed === false ? 'red' : parsed === true ? 'green' : 'yellow';
+    segment.color = parsed === false ? inkColors.error : parsed === true ? inkColors.success : inkColors.warning;
     return [segment];
   }
 
   if (meta.kind === 'date') {
-    segment.color = 'blue';
+    segment.color = inkColors.muted;
     return [segment];
   }
 
@@ -331,17 +332,17 @@ function valueSegments(rawValue: string, meta: ColumnMeta, dimRow: boolean): Sty
 
 function badgeColor(value: string): string {
   const normalized = value.trim().toLowerCase();
-  if (/(success|active|ok|passed|complete|completed|done|valid)/u.test(normalized)) return 'green';
-  if (/(fail|failed|error|invalid|disabled|cancel|blocked)/u.test(normalized)) return 'red';
-  if (/(warn|warning|pending|queued|running|processing|review)/u.test(normalized)) return 'yellow';
-  if (/(info|note|draft|new)/u.test(normalized)) return 'blue';
+  if (/(success|active|ok|passed|complete|completed|done|valid)/u.test(normalized)) return inkColors.success;
+  if (/(fail|failed|error|invalid|disabled|cancel|blocked)/u.test(normalized)) return inkColors.error;
+  if (/(warn|warning|pending|queued|running|processing|review)/u.test(normalized)) return inkColors.warning;
+  if (/(info|note|draft|new)/u.test(normalized)) return inkColors.accent;
 
-  const palette = ['cyan', 'magenta', 'yellow', 'blue', 'green'];
+  const palette = [inkColors.accent, inkColors.muted, inkColors.success];
   let hash = 0;
   for (const char of normalized) {
     hash = (hash + char.charCodeAt(0)) % palette.length;
   }
-  return palette[hash] ?? 'cyan';
+  return palette[hash] ?? inkColors.muted;
 }
 
 function compareRows(a: string[], b: string[], sort: SortState, metas: ColumnMeta[]): number {
@@ -532,7 +533,7 @@ function headerSegments(
     segments.push({
       text: padText(`${meta.header}${indicator}`, width, meta.align),
       bold: true,
-      color: 'cyan',
+      color: inkColors.accent,
     });
     segments.push({ text: ' ' });
     segments.push({ text: '│', dimColor: true });
@@ -667,10 +668,10 @@ export const TableView: React.FC<TableViewProps> = ({
       <Box flexDirection="column" paddingX={1}>
         {title && (
           <Box marginBottom={1}>
-            <Text bold color="cyan">{title}</Text>
+            <Text bold color={inkColors.accent}>{title}</Text>
           </Box>
         )}
-        <Box borderStyle="round" borderColor="gray" paddingX={1}>
+        <Box borderStyle="round" borderColor={inkColors.border} paddingX={1}>
           <Text dimColor>无可预览的表格数据</Text>
         </Box>
       </Box>
@@ -681,12 +682,12 @@ export const TableView: React.FC<TableViewProps> = ({
     <Box flexDirection="column" paddingX={1}>
       {title && (
         <Box marginBottom={1}>
-          <Text bold color="cyan">{title}</Text>
+          <Text bold color={inkColors.accent}>{title}</Text>
         </Box>
       )}
 
       <Box marginBottom={1}>
-        <Text color="cyan" bold>TABLE</Text>
+        <Text color={inkColors.accent} bold>TABLE</Text>
         <Text dimColor>
           {' '}
           {columns.length} 列 × {totalRows.toLocaleString()} 行

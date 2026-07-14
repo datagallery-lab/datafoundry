@@ -1,6 +1,7 @@
 import React from 'react';
 import { Box, Text } from 'ink';
 import type { ConnectionStatus, LiveRunStatus } from '../state/index.js';
+import { inkColors } from './theme.js';
 
 interface HeaderProps {
   threadId: string | undefined;
@@ -12,31 +13,31 @@ interface HeaderProps {
 }
 
 // Helper functions for status display (shared by all components)
-const getConnectionDisplay = (connectionStatus: ConnectionStatus): { color: string; icon: string; text: string } => {
+const getConnectionDisplay = (connectionStatus: ConnectionStatus): { color: typeof inkColors[keyof typeof inkColors]; icon: string; text: string } => {
   switch (connectionStatus) {
     case 'connected':
-      return { color: 'green', icon: '●', text: 'Connected' };
+      return { color: inkColors.success, icon: '●', text: 'Connected' };
     case 'disconnected':
-      return { color: 'gray', icon: '○', text: 'Disconnected' };
+      return { color: inkColors.muted, icon: '○', text: 'Disconnected' };
     case 'error':
-      return { color: 'red', icon: '✖', text: 'Error' };
+      return { color: inkColors.error, icon: '✖', text: 'Error' };
     default:
-      return { color: 'gray', icon: '○', text: 'Unknown' };
+      return { color: inkColors.muted, icon: '○', text: 'Unknown' };
   }
 };
 
-const getRunDisplay = (runStatus: LiveRunStatus): { color: string; icon: string; text: string } => {
+const getRunDisplay = (runStatus: LiveRunStatus): { color: typeof inkColors[keyof typeof inkColors]; icon: string; text: string } => {
   switch (runStatus) {
     case 'idle':
-      return { color: 'gray', icon: '○', text: 'Idle' };
+      return { color: inkColors.muted, icon: '○', text: 'Idle' };
     case 'running':
-      return { color: 'yellow', icon: '◐', text: 'Running' };
+      return { color: inkColors.warning, icon: '◐', text: 'Running' };
     case 'completed':
-      return { color: 'green', icon: '✓', text: 'Completed' };
+      return { color: inkColors.success, icon: '✓', text: 'Completed' };
     case 'failed':
-      return { color: 'red', icon: '✖', text: 'Failed' };
+      return { color: inkColors.error, icon: '✖', text: 'Failed' };
     default:
-      return { color: 'gray', icon: '○', text: 'Unknown' };
+      return { color: inkColors.muted, icon: '○', text: 'Unknown' };
   }
 };
 
@@ -60,9 +61,9 @@ export const SessionBanner: React.FC<SessionBannerProps> = ({
   const runDisplay = getRunDisplay(runStatus);
 
   return (
-    <Box flexDirection="column" borderStyle="round" borderColor="cyan" paddingX={1} paddingY={0}>
+    <Box flexDirection="column" borderStyle="round" borderColor={inkColors.accent} paddingX={1} paddingY={0}>
       <Box>
-        <Text bold color="cyan">
+        <Text bold color={inkColors.accent}>
           DataFoundry TUI
         </Text>
         {threadId && (
@@ -160,7 +161,7 @@ export const Header: React.FC<HeaderProps> = ({
   return (
     <Box flexDirection="column" flexShrink={0} paddingX={1} marginBottom={1}>
       <Box>
-        <Text bold color="cyan">
+        <Text bold color={inkColors.accent}>
           DataFoundry TUI
         </Text>
         {threadId && (
@@ -192,7 +193,7 @@ export const Header: React.FC<HeaderProps> = ({
 
       {lastError && (
         <Box>
-          <Text color="red">
+          <Text color={inkColors.error}>
             Error: {lastError}
           </Text>
         </Box>

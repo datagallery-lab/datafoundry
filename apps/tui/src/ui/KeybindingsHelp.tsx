@@ -1,6 +1,7 @@
 import React from 'react';
 import { Box, Text } from 'ink';
 import { KEYBINDINGS, type KeybindingAction } from './keybindings.js';
+import { inkColors } from './theme.js';
 
 interface KeybindingsHelpProps {
   compact?: boolean;
@@ -27,16 +28,16 @@ export const KeybindingsHelp: React.FC<KeybindingsHelpProps> = ({ compact = fals
   };
 
   const categoryColors: Record<KeybindingAction['category'], string> = {
-    system: 'red',
-    navigation: 'cyan',
-    session: 'yellow',
-    input: 'green',
+    system: inkColors.error,
+    navigation: inkColors.accent,
+    session: inkColors.warning,
+    input: inkColors.success,
   };
 
   if (compact) {
     return (
       <Box flexDirection="column">
-        <Text bold color="cyan">Keyboard Shortcuts</Text>
+        <Text bold color={inkColors.accent}>Keyboard Shortcuts</Text>
         <Text> </Text>
         {Object.entries(groupedKeybindings).map(([category, bindings]) => (
           <Box key={category} flexDirection="column" marginBottom={1}>
@@ -45,7 +46,7 @@ export const KeybindingsHelp: React.FC<KeybindingsHelpProps> = ({ compact = fals
             </Text>
             {bindings.map((kb, idx) => (
               <Box key={idx} paddingLeft={2}>
-                <Text color="white" bold>
+                <Text color={inkColors.text} bold>
                   {kb.key}
                 </Text>
                 <Text dimColor> - {kb.description}</Text>
@@ -61,12 +62,12 @@ export const KeybindingsHelp: React.FC<KeybindingsHelpProps> = ({ compact = fals
     <Box flexDirection="column" paddingX={2}>
       <Box
         borderStyle="round"
-        borderColor="cyan"
+        borderColor={inkColors.border}
         paddingX={2}
         paddingY={1}
         flexDirection="column"
       >
-        <Text bold color="cyan" underline>
+        <Text bold color={inkColors.accent} underline>
           Keyboard Shortcuts Reference
         </Text>
         <Text> </Text>
@@ -79,7 +80,7 @@ export const KeybindingsHelp: React.FC<KeybindingsHelpProps> = ({ compact = fals
             {bindings.map((kb, idx) => (
               <Box key={idx} paddingLeft={2} justifyContent="space-between">
                 <Box width={20}>
-                  <Text color="white" bold>
+                  <Text color={inkColors.text} bold>
                     {kb.key}
                   </Text>
                 </Box>
@@ -117,7 +118,7 @@ export const ShortcutsIndicator: React.FC = () => {
       {shortcuts.map((s, idx) => (
         <React.Fragment key={idx}>
           {idx > 0 && <Text dimColor> | </Text>}
-          <Text bold color="cyan">
+          <Text bold color={inkColors.accent}>
             {s.key}
           </Text>
           <Text dimColor>: {s.desc}</Text>

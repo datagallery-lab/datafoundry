@@ -3,6 +3,7 @@ import { Box, Text, useInput } from 'ink';
 import type { SessionListItem } from '../config/index.js';
 import { isMouseInput } from '../input/mouse-wheel.js';
 import { textWidth, truncateToWidth } from './text-width.js';
+import { inkColors } from './theme.js';
 
 interface SessionPickerProps {
   sessions: SessionListItem[];
@@ -153,13 +154,13 @@ export const SessionPicker: React.FC<SessionPickerProps> = ({
       <Box
         flexDirection="column"
         borderStyle="single"
-        borderColor="cyan"
+        borderColor={inkColors.accent}
         width={panelWidth}
         height={panelHeight}
         overflow="hidden"
       >
         <Box paddingX={1}>
-          <Text bold color="cyan" wrap="truncate-end">
+          <Text bold color={inkColors.accent} wrap="truncate-end">
             {titleText}
           </Text>
           {matchText ? (
@@ -195,7 +196,7 @@ export const SessionPicker: React.FC<SessionPickerProps> = ({
             </Box>
           ) : error ? (
             <Box paddingY={1}>
-              <Text color="red" wrap="truncate-end">
+              <Text color={inkColors.error} wrap="truncate-end">
                 {truncate(`Failed to load sessions: ${error}`, contentWidth)}
               </Text>
             </Box>
@@ -239,10 +240,10 @@ export const SessionPicker: React.FC<SessionPickerProps> = ({
                   marginBottom={isLast ? 0 : 1}
                 >
                   <Box>
-                    <Text color={selected ? 'cyan' : 'white'} bold={selected}>
+                    <Text color={selected ? inkColors.accent : inkColors.text} bold={selected}>
                       {prefix}
                     </Text>
-                    <Text color={selected ? 'cyan' : 'white'} bold={selected} wrap="truncate-end">
+                    <Text color={selected ? inkColors.accent : inkColors.text} bold={selected} wrap="truncate-end">
                       {title}
                     </Text>
                   </Box>

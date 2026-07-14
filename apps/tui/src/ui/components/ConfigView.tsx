@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { Box, Text } from 'ink';
+import { inkColors } from '../theme.js';
 
 // Configuration types
 export type ConfigType = 'datasources' | 'models' | 'skills' | 'mcp' | 'kb';
@@ -118,15 +119,15 @@ export const ConfigView: React.FC<ConfigViewProps> = ({
   const getStatusColor = (status: ConfigItem['status']): string => {
     switch (status) {
       case 'connected':
-        return 'green';
+        return inkColors.success;
       case 'disconnected':
-        return 'gray';
+        return inkColors.muted;
       case 'error':
-        return 'red';
+        return inkColors.error;
       case 'unknown':
-        return 'yellow';
+        return inkColors.warning;
       default:
-        return 'gray';
+        return inkColors.muted;
     }
   };
 
@@ -134,10 +135,10 @@ export const ConfigView: React.FC<ConfigViewProps> = ({
   const commands = TAB_COMMANDS[activeTab];
 
   return (
-    <Box flexDirection="column" height="100%" borderStyle="round" borderColor="cyan" padding={1}>
+    <Box flexDirection="column" height="100%" borderStyle="round" borderColor={inkColors.border} padding={1}>
       {/* Header */}
       <Box marginBottom={1}>
-        <Text bold color="cyan">
+        <Text bold color={inkColors.accent}>
           Configuration Panel
         </Text>
         {onClose && (
@@ -235,7 +236,7 @@ export const ConfigView: React.FC<ConfigViewProps> = ({
       </Box>
 
       {/* Available Commands */}
-      <Box flexDirection="column" borderStyle="single" borderColor="gray" padding={1}>
+      <Box flexDirection="column" borderStyle="single" borderColor={inkColors.border} padding={1}>
         <Box marginBottom={1}>
           <Text bold underline>
             Available Commands

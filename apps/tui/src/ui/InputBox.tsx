@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Box, Text, useInput, useStdin } from 'ink';
 import { isMouseInput } from '../input/mouse-wheel.js';
 import { CommandHistory, CommandCompletion, DEFAULT_COMMANDS } from './keybindings.js';
+import { inkColors } from './theme.js';
 
 interface InputBoxProps {
   value?: string;
@@ -15,6 +16,7 @@ interface InputBoxProps {
   skillId?: string | undefined;
   onExitRequest?: (clearInputDraft: () => boolean) => void;
   ctrlCExitPending?: boolean | undefined;
+  outputCount?: number | undefined;
 }
 
 export const InputBox: React.FC<InputBoxProps> = ({
@@ -29,16 +31,15 @@ export const InputBox: React.FC<InputBoxProps> = ({
   skillId,
   onExitRequest,
   ctrlCExitPending = false,
+  outputCount = 0,
 }) => {
   const [localValue, setLocalValue] = useState('');
   const [completionHint, setCompletionHint] = useState<string>('');
   const { isRawModeSupported } = useStdin();
-  const accent = disabled ? 'gray' : 'cyan';
-  const panelBackground = '#1e1e1e';
+  const accent = disabled ? inkColors.muted : inkColors.accent;
   const metaParts = [
-    modelName || 'server default',
-    datasourceId ? `db ${datasourceId}` : 'no datasource',
-    skillId ? `skill ${skillId}` : undefined,
+    datasourceId || 'no datasource',
+    skillId,
   ].filter((part): part is string => Boolean(part));
 
   // Use refs to maintain history and completion across renders
@@ -209,42 +210,45 @@ export const InputBox: React.FC<InputBoxProps> = ({
           paddingLeft={1}
           paddingRight={2}
           paddingY={1}
-          backgroundColor={panelBackground}
         >
           <Box minHeight={1}>
-            <Text color={disabled ? 'gray' : 'white'} backgroundColor={panelBackground} wrap="truncate-end">
+            <Text color={disabled ? inkColors.muted : inkColors.text} wrap="truncate-end">
               {localValue}
               {!disabled && <Text inverse> </Text>}
-              {!localValue && <Text color="gray">{placeholder}</Text>}
+              {!localValue && <Text color={inkColors.muted}>{placeholder}</Text>}
             </Text>
           </Box>
 
           {!disabled && completionHint && (
             <Box paddingTop={1}>
-              <Text dimColor color="cyan" backgroundColor={panelBackground} wrap="truncate-end">
+              <Text dimColor color={inkColors.accent} wrap="truncate-end">
                 {completionHint}
               </Text>
             </Box>
           )}
 
           <Box flexDirection="row" justifyContent="space-between" paddingTop={1}>
-            <Text wrap="truncate-end" backgroundColor={panelBackground}>
-              <Text color={accent} backgroundColor={panelBackground}>Analyze</Text>
-              <Text dimColor backgroundColor={panelBackground}> · </Text>
-              <Text color={disabled ? 'gray' : 'white'} backgroundColor={panelBackground}>
+            <Text wrap="truncate-end">
+              <Text color={accent}>Analyze</Text>
+              <Text dimColor> · </Text>
+              <Text color={disabled ? inkColors.muted : inkColors.text}>
                 {metaParts.join(' · ')}
               </Text>
             </Text>
             {ctrlCExitPending ? (
-              <Text color="yellow" backgroundColor={panelBackground} wrap="truncate-end">
+              <Text color={inkColors.warning} wrap="truncate-end">
                 Press Ctrl+C again to exit.
               </Text>
             ) : (
-              <Text backgroundColor={panelBackground}>
-                <Text color="white" backgroundColor={panelBackground}>tab</Text>
-                <Text dimColor backgroundColor={panelBackground}> complete  </Text>
-                <Text color="white" backgroundColor={panelBackground}>enter</Text>
-                <Text dimColor backgroundColor={panelBackground}> send</Text>
+              <Text>
+                {outputCount > 0 && (
+                  <>
+                    <Text color={inkColors.accent}>Outputs {outputCount}</Text>
+                    <Text dimColor> · </Text>
+                  </>
+                )}
+                <Text color={inkColors.text}>Enter</Text>
+                <Text dimColor> send</Text>
               </Text>
             )}
           </Box>

@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from
 import { Box, Text, useInput, useStdin, useStdout, type Key } from 'ink';
 import { isMouseInput } from '../../input/mouse-wheel.js';
 import { CommandCompletion, CommandHistory, DEFAULT_COMMANDS } from '../keybindings.js';
+import { inkColors } from '../theme.js';
 import { TextBuffer, cpLen, cpSlice, toCodePoints } from './text-buffer.js';
 
 interface EnhancedInputBoxProps {
@@ -22,6 +23,7 @@ interface EnhancedInputBoxProps {
   datasourceId?: string | undefined;
   skillId?: string | undefined;
   inputWidth?: number | undefined;
+  outputCount?: number | undefined;
 }
 
 const INPUT_VIEWPORT_HEIGHT = 5;
@@ -93,6 +95,7 @@ export const EnhancedInputBox: React.FC<EnhancedInputBoxProps> = ({
   datasourceId,
   skillId,
   inputWidth,
+  outputCount = 0,
 }) => {
   const [, forceRender] = useState(0);
   const [completionHint, setCompletionHint] = useState('');
@@ -110,12 +113,10 @@ export const EnhancedInputBox: React.FC<EnhancedInputBoxProps> = ({
     isRawModeSupported && typeof process.stdin.setRawMode === 'function',
   );
 
-  const accent = disabled ? 'gray' : 'cyan';
-  const panelBackground = '#1e1e1e';
+  const accent = disabled ? inkColors.muted : inkColors.accent;
   const metaParts = [
-    modelName || 'server default',
-    datasourceId ? `db ${datasourceId}` : 'no datasource',
-    skillId ? `skill ${skillId}` : undefined,
+    datasourceId || 'no datasource',
+    skillId,
   ].filter((part): part is string => Boolean(part));
 
   const redraw = useCallback(() => {
@@ -598,8 +599,7 @@ export const EnhancedInputBox: React.FC<EnhancedInputBoxProps> = ({
       return (
         <Text
           key={index}
-          backgroundColor={panelBackground}
-          color={disabled ? 'gray' : 'white'}
+          color={disabled ? inkColors.muted : inkColors.text}
           wrap="truncate-end"
         >
           {displayText}
@@ -611,7 +611,7 @@ export const EnhancedInputBox: React.FC<EnhancedInputBoxProps> = ({
     const cursorPos = Math.min(cursorVisualCol, codePoints.length);
     if (cursorPos >= codePoints.length) {
       return (
-        <Text key={index} backgroundColor={panelBackground} color="white" wrap="truncate-end">
+        <Text key={index} color={inkColors.text} wrap="truncate-end">
           {displayText}
           <Text inverse> </Text>
         </Text>
@@ -619,7 +619,7 @@ export const EnhancedInputBox: React.FC<EnhancedInputBoxProps> = ({
     }
 
     return (
-      <Text key={index} backgroundColor={panelBackground} color="white" wrap="truncate-end">
+      <Text key={index} color={inkColors.text} wrap="truncate-end">
         {cpSlice(displayText, 0, cursorPos)}
         <Text inverse>{cpSlice(displayText, cursorPos, cursorPos + 1)}</Text>
         {cpSlice(displayText, cursorPos + 1)}
@@ -644,11 +644,10 @@ export const EnhancedInputBox: React.FC<EnhancedInputBoxProps> = ({
           paddingLeft={1}
           paddingRight={2}
           paddingY={1}
-          backgroundColor={panelBackground}
         >
           <Box flexDirection="column" minHeight={1}>
             {buffer.text.length === 0 ? (
-              <Text color="gray" backgroundColor={panelBackground} wrap="truncate-end">
+              <Text color={inkColors.muted} wrap="truncate-end">
                 {!disabled ? <Text inverse>{placeholderFirst || ' '}</Text> : placeholderFirst}
                 {placeholderRest}
               </Text>
@@ -661,32 +660,36 @@ export const EnhancedInputBox: React.FC<EnhancedInputBoxProps> = ({
 
           {!disabled && completionHint && (
             <Box paddingTop={1}>
-              <Text dimColor color="cyan" backgroundColor={panelBackground} wrap="truncate-end">
+              <Text dimColor color={inkColors.accent} wrap="truncate-end">
                 {completionHint}
               </Text>
             </Box>
           )}
 
           <Box flexDirection="row" justifyContent="space-between" paddingTop={1}>
-            <Text backgroundColor={panelBackground} wrap="truncate-end">
-              <Text color={accent} backgroundColor={panelBackground}>Analyze</Text>
-              <Text dimColor backgroundColor={panelBackground}> · </Text>
-              <Text color={disabled ? 'gray' : 'white'} backgroundColor={panelBackground}>
+            <Text wrap="truncate-end">
+              <Text color={accent}>Analyze</Text>
+              <Text dimColor> · </Text>
+              <Text color={disabled ? inkColors.muted : inkColors.text}>
                 {metaParts.join(' · ')}
               </Text>
             </Text>
             {ctrlCExitPending ? (
-              <Text color="yellow" backgroundColor={panelBackground} wrap="truncate-end">
+              <Text color={inkColors.warning} wrap="truncate-end">
                 Press Ctrl+C again to exit.
               </Text>
             ) : (
-              <Text backgroundColor={panelBackground} wrap="truncate-end">
-                <Text color="white" backgroundColor={panelBackground}>⇧↵</Text>
-                <Text dimColor backgroundColor={panelBackground}> newline  </Text>
-                <Text color="white" backgroundColor={panelBackground}>tab</Text>
-                <Text dimColor backgroundColor={panelBackground}> complete  </Text>
-                <Text color="white" backgroundColor={panelBackground}>enter</Text>
-                <Text dimColor backgroundColor={panelBackground}> send</Text>
+              <Text wrap="truncate-end">
+                {outputCount > 0 && (
+                  <>
+                    <Text color={inkColors.accent}>Outputs {outputCount}</Text>
+                    <Text dimColor> · </Text>
+                  </>
+                )}
+                <Text color={inkColors.text}>⇧↵</Text>
+                <Text dimColor> newline  </Text>
+                <Text color={inkColors.text}>Enter</Text>
+                <Text dimColor> send</Text>
               </Text>
             )}
           </Box>

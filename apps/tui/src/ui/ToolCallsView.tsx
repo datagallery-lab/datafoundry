@@ -1,6 +1,7 @@
 import React from 'react';
 import { Box, Text } from 'ink';
 import type { LiveToolCallRecord } from '../state/index.js';
+import { getStatusColor, inkColors } from './theme.js';
 
 interface ToolCallsViewProps {
   toolCalls: LiveToolCallRecord[];
@@ -19,17 +20,17 @@ export const ToolCallsView: React.FC<ToolCallsViewProps> = ({
   const getStatusDisplay = (status: LiveToolCallRecord['status']) => {
     switch (status) {
       case 'pending':
-        return { icon: '○', color: 'gray' as const, label: 'Pending' };
+        return { icon: '○', color: getStatusColor(status), label: 'Pending' };
       case 'running':
-        return { icon: '⟳', color: 'yellow' as const, label: 'Running' };
+        return { icon: '⟳', color: getStatusColor(status), label: 'Running' };
       case 'success':
-        return { icon: '✓', color: 'green' as const, label: 'Success' };
+        return { icon: '✓', color: getStatusColor(status), label: 'Success' };
       case 'failed':
-        return { icon: '✗', color: 'red' as const, label: 'Failed' };
+        return { icon: '✗', color: getStatusColor(status), label: 'Failed' };
       case 'cancelled':
-        return { icon: '⊘', color: 'yellow' as const, label: 'Cancelled' };
+        return { icon: '⊘', color: getStatusColor(status), label: 'Cancelled' };
       default:
-        return { icon: '?', color: 'gray' as const, label: 'Unknown' };
+        return { icon: '?', color: inkColors.muted, label: 'Unknown' };
     }
   };
 

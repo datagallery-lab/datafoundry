@@ -14,6 +14,7 @@ import {
   isMarkdownArtifact,
 } from './ArtifactCard.js';
 import { textWidth, truncateToWidth } from './text-width.js';
+import { inkColors } from './theme.js';
 
 interface OutputsViewProps {
   artifacts: DataArtifact[];
@@ -217,10 +218,10 @@ export const OutputsView: React.FC<OutputsViewProps> = ({
                 marginBottom={isLast ? 0 : 1}
               >
                 <Box>
-                  <Text color={selected ? 'cyan' : 'white'} bold={selected}>
+                  <Text color={selected ? inkColors.accent : inkColors.text} bold={selected}>
                     {prefix}
                   </Text>
-                  <Text color={selected ? 'cyan' : 'white'} bold={selected} wrap="truncate-end">
+                  <Text color={selected ? inkColors.accent : inkColors.text} bold={selected} wrap="truncate-end">
                     {title}
                   </Text>
                   <Text dimColor wrap="truncate-end">
@@ -267,7 +268,7 @@ const OutputsDetailView: React.FC<{
     <Box flexDirection="column" flexGrow={1} paddingX={1} overflow="hidden">
       <Box>
         <Text dimColor>#{index + 1} </Text>
-        <Text color="yellow" wrap="truncate-end">
+        <Text color={inkColors.accent} wrap="truncate-end">
           {truncate(sourceLabel(artifact, events), Math.max(1, contentWidth - 4))}
         </Text>
       </Box>
@@ -453,13 +454,13 @@ export const OutputsScreen: React.FC<OutputsScreenProps> = ({
       <Box
         flexDirection="column"
         borderStyle="single"
-        borderColor="cyan"
+        borderColor={inkColors.border}
         width={panelWidth}
         height={panelHeight}
         overflow="hidden"
       >
         <Box paddingX={1}>
-          <Text bold color="cyan" wrap="truncate-end">{headerTitle}</Text>
+          <Text bold color={inkColors.accent} wrap="truncate-end">{headerTitle}</Text>
           <Text dimColor wrap="truncate-end">
             {truncate(headerSuffix, Math.max(1, contentWidth - textWidth(headerTitle)))}
           </Text>

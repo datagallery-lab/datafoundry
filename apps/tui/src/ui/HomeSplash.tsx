@@ -2,6 +2,7 @@ import React from 'react';
 import { Box, Text } from 'ink';
 import type { StartupInfo } from './transcript-lines.js';
 import { textWidth, truncateToWidth } from './text-width.js';
+import { inkColors } from './theme.js';
 
 interface HomeSplashProps {
   rows: number;
@@ -68,10 +69,10 @@ export function HomeSplash({ rows, columns, startup, input }: HomeSplashProps) {
 
         <Box height={1} />
         <Box width={promptWidth} flexDirection="column" alignItems="center">
-          <Text color="yellow" wrap="truncate-end">
-            ● Tip <Text color="gray">Run </Text>
-            <Text color="white">/datasource</Text>
-            <Text color="gray"> to choose data, then ask a business question</Text>
+          <Text color={inkColors.accent} wrap="truncate-end">
+            ● Tip <Text dimColor>Run </Text>
+            <Text color={inkColors.text}>/datasource</Text>
+            <Text dimColor> to choose data, then ask a business question</Text>
           </Text>
           <Text dimColor wrap="truncate-end">
             {fit(statusText(startup), promptWidth)}

@@ -1,6 +1,7 @@
 import React from 'react';
 import { Box, Text } from 'ink';
 import type { RunUsageSnapshot } from '../../state/index.js';
+import { getStatusColor, inkColors } from '../theme.js';
 
 interface StatsViewProps {
   stats: RunUsageSnapshot;
@@ -44,7 +45,7 @@ const ProgressBar: React.FC<ProgressBarProps> = ({
   value,
   max,
   width = 20,
-  color = 'green',
+  color = inkColors.success,
 }) => {
   const percentage = max > 0 ? Math.min(100, (value / max) * 100) : 0;
   const filledWidth = Math.round((percentage / 100) * width);
@@ -114,7 +115,7 @@ const StatsRow: React.FC<StatsRowProps> = ({ label, value, color, dimValue }) =>
 const SectionHeader: React.FC<{ title: string }> = ({ title }) => {
   return (
     <Box marginTop={1} marginBottom={0}>
-      <Text bold underline color="cyan">
+      <Text bold underline color={inkColors.accent}>
         {title}
       </Text>
     </Box>
@@ -129,15 +130,15 @@ export const StatsView: React.FC<StatsViewProps> = ({ stats }) => {
   const getRunStatusDisplay = (): { color: string; icon: string; text: string } => {
     switch (stats.runStatus) {
       case 'idle':
-        return { color: 'gray', icon: '○', text: 'Idle' };
+        return { color: getStatusColor(stats.runStatus), icon: '○', text: 'Idle' };
       case 'running':
-        return { color: 'yellow', icon: '◐', text: 'Running' };
+        return { color: getStatusColor(stats.runStatus), icon: '◐', text: 'Running' };
       case 'completed':
-        return { color: 'green', icon: '✓', text: 'Completed' };
+        return { color: getStatusColor(stats.runStatus), icon: '✓', text: 'Completed' };
       case 'failed':
-        return { color: 'red', icon: '✖', text: 'Failed' };
+        return { color: getStatusColor(stats.runStatus), icon: '✖', text: 'Failed' };
       default:
-        return { color: 'gray', icon: '○', text: 'Unknown' };
+        return { color: inkColors.muted, icon: '○', text: 'Unknown' };
     }
   };
 
@@ -176,7 +177,7 @@ export const StatsView: React.FC<StatsViewProps> = ({ stats }) => {
       </Box>
       {stats.errorMessage && (
         <Box marginTop={0}>
-          <Text color="red">Error: {stats.errorMessage}</Text>
+          <Text color={inkColors.error}>Error: {stats.errorMessage}</Text>
         </Box>
       )}
 
@@ -186,15 +187,15 @@ export const StatsView: React.FC<StatsViewProps> = ({ stats }) => {
       <StatsRow
         label="Success"
         value={stats.toolCalls.success}
-        color="green"
+        color={inkColors.success}
       />
-      <StatsRow label="Failed" value={stats.toolCalls.failed} color="red" />
+      <StatsRow label="Failed" value={stats.toolCalls.failed} color={inkColors.error} />
       {stats.toolCalls.total > 0 && (
         <ProgressBar
           label="Success Rate"
           value={stats.toolCalls.success}
           max={stats.toolCalls.total}
-          color={toolSuccessRate >= 80 ? 'green' : toolSuccessRate >= 50 ? 'yellow' : 'red'}
+          color={toolSuccessRate >= 80 ? inkColors.success : toolSuccessRate >= 50 ? inkColors.warning : inkColors.error}
         />
       )}
 
@@ -215,9 +216,9 @@ export const StatsView: React.FC<StatsViewProps> = ({ stats }) => {
                 </Box>
                 <Text>
                   {toolStats.calls} calls
-                  <Text color="green"> ({toolStats.success} ✓</Text>
+                  <Text color={inkColors.success}> ({toolStats.success} ✓</Text>
                   {toolStats.failed > 0 && (
-                    <Text color="red"> {toolStats.failed} ✖</Text>
+                    <Text color={inkColors.error}> {toolStats.failed} ✖</Text>
                   )}
                   <Text>)</Text>
                 </Text>
@@ -229,8 +230,8 @@ export const StatsView: React.FC<StatsViewProps> = ({ stats }) => {
       {/* SQL Query Section */}
       <SectionHeader title="SQL Queries" />
       <StatsRow label="Total Queries" value={stats.sql.total} />
-      <StatsRow label="Success" value={stats.sql.success} color="green" />
-      <StatsRow label="Failed" value={stats.sql.failed} color="red" />
+      <StatsRow label="Success" value={stats.sql.success} color={inkColors.success} />
+      <StatsRow label="Failed" value={stats.sql.failed} color={inkColors.error} />
       <StatsRow label="Rows Scanned" value={stats.sql.rowsScanned} />
       <StatsRow
         label="Total Duration"
@@ -252,7 +253,7 @@ export const StatsView: React.FC<StatsViewProps> = ({ stats }) => {
             label="Success Rate"
             value={stats.sql.success}
             max={stats.sql.total}
-            color={sqlSuccessRate >= 80 ? 'green' : sqlSuccessRate >= 50 ? 'yellow' : 'red'}
+            color={sqlSuccessRate >= 80 ? inkColors.success : sqlSuccessRate >= 50 ? inkColors.warning : inkColors.error}
           />
         </>
       )}
@@ -269,7 +270,7 @@ export const StatsView: React.FC<StatsViewProps> = ({ stats }) => {
           <StatsRow
             label="Total Tokens"
             value={totalTokens}
-            color="cyan"
+            color={inkColors.accent}
           />
           {totalTokens > 0 && (
             <ProgressBar
@@ -277,7 +278,7 @@ export const StatsView: React.FC<StatsViewProps> = ({ stats }) => {
               value={stats.tokens.inputTokens}
               max={totalTokens}
               width={20}
-              color="blue"
+              color={inkColors.accent}
             />
           )}
         </>
@@ -300,10 +301,10 @@ export const StatsView: React.FC<StatsViewProps> = ({ stats }) => {
         <Box
           marginTop={1}
           borderStyle="round"
-          borderColor="green"
+          borderColor={inkColors.success}
           paddingX={1}
         >
-          <Text color="green">
+          <Text color={inkColors.success}>
             ✓ Run completed in {formatDuration(stats.durationMs ?? 0)} with{' '}
             {stats.toolCalls.total} tool calls and {stats.sql.total} SQL{' '}
             {stats.sql.total === 1 ? 'query' : 'queries'}
@@ -312,8 +313,8 @@ export const StatsView: React.FC<StatsViewProps> = ({ stats }) => {
       )}
 
       {stats.runStatus === 'failed' && (
-        <Box marginTop={1} borderStyle="round" borderColor="red" paddingX={1}>
-          <Text color="red">
+        <Box marginTop={1} borderStyle="round" borderColor={inkColors.error} paddingX={1}>
+          <Text color={inkColors.error}>
             ✖ Run failed after {formatDuration(stats.durationMs ?? 0)}
           </Text>
         </Box>

@@ -1,5 +1,6 @@
 import React from 'react';
 import { Box, Text } from 'ink';
+import { inkColors } from '../theme.js';
 
 const MAX_DISPLAYED_QUEUED_PROMPTS = 3;
 
@@ -21,7 +22,7 @@ export function QueuedPromptDisplay({
 
   return (
     <Box flexDirection="column" paddingX={1} flexShrink={0}>
-      <Text color="cyan">Queued follow-ups</Text>
+      <Text color={inkColors.accent}>Queued follow-ups</Text>
       {prompts.slice(0, MAX_DISPLAYED_QUEUED_PROMPTS).map((prompt, index) => (
         <Box key={`${index}:${prompt}`} paddingLeft={2} width="100%">
           <Text dimColor wrap="truncate-end">

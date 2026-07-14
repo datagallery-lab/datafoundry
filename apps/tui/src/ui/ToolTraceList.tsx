@@ -1,6 +1,7 @@
 import React from 'react';
 import { Box, Text } from 'ink';
 import type { LiveToolCallRecord, TimelineEvent } from '../state/index.js';
+import { getStatusColor } from './theme.js';
 
 interface ToolTraceListProps {
   toolCalls: LiveToolCallRecord[];
@@ -30,24 +31,6 @@ export const ToolTraceList: React.FC<ToolTraceListProps> = ({
     }
   };
 
-  // Get status color for tool call
-  const getToolColor = (status: LiveToolCallRecord['status']): string => {
-    switch (status) {
-      case 'pending':
-        return 'gray';
-      case 'running':
-        return 'yellow';
-      case 'success':
-        return 'green';
-      case 'failed':
-        return 'red';
-      case 'cancelled':
-        return 'yellow';
-      default:
-        return 'gray';
-    }
-  };
-
   // Calculate duration for completed tool calls
   const getDuration = (toolCall: LiveToolCallRecord): string | null => {
     if (toolCall.startedAtMs && toolCall.finishedAtMs) {
@@ -74,7 +57,7 @@ export const ToolTraceList: React.FC<ToolTraceListProps> = ({
           return (
             <Box key={toolCall.id} marginTop={0}>
               {/* Tool call header */}
-              <Text color={getToolColor(toolCall.status)}>
+              <Text color={getStatusColor(toolCall.status)}>
                 {getToolIcon(toolCall.status)}
               </Text>
               <Text bold> {toolCall.name}</Text>

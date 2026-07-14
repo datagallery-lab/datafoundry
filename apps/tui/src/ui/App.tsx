@@ -15,6 +15,7 @@ import { HomeSplash } from './HomeSplash.js';
 import { DEFAULT_COMMANDS } from './keybindings.js';
 import { AssistantTextStreamBuffer, type AssistantTextFlush } from './assistant-stream-buffer.js';
 import { createWheelScrollDecoder } from '../input/mouse-wheel.js';
+import { inkColors } from './theme.js';
 import {
   restoreSessionConversation,
   store,
@@ -741,7 +742,7 @@ export const App: React.FC<AppProps> = ({
       chatAreaRef.current?.reset();
       setCommandNotice({
         kind: 'info',
-        message: `Resumed session ${restored.title ? `"${restored.title}" ` : ''}(${restored.threadId}).`,
+        message: `↺ 已恢复会话${restored.title ? `：${restored.title}` : ''}`,
       });
     } catch (error) {
       setCommandNotice({
@@ -1658,10 +1659,10 @@ export const App: React.FC<AppProps> = ({
                     overflowY="hidden"
                     justifyContent="center"
                   >
-                    <Text color="cyan">
+                    <Text color={inkColors.accent}>
                       {resumeLoadingSessionId === 'latest'
                         ? 'Loading latest session...'
-                        : `Loading session ${resumeLoadingSessionId}...`}
+                        : 'Loading selected session...'}
                     </Text>
                   </Box>
               ) : (
@@ -1693,7 +1694,7 @@ export const App: React.FC<AppProps> = ({
                         flexDirection="column"
                         width={`${panelWidth}%`}
                         borderStyle="single"
-                        borderColor="cyan"
+                        borderColor={inkColors.border}
                         paddingX={1}
                       >
                         <ActivityPanel
@@ -1711,7 +1712,7 @@ export const App: React.FC<AppProps> = ({
             <Box ref={mainControlsRef} flexDirection="column" flexShrink={0}>
               {commandNotice && (
                 <Box paddingX={1} flexShrink={0}>
-                  <Text color={commandNotice.kind === 'error' ? 'red' : 'cyan'}>
+                  <Text color={commandNotice.kind === 'error' ? inkColors.error : inkColors.accent}>
                     {commandNotice.message}
                   </Text>
                 </Box>
@@ -1738,6 +1739,7 @@ export const App: React.FC<AppProps> = ({
                   datasourceId={activeDatasourceId}
                   skillId={activeSkillId}
                   inputWidth={terminalColumns}
+                  outputCount={visibleArtifacts.length}
                 />
               )}
 

@@ -2,6 +2,7 @@ import React from 'react';
 import { Box, Text } from 'ink';
 import type { LivePlanTask, LiveToolCallRecord, TimelineEvent } from '../state/index.js';
 import { ToolTraceList } from './ToolTraceList.js';
+import { getStatusColor } from './theme.js';
 
 interface ActivityPanelProps {
   plan: LivePlanTask[];
@@ -28,22 +29,6 @@ export const ActivityPanel: React.FC<ActivityPanelProps> = ({
     }
   };
 
-  // Get status color for plan task
-  const getTaskColor = (status: LivePlanTask['status']): string => {
-    switch (status) {
-      case 'pending':
-        return 'gray';
-      case 'running':
-        return 'yellow';
-      case 'completed':
-        return 'green';
-      case 'failed':
-        return 'red';
-      default:
-        return 'gray';
-    }
-  };
-
   return (
     <Box flexDirection="column">
       {/* Plan section */}
@@ -56,7 +41,7 @@ export const ActivityPanel: React.FC<ActivityPanelProps> = ({
         ) : (
           plan.map((task) => (
             <Box key={task.id} marginTop={0}>
-              <Text color={getTaskColor(task.status)}>
+              <Text color={getStatusColor(task.status)}>
                 {getTaskIcon(task.status)}
               </Text>
               <Text> {task.title}</Text>
