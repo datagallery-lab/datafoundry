@@ -31,6 +31,7 @@ interface OutputsScreenProps {
   columns?: number | undefined;
   rows?: number | undefined;
   fetchArtifactPreview?: ((id: string) => Promise<unknown>) | undefined;
+  fetchArtifactContent?: ((id: string) => Promise<string>) | undefined;
   onCancel: () => void;
 }
 
@@ -44,6 +45,7 @@ const RESERVED_LINES = 5;
 const ITEM_HEIGHT = 4;
 const SIDEBAR_RESERVED_LINES = 4;
 const SIDEBAR_ITEM_HEIGHT = 4;
+const MARKDOWN_PREVIEW_TIMEOUT_MS = 5000;
 
 const truncate = (value: string, maxWidth: number): string => {
   const firstLine = value.split(/\r?\n/, 1)[0] ?? '';
@@ -134,6 +136,25 @@ function compactArtifactMetadata(artifact: DataArtifact, events: TimelineEvent[]
 
 function previewErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timeoutId = setTimeout(() => {
+      reject(new Error(`${label} timed out after ${ms}ms`));
+    }, ms);
+
+    promise.then(
+      (value) => {
+        clearTimeout(timeoutId);
+        resolve(value);
+      },
+      (error: unknown) => {
+        clearTimeout(timeoutId);
+        reject(error);
+      },
+    );
+  });
 }
 
 function mergePreviewStateDetail(
@@ -428,6 +449,7 @@ export const OutputsScreen: React.FC<OutputsScreenProps> = ({
   columns = 100,
   rows = 40,
   fetchArtifactPreview,
+  fetchArtifactContent,
   onCancel,
 }) => {
   const [selectedArtifactId, setSelectedArtifactId] = useState<string | null>(
@@ -505,10 +527,53 @@ export const OutputsScreen: React.FC<OutputsScreenProps> = ({
       };
     });
 
-    fetchArtifactPreview(artifactId)
-      .then((preview) => {
-        if (cancelled) return;
+    const markdownContentFallbackAvailable = Boolean(
+      fetchArtifactContent
+      && isMarkdownArtifact(selectedBaseArtifact)
+      && (selectedBaseArtifact.fileId || selectedBaseArtifact.downloadUrl),
+    );
+
+    const loadPreviewDetail = async (): Promise<DataArtifact['detail'] | undefined> => {
+      try {
+        const preview = markdownContentFallbackAvailable
+          ? await withTimeout(
+              fetchArtifactPreview(artifactId),
+              MARKDOWN_PREVIEW_TIMEOUT_MS,
+              'Artifact preview',
+            )
+          : await fetchArtifactPreview(artifactId);
         const detail = artifactDetailFromPreview(selectedBaseArtifact, preview);
+        if (detail || !markdownContentFallbackAvailable || !fetchArtifactContent) {
+          return detail;
+        }
+      } catch (error) {
+        if (!markdownContentFallbackAvailable || !fetchArtifactContent) {
+          throw error;
+        }
+      }
+
+      const content = await withTimeout(
+        fetchArtifactContent(artifactId),
+        MARKDOWN_PREVIEW_TIMEOUT_MS,
+        'Artifact content',
+      );
+      const fallbackPreview = selectedBaseArtifact.type === 'file'
+        ? {
+            type: 'file',
+            path: selectedBaseArtifact.title,
+            content,
+          }
+        : {
+            type: 'markdown',
+            path: selectedBaseArtifact.title,
+            content,
+          };
+      return artifactDetailFromPreview(selectedBaseArtifact, fallbackPreview);
+    };
+
+    loadPreviewDetail()
+      .then((detail) => {
+        if (cancelled) return;
         setPreviewStateById((current) => ({
           ...current,
           [artifactId]: detail
@@ -533,10 +598,13 @@ export const OutputsScreen: React.FC<OutputsScreenProps> = ({
     return () => {
       cancelled = true;
     };
+  // Do not depend on previewStateById here. This effect sets the selected
+  // artifact to loading; if that state update retriggers cleanup, the in-flight
+  // preview promise is marked cancelled and its result is discarded.
   }, [
     detailOpen,
+    fetchArtifactContent,
     fetchArtifactPreview,
-    previewStateById,
     selectedBaseArtifact,
   ]);
 

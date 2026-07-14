@@ -612,6 +612,73 @@ export class ConfigClient {
     }
   }
 
+  private async requestText(
+    method: "GET",
+    path: string,
+    options?: {
+      params?: Record<string, string | number | boolean>;
+      headers?: Record<string, string>;
+    }
+  ): Promise<string> {
+    const url = new URL(`${this.baseUrl}${path}`);
+
+    if (options?.params) {
+      Object.entries(options.params).forEach(([key, value]) => {
+        url.searchParams.append(key, String(value));
+      });
+    }
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), this.timeout);
+
+    try {
+      const response = await fetch(url.toString(), {
+        method,
+        headers: {
+          Accept: "text/plain, text/markdown, text/*, */*",
+          ...options?.headers,
+        },
+        signal: controller.signal,
+      }).finally(() => clearTimeout(timeoutId));
+
+      if (!response.ok) {
+        throw await this.errorFromResponse(response);
+      }
+
+      return await response.text();
+    } catch (error) {
+      if (error instanceof ConfigClientError) {
+        this.onError?.(error);
+        throw error;
+      }
+
+      if (error instanceof Error) {
+        if (error.name === "AbortError") {
+          const timeoutError = new ConfigClientError(
+            `Request timed out after ${this.timeout}ms`,
+            "TIMEOUT_ERROR"
+          );
+          this.onError?.(timeoutError);
+          throw timeoutError;
+        }
+
+        const networkError = new ConfigClientError(
+          `Network request failed: ${error.message}`,
+          "NETWORK_ERROR"
+        );
+        this.onError?.(networkError);
+        throw networkError;
+      }
+
+      const unknownError = new ConfigClientError(
+        `Request failed: ${String(error)}`,
+        "UNKNOWN_ERROR"
+      );
+      this.onError?.(unknownError);
+      throw unknownError;
+    }
+  }
+
   private async errorFromResponse(response: Response): Promise<ConfigClientError> {
     let message = `HTTP ${response.status}: ${response.statusText}`;
     let code: string | undefined;
@@ -740,6 +807,13 @@ export class ConfigClient {
     return this.request<unknown>(
       "GET",
       `/api/v1/artifacts/${encodeURIComponent(id)}/preview`
+    );
+  }
+
+  async getArtifactContent(id: string): Promise<string> {
+    return this.requestText(
+      "GET",
+      `/api/v1/artifacts/${encodeURIComponent(id)}/content`
     );
   }
 

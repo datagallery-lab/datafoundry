@@ -1639,6 +1639,11 @@ export const App: React.FC<AppProps> = ({
                 ? (artifactId) => configClient.getArtifactPreview(artifactId)
                 : undefined
             }
+            fetchArtifactContent={
+              configClient
+                ? (artifactId) => configClient.getArtifactContent(artifactId)
+                : undefined
+            }
             onCancel={() => {
               setOutputsOpen(false);
             }}
