@@ -2,6 +2,8 @@
  * Error classification and handling utilities
  */
 
+import { getLogger } from '../utils/logger.js';
+
 export enum ErrorCategory {
   NETWORK = 'network',
   CONFIG = 'config',
@@ -43,8 +45,7 @@ class ErrorLogger {
       this.logs.shift();
     }
 
-    // Console logging for debugging
-    console.error('[Error]', {
+    getLogger().error('TUI runtime error', undefined, {
       category: error.category,
       message: error.message,
       code: error.code,

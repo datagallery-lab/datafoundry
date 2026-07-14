@@ -54,6 +54,7 @@ function sanitizeInput(input: string): string {
       if (code === undefined) return false;
       if (char === '\n' || char === '\t') return true;
       if (code >= 0x00 && code <= 0x1f) return false;
+      if (code === 0x7f) return false;
       if (code >= 0x80 && code <= 0x9f) return false;
       return true;
     })

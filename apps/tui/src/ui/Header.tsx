@@ -118,30 +118,32 @@ export const StatusFooter: React.FC<StatusFooterProps> = ({
   const runDisplay = getRunDisplay(runStatus);
 
   return (
-    <Box paddingX={1} flexShrink={0}>
-      <Text dimColor>{modelName}</Text>
-      <Text dimColor> · </Text>
-      <Text dimColor>{directory}</Text>
-      <Text dimColor> · </Text>
-      <Text color={connDisplay.color}>
-        {connDisplay.icon} {connDisplay.text}
+    <Box paddingX={1} flexShrink={0} width="100%" height={1} overflow="hidden">
+      <Text wrap="truncate-end">
+        <Text dimColor>{modelName}</Text>
+        <Text dimColor> · </Text>
+        <Text dimColor>{directory}</Text>
+        <Text dimColor> · </Text>
+        <Text color={connDisplay.color}>
+          {connDisplay.icon} {connDisplay.text}
+        </Text>
+        <Text dimColor> | </Text>
+        <Text color={runDisplay.color}>
+          {runDisplay.icon} {runDisplay.text}
+        </Text>
+        {compactMode !== undefined && (
+          <>
+            <Text dimColor> | </Text>
+            <Text dimColor>{compactMode ? 'Compact' : 'Full'}</Text>
+          </>
+        )}
+        {thoughtExpanded !== undefined && (
+          <>
+            <Text dimColor> · </Text>
+            <Text dimColor>{thoughtExpanded ? 'Thinking open' : 'Thinking closed'}</Text>
+          </>
+        )}
       </Text>
-      <Text dimColor> | </Text>
-      <Text color={runDisplay.color}>
-        {runDisplay.icon} {runDisplay.text}
-      </Text>
-      {compactMode !== undefined && (
-        <>
-          <Text dimColor> | </Text>
-          <Text dimColor>{compactMode ? 'Compact' : 'Full'}</Text>
-        </>
-      )}
-      {thoughtExpanded !== undefined && (
-        <>
-          <Text dimColor> · </Text>
-          <Text dimColor>{thoughtExpanded ? 'Thinking open' : 'Thinking closed'}</Text>
-        </>
-      )}
     </Box>
   );
 };

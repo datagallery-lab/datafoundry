@@ -3,6 +3,7 @@ import type {
   CopilotKitEvent,
   RunAgentInput,
 } from "./types.js";
+import { getLogger } from "../utils/logger.js";
 import {
   classifyError,
   errorLogger,
@@ -393,7 +394,9 @@ export class CopilotKitClient {
       if (error instanceof CopilotKitClientError) {
         throw error;
       }
-      console.warn("Failed to parse SSE event:", data);
+      getLogger().warn("Failed to parse SSE event", {
+        data: data.length > 2000 ? `${data.slice(0, 2000)}...` : data,
+      });
       return null;
     }
   }

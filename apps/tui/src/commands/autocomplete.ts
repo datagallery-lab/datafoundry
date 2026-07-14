@@ -6,6 +6,7 @@
  */
 
 import type { CommandRegistry, CommandDefinition, ParameterDefinition } from './command-parser.js';
+import { getLogger } from '../utils/logger.js';
 
 /**
  * Autocomplete suggestion with metadata
@@ -424,8 +425,7 @@ export class CommandAutocomplete {
         const values = await provider.getValues(parameterName, commandName);
         allValues.push(...values);
       } catch (error) {
-        // Silently ignore provider errors
-        console.error(`Provider ${provider.name} failed:`, error);
+        getLogger().error(`Autocomplete provider ${provider.name} failed`, error);
       }
     }
 

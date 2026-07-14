@@ -1,11 +1,10 @@
 import React, { useState, useEffect, useLayoutEffect, useMemo, useRef, useCallback } from 'react';
-import { Box, Text, useApp, useInput, useStdin, measureElement, type DOMElement } from 'ink';
+import { Box, Text, useApp, useInput, useStdin, useStdout, measureElement, type DOMElement } from 'ink';
 import { randomUUID } from 'node:crypto';
-import { StatusFooter } from './Header.js';
 import { ChatArea, type ChatAreaRef } from './ChatArea.js';
 import { OutputsScreen, OutputsSidebar } from './OutputsView.js';
 import { ActivityPanel } from './ActivityPanel.js';
-import { EnhancedInputBox } from './components/EnhancedInputBox.js';
+import { EnhancedInputBox, ENHANCED_INPUT_RESERVED_ROWS } from './components/EnhancedInputBox.js';
 import { QueuedPromptDisplay } from './components/QueuedPromptDisplay.js';
 import {
   WorkspaceFrame,
@@ -42,6 +41,7 @@ interface AppProps {
   client: AgentClient;
   configClient?: ConfigClient | undefined;
   datasourceId: string | undefined;
+  initialDatasourceId?: string | undefined;
   initialResume?: {
     enabled: boolean;
     sessionId?: string | undefined;
@@ -75,6 +75,7 @@ const SCROLL_FRAME_MS = 33;
 const SCROLL_ROWS_PER_FRAME = 9;
 const MAX_PENDING_SCROLL_ROWS = 120;
 const CTRL_EXIT_PROMPT_DURATION_MS = 1000;
+const CLEAR_TERMINAL = '\u001B[2J\u001B[H';
 type ClearInputDraft = () => boolean;
 
 function eventType(event: RuntimeEvent): string {
@@ -317,16 +318,24 @@ export const App: React.FC<AppProps> = ({
   client,
   configClient,
   datasourceId,
+  initialDatasourceId,
   initialResume,
 }) => {
   const { exit } = useApp();
   const { stdin } = useStdin();
+  const { write: writeToStdout } = useStdout();
   const { columns: terminalColumns, rows: terminalRows } = useTerminalSize();
+  // Leave physical terminal rows unused. Ink switches to full-screen clears when
+  // rendered output reaches stdout.rows; the extra slack keeps scroll updates on
+  // the incremental erase-lines path instead of the flickery clearTerminal path.
+  const appRows = Math.max(1, terminalRows - 2);
   const [state, setState] = useState<TuiAppState>(store.getState());
   const [inputFocused, setInputFocused] = useState(false);
   const [commandNotice, setCommandNotice] = useState<CommandNotice | null>(null);
   const [activeDatasourceId, setActiveDatasourceId] = useState<string | undefined>(
-    () => datasourceId ?? (configClient ? undefined : firstEnabledDatasourceId(store.getState())),
+    () => datasourceId
+      ?? initialDatasourceId
+      ?? (configClient ? undefined : firstEnabledDatasourceId(store.getState())),
   );
   const [activeSkillId, setActiveSkillId] = useState<string | undefined>(
     () => firstEnabledSkillId(store.getState()),
@@ -352,7 +361,9 @@ export const App: React.FC<AppProps> = ({
   const [skillPickerWarning, setSkillPickerWarning] = useState<string | undefined>(undefined);
   const [retryCount, setRetryCount] = useState(0);
   const [controlsHeight, setControlsHeight] = useState(0);
-  const [reportedInputBoxRows, setReportedInputBoxRows] = useState<number | null>(null);
+  const [reportedInputBoxRows, setReportedInputBoxRows] = useState<number | null>(
+    ENHANCED_INPUT_RESERVED_ROWS,
+  );
   const [ctrlCPressedOnce, setCtrlCPressedOnce] = useState(false);
   const [compactMode, setCompactMode] = useState(true);
   const [thoughtExpanded, setThoughtExpanded] = useState(false);
@@ -362,6 +373,7 @@ export const App: React.FC<AppProps> = ({
   const applyChatScrollDeltaRef = useRef<(delta: number) => void>(() => {});
   const startupResumeAttempted = useRef(false);
   const activeDatasourceIdRef = useRef(activeDatasourceId);
+  const fullRedrawSignatureRef = useRef<string | null>(null);
   const datasourceSelectionLockedRef = useRef(Boolean(datasourceId));
   const defaultDatasourcePromiseRef = useRef<Promise<string | undefined> | null>(null);
   const queuedPromptsRef = useRef<string[]>([]);
@@ -393,13 +405,31 @@ export const App: React.FC<AppProps> = ({
     ? startup
     : undefined;
   const pickerOpen = sessionPickerOpen || datasourcePickerOpen || skillPickerOpen || outputsOpen;
+  const mainPaneColumns = resolveMainPaneColumns({
+    columns: terminalColumns,
+  });
+  const showResumeLoading = isRestoringSession && state.messages.length === 0;
+  const showOutputsSidebar = mainPaneColumns.outputsVisible
+    && !showLiveActivity
+    && !isHomeScreen
+    && !showResumeLoading;
+  const fullRedrawSignature = [
+    isHomeScreen ? 'home' : 'workspace',
+    pickerOpen ? 'picker-open' : 'picker-closed',
+    showOutputsSidebar ? 'outputs-sidebar' : 'main-only',
+    terminalColumns,
+    appRows,
+    isHomeScreen ? state.connectionStatus : '',
+    isHomeScreen ? activeDatasourceId ?? 'no-datasource' : '',
+    isHomeScreen ? activeSkillId ?? 'no-skill' : '',
+  ].join('\u0000');
   const controlsLayoutKey = [
     'chat',
     isHomeScreen ? 'home' : 'workspace',
     pickerOpen ? 'picker-open' : 'picker-closed',
     commandNotice ? `${commandNotice.kind}:${commandNotice.message}` : 'clean',
     terminalColumns,
-    terminalRows,
+    appRows,
     reportedInputBoxRows ?? 'input-unknown',
     queuedPrompts.length,
     state.connectionStatus,
@@ -417,7 +447,7 @@ export const App: React.FC<AppProps> = ({
     inputBoxRows: reportedInputBoxRows ?? undefined,
   });
   const controlsRowCountForViewport = Math.max(estimatedControlsRowCount, controlsHeight);
-  const scrollableRowCount = availableContentRows(terminalRows, controlsRowCountForViewport);
+  const scrollableRowCount = availableContentRows(appRows, controlsRowCountForViewport);
   const chatViewportRowCount = scrollableRowCount;
   const inputDisabled = isRestoringSession;
   const inputCommands = useMemo(
@@ -551,6 +581,15 @@ export const App: React.FC<AppProps> = ({
     const nextRows = Math.max(0, Math.ceil(measureElement(controlsNode).height));
     setControlsHeight((current) => (current === nextRows ? current : nextRows));
   }, [controlsLayoutKey]);
+
+  useEffect(() => {
+    const previousSignature = fullRedrawSignatureRef.current;
+    fullRedrawSignatureRef.current = fullRedrawSignature;
+
+    if (previousSignature !== null && previousSignature !== fullRedrawSignature) {
+      writeToStdout(CLEAR_TERMINAL);
+    }
+  }, [fullRedrawSignature, writeToStdout]);
 
   useEffect(() => {
     activeDatasourceIdRef.current = activeDatasourceId;
@@ -1483,9 +1522,6 @@ export const App: React.FC<AppProps> = ({
   };
 
   const visibleArtifacts = state.artifacts;
-  const mainPaneColumns = resolveMainPaneColumns({
-    columns: terminalColumns,
-  });
   const liveActivity = state.runStatus === 'running'
     ? {
         plan: state.plan,
@@ -1497,11 +1533,6 @@ export const App: React.FC<AppProps> = ({
         toolCalls: [],
         events: [],
       };
-  const showResumeLoading = isRestoringSession && state.messages.length === 0;
-  const showOutputsSidebar = mainPaneColumns.outputsVisible
-    && !showLiveActivity
-    && !isHomeScreen
-    && !showResumeLoading;
   const chatPaneColumns = showOutputsSidebar
     ? mainPaneColumns.chatColumns
     : terminalColumns;
@@ -1511,7 +1542,7 @@ export const App: React.FC<AppProps> = ({
       {sessionPickerOpen ? (
         <Box
           flexDirection="column"
-          minHeight={terminalRows}
+          height={appRows}
           width={terminalColumns}
           overflowY="hidden"
           paddingX={1}
@@ -1521,7 +1552,7 @@ export const App: React.FC<AppProps> = ({
             loading={pickerLoading}
             error={pickerError}
             columns={Math.max(20, terminalColumns - 2)}
-            rows={terminalRows}
+            rows={appRows}
             onSelect={(sessionId) => {
               setResumeLoadingSessionId(sessionId);
               setSessionPickerOpen(false);
@@ -1535,7 +1566,7 @@ export const App: React.FC<AppProps> = ({
       ) : datasourcePickerOpen ? (
         <Box
           flexDirection="column"
-          minHeight={terminalRows}
+          height={appRows}
           width={terminalColumns}
           overflowY="hidden"
           paddingX={1}
@@ -1547,7 +1578,7 @@ export const App: React.FC<AppProps> = ({
             error={datasourcePickerError}
             warning={datasourcePickerWarning}
             columns={Math.max(20, terminalColumns - 2)}
-            rows={terminalRows}
+            rows={appRows}
             emptyMessage="No data sources configured."
             onSelect={(item) => {
               setDatasourcePickerOpen(false);
@@ -1565,7 +1596,7 @@ export const App: React.FC<AppProps> = ({
       ) : skillPickerOpen ? (
         <Box
           flexDirection="column"
-          minHeight={terminalRows}
+          height={appRows}
           width={terminalColumns}
           overflowY="hidden"
           paddingX={1}
@@ -1593,7 +1624,7 @@ export const App: React.FC<AppProps> = ({
       ) : outputsOpen ? (
         <Box
           flexDirection="column"
-          minHeight={terminalRows}
+          height={appRows}
           width={terminalColumns}
           overflowY="hidden"
           paddingX={1}
@@ -1602,7 +1633,7 @@ export const App: React.FC<AppProps> = ({
             artifacts={visibleArtifacts}
             events={state.events}
             columns={Math.max(20, terminalColumns - 2)}
-            rows={terminalRows}
+            rows={appRows}
             fetchArtifactPreview={
               configClient
                 ? (artifactId) => configClient.getArtifactPreview(artifactId)
@@ -1615,7 +1646,7 @@ export const App: React.FC<AppProps> = ({
         </Box>
       ) : (
         <WorkspaceFrame
-          rows={terminalRows}
+          rows={appRows}
           columns={terminalColumns}
           scrollableRows={scrollableRowCount}
           {...(showOutputsSidebar
@@ -1626,13 +1657,14 @@ export const App: React.FC<AppProps> = ({
                     artifacts={visibleArtifacts}
                     events={state.events}
                     columns={mainPaneColumns.outputsColumns}
-                    rows={terminalRows}
+                    rows={appRows}
                   />
                 ),
               }
             : {})}
           scrollable={
             <Box
+              key={isHomeScreen ? 'home-scrollable' : 'chat-scrollable'}
               flexDirection="row"
               height={scrollableRowCount}
               width={chatPaneColumns}
@@ -1763,16 +1795,6 @@ export const App: React.FC<AppProps> = ({
                 />
               )}
 
-              {isHomeScreen && (
-                <StatusFooter
-                  connectionStatus={state.connectionStatus}
-                  runStatus={state.runStatus}
-                  modelName={modelName}
-                  directory={directory}
-                  compactMode={compactMode}
-                  thoughtExpanded={thoughtExpanded}
-                />
-              )}
             </Box>
           }
         />

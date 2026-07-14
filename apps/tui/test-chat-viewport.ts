@@ -14,6 +14,8 @@ import {
   estimateControlsRows,
   resolveMainPaneColumns,
 } from './dist/ui/workspace-layout.js';
+import { ENHANCED_INPUT_RESERVED_ROWS } from './dist/ui/components/EnhancedInputBox.js';
+import { TextBuffer } from './dist/ui/components/text-buffer.js';
 import {
   createWheelScrollDecoder,
   wheelScrollDelta,
@@ -115,13 +117,27 @@ check(eq(wrapToWidth('hello world', 5), ['hello', 'world']), 'wrap breaks at spa
 check(wrapToWidth('', 10).length === 1, 'empty line still yields one row');
 check(textWidth(truncateToWidth('中文测试内容很长', 5)) <= 5, 'truncate fits within width');
 
+// --- input control characters ---
+const inputBuffer = new TextBuffer('abc', 5, 10);
+inputBuffer.insert('\x7f');
+check(inputBuffer.text === 'abc', 'raw DEL is ignored by the text buffer instead of rendering as residue');
+
 // --- layout helpers ---
 check(chatContentWidth(120) === 115, 'content width is capped for wide terminals');
-check(estimateControlsRows({ commandNotice: false, activeTab: 'chat' }) === 5, 'controls estimate matches empty enhanced input height');
-check(estimateControlsRows({ commandNotice: true, activeTab: 'chat' }) === 6, 'controls estimate includes command notice');
+check(estimateControlsRows({ commandNotice: false, activeTab: 'chat' }) === 9, 'controls estimate reserves the fixed enhanced input height');
+check(estimateControlsRows({ commandNotice: true, activeTab: 'chat' }) === 10, 'controls estimate includes command notice');
 check(estimateControlsRows({ commandNotice: false, activeTab: 'chat', inputBoxRows: 9 }) === 9, 'controls estimate follows expanded input height');
 check(estimateControlsRows({ commandNotice: true, activeTab: 'chat', inputBoxRows: 9 }) === 10, 'controls estimate combines notice and expanded input height');
-check(estimateControlsRows({ commandNotice: false, activeTab: 'chat', homeScreen: true }) === 1, 'home controls estimate only reserves status footer');
+check(ENHANCED_INPUT_RESERVED_ROWS === 9, 'reserved input height covers the five-row input viewport');
+check(
+  estimateControlsRows({
+    commandNotice: false,
+    activeTab: 'chat',
+    inputBoxRows: ENHANCED_INPUT_RESERVED_ROWS,
+  }) === ENHANCED_INPUT_RESERVED_ROWS,
+  'controls estimate follows the reserved input height',
+);
+check(estimateControlsRows({ commandNotice: false, activeTab: 'chat', homeScreen: true }) === 0, 'home screen does not reserve a duplicate status footer');
 check(availableContentRows(40, 5) === 35, 'content viewport subtracts measured controls rows');
 check(availableContentRows(40, 9) === 31, 'content viewport shrinks when measured input grows');
 check(availableContentRows(8, 12) === 0, 'content viewport can collapse instead of overlapping controls');
