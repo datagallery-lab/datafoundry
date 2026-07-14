@@ -172,7 +172,7 @@ export function deriveRunUsage(liveRun: LiveRun): RunUsageSnapshot {
     durationMs,
     toolCalls: toolCallsToStats(liveRun.toolCalls),
     sql: sqlAuditsToStats(liveRun.audits),
-    artifactCount: liveRun.artifacts.length,
+    artifactCount: artifactCountForRun(liveRun),
     tokens,
     tokenUsageReported,
   };
@@ -223,6 +223,7 @@ export function reduceLiveRunEvent(state: LiveRun, event: AgUiLikeEvent): LiveRu
     case "RUN_STARTED":
       return {
         ...createInitialLiveRun(),
+        artifacts: state.artifacts,
         ...optionalRunId(runIdFromEvent(event)),
         agentResponseComplete: false,
         runStatus: "running",
@@ -269,6 +270,15 @@ export function isTerminalToolCallStatus(status: LiveToolCallStatus): boolean {
 
 function isTerminalRunStatus(status: LiveRunStatus): boolean {
   return status === "completed" || status === "failed";
+}
+
+function artifactCountForRun(liveRun: LiveRun): number {
+  return liveRun.artifacts.filter((artifact) => isArtifactFromCurrentRun(liveRun, artifact)).length;
+}
+
+function isArtifactFromCurrentRun(liveRun: LiveRun, artifact: DataArtifact): boolean {
+  if (liveRun.runStartedAt === undefined) return true;
+  return artifact.recordedAtMs === undefined || artifact.recordedAtMs >= liveRun.runStartedAt;
 }
 
 function applyRunStatus(state: LiveRun, status: LiveRunStatus): LiveRun {
@@ -1291,6 +1301,7 @@ function reconcileUnlinkedArtifacts(state: LiveRun): LiveRun {
   let nextState = state;
   for (const artifact of state.artifacts) {
     if (artifact.createdByEventId) continue;
+    if (!isArtifactFromCurrentRun(state, artifact)) continue;
     const linkedTool = findArtifactSourceTool(nextState, artifact);
     if (linkedTool) {
       nextState = linkArtifactToToolCall(nextState, artifact.id, linkedTool.id);
