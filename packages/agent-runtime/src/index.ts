@@ -9,7 +9,7 @@ import {
 } from "@mastra/core/harness";
 import { Mastra } from "@mastra/core/mastra";
 import { WorkingMemory } from "@mastra/core/processors";
-import { createSkillTools } from "@mastra/core/workspace";
+import { createSkillTools, createWorkspaceTools } from "@mastra/core/workspace";
 import type { Message } from "@ag-ui/core";
 import type { ArtifactService, SessionOutputService } from "@datafoundry/artifacts";
 import type { DataGateway } from "@datafoundry/data-gateway";
@@ -69,7 +69,10 @@ import {
   resolveSkillCacheDir,
   resolveWorkspaceDir
 } from "./tools/workspace-factory.js";
-import { createCompatibleWorkspaceTools } from "./tools/workspace-tool-input-compat.js";
+import {
+  applyToolInputCompatibility,
+  buildToolInputCompatibilityInstruction
+} from "./tools/tool-input-compat.js";
 import { createMastraStreamNormalizerHooks } from "./stream/mastra-stream-hooks.js";
 import { createTokenUsageCorrelationStore } from "./stream/token-usage-correlation.js";
 import { wrapAgentForAgUi } from "./stream/mastra-stream-normalizer.js";
@@ -420,7 +423,7 @@ export const createDataFoundry = async (
   // session-scoped files. Eligible write/edit outputs are auto-ingested into Session
   // Outputs from governed tool results (and workspace.metadata when Mastra emits it);
   // drafts/scripts remain workspace-only.
-  const workspaceTools = await createCompatibleWorkspaceTools(runWorkspace.workspace, {
+  const workspaceTools = await createWorkspaceTools(runWorkspace.workspace, {
     requestContext: {},
     workspace: runWorkspace.workspace
   });
@@ -437,10 +440,10 @@ export const createDataFoundry = async (
     ...skillTools
   };
   const selectedPolicyTools = selectToolsByPolicy(availableTools, input.skillSelection);
-  const selectedTools = {
+  const selectedTools = applyToolInputCompatibility({
     ...selectedPolicyTools,
     ...(input.mcpTools ?? {})
-  };
+  });
   const tools = governedToolFactory.governTools(selectedTools);
   const agent = new Agent({
     id: "data-foundry",
@@ -724,6 +727,7 @@ const buildAgentInstructions = (input: AgentInstructionsInput): string => {
   }
 
   const policies: string[] = [];
+  policies.push(buildToolInputCompatibilityInstruction(input.toolNames));
   if (taskToolsEnabled && taskTools.length === 4) {
     policies.push(
       "Plan with tasks. For work with three or more distinct actions, call task_write first and keep exactly one "

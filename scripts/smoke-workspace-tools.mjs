@@ -2,7 +2,7 @@ import { rmSync } from "node:fs";
 import path from "node:path";
 
 import { createRunWorkspace } from "../packages/agent-runtime/dist/tools/workspace-factory.js";
-import { createCompatibleWorkspaceTools } from "../packages/agent-runtime/dist/tools/workspace-tool-input-compat.js";
+import { createCompatibleWorkspaceTools } from "../packages/agent-runtime/dist/tools/tool-input-compat.js";
 
 const runContext = {
   user_id: "workspace-smoke-user",

@@ -5,7 +5,7 @@ import path from "node:path";
 import test from "node:test";
 
 import { createRunWorkspace } from "../packages/agent-runtime/dist/tools/workspace-factory.js";
-import { createCompatibleWorkspaceTools } from "../packages/agent-runtime/dist/tools/workspace-tool-input-compat.js";
+import { createCompatibleWorkspaceTools } from "../packages/agent-runtime/dist/tools/tool-input-compat.js";
 
 const createTools = async () => {
   const workspaceRoot = mkdtempSync(path.join(tmpdir(), "datafoundry-workspace-input-compat-"));
@@ -112,6 +112,21 @@ test("list_files preserves native values and rejects ambiguous string coercions"
       const validation = await fixture.tools.list_files.inputSchema.safeParseAsync({ path: ".", ...input });
       assert.equal(validation.success, false, `Expected ${JSON.stringify(input)} to remain invalid`);
     }
+  } finally {
+    await destroyTools(fixture);
+  }
+});
+
+test("write_file keeps required content strict instead of creating empty files", async () => {
+  const fixture = await createTools();
+  try {
+    const validation = await fixture.tools.write_file.inputSchema.safeParseAsync({
+      path: "data/report.md",
+      overwrite: "true",
+    });
+
+    assert.equal(validation.success, false);
+    assert.deepEqual(validation.error.issues.map((issue) => issue.path), [["content"]]);
   } finally {
     await destroyTools(fixture);
   }

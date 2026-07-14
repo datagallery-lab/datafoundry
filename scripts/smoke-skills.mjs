@@ -16,6 +16,7 @@ import {
   ToolObservationDispatcher
 } from "../packages/agent-runtime/dist/testing.js";
 import { createRunWorkspace } from "../packages/agent-runtime/dist/tools/workspace-factory.js";
+import { applyToolInputCompatibility } from "../packages/agent-runtime/dist/tools/tool-input-compat.js";
 import { createMetadataStore } from "../packages/metadata/dist/index.js";
 
 const root = mkdtempSync(join(tmpdir(), "open-data-foundry-skills-smoke-"));
@@ -189,7 +190,9 @@ const searchWorkspaceWithSkills = createRunWorkspace({
   workspaceRoot: searchWorkspaceRoot
 });
 await searchWorkspaceWithSkills.workspace.init();
-const searchSkillTools = createSkillTools(searchWorkspaceWithSkills.workspace.skills);
+const searchSkillTools = applyToolInputCompatibility(
+  createSkillTools(searchWorkspaceWithSkills.workspace.skills),
+);
 const searchResult = await searchSkillTools.skill_search.execute({ query: "查数 指标", topK: 3 }, {
   context: { requestContext: new Map() },
   mastra: undefined,

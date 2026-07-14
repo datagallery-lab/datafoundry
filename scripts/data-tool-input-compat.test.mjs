@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { createDataFoundryToolRegistry } from "../packages/agent-runtime/dist/testing.js";
+import { applyToolInputCompatibility } from "../packages/agent-runtime/dist/tools/tool-input-compat.js";
 
 const createListDataSourcesTool = () => {
   const gatewayInputs = [];
@@ -22,7 +23,8 @@ const createListDataSourcesTool = () => {
       enabled_datasource_ids: ["enabled-source"],
     },
   });
-  return { gatewayInputs, tool: registry.mastraTools.list_data_sources };
+  const tools = applyToolInputCompatibility(registry.mastraTools);
+  return { gatewayInputs, tool: tools.list_data_sources };
 };
 
 const createPreviewTableTool = () => {
@@ -53,7 +55,34 @@ const createPreviewTableTool = () => {
     datasource_id: "enabled-source",
     schema_id: schemaId,
   });
-  return { gatewayInputs, schemaId, tool: registry.mastraTools.preview_table };
+  const tools = applyToolInputCompatibility(registry.mastraTools);
+  return { gatewayInputs, schemaId, tool: tools.preview_table };
+};
+
+const createInspectSchemaTool = () => {
+  const gatewayInputs = [];
+  const registry = createDataFoundryToolRegistry({
+    dataGateway: {
+      inspectSchema: async (input) => {
+        gatewayInputs.push(input);
+        return {
+          datasource_id: input.datasource_id,
+          tables: [],
+        };
+      },
+    },
+    emitter: { emit: () => undefined },
+    runContext: {
+      user_id: "tool-input-test-user",
+      session_id: "tool-input-test-session",
+      run_id: "tool-input-test-run",
+      user_input: "inspect schema",
+      chat_mode: "chat_data",
+      enabled_datasource_ids: ["custom-postgresql"],
+    },
+  });
+  const tools = applyToolInputCompatibility(registry.mastraTools);
+  return { gatewayInputs, tool: tools.inspect_schema };
 };
 
 const createRunSqlTool = () => {
@@ -86,7 +115,8 @@ const createRunSqlTool = () => {
     datasource_id: "enabled-source",
     schema_id: schemaId,
   });
-  return { gatewayInputs, schemaId, tool: registry.mastraTools.run_sql_readonly };
+  const tools = applyToolInputCompatibility(registry.mastraTools);
+  return { gatewayInputs, schemaId, tool: tools.run_sql_readonly };
 };
 
 test("list_data_sources accepts explicit string booleans emitted by chat models", async () => {
@@ -116,6 +146,57 @@ test("list_data_sources preserves native booleans and rejects ambiguous coercion
   for (const enabledOnly of ["yes", "0", "", 0, 1]) {
     const parsed = await tool.inputSchema.safeParseAsync({ enabled_only: enabledOnly });
     assert.equal(parsed.success, false, `Expected ${JSON.stringify(enabledOnly)} to remain invalid`);
+  }
+});
+
+test("inspect_schema accepts optional table name arrays emitted as strings", async () => {
+  const { gatewayInputs, tool } = createInspectSchemaTool();
+  const omittedValidation = await tool.inputSchema["~standard"].validate({
+    datasource_id: "custom-postgresql",
+    table_names: "",
+  });
+  const arrayValidation = await tool.inputSchema["~standard"].validate({
+    datasource_id: "custom-postgresql",
+    table_names: "[\"orders\",\"customers\"]",
+  });
+
+  assert.equal("issues" in omittedValidation, false);
+  assert.equal("issues" in arrayValidation, false);
+  assert.deepEqual(omittedValidation.value, { datasource_id: "custom-postgresql" });
+  assert.deepEqual(arrayValidation.value, {
+    datasource_id: "custom-postgresql",
+    table_names: ["orders", "customers"],
+  });
+  await tool.execute(omittedValidation.value, {});
+  await tool.execute(arrayValidation.value, {});
+  assert.deepEqual(gatewayInputs[0], {
+    user_id: "tool-input-test-user",
+    datasource_id: "custom-postgresql",
+  });
+  assert.deepEqual(gatewayInputs[1], {
+    user_id: "tool-input-test-user",
+    datasource_id: "custom-postgresql",
+    table_names: ["orders", "customers"],
+  });
+});
+
+test("inspect_schema preserves native arrays and rejects ambiguous array strings", async () => {
+  const { tool } = createInspectSchemaTool();
+
+  assert.deepEqual(
+    await tool.inputSchema.parseAsync({
+      datasource_id: "custom-postgresql",
+      table_names: ["orders"],
+    }),
+    { datasource_id: "custom-postgresql", table_names: ["orders"] },
+  );
+
+  for (const tableNames of ["orders", "{}", "[1]", "[\"orders\",1]", true, 1]) {
+    const parsed = await tool.inputSchema.safeParseAsync({
+      datasource_id: "custom-postgresql",
+      table_names: tableNames,
+    });
+    assert.equal(parsed.success, false, `Expected ${JSON.stringify(tableNames)} to remain invalid`);
   }
 });
 

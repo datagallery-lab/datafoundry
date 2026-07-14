@@ -8,7 +8,7 @@ import path from "node:path";
 
 import { createRunWorkspace } from "../../packages/agent-runtime/dist/tools/workspace-factory.js";
 import { GovernedToolFactory } from "../../packages/agent-runtime/dist/tools/governed-tool-factory.js";
-import { createCompatibleWorkspaceTools } from "../../packages/agent-runtime/dist/tools/workspace-tool-input-compat.js";
+import { createCompatibleWorkspaceTools } from "../../packages/agent-runtime/dist/tools/tool-input-compat.js";
 
 const { createToolObservationBoundary } = await import(
   "../../packages/agent-runtime/dist/context/tool-observation/tool-observation-boundary.js"
