@@ -9,7 +9,11 @@
  */
 import { buildChatLines, countChatLines, chatContentWidth } from './dist/ui/transcript-lines.js';
 import { textWidth, wrapToWidth, truncateToWidth } from './dist/ui/text-width.js';
-import { availableContentRows, estimateControlsRows } from './dist/ui/workspace-layout.js';
+import {
+  availableContentRows,
+  estimateControlsRows,
+  resolveMainPaneColumns,
+} from './dist/ui/workspace-layout.js';
 import {
   createWheelScrollDecoder,
   wheelScrollDelta,
@@ -121,6 +125,38 @@ check(estimateControlsRows({ commandNotice: false, activeTab: 'chat', homeScreen
 check(availableContentRows(40, 5) === 35, 'content viewport subtracts measured controls rows');
 check(availableContentRows(40, 9) === 31, 'content viewport shrinks when measured input grows');
 check(availableContentRows(8, 12) === 0, 'content viewport can collapse instead of overlapping controls');
+check(
+  eq(resolveMainPaneColumns({ columns: 120 }), {
+    chatColumns: 120,
+    outputsColumns: 0,
+    outputsVisible: false,
+  }),
+  'outputs sidebar stays hidden at the opencode-style breakpoint',
+);
+check(
+  eq(resolveMainPaneColumns({ columns: 121 }), {
+    chatColumns: 79,
+    outputsColumns: 42,
+    outputsVisible: true,
+  }),
+  'outputs sidebar appears above the opencode-style breakpoint with fixed width',
+);
+check(
+  eq(resolveMainPaneColumns({ columns: 220 }), {
+    chatColumns: 178,
+    outputsColumns: 42,
+    outputsVisible: true,
+  }),
+  'outputs sidebar keeps a fixed width on very wide terminals',
+);
+check(
+  eq(resolveMainPaneColumns({ columns: 200 }), {
+    chatColumns: 158,
+    outputsColumns: 42,
+    outputsVisible: true,
+  }),
+  'outputs sidebar stays visible on wide terminals even before outputs exist',
+);
 
 // --- mouse wheel parsing ---
 const ESC = '\u001B';
