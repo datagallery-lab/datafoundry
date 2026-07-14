@@ -64,7 +64,7 @@ class Logger {
       }
     } catch (error) {
       // Silently fail - logging should not crash the app
-      console.error('Failed to create log directory:', error);
+      void error;
     }
   }
 
@@ -89,10 +89,7 @@ class Logger {
       fs.appendFileSync(this.logFilePath, message, 'utf8');
     } catch (error) {
       // Silently fail - logging should not crash the app
-      // Only log to stderr if it's a critical error
-      if (this.config.debugMode) {
-        console.error('Failed to write to log file:', error);
-      }
+      void error;
     }
   }
 
@@ -139,9 +136,7 @@ class Logger {
       }
     } catch (error) {
       // Silently fail - rotation errors should not crash the app
-      if (this.config.debugMode) {
-        console.error('Failed to rotate logs:', error);
-      }
+      void error;
     }
   }
 

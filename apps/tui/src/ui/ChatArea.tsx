@@ -173,6 +173,7 @@ const ChatAreaComponent = forwardRef<ChatAreaRef, ChatAreaProps>(({
   return (
     <Box
       flexDirection="column"
+      width="100%"
       height={resolvedViewport}
       flexShrink={0}
       overflowY="hidden"

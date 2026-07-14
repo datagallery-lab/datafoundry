@@ -12,6 +12,7 @@ import { withAlternateScreen } from "./terminal-screen.js";
 import { App } from "./ui/App.js";
 
 const args = process.argv.slice(2);
+const STARTUP_PREFLIGHT_TIMEOUT_MS = 1200;
 
 if (args.includes("--help") || args.includes("-h")) {
   console.log(`
@@ -78,20 +79,80 @@ function configBaseUrlFromRuntime(runtimeUrl: string): string {
   return runtimeUrl.replace(/\/$/, "");
 }
 
+async function fetchWithStartupTimeout(url: string): Promise<Response | undefined> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), STARTUP_PREFLIGHT_TIMEOUT_MS);
+
+  try {
+    return await fetch(url, {
+      method: "GET",
+      signal: controller.signal,
+    });
+  } catch {
+    return undefined;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+async function preflightRuntimeConnection(runtimeUrl: string): Promise<boolean> {
+  const response = await fetchWithStartupTimeout(runtimeUrl.replace(/\/api\/.*$/, "/healthz"));
+  return response?.ok === true;
+}
+
+function objectRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" ? value as Record<string, unknown> : undefined;
+}
+
+function datasourceIdFromRunDefaults(value: unknown): string | undefined {
+  const envelope = objectRecord(value);
+  const data = objectRecord(envelope?.success === true ? envelope.data : value);
+  const activeDatasourceId = data?.activeDatasourceId;
+
+  if (typeof activeDatasourceId === "string" && activeDatasourceId.trim()) {
+    return activeDatasourceId;
+  }
+
+  const enabledDatasourceIds = data?.enabledDatasourceIds;
+  if (Array.isArray(enabledDatasourceIds)) {
+    const firstEnabled = enabledDatasourceIds.find(
+      (item): item is string => typeof item === "string" && item.trim().length > 0,
+    );
+    return firstEnabled;
+  }
+
+  return undefined;
+}
+
+async function preflightDefaultDatasourceId(baseUrl: string): Promise<string | undefined> {
+  const response = await fetchWithStartupTimeout(`${baseUrl}/api/v1/run-defaults`);
+  if (!response?.ok) {
+    return undefined;
+  }
+
+  try {
+    return datasourceIdFromRunDefaults(await response.json());
+  } catch {
+    return undefined;
+  }
+}
+
 const runtimeUrl = getArg(
   "--runtime-url",
   "http://127.0.0.1:8787/api/copilotkit"
 );
+const configBaseUrl = configBaseUrlFromRuntime(runtimeUrl);
 const explicitDatasourceId = getOptionalArg("--datasource-id");
 const agent = getArg("--agent", "dataFoundry");
 const demoMode = args.includes("--demo");
 const demoDatasourceId = explicitDatasourceId ?? "api-duckdb-demo";
 const datasourceId = demoMode ? demoDatasourceId : explicitDatasourceId;
+let initialDatasourceId = datasourceId;
 const initialResume = resolveResumeRequest();
 const configClient = demoMode
   ? undefined
   : new ConfigClient({
-      baseUrl: configBaseUrlFromRuntime(runtimeUrl),
+      baseUrl: configBaseUrl,
     });
 
 const client = demoMode
@@ -108,6 +169,7 @@ function createAppElement(): React.ReactElement {
   return React.createElement(App, {
     client,
     datasourceId,
+    initialDatasourceId,
     ...(configClient ? { configClient } : {}),
     ...(initialResume ? { initialResume } : {}),
   });
@@ -115,7 +177,18 @@ function createAppElement(): React.ReactElement {
 
 async function main(): Promise<void> {
   try {
-    store.setConnectionStatus(demoMode ? "connected" : "disconnected");
+    const [runtimeConnected, preflightDatasourceId] = await Promise.all([
+      demoMode ? Promise.resolve(true) : preflightRuntimeConnection(runtimeUrl),
+      !demoMode && !initialDatasourceId
+        ? preflightDefaultDatasourceId(configBaseUrl)
+        : Promise.resolve(undefined),
+    ]);
+
+    if (!initialDatasourceId && preflightDatasourceId) {
+      initialDatasourceId = preflightDatasourceId;
+    }
+
+    store.setConnectionStatus(runtimeConnected ? "connected" : "disconnected");
     if (!initialResume?.enabled) {
       store.setThreadId(randomUUID());
     }
@@ -131,8 +204,12 @@ async function main(): Promise<void> {
       await withAlternateScreen(async () => {
         const instance = render(createAppElement(), {
           exitOnCtrlC: false,
-          incrementalRendering: true,
+          // Ink 7 fixes the trailing-newline cursor offset in its line-diff
+          // renderer. Keep an opt-out for terminal-specific rendering issues.
+          incrementalRendering:
+            process.env.DATAFOUNDRY_TUI_INCREMENTAL_RENDERING !== "0",
           maxFps: 30,
+          patchConsole: false,
         });
         await instance.waitUntilExit();
       });

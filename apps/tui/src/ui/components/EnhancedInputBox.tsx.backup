@@ -648,93 +648,55 @@ export const EnhancedInputBox: React.FC<EnhancedInputBoxProps> = ({
     visualWidth,
     metaParts.join('\u0000'),
   ].join(':');
-  const isBufferEmpty = buffer.text.length === 0;
+  const visibleInputRows = buffer.text.length === 0 ? [placeholder] : lines;
+  const paddedInputRows = [
+    ...visibleInputRows.slice(0, INPUT_VIEWPORT_HEIGHT),
+    ...Array.from(
+      { length: Math.max(0, INPUT_VIEWPORT_HEIGHT - visibleInputRows.length) },
+      () => '',
+    ),
+  ];
 
   useLayoutEffect(() => {
     reportLayoutRows(layoutRows);
   }, [layoutRows, layoutSignature, reportLayoutRows]);
 
-  /**
-   * Unified rendering function for all input lines.
-   * This approach eliminates conditional rendering branches that can cause
-   * incomplete terminal redraws, leading to visual artifacts (ghosting).
-   */
-  const renderInputLine = (index: number) => {
-    // Determine line content based on buffer state
-    let lineText: string;
-    let shouldShowCursor = false;
+  const renderInputLine = (lineText: string, index: number) => {
+    const displayText = lineText || ' ';
+    const isCursorLine = index === relativeCursorRow;
 
-    if (isBufferEmpty) {
-      // Empty buffer: show placeholder on first line, padding on others
-      lineText = index === 0 ? placeholder : '';
-    } else {
-      // Buffer has content: show actual lines
-      lineText = lines[index] || '';
-      shouldShowCursor = index === relativeCursorRow && !disabled;
-    }
-
-    // Render placeholder line (first line when empty)
-    if (isBufferEmpty && index === 0) {
+    if (!isCursorLine || disabled) {
       return (
-        <Box key={`input-line-${index}`} minHeight={1}>
-          <Text color={inkColors.muted} wrap="truncate-end">
-            {!disabled ? <Text inverse>{placeholderFirst || ' '}</Text> : placeholderFirst}
-            {placeholderRest}
-          </Text>
-        </Box>
-      );
-    }
-
-    // Render empty line (padding lines or empty content lines)
-    if (!lineText || lineText === '') {
-      return (
-        <Box key={`input-line-${index}`} minHeight={1}>
-          <Text wrap="truncate-end"> </Text>
-        </Box>
-      );
-    }
-
-    // Render content line without cursor
-    if (!shouldShowCursor) {
-      return (
-        <Box key={`input-line-${index}`} minHeight={1}>
-          <Text
-            color={disabled ? inkColors.muted : inkColors.text}
-            wrap="truncate-end"
-          >
-            {lineText}
-          </Text>
-        </Box>
-      );
-    }
-
-    // Render content line with cursor
-    const codePoints = toCodePoints(lineText);
-    const cursorPos = Math.min(cursorVisualCol, codePoints.length);
-
-    if (cursorPos >= codePoints.length) {
-      // Cursor at end of line
-      return (
-        <Box key={`input-line-${index}`} minHeight={1}>
-          <Text color={inkColors.text} wrap="truncate-end">
-            {lineText}
-            <Text inverse> </Text>
-          </Text>
-        </Box>
-      );
-    }
-
-    // Cursor in middle of line
-    return (
-      <Box key={`input-line-${index}`} minHeight={1}>
-        <Text color={inkColors.text} wrap="truncate-end">
-          {cpSlice(lineText, 0, cursorPos)}
-          <Text inverse>{cpSlice(lineText, cursorPos, cursorPos + 1)}</Text>
-          {cpSlice(lineText, cursorPos + 1)}
+        <Text
+          key={index}
+          color={disabled ? inkColors.muted : inkColors.text}
+          wrap="truncate-end"
+        >
+          {displayText}
         </Text>
-      </Box>
+      );
+    }
+
+    const codePoints = toCodePoints(displayText);
+    const cursorPos = Math.min(cursorVisualCol, codePoints.length);
+    if (cursorPos >= codePoints.length) {
+      return (
+        <Text key={index} color={inkColors.text} wrap="truncate-end">
+          {displayText}
+          <Text inverse> </Text>
+        </Text>
+      );
+    }
+
+    return (
+      <Text key={index} color={inkColors.text} wrap="truncate-end">
+        {cpSlice(displayText, 0, cursorPos)}
+        <Text inverse>{cpSlice(displayText, cursorPos, cursorPos + 1)}</Text>
+        {cpSlice(displayText, cursorPos + 1)}
+      </Text>
     );
   };
+
   return (
     <Box flexDirection="column" flexShrink={0} minHeight={4}>
       <Box
@@ -759,7 +721,22 @@ export const EnhancedInputBox: React.FC<EnhancedInputBoxProps> = ({
             overflowY="hidden"
             flexShrink={0}
           >
-            {Array.from({ length: INPUT_VIEWPORT_HEIGHT }).map((_, index) => renderInputLine(index))}
+            {buffer.text.length === 0 ? (
+              paddedInputRows.map((_, index) => (
+                index === 0 ? (
+                  <Text key={index} color={inkColors.muted} wrap="truncate-end">
+                    {!disabled ? <Text inverse>{placeholderFirst || ' '}</Text> : placeholderFirst}
+                    {placeholderRest}
+                  </Text>
+                ) : (
+                  <Text key={index}> </Text>
+                )
+              ))
+            ) : (
+              <>
+                {paddedInputRows.map(renderInputLine)}
+              </>
+            )}
           </Box>
 
           <Box paddingTop={1}>

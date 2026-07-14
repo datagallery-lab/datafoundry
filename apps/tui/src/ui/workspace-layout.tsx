@@ -7,6 +7,8 @@ export type WorkspaceTab = 'chat' | 'stats' | 'config' | 'outputs';
 
 export const OUTPUTS_SIDEBAR_COLUMNS = 42;
 export const OUTPUTS_SIDEBAR_BREAKPOINT_COLUMNS = 120;
+const MIN_WORKSPACE_ROWS = 19;
+const DEFAULT_INPUT_BOX_ROWS = 9;
 
 export interface MainPaneColumns {
   chatColumns: number;
@@ -63,8 +65,10 @@ export function WorkspaceFrame({
   const safeColumns = Math.max(1, Math.floor(columns));
   const sideColumns = right ? Math.max(1, Math.min(safeColumns - 1, Math.floor(rightColumns))) : 0;
   const mainColumns = Math.max(1, safeColumns - sideColumns);
+  const contentRows = Math.min(rows, Math.max(0, Math.floor(scrollableRows)));
+  const controlsRows = Math.max(0, rows - contentRows);
 
-  if (rows < 20) {
+  if (rows < MIN_WORKSPACE_ROWS) {
     return (
       <Box flexDirection="column" height={rows} width={safeColumns}>
         <Box paddingX={1} flexDirection="column">
@@ -79,7 +83,7 @@ export function WorkspaceFrame({
     <Box flexDirection="row" height={rows} width={safeColumns}>
       <Box flexDirection="column" height={rows} width={mainColumns} flexShrink={0}>
         <Box
-          height={Math.max(0, Math.floor(scrollableRows))}
+          height={contentRows}
           width={mainColumns}
           overflowY="hidden"
           flexDirection="column"
@@ -87,7 +91,14 @@ export function WorkspaceFrame({
         >
           {scrollable}
         </Box>
-        <Box width={mainColumns} flexShrink={0} flexDirection="column">
+        <Box
+          width={mainColumns}
+          height={controlsRows}
+          overflowY="hidden"
+          flexShrink={0}
+          flexDirection="column"
+          justifyContent="flex-end"
+        >
           {bottom}
         </Box>
       </Box>
@@ -105,12 +116,15 @@ export function estimateControlsRows(
     inputBoxRows?: number | undefined;
   },
 ): number {
-  if (options.homeScreen) {
-    return 1;
-  }
-
-  const inputBoxRows = Math.max(5, Math.ceil(options.inputBoxRows ?? 5));
+  const inputBoxRows = Math.max(
+    DEFAULT_INPUT_BOX_ROWS,
+    Math.ceil(options.inputBoxRows ?? DEFAULT_INPUT_BOX_ROWS),
+  );
   const queueRows = queuedPromptDisplayRows(options.queuedPromptCount ?? 0);
+
+  if (options.homeScreen) {
+    return 0;
+  }
 
   if (options.activeTab === 'chat') {
     return inputBoxRows + queueRows + (options.commandNotice ? 1 : 0);
