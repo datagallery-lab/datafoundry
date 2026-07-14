@@ -132,7 +132,7 @@ async function main(): Promise<void> {
         const instance = render(createAppElement(), {
           exitOnCtrlC: false,
           incrementalRendering: true,
-          maxFps: 60,
+          maxFps: 30,
         });
         await instance.waitUntilExit();
       });

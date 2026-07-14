@@ -3,11 +3,16 @@ import { Box, Text, useApp, useInput, useStdin, measureElement, type DOMElement 
 import { randomUUID } from 'node:crypto';
 import { StatusFooter } from './Header.js';
 import { ChatArea, type ChatAreaRef } from './ChatArea.js';
-import { OutputsScreen } from './OutputsView.js';
+import { OutputsScreen, OutputsSidebar } from './OutputsView.js';
 import { ActivityPanel } from './ActivityPanel.js';
 import { EnhancedInputBox } from './components/EnhancedInputBox.js';
 import { QueuedPromptDisplay } from './components/QueuedPromptDisplay.js';
-import { WorkspaceFrame, availableContentRows, estimateControlsRows } from './workspace-layout.js';
+import {
+  WorkspaceFrame,
+  availableContentRows,
+  estimateControlsRows,
+  resolveMainPaneColumns,
+} from './workspace-layout.js';
 import { useTerminalSize } from './use-terminal-size.js';
 import { SessionPicker } from './SessionPicker.js';
 import { ResourcePicker, type ResourcePickerItem } from './ResourcePicker.js';
@@ -66,8 +71,8 @@ const REASONING_END_EVENTS = new Set([
   'THINKING_END',
   'THINKING_TEXT_MESSAGE_END',
 ]);
-const SCROLL_FRAME_MS = 16;
-const SCROLL_ROWS_PER_FRAME = 3;
+const SCROLL_FRAME_MS = 33;
+const SCROLL_ROWS_PER_FRAME = 9;
 const MAX_PENDING_SCROLL_ROWS = 120;
 const CTRL_EXIT_PROMPT_DURATION_MS = 1000;
 type ClearInputDraft = () => boolean;
@@ -1477,15 +1482,10 @@ export const App: React.FC<AppProps> = ({
     // This avoids unnecessary re-renders and flickering
   };
 
-  // Calculate responsive widths (70% / 30%)
-  const getContentWidth = () => {
-    // For terminal, use character-based width calculation
-    // This is a simplified approach - actual width depends on terminal size
-    return { chatWidth: 70, panelWidth: 30 };
-  };
-
-  const { chatWidth, panelWidth } = getContentWidth();
   const visibleArtifacts = state.artifacts;
+  const mainPaneColumns = resolveMainPaneColumns({
+    columns: terminalColumns,
+  });
   const liveActivity = state.runStatus === 'running'
     ? {
         plan: state.plan,
@@ -1498,6 +1498,13 @@ export const App: React.FC<AppProps> = ({
         events: [],
       };
   const showResumeLoading = isRestoringSession && state.messages.length === 0;
+  const showOutputsSidebar = mainPaneColumns.outputsVisible
+    && !showLiveActivity
+    && !isHomeScreen
+    && !showResumeLoading;
+  const chatPaneColumns = showOutputsSidebar
+    ? mainPaneColumns.chatColumns
+    : terminalColumns;
 
   return (
     <>
@@ -1611,11 +1618,24 @@ export const App: React.FC<AppProps> = ({
           rows={terminalRows}
           columns={terminalColumns}
           scrollableRows={scrollableRowCount}
+          {...(showOutputsSidebar
+            ? {
+                rightColumns: mainPaneColumns.outputsColumns,
+                right: (
+                  <OutputsSidebar
+                    artifacts={visibleArtifacts}
+                    events={state.events}
+                    columns={mainPaneColumns.outputsColumns}
+                    rows={terminalRows}
+                  />
+                ),
+              }
+            : {})}
           scrollable={
             <Box
               flexDirection="row"
               height={scrollableRowCount}
-              width={terminalColumns}
+              width={chatPaneColumns}
               flexShrink={0}
               overflowY="hidden"
             >
@@ -1629,7 +1649,7 @@ export const App: React.FC<AppProps> = ({
                   >
                     <HomeSplash
                       rows={scrollableRowCount}
-                      columns={terminalColumns}
+                      columns={chatPaneColumns}
                       startup={startup}
                       input={(promptWidth) => (
                         <EnhancedInputBox
@@ -1669,7 +1689,7 @@ export const App: React.FC<AppProps> = ({
                   <>
                     <Box
                       flexDirection="column"
-                      width={showLiveActivity ? `${chatWidth}%` : '100%'}
+                      width={showLiveActivity ? '70%' : chatPaneColumns}
                       height={scrollableRowCount}
                       flexShrink={0}
                       paddingX={1}
@@ -1682,7 +1702,7 @@ export const App: React.FC<AppProps> = ({
                         totalMessageCount={state.messages.length}
                         toolCalls={state.toolCalls}
                         viewportRows={chatViewportRowCount}
-                        columns={terminalColumns}
+                        columns={chatPaneColumns}
                         startup={transcriptStartup}
                         compactMode={compactMode}
                         thoughtExpanded={thoughtExpanded}
@@ -1692,7 +1712,7 @@ export const App: React.FC<AppProps> = ({
                     {showLiveActivity && (
                       <Box
                         flexDirection="column"
-                        width={`${panelWidth}%`}
+                        width="30%"
                         borderStyle="single"
                         borderColor={inkColors.border}
                         paddingX={1}
@@ -1738,7 +1758,7 @@ export const App: React.FC<AppProps> = ({
                   modelName={modelName}
                   datasourceId={activeDatasourceId}
                   skillId={activeSkillId}
-                  inputWidth={terminalColumns}
+                  inputWidth={chatPaneColumns}
                   outputCount={visibleArtifacts.length}
                 />
               )}
