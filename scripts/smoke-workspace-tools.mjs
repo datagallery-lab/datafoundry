@@ -1,8 +1,8 @@
-import { createWorkspaceTools } from "@mastra/core/workspace";
 import { rmSync } from "node:fs";
 import path from "node:path";
 
 import { createRunWorkspace } from "../packages/agent-runtime/dist/tools/workspace-factory.js";
+import { createCompatibleWorkspaceTools } from "../packages/agent-runtime/dist/tools/workspace-tool-input-compat.js";
 
 const runContext = {
   user_id: "workspace-smoke-user",
@@ -40,7 +40,7 @@ try {
   await runWorkspace.workspace.init();
   assert(runWorkspace.workspace.status === "ready", "workspace should reach ready status after init");
 
-  const tools = await createWorkspaceTools(runWorkspace.workspace, {
+  const tools = await createCompatibleWorkspaceTools(runWorkspace.workspace, {
     requestContext: {},
     workspace: runWorkspace.workspace
   });
@@ -102,7 +102,7 @@ try {
   });
   assert(nextRunWorkspace.runDir === runDir, "same (user, workspace) should reuse the persistent workspace directory");
   await nextRunWorkspace.workspace.init();
-  const nextTools = await createWorkspaceTools(nextRunWorkspace.workspace, {
+  const nextTools = await createCompatibleWorkspaceTools(nextRunWorkspace.workspace, {
     requestContext: {},
     workspace: nextRunWorkspace.workspace
   });
@@ -133,7 +133,7 @@ try {
     "session scratch dir should live under {workspaceDir}/sessions/"
   );
   await isolatedWorkspace.workspace.init();
-  const isolatedTools = await createWorkspaceTools(isolatedWorkspace.workspace, {
+  const isolatedTools = await createCompatibleWorkspaceTools(isolatedWorkspace.workspace, {
     requestContext: {},
     workspace: isolatedWorkspace.workspace
   });

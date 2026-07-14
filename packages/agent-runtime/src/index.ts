@@ -9,7 +9,7 @@ import {
 } from "@mastra/core/harness";
 import { Mastra } from "@mastra/core/mastra";
 import { WorkingMemory } from "@mastra/core/processors";
-import { createSkillTools, createWorkspaceTools } from "@mastra/core/workspace";
+import { createSkillTools } from "@mastra/core/workspace";
 import type { Message } from "@ag-ui/core";
 import type { ArtifactService, SessionOutputService } from "@datafoundry/artifacts";
 import type { DataGateway } from "@datafoundry/data-gateway";
@@ -69,6 +69,7 @@ import {
   resolveSkillCacheDir,
   resolveWorkspaceDir
 } from "./tools/workspace-factory.js";
+import { createCompatibleWorkspaceTools } from "./tools/workspace-tool-input-compat.js";
 import { createMastraStreamNormalizerHooks } from "./stream/mastra-stream-hooks.js";
 import { createTokenUsageCorrelationStore } from "./stream/token-usage-correlation.js";
 import { wrapAgentForAgUi } from "./stream/mastra-stream-normalizer.js";
@@ -419,7 +420,7 @@ export const createDataFoundry = async (
   // session-scoped files. Eligible write/edit outputs are auto-ingested into Session
   // Outputs from governed tool results (and workspace.metadata when Mastra emits it);
   // drafts/scripts remain workspace-only.
-  const workspaceTools = await createWorkspaceTools(runWorkspace.workspace, {
+  const workspaceTools = await createCompatibleWorkspaceTools(runWorkspace.workspace, {
     requestContext: {},
     workspace: runWorkspace.workspace
   });

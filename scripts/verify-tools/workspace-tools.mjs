@@ -3,12 +3,12 @@
  * Deterministic runtime verification of Mastra workspace tools.
  * Records direct execution results, data-* chunk emissions, and governed-adapter output.
  */
-import { createWorkspaceTools } from "@mastra/core/workspace";
 import { rmSync } from "node:fs";
 import path from "node:path";
 
 import { createRunWorkspace } from "../../packages/agent-runtime/dist/tools/workspace-factory.js";
 import { GovernedToolFactory } from "../../packages/agent-runtime/dist/tools/governed-tool-factory.js";
+import { createCompatibleWorkspaceTools } from "../../packages/agent-runtime/dist/tools/workspace-tool-input-compat.js";
 
 const { createToolObservationBoundary } = await import(
   "../../packages/agent-runtime/dist/context/tool-observation/tool-observation-boundary.js"
@@ -135,7 +135,7 @@ try {
   );
 
   await runWorkspace.workspace.init();
-  const toolsRaw = await createWorkspaceTools(runWorkspace.workspace, {
+  const toolsRaw = await createCompatibleWorkspaceTools(runWorkspace.workspace, {
     requestContext: {},
     workspace: runWorkspace.workspace
   });

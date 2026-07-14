@@ -97,6 +97,7 @@
     "smoke:agui-stream": "npm run build && node scripts/smoke-agui-stream.mjs",
     "test:ingress-messages": "npm run build && node scripts/test-ingress-messages.mjs",
     "test:data-tool-input-compat": "npm run build && node --test scripts/data-tool-input-compat.test.mjs",
+    "test:workspace-tool-input-compat": "npm run build && node --test scripts/workspace-tool-input-compat.test.mjs",
     "test:mastra-stream": "npm run build && node scripts/test-mastra-stream-normalizer.mjs",
     "test:model-provider-transport": "npm run build && node --test scripts/model-provider-transport.test.mjs",
     "test:postgresql-data-gateway": "npm run build && node --test scripts/datasource-schema-cache.test.mjs scripts/postgresql-data-gateway.test.mjs scripts/sql-table-references.test.mjs scripts/table-result-policy.test.mjs",
