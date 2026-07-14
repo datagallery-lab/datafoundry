@@ -901,6 +901,17 @@ function previewPayload(value: unknown): unknown {
   return recordValue(record?.preview_json) ?? recordValue(record?.preview) ?? value;
 }
 
+function textContentFromRecord(record: Record<string, unknown> | null): string | undefined {
+  return (
+    stringValue(record?.content) ??
+    stringValue(record?.body) ??
+    stringValue(record?.markdown) ??
+    stringValue(record?.text) ??
+    stringValue(record?.preview) ??
+    stringValue(record?.preview_json)
+  );
+}
+
 export function artifactDetailNeedsPreviewFetch(
   artifact: Pick<DataArtifact, "previewAvailable" | "fileId" | "type">,
   detail: ArtifactDetailValue | undefined,
@@ -975,7 +986,9 @@ export function artifactDetailFromPreview(
     const fileSize = numberValue(payloadRecord?.size);
     const fileMtime = stringValue(payloadRecord?.mtime);
     const fileTool = stringValue(payloadRecord?.tool);
-    const fileContent = stringValue(payloadRecord?.content);
+    const fileContent =
+      textContentFromRecord(payloadRecord) ??
+      (typeof payload === "string" ? stringValue(payload) : undefined);
     return {
       type: "file",
       path: filePath,
@@ -987,8 +1000,7 @@ export function artifactDetailFromPreview(
   }
 
   const textContent =
-    stringValue(payloadRecord?.content) ??
-    stringValue(payloadRecord?.body) ??
+    textContentFromRecord(payloadRecord) ??
     (typeof payload === "string" && backendType !== "table" ? payload : undefined);
   if (textContent) {
     return {
@@ -1050,9 +1062,8 @@ export function dataArtifactFromArtifactValue(value: Record<string, unknown>): D
     type = "report";
     kind = "memo";
     const textContent =
-      stringValue(previewRecord?.content) ??
-      stringValue(previewRecord?.body) ??
-      (typeof preview === "string" ? preview : undefined);
+      textContentFromRecord(previewRecord) ??
+      (typeof preview === "string" ? stringValue(preview) : undefined);
     if (textContent) {
       detail = {
         type: "report",
@@ -1067,7 +1078,9 @@ export function dataArtifactFromArtifactValue(value: Record<string, unknown>): D
     const fileSize = numberValue(previewRecord?.size);
     const fileMtime = stringValue(previewRecord?.mtime);
     const fileTool = stringValue(previewRecord?.tool);
-    const fileContent = stringValue(previewRecord?.content);
+    const fileContent =
+      textContentFromRecord(previewRecord) ??
+      (typeof preview === "string" ? stringValue(preview) : undefined);
     detail = {
       type: "file",
       path: filePath,

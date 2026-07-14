@@ -26,7 +26,7 @@ interface EnhancedInputBoxProps {
   outputCount?: number | undefined;
 }
 
-const INPUT_VIEWPORT_HEIGHT = 5;
+const INPUT_VIEWPORT_HEIGHT = 3;
 const LARGE_PASTE_CHAR_THRESHOLD = 1000;
 const LARGE_PASTE_LINE_THRESHOLD = 10;
 
@@ -736,7 +736,7 @@ export const EnhancedInputBox: React.FC<EnhancedInputBoxProps> = ({
     );
   };
   return (
-    <Box flexDirection="column" flexShrink={0} minHeight={4}>
+    <Box flexDirection="column" flexShrink={0} minHeight={4} width="100%">
       <Box
         flexDirection="row"
         width="100%"

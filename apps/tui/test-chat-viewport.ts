@@ -17,6 +17,11 @@ import {
 import { ENHANCED_INPUT_RESERVED_ROWS } from './dist/ui/components/EnhancedInputBox.js';
 import { TextBuffer } from './dist/ui/components/text-buffer.js';
 import {
+  artifactDetailFromPreview,
+  dataArtifactFromArtifactValue,
+} from './dist/state/index.js';
+import { artifactMarkdownContent } from './dist/ui/ArtifactCard.js';
+import {
   createWheelScrollDecoder,
   wheelScrollDelta,
   wheelScrollDeltas,
@@ -124,11 +129,11 @@ check(inputBuffer.text === 'abc', 'raw DEL is ignored by the text buffer instead
 
 // --- layout helpers ---
 check(chatContentWidth(120) === 115, 'content width is capped for wide terminals');
-check(estimateControlsRows({ commandNotice: false, activeTab: 'chat' }) === 9, 'controls estimate reserves the fixed enhanced input height');
-check(estimateControlsRows({ commandNotice: true, activeTab: 'chat' }) === 10, 'controls estimate includes command notice');
+check(estimateControlsRows({ commandNotice: false, activeTab: 'chat' }) === 7, 'controls estimate reserves the fixed enhanced input height');
+check(estimateControlsRows({ commandNotice: true, activeTab: 'chat' }) === 8, 'controls estimate includes command notice');
 check(estimateControlsRows({ commandNotice: false, activeTab: 'chat', inputBoxRows: 9 }) === 9, 'controls estimate follows expanded input height');
 check(estimateControlsRows({ commandNotice: true, activeTab: 'chat', inputBoxRows: 9 }) === 10, 'controls estimate combines notice and expanded input height');
-check(ENHANCED_INPUT_RESERVED_ROWS === 9, 'reserved input height covers the five-row input viewport');
+check(ENHANCED_INPUT_RESERVED_ROWS === 7, 'reserved input height covers the three-row input viewport');
 check(
   estimateControlsRows({
     commandNotice: false,
@@ -141,6 +146,45 @@ check(estimateControlsRows({ commandNotice: false, activeTab: 'chat', homeScreen
 check(availableContentRows(40, 5) === 35, 'content viewport subtracts measured controls rows');
 check(availableContentRows(40, 9) === 31, 'content viewport shrinks when measured input grows');
 check(availableContentRows(8, 12) === 0, 'content viewport can collapse instead of overlapping controls');
+
+// --- output artifact markdown previews ---
+const markdownFileArtifact = dataArtifactFromArtifactValue({
+  id: 'artifact-md-file',
+  type: 'file',
+  name: 'report.md',
+  mime_type: 'text/markdown',
+  preview_json: { path: 'report.md' },
+});
+const markdownFileDetail = artifactDetailFromPreview(
+  markdownFileArtifact,
+  '# Report\n\nDone.',
+);
+check(
+  eq(markdownFileDetail, {
+    type: 'file',
+    path: 'report.md',
+    content: '# Report\n\nDone.',
+  }),
+  'raw markdown file previews become file detail content',
+);
+check(
+  artifactMarkdownContent({
+    ...markdownFileArtifact,
+    detail: markdownFileDetail,
+  }) === '# Report\n\nDone.',
+  'markdown file detail exposes content for Outputs markdown rendering',
+);
+const markdownReportArtifact = dataArtifactFromArtifactValue({
+  id: 'artifact-md-report',
+  type: 'markdown',
+  name: 'summary.md',
+  preview_json: { markdown: '# Summary\n\nComplete.' },
+});
+check(
+  markdownReportArtifact.detail?.type === 'report'
+    && artifactMarkdownContent(markdownReportArtifact) === '# Summary\n\nComplete.',
+  'markdown artifact preview_json markdown field renders as report markdown',
+);
 check(
   eq(resolveMainPaneColumns({ columns: 120 }), {
     chatColumns: 120,
