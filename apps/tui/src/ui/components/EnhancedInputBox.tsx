@@ -30,6 +30,7 @@ interface EnhancedInputBoxProps {
   inputWidth?: number | undefined;
   outputCount?: number | undefined;
   history?: CommandHistory | undefined;
+  onShortcut?: ((input: string) => boolean) | undefined;
 }
 
 const INPUT_VIEWPORT_HEIGHT = 3;
@@ -37,8 +38,8 @@ const LARGE_PASTE_CHAR_THRESHOLD = 1000;
 const LARGE_PASTE_LINE_THRESHOLD = 10;
 
 function inputBoxRowsFor(renderedInputRows: number): number {
-  // paddingY top/bottom + the metadata row's top padding/content.
-  return Math.max(1, renderedInputRows) + 4;
+  // Full border + vertical input padding + divider + metadata row.
+  return Math.max(1, renderedInputRows) + 6;
 }
 
 export const ENHANCED_INPUT_RESERVED_ROWS = inputBoxRowsFor(INPUT_VIEWPORT_HEIGHT);
@@ -172,6 +173,7 @@ export const EnhancedInputBox: React.FC<EnhancedInputBoxProps> = ({
   inputWidth,
   outputCount = 0,
   history,
+  onShortcut,
 }) => {
   const [, forceRender] = useState(0);
   const [completionHint, setCompletionHint] = useState('');
@@ -185,14 +187,16 @@ export const EnhancedInputBox: React.FC<EnhancedInputBoxProps> = ({
   const { isRawModeSupported } = useStdin();
   const { stdout } = useStdout();
   const fallbackWidth = stdout.columns ?? process.stdout.columns ?? 80;
-  const visualWidth = Math.max(12, Math.floor((inputWidth ?? fallbackWidth) - 6));
+  const composerWidth = Math.max(12, Math.floor(inputWidth ?? fallbackWidth));
+  const visualWidth = Math.max(12, composerWidth - 6);
   const bufferRef = useRef<TextBuffer>(new TextBuffer('', INPUT_VIEWPORT_HEIGHT, visualWidth));
   const buffer = bufferRef.current;
   const inputIsActive = isRawModeSupported;
 
   const availableCommands = React.useMemo(() => commandProcessor.getCommands(), []);
 
-  const accent = disabled ? inkColors.muted : inkColors.accent;
+  const accent = disabled ? inkColors.muted : inkColors.focus;
+  const borderColor = disabled ? inkColors.muted : (inputIsActive ? inkColors.focus : inkColors.border);
   const metaParts = [
     datasourceId || 'no datasource',
     skillId,
@@ -762,6 +766,11 @@ export const EnhancedInputBox: React.FC<EnhancedInputBoxProps> = ({
         return;
       }
 
+      if (buffer.text.length === 0 && onShortcut?.(input)) {
+        resetCompletion();
+        return;
+      }
+
       buffer.insert(input);
       syncChange();
       updateCompletionHint(buffer.text);
@@ -776,6 +785,9 @@ export const EnhancedInputBox: React.FC<EnhancedInputBoxProps> = ({
   const placeholderFirst = cpSlice(placeholder, 0, 1);
   const placeholderRest = cpSlice(placeholder, 1);
   const layoutRows = currentLayoutRows();
+  const showNewlineHint = composerWidth >= 96;
+  const showSendHint = composerWidth >= 40;
+  const showOutputCount = outputCount > 0 && composerWidth >= 64;
   const layoutSignature = [
     layoutRows,
     visualWidth,
@@ -875,63 +887,101 @@ export const EnhancedInputBox: React.FC<EnhancedInputBoxProps> = ({
       )}
 
       <Box
-        flexDirection="row"
+        flexDirection="column"
         width="100%"
         borderStyle="single"
-        borderTop={false}
-        borderBottom={false}
-        borderRight={false}
-        borderColor={accent}
+        borderColor={borderColor}
       >
+        {/* 主输入区域 */}
         <Box
-          flexDirection="column"
-          flexGrow={1}
+          flexDirection="row"
+          width="100%"
           paddingLeft={1}
           paddingRight={2}
           paddingY={1}
         >
+          <Text color={accent} bold>›</Text>
           <Box
             flexDirection="column"
-            height={INPUT_VIEWPORT_HEIGHT}
-            overflowY="hidden"
-            flexShrink={0}
+            flexGrow={1}
+            paddingLeft={1}
           >
-            {Array.from({ length: INPUT_VIEWPORT_HEIGHT }).map((_, index) => renderInputLine(index))}
+            <Box
+              flexDirection="column"
+              height={INPUT_VIEWPORT_HEIGHT}
+              overflowY="hidden"
+              flexShrink={0}
+            >
+              {Array.from({ length: INPUT_VIEWPORT_HEIGHT }).map((_, index) => renderInputLine(index))}
+            </Box>
           </Box>
+        </Box>
 
-          <Box paddingTop={1}>
-            {ctrlCExitPending ? (
-              <Text color={inkColors.warning} wrap="truncate-end">
-                Press Ctrl+C again to exit.
-              </Text>
-            ) : !disabled && completionHint && !showSlashPopover ? (
-              <Text dimColor color={inkColors.accent} wrap="truncate-end">
-                {completionHint}
-              </Text>
-            ) : (
-              <Box flexDirection="row" justifyContent="space-between">
+        {/* 分隔线 */}
+        <Box
+          width="100%"
+          borderStyle="single"
+          borderTop={true}
+          borderBottom={false}
+          borderLeft={false}
+          borderRight={false}
+          borderColor={inkColors.border}
+        />
+
+        {/* 底部元数据栏 */}
+        <Box
+          flexDirection="row"
+          width="100%"
+          paddingX={1}
+          paddingY={0}
+          justifyContent="space-between"
+        >
+          {ctrlCExitPending ? (
+            <Text color={inkColors.warning} wrap="truncate-end">
+              Press Ctrl+C again to exit.
+            </Text>
+          ) : (
+            <>
+              <Box flexDirection="row" flexGrow={1} flexShrink={1} minWidth={0} marginRight={1}>
                 <Text wrap="truncate-end">
-                  <Text color={accent}>Analyze</Text>
-                  <Text dimColor> · </Text>
-                  <Text color={disabled ? inkColors.muted : inkColors.text}>
-                    {metaParts.join(' · ')}
-                  </Text>
-                </Text>
-                <Text wrap="truncate-end">
-                  {outputCount > 0 && (
+                  {!disabled && completionHint && !showSlashPopover ? (
+                    <Text color={inkColors.muted}>{completionHint}</Text>
+                  ) : (
                     <>
-                      <Text color={inkColors.accent}>Outputs {outputCount}</Text>
-                      <Text dimColor> · </Text>
+                      <Text color={inkColors.muted}>ANALYZE / </Text>
+                      <Text color={disabled ? inkColors.muted : inkColors.text}>
+                        {datasourceId || 'no datasource'}
+                      </Text>
+                      {skillId && (
+                        <>
+                          <Text color={inkColors.muted}> / </Text>
+                          <Text color={disabled ? inkColors.muted : inkColors.text}>{skillId}</Text>
+                        </>
+                      )}
                     </>
                   )}
-                  <Text color={inkColors.text}>⇧↵</Text>
-                  <Text dimColor> newline  </Text>
-                  <Text color={inkColors.text}>Enter</Text>
-                  <Text dimColor> send</Text>
                 </Text>
               </Box>
-            )}
-          </Box>
+              {showSendHint && (
+                <Box flexDirection="row" flexShrink={0}>
+                  {showOutputCount && (
+                    <>
+                      <Text color={inkColors.accent}>Outputs {outputCount}</Text>
+                      <Text color={inkColors.muted}>  </Text>
+                    </>
+                  )}
+                  {showNewlineHint && (
+                    <>
+                      <Text color={inkColors.muted}>[Shift+Enter]</Text>
+                      <Text color={inkColors.muted}> new line  </Text>
+                    </>
+                  )}
+                  <Text color={inkColors.muted}>[Enter]</Text>
+                  <Text color={inkColors.text}> send</Text>
+                </Box>
+              )}
+            </>
+          )}
         </Box>
       </Box>
     </Box>

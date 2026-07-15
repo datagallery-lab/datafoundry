@@ -13,10 +13,13 @@ export const theme = {
   background: '#0B0F14',
   surface: '#121820',
   border: '#27313C',
+  focus: '#496783',
 
   // 文本
   text: '#E6EDF3',
+  emphasis: '#B7C0C8',
   muted: '#7D8590',
+  subtle: '#5F6975',
 
   // 语义色（低饱和度）
   accent: '#6CA8E8',    // 主强调色：当前模式、选中项、主要交互
@@ -75,11 +78,14 @@ export const inkColors = {
   background: theme.background,
   surface: theme.surface,
   border: theme.border,
+  focus: theme.focus,
   accent: theme.accent,
   success: theme.success,
   warning: theme.warning,
   error: theme.error,
+  emphasis: theme.emphasis,
   muted: theme.muted,
+  subtle: theme.subtle,
   text: theme.text,
 } as const;
 
