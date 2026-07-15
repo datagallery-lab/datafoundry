@@ -129,11 +129,11 @@ check(inputBuffer.text === 'abc', 'raw DEL is ignored by the text buffer instead
 
 // --- layout helpers ---
 check(chatContentWidth(120) === 115, 'content width is capped for wide terminals');
-check(estimateControlsRows({ commandNotice: false, activeTab: 'chat' }) === 7, 'controls estimate reserves the fixed enhanced input height');
-check(estimateControlsRows({ commandNotice: true, activeTab: 'chat' }) === 8, 'controls estimate includes command notice');
-check(estimateControlsRows({ commandNotice: false, activeTab: 'chat', inputBoxRows: 9 }) === 9, 'controls estimate follows expanded input height');
-check(estimateControlsRows({ commandNotice: true, activeTab: 'chat', inputBoxRows: 9 }) === 10, 'controls estimate combines notice and expanded input height');
-check(ENHANCED_INPUT_RESERVED_ROWS === 7, 'reserved input height covers the three-row input viewport');
+check(estimateControlsRows({ commandNotice: false, activeTab: 'chat' }) === 9, 'controls estimate reserves the fixed enhanced input height');
+check(estimateControlsRows({ commandNotice: true, activeTab: 'chat' }) === 10, 'controls estimate includes command notice');
+check(estimateControlsRows({ commandNotice: false, activeTab: 'chat', inputBoxRows: 12 }) === 12, 'controls estimate follows expanded input height');
+check(estimateControlsRows({ commandNotice: true, activeTab: 'chat', inputBoxRows: 12 }) === 13, 'controls estimate combines notice and expanded input height');
+check(ENHANCED_INPUT_RESERVED_ROWS === 9, 'reserved input height covers the bordered three-row input viewport');
 check(
   estimateControlsRows({
     commandNotice: false,
@@ -142,7 +142,7 @@ check(
   }) === ENHANCED_INPUT_RESERVED_ROWS,
   'controls estimate follows the reserved input height',
 );
-check(estimateControlsRows({ commandNotice: false, activeTab: 'chat', homeScreen: true }) === 0, 'home screen does not reserve a duplicate status footer');
+check(estimateControlsRows({ commandNotice: false, activeTab: 'chat', homeScreen: true }) === 0, 'home screen keeps the composer inside the main content area');
 check(availableContentRows(40, 5) === 35, 'content viewport subtracts measured controls rows');
 check(availableContentRows(40, 9) === 31, 'content viewport shrinks when measured input grows');
 check(availableContentRows(8, 12) === 0, 'content viewport can collapse instead of overlapping controls');

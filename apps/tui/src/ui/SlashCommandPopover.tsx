@@ -60,9 +60,8 @@ export const SlashCommandPopover: React.FC<SlashCommandPopoverProps> = ({
         height={1}
         width="100%"
         paddingLeft={1}
-        backgroundColor={inkColors.surface}
       >
-        <Text color={inkColors.muted} wrap="truncate-end">No matching commands</Text>
+        <Text color={inkColors.subtle} wrap="truncate-end">No matching commands</Text>
       </Box>
     );
   }
@@ -87,7 +86,6 @@ export const SlashCommandPopover: React.FC<SlashCommandPopoverProps> = ({
       height={visibleRows}
       width="100%"
       overflowY="hidden"
-      backgroundColor={inkColors.surface}
     >
       {visibleCommands.map((command, rowIndex) => {
         const isActive = offset + rowIndex === selectedIndex;
@@ -97,14 +95,16 @@ export const SlashCommandPopover: React.FC<SlashCommandPopoverProps> = ({
             flexDirection="row"
             width="100%"
             height={1}
-            paddingLeft={1}
             paddingRight={1}
-            backgroundColor={isActive ? inkColors.accent : undefined}
           >
+            <Box width={2} flexShrink={0}>
+              <Text color={isActive ? inkColors.accent : inkColors.surface}>
+                {isActive ? '› ' : '  '}
+              </Text>
+            </Box>
             <Box width={commandColumnWidth} flexShrink={0}>
               <Text
-                bold
-                color={isActive ? inkColors.background : inkColors.text}
+                color={isActive ? inkColors.emphasis : inkColors.muted}
                 wrap="truncate-end"
               >
                 /{command.name}
@@ -112,7 +112,7 @@ export const SlashCommandPopover: React.FC<SlashCommandPopoverProps> = ({
             </Box>
             <Box flexGrow={1} minWidth={0}>
               <Text
-                color={isActive ? inkColors.background : inkColors.muted}
+                color={isActive ? inkColors.muted : inkColors.subtle}
                 wrap="truncate-end"
               >
                 {command.description ?? ''}

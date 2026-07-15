@@ -4,6 +4,8 @@ import { PassThrough } from 'node:stream';
 import { afterEach, describe, it } from 'node:test';
 import { Box, render } from 'ink';
 import { CommandHistory } from '../keybindings.js';
+import { SlashCommandPopover } from '../SlashCommandPopover.js';
+import { StatusBar } from '../StatusBar.js';
 import { EnhancedInputBox, inputLineFragments } from './EnhancedInputBox.js';
 
 const waitForInput = () => new Promise<void>((resolve) => setImmediate(resolve));
@@ -251,6 +253,21 @@ describe('EnhancedInputBox history navigation', () => {
 });
 
 describe('EnhancedInputBox slash command menu', () => {
+  it('inherits the terminal background instead of painting a color block', async () => {
+    const view = renderInputBox(
+      <SlashCommandPopover
+        activeIndex={0}
+        commands={[
+          { name: 'reset', description: 'Reset session and start fresh' },
+          { name: 'resume', description: 'Resume a server session' },
+        ]}
+      />,
+    );
+    await waitForInput();
+
+    assert.doesNotMatch(view.output.join(''), /\u001B\[48(?:;\d+)*m/);
+  });
+
   it('keeps the composer height fixed while the menu overlays the chat viewport', async () => {
     const layoutRows: number[] = [];
     const view = renderInputBox(
@@ -264,13 +281,13 @@ describe('EnhancedInputBox slash command menu', () => {
     );
     await waitForInput();
 
-    assert.equal(layoutRows.at(-1), 7);
+    assert.equal(layoutRows.at(-1), 9);
 
     view.stdin.write('/');
     await waitForInput();
     await waitForInput();
 
-    assert.equal(layoutRows.at(-1), 7);
+    assert.equal(layoutRows.at(-1), 9);
     assert.match(view.output.join(''), /\/clear\s+Clear chat history/);
     assert.doesNotMatch(view.output.join(''), /Slash Commands/);
   });
@@ -341,5 +358,110 @@ describe('EnhancedInputBox slash command menu', () => {
     await waitForInput();
 
     assert.deepEqual(submissions, ['/no-such-command']);
+  });
+});
+
+describe('EnhancedInputBox layout', () => {
+  it('keeps all three input viewport rows visible inside the full border', async () => {
+    const view = renderInputBox(
+      <Box width={88}>
+        <EnhancedInputBox
+          value={'first\nsecond\nthird'}
+          inputWidth={88}
+          datasourceId="dtc-growth-demo"
+          skillId="data-analysis"
+          onChange={() => {}}
+          onSubmit={() => {}}
+        />
+      </Box>,
+    );
+    await waitForInput();
+    await waitForInput();
+
+    assert.match(view.output.join(''), /third/);
+  });
+
+  it('uses the compact shortcut footer at the 76-column home width', async () => {
+    const view = renderInputBox(
+      <Box width={76}>
+        <EnhancedInputBox
+          inputWidth={76}
+          datasourceId="dtc-growth-demo"
+          skillId="data-analysis"
+          onChange={() => {}}
+          onSubmit={() => {}}
+        />
+      </Box>,
+    );
+    await waitForInput();
+
+    const output = view.output.join('');
+    assert.match(output, /ANALYZE/);
+    assert.match(output, /dtc-growth-demo/);
+    assert.match(output, /\[Enter\]/);
+    assert.doesNotMatch(output, /\[Shift\+Enter\]/);
+  });
+
+  it('intercepts configured home shortcuts before inserting text', async () => {
+    const changes: string[] = [];
+    const shortcuts: string[] = [];
+    const view = renderInputBox(
+      <EnhancedInputBox
+        onChange={(nextValue) => changes.push(nextValue)}
+        onSubmit={() => {}}
+        onShortcut={(input) => {
+          shortcuts.push(input);
+          return input === '1';
+        }}
+      />,
+    );
+    await waitForInput();
+
+    view.stdin.write('1');
+    await waitForInput();
+
+    assert.deepEqual(shortcuts, ['1']);
+    assert.deepEqual(changes, []);
+  });
+});
+
+describe('StatusBar', () => {
+  const startup = {
+    threadId: 'thread-1',
+    connectionStatus: 'connected',
+    runStatus: 'running',
+    modelName: 'Qwen3-32B',
+    directory: '/tmp',
+    datasourceId: 'dtc-growth-demo',
+  } as const;
+
+  it('shows live run, datasource, and model state when space is available', async () => {
+    const view = renderInputBox(
+      <Box width={80}>
+        <StatusBar columns={80} startup={startup} />
+      </Box>,
+    );
+    await waitForInput();
+
+    const output = view.output.join('');
+    assert.match(output, /Running/);
+    assert.match(output, /source: /);
+    assert.match(output, /dtc-growth-demo/);
+    assert.match(output, /model: /);
+    assert.match(output, /Qwen3-32B/);
+  });
+
+  it('keeps only the primary state on narrow terminals', async () => {
+    const view = renderInputBox(
+      <Box width={39}>
+        <StatusBar columns={39} startup={startup} />
+      </Box>,
+    );
+    await waitForInput();
+
+    const output = view.output.join('');
+    assert.match(output, /Running/);
+    assert.doesNotMatch(output, /source: /);
+    assert.doesNotMatch(output, /model: /);
   });
 });

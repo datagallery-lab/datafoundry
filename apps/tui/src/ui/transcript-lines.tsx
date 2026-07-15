@@ -44,6 +44,7 @@ export interface StartupInfo {
   runStatus: LiveRunStatus;
   modelName: string;
   directory: string;
+  datasourceId?: string | undefined;
 }
 
 export interface BuildChatLinesInput {

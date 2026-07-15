@@ -16,6 +16,7 @@ import { useTerminalSize } from './use-terminal-size.js';
 import { SessionPicker } from './SessionPicker.js';
 import { ResourcePicker, type ResourcePickerItem } from './ResourcePicker.js';
 import { HomeSplash } from './HomeSplash.js';
+import { StatusBar } from './StatusBar.js';
 import { CommandHistory, DEFAULT_COMMANDS } from './keybindings.js';
 import { AssistantTextStreamBuffer, type AssistantTextFlush } from './assistant-stream-buffer.js';
 import { createWheelScrollDecoder } from '../input/mouse-wheel.js';
@@ -329,6 +330,7 @@ export const App: React.FC<AppProps> = ({
   // rendered output reaches stdout.rows; the extra slack keeps scroll updates on
   // the incremental erase-lines path instead of the flickery clearTerminal path.
   const appRows = Math.max(1, terminalRows - 2);
+  const workspaceRows = Math.max(0, appRows - 1);
   const [state, setState] = useState<TuiAppState>(store.getState());
   const [inputFocused, setInputFocused] = useState(false);
   const [commandNotice, setCommandNotice] = useState<CommandNotice | null>(null);
@@ -391,6 +393,7 @@ export const App: React.FC<AppProps> = ({
     runStatus: state.runStatus,
     modelName,
     directory,
+    datasourceId: activeDatasourceId,
   };
   const visibleMessages = state.messages;
   const isRestoringSession = resumeLoadingSessionId !== null;
@@ -421,7 +424,7 @@ export const App: React.FC<AppProps> = ({
     pickerOpen ? 'picker-open' : 'picker-closed',
     showOutputsSidebar ? 'outputs-sidebar' : 'main-only',
     terminalColumns,
-    appRows,
+    workspaceRows,
     isHomeScreen ? state.connectionStatus : '',
     isHomeScreen ? activeDatasourceId ?? 'no-datasource' : '',
     isHomeScreen ? activeSkillId ?? 'no-skill' : '',
@@ -432,7 +435,7 @@ export const App: React.FC<AppProps> = ({
     pickerOpen ? 'picker-open' : 'picker-closed',
     commandNotice ? `${commandNotice.kind}:${commandNotice.message}` : 'clean',
     terminalColumns,
-    appRows,
+    workspaceRows,
     reportedInputBoxRows ?? 'input-unknown',
     queuedPrompts.length,
     state.connectionStatus,
@@ -450,7 +453,7 @@ export const App: React.FC<AppProps> = ({
     inputBoxRows: reportedInputBoxRows ?? undefined,
   });
   const controlsRowCountForViewport = Math.max(estimatedControlsRowCount, controlsHeight);
-  const scrollableRowCount = availableContentRows(appRows, controlsRowCountForViewport);
+  const scrollableRowCount = availableContentRows(workspaceRows, controlsRowCountForViewport);
   const chatViewportRowCount = scrollableRowCount;
   const inputDisabled = isRestoringSession;
   const inputCommands = useMemo(
@@ -1541,11 +1544,12 @@ export const App: React.FC<AppProps> = ({
     : terminalColumns;
 
   return (
-    <>
-      {sessionPickerOpen ? (
+    <Box flexDirection="column" height={appRows} width={terminalColumns} overflowY="hidden">
+      <Box flexDirection="column" height={workspaceRows} width={terminalColumns} overflowY="hidden">
+        {sessionPickerOpen ? (
         <Box
           flexDirection="column"
-          height={appRows}
+          height={workspaceRows}
           width={terminalColumns}
           overflowY="hidden"
           paddingX={1}
@@ -1555,7 +1559,7 @@ export const App: React.FC<AppProps> = ({
             loading={pickerLoading}
             error={pickerError}
             columns={Math.max(20, terminalColumns - 2)}
-            rows={appRows}
+            rows={workspaceRows}
             onSelect={(sessionId) => {
               setResumeLoadingSessionId(sessionId);
               setSessionPickerOpen(false);
@@ -1569,7 +1573,7 @@ export const App: React.FC<AppProps> = ({
       ) : datasourcePickerOpen ? (
         <Box
           flexDirection="column"
-          height={appRows}
+          height={workspaceRows}
           width={terminalColumns}
           overflowY="hidden"
           paddingX={1}
@@ -1581,7 +1585,7 @@ export const App: React.FC<AppProps> = ({
             error={datasourcePickerError}
             warning={datasourcePickerWarning}
             columns={Math.max(20, terminalColumns - 2)}
-            rows={appRows}
+            rows={workspaceRows}
             emptyMessage="No data sources configured."
             onSelect={(item) => {
               setDatasourcePickerOpen(false);
@@ -1599,7 +1603,7 @@ export const App: React.FC<AppProps> = ({
       ) : skillPickerOpen ? (
         <Box
           flexDirection="column"
-          height={appRows}
+          height={workspaceRows}
           width={terminalColumns}
           overflowY="hidden"
           paddingX={1}
@@ -1627,7 +1631,7 @@ export const App: React.FC<AppProps> = ({
       ) : outputsOpen ? (
         <Box
           flexDirection="column"
-          height={appRows}
+          height={workspaceRows}
           width={terminalColumns}
           overflowY="hidden"
           paddingX={1}
@@ -1636,7 +1640,7 @@ export const App: React.FC<AppProps> = ({
             artifacts={visibleArtifacts}
             events={state.events}
             columns={Math.max(20, terminalColumns - 2)}
-            rows={appRows}
+            rows={workspaceRows}
             fetchArtifactPreview={
               configClient
                 ? (artifactId) => configClient.getArtifactPreview(artifactId)
@@ -1654,7 +1658,7 @@ export const App: React.FC<AppProps> = ({
         </Box>
       ) : (
         <WorkspaceFrame
-          rows={appRows}
+          rows={workspaceRows}
           columns={terminalColumns}
           scrollableRows={scrollableRowCount}
           {...(showOutputsSidebar
@@ -1665,7 +1669,7 @@ export const App: React.FC<AppProps> = ({
                     artifacts={visibleArtifacts}
                     events={state.events}
                     columns={mainPaneColumns.outputsColumns}
-                    rows={appRows}
+                    rows={workspaceRows}
                   />
                 ),
               }
@@ -1691,6 +1695,7 @@ export const App: React.FC<AppProps> = ({
                       rows={scrollableRowCount}
                       columns={chatPaneColumns}
                       startup={startup}
+                      canResume={Boolean(configClient)}
                       input={(promptWidth) => (
                         <EnhancedInputBox
                           onChange={handleInputChange}
@@ -1708,6 +1713,17 @@ export const App: React.FC<AppProps> = ({
                           skillId={activeSkillId}
                           inputWidth={promptWidth}
                           history={inputHistoryRef.current}
+                          onShortcut={(shortcut) => {
+                            if (shortcut === '1') {
+                              void handleSubmit('Show tables');
+                              return true;
+                            }
+                            if (shortcut === '2' && configClient) {
+                              void handleCommandExecution('/resume latest');
+                              return true;
+                            }
+                            return false;
+                          }}
                         />
                       )}
                     />
@@ -1808,7 +1824,9 @@ export const App: React.FC<AppProps> = ({
             </Box>
           }
         />
-      )}
-    </>
+        )}
+      </Box>
+      <StatusBar columns={terminalColumns} startup={startup} />
+    </Box>
   );
 };
