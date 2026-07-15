@@ -39,9 +39,12 @@
   --scrollbar-thumb: rgb(13 13 13 / 0.16);
   --scrollbar-thumb-hover: rgb(13 13 13 / 0.28);
 
-  /* Local system stacks — avoid next/font/google (Turbopack + offline CDN failures). */
+  /* Local system stacks — avoid next/font/google (Turbopack + offline CDN failures).
+     Include CJK-capable faces so zh-CN copy does not fall back to missing-glyph boxes
+     on Linux/WSL environments that ship WenQuanYi / Noto CJK. */
   --font-inter: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
-    sans-serif;
+    "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", "Noto Sans SC",
+    "WenQuanYi Micro Hei", sans-serif; /* CJK_FALLBACK_STACK_V1 */
   --font-fira-code: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
     "Courier New", monospace;
 }

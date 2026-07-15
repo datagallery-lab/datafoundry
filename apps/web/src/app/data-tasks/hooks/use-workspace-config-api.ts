@@ -11,7 +11,7 @@ import {
   mergeItemFromDto,
   workspaceConfigDtoToStore,
 } from "../../../lib/config-api";
-import type { DatasourceTypeDto, JobDto, RunDefaultsDto } from "../../../lib/config-api";
+import type { DatasourceTypeDto, JobDto, KnowledgeDocumentDto, RunDefaultsDto } from "../../../lib/config-api";
 import {
   defaultWorkspaceConfig,
   setLiveBackendCapabilities,
@@ -78,6 +78,9 @@ export type WorkspaceApiActions = {
   introspectDatasource: (itemId: string) => Promise<JobDto>;
   reindexKnowledgeBase: (itemId: string) => Promise<JobDto>;
   uploadKnowledgeFile: (itemId: string, file: File) => Promise<void>;
+  listKnowledgeFiles: (itemId: string) => Promise<{ documents: KnowledgeDocumentDto[] }>;
+  deleteKnowledgeFile: (itemId: string, documentId: string) => Promise<void>;
+  reindexKnowledgeFile: (itemId: string, documentId: string) => Promise<KnowledgeDocumentDto>;
   replaceSkillPackage: (itemId: string, file: File) => Promise<void>;
   validateSkill: (itemId: string) => Promise<void>;
   pollJob: (
@@ -528,6 +531,18 @@ export function useWorkspaceConfigApi(): WorkspaceApiState & WorkspaceApiActions
     await refresh();
   }, [refresh]);
 
+  const listKnowledgeFiles = useCallback(async (itemId: string) => {
+    return configApi.listKnowledgeFiles(itemId);
+  }, []);
+
+  const deleteKnowledgeFile = useCallback(async (itemId: string, documentId: string): Promise<void> => {
+    await configApi.deleteKnowledgeFile(itemId, documentId);
+  }, []);
+
+  const reindexKnowledgeFile = useCallback(async (itemId: string, documentId: string) => {
+    return configApi.reindexKnowledgeFile(itemId, documentId);
+  }, []);
+
   const replaceSkillPackage = useCallback(async (itemId: string, file: File): Promise<void> => {
     const form = new FormData();
     form.append("file", file);
@@ -609,6 +624,9 @@ export function useWorkspaceConfigApi(): WorkspaceApiState & WorkspaceApiActions
     introspectDatasource,
     reindexKnowledgeBase,
     uploadKnowledgeFile,
+    listKnowledgeFiles,
+    deleteKnowledgeFile,
+    reindexKnowledgeFile,
     replaceSkillPackage,
     validateSkill,
     pollJob,

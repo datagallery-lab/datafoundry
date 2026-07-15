@@ -109,6 +109,8 @@ export type TaskConsoleProps = {
   onMentionArtifact?: (artifact: DataArtifact) => void;
   /** Opens an artifact in its own full-panel page (a peer of the console). */
   onOpenArtifactPage?: (artifactId: string) => void;
+  /** Opens an artifact in a full-page preview overlay (modal). */
+  onPreviewArtifact?: (artifactId: string) => void;
   onOpenTrace: () => void;
   onPromoteArtifact?: (artifact: DataArtifact) => Promise<void> | void;
   onArtifactExportJob?: (job: JobDto) => void;
@@ -172,6 +174,7 @@ export function TaskConsole({
   onClose,
   onMentionArtifact,
   onOpenArtifactPage,
+  onPreviewArtifact,
   onOpenTrace,
   onPromoteArtifact,
   onArtifactExportJob,
@@ -344,6 +347,7 @@ export function TaskConsole({
             events={visibleEvents}
             onMentionArtifact={onMentionArtifact}
             onOpenArtifactPage={onOpenArtifactPage}
+            onPreviewArtifact={onPreviewArtifact}
             onPromoteArtifact={onPromoteArtifact}
             onArtifactExportJob={onArtifactExportJob}
             onSelectEvent={onSelectEvent}
@@ -627,14 +631,18 @@ function DynamicStepsList({
             const primaryEvent = primaryCall ? eventById.get(primaryCall.id) : undefined;
             const rawName = primaryEvent?.toolName ?? primaryCall?.name;
             const kind = calls.length > 1 ? "other" : dataStepKindForTool(rawName);
-            const kindLabel = dataStepLabel(kind);
+            const kindLabel = dataStepLabel(kind, t);
             const tone = stepKindTone(kind);
             const groupDuration =
               group.startedAtMs !== undefined && group.finishedAtMs !== undefined
                 ? formatDuration(Math.max(0, group.finishedAtMs - group.startedAtMs))
                 : group.status === "running"
-                  ? "Running"
+                  ? t("common.running")
                   : "—";
+            const displayTitle =
+              calls.length === 1
+                ? toolDisplayTitle(rawName, t)
+                : group.title;
             const body = (
               <>
                 <span className={["h-8 w-1 shrink-0 rounded-full", tone.bar].join(" ")} />
@@ -650,11 +658,16 @@ function DynamicStepsList({
                           : "text-muted",
                     ].join(" ")}
                   >
-                    {group.title}
+                    {displayTitle}
                   </span>
                   <span className="text-[10px] text-muted-light">
-                    Step {group.stepNumber} · {kindLabel}
-                    {calls.length > 1 ? ` · ${calls.length} tool calls` : ""}
+                    {calls.length > 1
+                      ? t("steps.stepMetaTools", {
+                          n: group.stepNumber,
+                          kind: kindLabel,
+                          count: calls.length,
+                        })
+                      : t("steps.stepMeta", { n: group.stepNumber, kind: kindLabel })}
                   </span>
                 </span>
                 <span className="shrink-0 text-right text-[10px] text-muted-light">
@@ -683,10 +696,7 @@ function DynamicStepsList({
                   <div className="ml-5 mt-1 grid gap-1 border-l border-border pl-2">
                     {calls.map((call) => {
                       const event = eventById.get(call.id);
-                      const title =
-                        event?.title && event.title !== "tool" && event.title !== "unknown"
-                          ? event.title
-                          : toolDisplayTitle(event?.toolName ?? call.name);
+                      const title = toolDisplayTitle(event?.toolName ?? call.name, t);
                       return (
                         <button
                           key={call.id}
@@ -725,7 +735,7 @@ function ToolDistributionZone({ liveRun }: { liveRun: LiveRun }) {
       <div className="grid gap-1.5">
         {entries.map(([name, bucket]) => {
           const kind = dataStepKindForTool(name);
-          const kindLabel = dataStepLabel(kind);
+          const kindLabel = dataStepLabel(kind, t);
           const tone = stepKindTone(kind);
           const share = runUsage.toolCalls.total > 0
             ? Math.max(8, Math.round((bucket.calls / runUsage.toolCalls.total) * 100))
@@ -852,6 +862,7 @@ function DeliverablesZone({
   events,
   onMentionArtifact,
   onOpenArtifactPage,
+  onPreviewArtifact,
   onPromoteArtifact,
   onArtifactExportJob,
   onSelectEvent,
@@ -861,6 +872,7 @@ function DeliverablesZone({
   events: TimelineEvent[];
   onMentionArtifact?: (artifact: DataArtifact) => void;
   onOpenArtifactPage?: (artifactId: string) => void;
+  onPreviewArtifact?: (artifactId: string) => void;
   onPromoteArtifact?: (artifact: DataArtifact) => Promise<void> | void;
   onArtifactExportJob?: (job: JobDto) => void;
   onSelectEvent: (eventId: string) => void;
@@ -927,6 +939,7 @@ function DeliverablesZone({
                   exportReady={exportReady}
                   promoted={promotedArtifactIds?.has(artifact.id) ?? false}
                   onOpenArtifactPage={onOpenArtifactPage}
+                  onPreviewArtifact={onPreviewArtifact}
                   onMentionArtifact={onMentionArtifact}
                   onPromoteArtifact={onPromoteArtifact}
                   onArtifactExportJob={onArtifactExportJob}
@@ -937,7 +950,7 @@ function DeliverablesZone({
             <p className="text-[11px] leading-4 text-muted-light">
               {exportReady
                 ? t("console.outputsHintExport")
-                : "Preview and download require the backend artifact API."}
+                : t("console.outputsHintBackend")}
             </p>
           </div>
         )}
@@ -952,6 +965,7 @@ function ArtifactCard({
   exportReady,
   promoted,
   onOpenArtifactPage,
+  onPreviewArtifact,
   onMentionArtifact,
   onPromoteArtifact,
   onArtifactExportJob,
@@ -962,11 +976,13 @@ function ArtifactCard({
   exportReady: boolean;
   promoted: boolean;
   onOpenArtifactPage?: (artifactId: string) => void;
+  onPreviewArtifact?: (artifactId: string) => void;
   onMentionArtifact?: (artifact: DataArtifact) => void;
   onPromoteArtifact?: (artifact: DataArtifact) => Promise<void> | void;
   onArtifactExportJob?: (job: JobDto) => void;
   onSelectEvent: (eventId: string) => void;
 }) {
+  const t = useT();
   const { busy, error, setError, downloadWhole, downloadFormat, exportJob } =
     useArtifactExportActions(onArtifactExportJob);
   const [promoting, setPromoting] = useState(false);
@@ -985,7 +1001,7 @@ function ArtifactCard({
     try {
       await onPromoteArtifact(artifact);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to add to project");
+      setError(err instanceof Error ? err.message : t("console.failedToAddToProject"));
     } finally {
       setPromoting(false);
     }
@@ -995,14 +1011,18 @@ function ArtifactCard({
   if (canMention && onMentionArtifact) {
     overflowItems.push({
       key: "mention",
-      label: "@ Mention",
+      label: t("console.mention"),
       onSelect: () => onMentionArtifact(artifact),
     });
   }
   if (promoteReady && onPromoteArtifact) {
     overflowItems.push({
       key: "promote",
-      label: promoted ? "Added to project" : promoting ? "Adding…" : "Add to project",
+      label: promoted
+        ? t("console.addedToProject")
+        : promoting
+          ? t("console.adding")
+          : t("console.addToProject"),
       disabled: promoted || promoting,
       onSelect: () => {
         void handlePromote();
@@ -1012,7 +1032,7 @@ function ArtifactCard({
   if (sourceEvent) {
     overflowItems.push({
       key: "source",
-      label: "View source",
+      label: t("console.viewSource"),
       onSelect: () => onSelectEvent(sourceEvent.id),
     });
   }
@@ -1020,25 +1040,25 @@ function ArtifactCard({
   const downloadItems: ActionMenuItem[] = [
     {
       key: "whole",
-      label: busy === "whole" ? "Downloading…" : "Download file",
+      label: busy === "whole" ? t("console.downloadingEllipsis") : t("console.downloadFile"),
       disabled: downloadBusy,
       onSelect: () => void downloadWhole(artifact),
     },
     {
       key: "csv",
-      label: busy === "csv" ? "Preparing CSV…" : "Download CSV",
+      label: busy === "csv" ? t("console.preparingCsv") : t("console.downloadCsv"),
       disabled: downloadBusy,
       onSelect: () => void downloadFormat(artifact, "csv"),
     },
     {
       key: "xlsx",
-      label: busy === "xlsx" ? "Preparing XLSX…" : "Download XLSX",
+      label: busy === "xlsx" ? t("console.preparingXlsx") : t("console.downloadXlsx"),
       disabled: downloadBusy,
       onSelect: () => void downloadFormat(artifact, "xlsx"),
     },
     {
       key: "job",
-      label: busy === "job" ? "Submitting…" : "Background export XLSX",
+      label: busy === "job" ? t("console.submitting") : t("console.backgroundExportXlsx"),
       disabled: downloadBusy,
       onSelect: () => void exportJob(artifact, "xlsx"),
     },
@@ -1061,21 +1081,32 @@ function ArtifactCard({
       <div className="flex flex-wrap items-center justify-end gap-2 rounded-b-xl border-t border-border bg-surface px-3 py-2">
         <button
           type="button"
+          onClick={() => onPreviewArtifact?.(artifact.id)}
+          disabled={!onPreviewArtifact}
+          className={`${btnPrimaryClass} disabled:cursor-not-allowed disabled:opacity-60`}
+          title={t("console.previewTitle")}
+        >
+          {t("console.preview")}
+        </button>
+        <button
+          type="button"
           onClick={() => onOpenArtifactPage?.(artifact.id)}
           disabled={!onOpenArtifactPage}
-          className={`${btnPrimaryClass} disabled:cursor-not-allowed disabled:opacity-60`}
-          title="Open its own page to reference the whole artifact or a selected table region / text"
+          className={`${btnSecondaryClass} disabled:cursor-not-allowed disabled:opacity-60`}
+          title={t("console.openPageTitle")}
         >
-          Open
+          {t("console.openPage")}
         </button>
         {hasHistory && exportReady ? (
           <button
             type="button"
             onClick={() => setShowHistory((v) => !v)}
             className={`${btnSecondaryClass}`}
-            title="View version history"
+            title={t("console.viewVersionHistory")}
           >
-            {showHistory ? "Hide history" : `History (${artifact.versionCount})`}
+            {showHistory
+              ? t("console.hideHistory")
+              : t("console.historyCount", { count: artifact.versionCount ?? 0 })}
           </button>
         ) : null}
         {exportReady ? (
@@ -1085,8 +1116,8 @@ function ArtifactCard({
               placement="up"
               align="right"
               triggerClass={`inline-flex items-center gap-1 ${btnSecondaryClass}`}
-              triggerLabel="Download"
-              ariaLabel="Download output"
+              triggerLabel={t("console.download")}
+              ariaLabel={t("console.downloadOutput")}
             />
           ) : (
             <button
@@ -1094,9 +1125,9 @@ function ArtifactCard({
               onClick={() => void downloadWhole(artifact)}
               disabled={downloadBusy}
               className={`${btnSecondaryClass} disabled:cursor-not-allowed disabled:opacity-60`}
-              title="Download output file"
+              title={t("console.downloadOutputFile")}
             >
-              {busy === "whole" ? "Downloading" : "Download"}
+              {busy === "whole" ? t("console.downloading") : t("console.download")}
             </button>
           )
         ) : null}
@@ -1107,8 +1138,8 @@ function ArtifactCard({
             align="right"
             triggerClass={`inline-flex items-center ${btnGhostClass}`}
             triggerIcon={<IconDots className="h-4 w-4" />}
-            ariaLabel="More actions"
-            title="More actions"
+            ariaLabel={t("console.moreActions")}
+            title={t("console.moreActions")}
             showChevron={false}
           />
         ) : null}
@@ -1124,6 +1155,7 @@ function ArtifactVersionHistory({
   artifactId: string;
   onClose: () => void;
 }) {
+  const t = useT();
   const [versions, setVersions] = useState<Array<{
     id: string;
     version: number;
@@ -1139,8 +1171,8 @@ function ArtifactVersionHistory({
     setFetchError(null);
     void configApi.listArtifactVersions(artifactId)
       .then((res) => setVersions(res.versions))
-      .catch(() => setFetchError("Failed to load version history"));
-  }, [artifactId]);
+      .catch(() => setFetchError(t("console.failedToLoadVersionHistory")));
+  }, [artifactId, t]);
 
   const handleDownload = async (versionId: string) => {
     if (downloadingId) return;
@@ -1163,21 +1195,21 @@ function ArtifactVersionHistory({
   return (
     <div className="border-t border-border bg-surface-subtle px-3 py-2">
       <div className="mb-1 flex items-center justify-between">
-        <span className="text-[11px] font-medium text-muted">Version history</span>
+        <span className="text-[11px] font-medium text-muted">{t("console.versionHistory")}</span>
         <button
           type="button"
           onClick={onClose}
           className="text-[11px] text-muted-light hover:text-foreground"
         >
-          Close
+          {t("common.close")}
         </button>
       </div>
       {fetchError ? (
         <p className="text-[11px] text-step-error">{fetchError}</p>
       ) : versions === null ? (
-        <p className="text-[11px] text-muted-light">Loading…</p>
+        <p className="text-[11px] text-muted-light">{t("common.loading")}</p>
       ) : versions.length === 0 ? (
-        <p className="text-[11px] text-muted-light">No versions yet</p>
+        <p className="text-[11px] text-muted-light">{t("console.noVersionsYet")}</p>
       ) : (
         <ul className="space-y-1">
           {[...versions].reverse().map((v) => (
@@ -1192,10 +1224,10 @@ function ArtifactVersionHistory({
                   onClick={() => void handleDownload(v.id)}
                   className={`text-[11px] ${btnGhostClass} disabled:opacity-50`}
                 >
-                  {downloadingId === v.id ? "Downloading…" : "Download"}
+                  {downloadingId === v.id ? t("console.downloadingEllipsis") : t("console.download")}
                 </button>
               ) : (
-                <span className="text-[11px] text-muted-light">No file</span>
+                <span className="text-[11px] text-muted-light">{t("console.noFile")}</span>
               )}
             </li>
           ))}
@@ -1401,8 +1433,8 @@ function ToolGroupDetailView({
   if (!group) {
     return (
       <EmptyState
-        title="No step selected"
-        description="Select a process step to inspect batch duration, child tools, and output lineage."
+        title={t("console.noProcessStepSelected")}
+        description={t("console.noProcessStepSelectedDescription")}
       />
     );
   }
@@ -1444,7 +1476,7 @@ function ToolGroupDetailView({
         <Metric label="Outputs" value={`${producedArtifacts.length} items`} />
       </div>
 
-      <Panel title="Tool calls">
+      <Panel title={t("console.toolCalls")}>
         <div className="divide-y divide-border overflow-hidden rounded-lg border border-border bg-surface">
           {calls.map((call) => {
             const event = eventForToolCall(events, call);
@@ -1462,7 +1494,7 @@ function ToolGroupDetailView({
                 <StepStatusDot status={call.status} compact />
                 <span className="min-w-0 flex-1">
                   <span className="block truncate text-xs font-medium text-foreground">
-                    {event?.title ?? toolDisplayTitle(call.name)}
+                    {toolDisplayTitle(call.name, t)}
                   </span>
                   <span className="mt-0.5 block truncate font-mono text-[10px] text-muted-light">
                     {call.name}
@@ -1478,20 +1510,20 @@ function ToolGroupDetailView({
         </div>
       </Panel>
 
-      <Panel title="Usage">
+      <Panel title={t("console.usage")}>
         <TokenUsagePanel usage={tokenUsage} />
       </Panel>
 
-      <Panel title="Tool details">
+      <Panel title={t("console.toolDetails")}>
         {selectedEvent && selectedCall ? (
           <div className="grid gap-3">
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0">
                 <div className={sectionLabelClass}>
-                  {dataStepLabel(selectedEvent.kind)} · {selectedEvent.ts}
+                  {dataStepLabel(selectedEvent.kind, t)} · {selectedEvent.ts}
                 </div>
                 <div className="mt-1 truncate text-xs font-semibold text-foreground">
-                  {selectedEvent.title}
+                  {toolDisplayTitle(selectedEvent.toolName ?? selectedCall.name, t)}
                 </div>
               </div>
               <button
@@ -1515,7 +1547,7 @@ function ToolGroupDetailView({
         )}
       </Panel>
 
-      <Panel title="Output lineage">
+      <Panel title={t("console.outputLineage")}>
         {producedArtifacts.length > 0 ? (
           <div className="grid gap-2">
             {producedArtifacts.map((artifact) => (
@@ -1533,7 +1565,7 @@ function ToolGroupDetailView({
             ))}
           </div>
         ) : (
-          <p className="text-xs text-muted-light">This step has not directly produced outputs yet.</p>
+          <p className="text-xs text-muted-light">{t("console.stepNoOutputsYet")}</p>
         )}
       </Panel>
     </div>
@@ -1588,8 +1620,8 @@ function ArtifactDetailPanel({
   if (!artifact) {
     return (
       <EmptyState
-        title="No content selected"
-        description="Select a visible output to inspect the full SQL, dataset, chart, or report."
+        title={t("console.noContentSelected")}
+        description={t("console.noContentSelectedDescription")}
       />
     );
   }
@@ -1680,8 +1712,8 @@ function ActionDetail({
   if (!event) {
     return (
       <EmptyState
-        title="No action selected"
-        description="Select a data action to inspect its parameters, observations, and outputs."
+        title={t("console.noActionSelected")}
+        description={t("console.noActionSelectedDescription")}
       />
     );
   }
@@ -1691,10 +1723,10 @@ function ActionDetail({
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className={sectionLabelClass}>
-            {dataStepLabel(event.kind)} · {event.ts}
+            {dataStepLabel(event.kind, t)} · {event.ts}
           </div>
           <h3 className="mt-1 text-sm font-semibold text-foreground">
-            {event.title}
+            {toolDisplayTitle(event.toolName, t)}
           </h3>
           <p className="mt-1 text-xs leading-5 text-muted">
             {event.summary}
@@ -1718,14 +1750,14 @@ function ActionDetail({
       </div>
 
       {event.thought && (
-        <Panel title="Reasoning">
+        <Panel title={t("console.reasoning")}>
           <p className="text-sm italic leading-6 text-muted">
             {event.thought}
           </p>
         </Panel>
       )}
 
-      <Panel title="Action details">
+      <Panel title={t("console.actionDetails")}>
         <EventPayloadView
           event={event}
           producedArtifacts={producedArtifacts}
@@ -1734,7 +1766,7 @@ function ActionDetail({
       </Panel>
 
       {workspaceMetadata ? (
-        <Panel title="Workspace metadata">
+        <Panel title={t("console.workspaceMetadata")}>
           <p className="text-xs leading-5 text-muted">
             {formatWorkspaceMetadataSummary(workspaceMetadata)}
           </p>
@@ -1749,7 +1781,7 @@ function ActionDetail({
       ) : null}
 
       {sandboxOutputs.length > 0 ? (
-        <Panel title="Sandbox output">
+        <Panel title={t("console.sandboxOutput")}>
           <div className="grid gap-2">
             {sandboxOutputs.map((output, index) => (
               <div
@@ -1768,7 +1800,7 @@ function ActionDetail({
         </Panel>
       ) : null}
 
-      <Panel title="Output lineage">
+      <Panel title={t("console.outputLineage")}>
         {producedArtifacts.length > 0 ? (
           <div className="grid gap-2">
             {producedArtifacts.map((artifact) => {
@@ -1795,10 +1827,10 @@ function ActionDetail({
                     </p>
                     <span className="mt-1 inline-block text-[10px] font-medium text-muted">
                       {expanded
-                        ? "Collapse"
+                        ? t("console.collapse")
                         : artifact.detail || artifact.previewAvailable
-                          ? "Expand content"
-                          : "No details"}
+                          ? t("console.expandContent")
+                          : t("console.noDetails")}
                     </span>
                   </button>
                   {expanded ? (
@@ -1814,7 +1846,7 @@ function ActionDetail({
             </p>
           </div>
         ) : (
-          <p className="text-xs text-muted-light">This action did not directly produce outputs.</p>
+          <p className="text-xs text-muted-light">{t("console.actionNoOutputs")}</p>
         )}
       </Panel>
     </div>
@@ -1941,6 +1973,7 @@ function EventPayloadView({
   producedArtifacts?: DataArtifact[];
   toolCall?: LiveToolCallRecord;
 }) {
+  const t = useT();
   if (event.kind === "inspect") {
     const payload = event.payload as {
       tables: Array<{ name: string; description: string; fields: string[] }>;
@@ -2039,7 +2072,7 @@ function EventPayloadView({
         )}
         {datasetDetail?.type === "dataset" ? (
           <div className="grid gap-2">
-            <div className={sectionLabelClass}>Result preview</div>
+            <div className={sectionLabelClass}>{t("console.resultPreview")}</div>
             <ArtifactDetailView detail={datasetDetail} />
           </div>
         ) : toolCall?.result && toolResultLooksLikeError(toolCall.result) ? (
@@ -2049,7 +2082,7 @@ function EventPayloadView({
           />
         ) : toolCall?.result && parseSqlToolResult(toolCall.result) ? (
           <div className="grid gap-2">
-            <div className={sectionLabelClass}>Result preview</div>
+            <div className={sectionLabelClass}>{t("console.resultPreview")}</div>
             <ToolFormattedResult
               toolName={toolCall.name ?? event.toolName ?? "run_sql_readonly"}
               result={toolCall.result}
@@ -2121,6 +2154,7 @@ function ArtifactExpandedDetail({
   artifact: DataArtifact;
   exportReady?: boolean;
 }) {
+  const t = useT();
   const [detail, setDetail] = useState<ArtifactDetail | undefined>(artifact.detail);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -2157,7 +2191,7 @@ function ArtifactExpandedDetail({
           return;
         }
         setError(
-          fetchError instanceof Error ? fetchError.message : "Failed to load preview",
+          fetchError instanceof Error ? fetchError.message : t("console.failedToLoadPreview"),
         );
       })
       .finally(() => {
@@ -2184,7 +2218,7 @@ function ArtifactExpandedDetail({
   }
 
   if (loading) {
-    return <p className="text-xs text-muted-light">Loading preview...</p>;
+    return <p className="text-xs text-muted-light">{t("console.loadingPreview")}</p>;
   }
 
   if (error) {
@@ -2197,7 +2231,7 @@ function ArtifactExpandedDetail({
 
   return (
     <EmptyState
-      title="No details"
+      title={t("console.noDetails")}
       description={
         artifact.previewAvailable && exportReady
           ? "Preview could not be loaded after expanding. Try again later."
@@ -2265,7 +2299,7 @@ function ArtifactDetailView({
   );
 }
 
-type FileKind = "image" | "markdown" | "csv" | "tsv" | "json" | "yaml" | "html" | "text";
+type FileKind = "image" | "markdown" | "csv" | "tsv" | "json" | "yaml" | "html" | "pdf" | "text";
 
 function classifyFileKind(path: string): FileKind {
   const ext = /\.([a-z0-9]+)$/u.exec(path.toLowerCase())?.[1];
@@ -2297,6 +2331,8 @@ function classifyFileKind(path: string): FileKind {
     case "html":
     case "htm":
       return "html";
+    case "pdf":
+      return "pdf";
     default:
       return "text";
   }
@@ -2331,6 +2367,7 @@ function FileNotEmbeddedNote({ downloadable }: { downloadable: boolean }) {
 }
 
 function HtmlFilePreview({ content }: { content: string }) {
+  const t = useT();
   const [showSource, setShowSource] = useState(false);
   return (
     <div className="grid gap-2">
@@ -2340,7 +2377,7 @@ function HtmlFilePreview({ content }: { content: string }) {
           onClick={() => setShowSource((value) => !value)}
           className={`h-7 ${btnSecondaryClass}`}
         >
-          {showSource ? "Rendered" : "Source"}
+          {showSource ? t("console.rendered") : t("console.source")}
         </button>
       </div>
       {showSource ? (
@@ -2349,7 +2386,7 @@ function HtmlFilePreview({ content }: { content: string }) {
         <iframe
           sandbox=""
           srcDoc={content}
-          title="HTML preview"
+          title={t("console.htmlPreview")}
           className="h-80 w-full rounded-lg border border-border bg-white"
         />
       )}
@@ -2373,6 +2410,10 @@ export function FileDetailView({
     kind === "image" && artifact?.fileId
       ? artifactExportClient.contentUrl(artifact.id)
       : undefined;
+  const pdfSrc =
+    kind === "pdf" && artifact?.fileId
+      ? artifactExportClient.contentUrl(artifact.id)
+      : undefined;
 
   const renderBody = () => {
     if (kind === "image") {
@@ -2388,6 +2429,22 @@ export function FileDetailView({
             className="max-h-80 w-auto max-w-full rounded-lg border border-border bg-white object-contain"
           />
         </a>
+      );
+    }
+
+    if (kind === "pdf") {
+      if (!pdfSrc) {
+        return <FileNotEmbeddedNote downloadable={fileBacked} />;
+      }
+      return (
+        <iframe
+          src={pdfSrc}
+          title={detail.path}
+          className={[
+            "w-full rounded-lg border border-border bg-white",
+            bare ? "h-[70vh]" : "h-80",
+          ].join(" ")}
+        />
       );
     }
 
@@ -2494,6 +2551,7 @@ export function ChartDetailView({
 }: {
   detail: Extract<ArtifactDetail, { type: "chart" }>;
 }) {
+  const t = useT();
   const points = detail.points.length > 0
     ? detail.points
     : detail.series?.[0]?.points ?? [];
@@ -2504,8 +2562,8 @@ export function ChartDetailView({
   if (points.length === 0) {
     return (
       <EmptyState
-        title="No chart data"
-        description="The backend declared a chart artifact but has not reported points/series preview data yet."
+        title={t("console.noChartData")}
+        description={t("console.noChartDataDescription")}
       />
     );
   }
@@ -2610,6 +2668,7 @@ function DatasetDetailView({
 }: {
   detail: Extract<ArtifactDetail, { type: "dataset" }>;
 }) {
+  const t = useT();
   const [query, setQuery] = useState("");
   const [sort, setSort] = useState<TableSortState | null>(null);
   const rows = useMemo(
@@ -2641,19 +2700,19 @@ function DatasetDetailView({
     <div className="grid gap-2">
       <div className="flex flex-wrap items-center gap-2">
         <label className="min-w-[180px] flex-1">
-          <span className="sr-only">Search result table</span>
+          <span className="sr-only">{t("console.searchResultTable")}</span>
           <input
             value={query}
             onChange={(event) => setQuery(event.target.value)}
             className="h-8 w-full rounded-lg border border-border bg-white px-2.5 text-xs text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-slate-400"
-            placeholder="Search result table"
+            placeholder={t("console.searchResultTable")}
           />
         </label>
         <button
           type="button"
           onClick={exportCsv}
           className={`h-8 ${btnSecondaryClass}`}
-          title="Export the current filtered / sorted result"
+          title={t("console.exportFilteredResult")}
         >
           Export current view CSV
         </button>
@@ -2745,6 +2804,7 @@ function ArtifactCardHeader({
   artifact: DataArtifact;
   sourceEvent?: TimelineEvent | null;
 }) {
+  const t = useT();
   const label = artifact.type ?? artifact.kind;
   const tone = artifactToneForType(artifact.type ?? artifact.kind);
 
@@ -2781,14 +2841,17 @@ function ArtifactCardHeader({
                 stepKindTone(sourceEvent.kind).text,
               ].join(" ")}
             >
-              {dataStepLabel(sourceEvent.kind)}
+              {dataStepLabel(sourceEvent.kind, t)}
             </span>
-            <span className="min-w-0 truncate text-muted-light" title={sourceEvent.title}>
-              From {sourceEvent.title}
+            <span
+              className="min-w-0 truncate text-muted-light"
+              title={toolDisplayTitle(sourceEvent.toolName, t)}
+            >
+              From {toolDisplayTitle(sourceEvent.toolName, t)}
             </span>
           </>
         ) : (
-          <span className="text-muted-light">Source step not linked</span>
+          <span className="text-muted-light">{t("console.sourceStepNotLinked")}</span>
         )}
       </div>
       <div className="mt-3 text-[11px] text-muted-light">

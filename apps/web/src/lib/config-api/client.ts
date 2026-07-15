@@ -16,6 +16,7 @@ import type {
   FileAssetRefDto,
   JobDto,
   KnowledgeBaseDto,
+  KnowledgeDocumentDto,
   MeResponseDto,
   McpServerDto,
   ModelProfileDto,
@@ -494,13 +495,36 @@ export const configApi = {
   uploadKnowledgeFile(
     id: string,
     file: File,
-  ): Promise<Record<string, unknown>> {
+  ): Promise<KnowledgeDocumentDto> {
     const form = new FormData();
     form.append("file", file);
-    return requestEnvelope(`/api/v1/knowledge-bases/${encodeURIComponent(id)}/files`, {
+    return requestEnvelope<KnowledgeDocumentDto>(`/api/v1/knowledge-bases/${encodeURIComponent(id)}/files`, {
       method: "POST",
       body: form,
     });
+  },
+
+  listKnowledgeFiles(id: string): Promise<{ documents: KnowledgeDocumentDto[] }> {
+    return requestEnvelope<{ documents: KnowledgeDocumentDto[] }>(
+      `/api/v1/knowledge-bases/${encodeURIComponent(id)}/files`,
+    );
+  },
+
+  deleteKnowledgeFile(
+    id: string,
+    documentId: string,
+  ): Promise<{ deleted: boolean; id: string }> {
+    return requestEnvelope<{ deleted: boolean; id: string }>(
+      `/api/v1/knowledge-bases/${encodeURIComponent(id)}/files/${encodeURIComponent(documentId)}`,
+      { method: "DELETE" },
+    );
+  },
+
+  reindexKnowledgeFile(id: string, documentId: string): Promise<KnowledgeDocumentDto> {
+    return requestEnvelope<KnowledgeDocumentDto>(
+      `/api/v1/knowledge-bases/${encodeURIComponent(id)}/files/${encodeURIComponent(documentId)}/reindex`,
+      { method: "POST" },
+    );
   },
 
   reindexKnowledgeBase(id: string, idempotencyKey?: string): Promise<JobDto> {

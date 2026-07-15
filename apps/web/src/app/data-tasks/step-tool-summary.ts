@@ -1,5 +1,6 @@
 import { toolDisplayTitle } from "./data-task-state";
 import type { LiveRun } from "./live-run-state";
+import type { TranslateFn } from "../../i18n/types";
 
 export type StepToolStatus = "running" | "success" | "failed";
 
@@ -18,6 +19,7 @@ export function buildStepToolSummaries(input: {
   toolCalls: AssistantToolCallLike[];
   liveRun: LiveRun | null;
   isActive: boolean;
+  t?: TranslateFn;
 }): StepToolSummaryInput[] {
   const liveById = new Map(input.liveRun?.toolCalls.map((call) => [call.id, call]) ?? []);
   return input.toolCalls
@@ -31,12 +33,14 @@ export function buildStepToolSummaries(input: {
           : "success";
       return {
         id,
-        label: toolDisplayTitle(liveCall?.name ?? call.function?.name),
+        label: toolDisplayTitle(liveCall?.name ?? call.function?.name, input.t),
         status,
         durationLabel: liveCall
-          ? stepElapsedLabel(liveCall)
+          ? stepElapsedLabel(liveCall, input.t)
           : status === "running"
-            ? "Running"
+            ? input.t
+              ? input.t("common.running")
+              : "Running"
             : "—",
       };
     })
@@ -65,8 +69,8 @@ export function formatStepDuration(ms: number): string {
   return `${(ms / 1000).toFixed(1)}s`;
 }
 
-export function stepElapsedLabel(step: StepElapsedInput): string {
-  if (step.status === "running") return "Running";
+export function stepElapsedLabel(step: StepElapsedInput, t?: TranslateFn): string {
+  if (step.status === "running") return t ? t("common.running") : "Running";
   if (step.startedAtMs === undefined || step.finishedAtMs === undefined) {
     return "—";
   }

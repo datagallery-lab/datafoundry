@@ -5,8 +5,12 @@ import type { EvidenceRef } from "@datafoundry/contracts";
 import { artifactToneForType } from "../../ui-tokens";
 import { TaskConsole, type TaskConsoleProps } from "./TaskConsole";
 import { ExpandedArtifactView } from "./ExpandedArtifactView";
+import { ArtifactPreviewModal } from "./ArtifactPreviewModal";
 
-type TaskConsolePanelProps = Omit<TaskConsoleProps, "onOpenArtifactPage"> & {
+type TaskConsolePanelProps = Omit<
+  TaskConsoleProps,
+  "onOpenArtifactPage" | "onPreviewArtifact"
+> & {
   sessionId: string;
   runId?: string;
   onReferenceEvidence: (ref: EvidenceRef) => void;
@@ -17,7 +21,7 @@ const CONSOLE_PAGE = "console";
 /**
  * Right-panel shell that hosts the Task Console and any number of expanded artifact
  * pages as sibling tabs. The console tab is fixed; each opened artifact becomes its
- * own closable page peer to the console.
+ * own closable page peer to the console. Preview opens a full-page overlay modal.
  */
 export function TaskConsolePanel({
   sessionId,
@@ -29,6 +33,7 @@ export function TaskConsolePanel({
   const { artifactFocusId, onArtifactFocusHandled } = consoleProps;
   const [openArtifactIds, setOpenArtifactIds] = useState<string[]>([]);
   const [activePageId, setActivePageId] = useState<string>(CONSOLE_PAGE);
+  const [previewArtifactId, setPreviewArtifactId] = useState<string | null>(null);
 
   // Drop pages whose artifact is gone (e.g. after switching sessions/runs).
   useEffect(() => {
@@ -53,6 +58,18 @@ export function TaskConsolePanel({
     setActivePageId(artifactId);
   }, []);
 
+  const openArtifactPreview = useCallback((artifactId: string) => {
+    setPreviewArtifactId(artifactId);
+  }, []);
+
+  // Drop preview when the artifact disappears (session/run switch).
+  useEffect(() => {
+    if (!previewArtifactId) return;
+    if (!artifacts.some((artifact) => artifact.id === previewArtifactId)) {
+      setPreviewArtifactId(null);
+    }
+  }, [artifacts, previewArtifactId]);
+
   // A focus request (e.g. from the Trace overlay) opens the artifact's peer page.
   useEffect(() => {
     if (!artifactFocusId) return;
@@ -74,6 +91,10 @@ export function TaskConsolePanel({
     activePageId === CONSOLE_PAGE
       ? null
       : artifacts.find((artifact) => artifact.id === activePageId) ?? null;
+
+  const previewArtifact = previewArtifactId
+    ? artifacts.find((artifact) => artifact.id === previewArtifactId) ?? null
+    : null;
 
   const hasPages = openArtifactIds.length > 0;
 
@@ -117,9 +138,26 @@ export function TaskConsolePanel({
             />
           </div>
         ) : (
-          <TaskConsole {...consoleProps} sessionId={sessionId} onOpenArtifactPage={openArtifactPage} />
+          <TaskConsole
+            {...consoleProps}
+            sessionId={sessionId}
+            onOpenArtifactPage={openArtifactPage}
+            onPreviewArtifact={openArtifactPreview}
+          />
         )}
       </div>
+
+      {previewArtifact ? (
+        <ArtifactPreviewModal
+          artifact={previewArtifact}
+          sessionId={sessionId}
+          runId={runId}
+          onClose={() => setPreviewArtifactId(null)}
+          onOpenPage={openArtifactPage}
+          onReferenceEvidence={onReferenceEvidence}
+          onArtifactExportJob={consoleProps.onArtifactExportJob}
+        />
+      ) : null}
     </div>
   );
 }

@@ -50,6 +50,7 @@ export type {
   IdentityWorkspace,
   JobDto,
   KnowledgeBaseDto,
+  KnowledgeDocumentDto,
   MeResponseDto,
   McpServerDto,
   ModelProfileDto,

@@ -1,5 +1,6 @@
 import type { WorkspaceConfigKind } from "./data-task-state";
 import { ConfigApiError } from "../../lib/config-api";
+import type { TranslateFn } from "../../i18n/types";
 
 export type ConfigTestPresentation = {
   tone: "success" | "error";
@@ -13,12 +14,12 @@ function stringValue(value: unknown): string | null {
   return null;
 }
 
-function humanizeProviderTestMessage(message: string): string {
+function humanizeProviderTestMessage(message: string, t: TranslateFn): string {
   const trimmed = message.trim();
   const missing = /^PROVIDER_CONFIG_MISSING:(.+)$/u.exec(trimmed);
   if (missing) {
     const profile = missing[1]?.trim() || "this model profile";
-    return `Model provider configuration is incomplete for "${profile}". Check the API key, base URL, and model name.`;
+    return t("configPanel.providerConfigMissing", { profile });
   }
   const providerFailed = /^PROVIDER_TEST_FAILED:(.+)$/u.exec(trimmed);
   if (providerFailed) {
@@ -33,10 +34,10 @@ function humanizeProviderTestMessage(message: string): string {
     return mcpFailed[1]?.trim() || trimmed;
   }
   if (trimmed === "MCP_SERVER_CONFIG_INVALID") {
-    return "MCP server configuration is incomplete. Check the URL/command and transport.";
+    return t("configPanel.mcpConfigInvalid");
   }
   if (trimmed === "MCP_STDIO_COMMAND_REQUIRED") {
-    return "MCP stdio transport requires a command.";
+    return t("configPanel.mcpStdioRequired");
   }
   if (trimmed.startsWith("MCP_SERVER_") || trimmed.startsWith("MCP_STDIO_")) {
     return trimmed.replace(/^MCP_[A-Z0-9_]+:?/u, "").trim() || trimmed;
@@ -46,14 +47,14 @@ function humanizeProviderTestMessage(message: string): string {
     || trimmed.startsWith("REVISION_CONFLICT:")
     || trimmed.includes("REVISION_CONFLICT")
   ) {
-    return "Configuration was updated while testing. Refresh and try again.";
+    return t("configPanel.revisionConflict");
   }
   if (
     trimmed.includes("CONFIG_RESOURCE_NOT_FOUND")
     || trimmed.includes("RESOURCE_NOT_FOUND")
     || /not found/iu.test(trimmed)
   ) {
-    return "This configuration was deleted while testing. Refresh and try again.";
+    return t("configPanel.resourceDeleted");
   }
   return trimmed;
 }
@@ -61,13 +62,14 @@ function humanizeProviderTestMessage(message: string): string {
 export function formatConfigTestResult(
   kind: WorkspaceConfigKind,
   result: Record<string, unknown>,
+  t: TranslateFn,
 ): ConfigTestPresentation {
   if (result.tested === false) {
     const reason =
-      stringValue(result.reason) ?? "Connectivity probe is not available for this resource type.";
+      stringValue(result.reason) ?? t("configPanel.testProbeUnavailable");
     return {
       tone: "success",
-      title: "Test skipped",
+      title: t("configPanel.testSkipped"),
       details: [reason],
     };
   }
@@ -80,16 +82,25 @@ export function formatConfigTestResult(
   const status = stringValue(result.status);
 
   if (reason) details.push(reason);
-  if (kind === "llm" && model && !reason) details.push(`Model: ${model}`);
-  if (latencyMs) details.push(`Duration: ${latencyMs} ms`);
-  if (kind === "llm" && response && !reason) details.push(`Response: ${response}`);
-  if (details.length === 0 && status) details.push(`Status: ${status}`);
-  if (details.length === 0) details.push("Connection test completed.");
+  if (kind === "llm" && model && !reason) {
+    details.push(t("configPanel.testModelLabel", { model }));
+  }
+  if (latencyMs) details.push(t("configPanel.testDurationLabel", { ms: latencyMs }));
+  if (kind === "llm" && response && !reason) {
+    details.push(t("configPanel.testResponseLabel", { response }));
+  }
+  if (details.length === 0 && status) {
+    details.push(t("configPanel.testStatusLabel", { status }));
+  }
+  if (details.length === 0) details.push(t("configPanel.testCompleted"));
 
-  return { tone: "success", title: "Test succeeded", details };
+  return { tone: "success", title: t("configPanel.testSucceeded"), details };
 }
 
-export function formatConfigTestError(error: unknown): ConfigTestPresentation {
+export function formatConfigTestError(
+  error: unknown,
+  t: TranslateFn,
+): ConfigTestPresentation {
   if (error instanceof ConfigApiError) {
     const raw =
       error.code === "REVISION_CONFLICT" && !error.message.includes("REVISION_CONFLICT")
@@ -97,14 +108,15 @@ export function formatConfigTestError(error: unknown): ConfigTestPresentation {
         : error.message || error.code;
     return {
       tone: "error",
-      title: "Test failed",
-      details: [humanizeProviderTestMessage(raw)],
+      title: t("configPanel.testFailedTitle"),
+      details: [humanizeProviderTestMessage(raw, t)],
     };
   }
-  const message = error instanceof Error ? error.message : "Test failed";
+  const message =
+    error instanceof Error ? error.message : t("configPanel.testFailed");
   return {
     tone: "error",
-    title: "Test failed",
-    details: [humanizeProviderTestMessage(message)],
+    title: t("configPanel.testFailedTitle"),
+    details: [humanizeProviderTestMessage(message, t)],
   };
 }

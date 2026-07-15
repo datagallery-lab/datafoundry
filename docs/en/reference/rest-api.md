@@ -182,10 +182,13 @@ The backend does not expose arbitrary SQL REST endpoints. SQL analysis runs thro
 | PATCH | `/api/v1/knowledge-bases/:id` | Update a knowledge base. |
 | DELETE | `/api/v1/knowledge-bases/:id` | Delete a knowledge base. |
 | POST | `/api/v1/knowledge-bases/:id/test` | Validate configuration. |
+| GET | `/api/v1/knowledge-bases/:id/files` | List documents. |
 | POST | `/api/v1/knowledge-bases/:id/files` | Upload documents. |
+| DELETE | `/api/v1/knowledge-bases/:id/files/:documentId` | Hard-delete one document (cascades chunks/FTS/embeddings). |
+| POST | `/api/v1/knowledge-bases/:id/files/:documentId/reindex` | Reindex one document; success sets status to `ready`. |
 | POST | `/api/v1/knowledge-bases/:id/files/import` | Import from FileAssetRef. |
 | POST | `/api/v1/knowledge-bases/:id/search` | Retrieval debug. |
-| POST | `/api/v1/knowledge-bases/:id/reindex` | Rebuild index; returns a job. |
+| POST | `/api/v1/knowledge-bases/:id/reindex` | Rebuild index; returns a job. Success marks documents `ready`. |
 
 ## MCP and Skills
 

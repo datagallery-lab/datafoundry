@@ -168,6 +168,16 @@ export type KnowledgeBaseDto = {
   updatedAt?: string;
 };
 
+export type KnowledgeDocumentDto = {
+  id: string;
+  userId?: string;
+  collectionId?: string;
+  filename: string;
+  fileAssetRefId?: string;
+  mimeType?: string;
+  status: string;
+};
+
 export type McpServerDto = {
   id: string;
   name: string;

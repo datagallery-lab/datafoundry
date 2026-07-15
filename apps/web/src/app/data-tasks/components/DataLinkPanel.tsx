@@ -8,6 +8,7 @@ import {
   useState,
   type PointerEvent as ReactPointerEvent,
 } from "react";
+import { useT } from "../../../i18n/locale-context";
 import type {
   DatalinkEdgeDto,
   DatalinkGraphDto,
@@ -97,6 +98,7 @@ const GRAPH_NODE_TYPES: GraphNodeType[] = ["table", "column", "concept", "entity
 const DEFAULT_CANVAS_HEIGHT = 620;
 
 export function DataLinkPanel({ onBack, onOpenMcpSettings }: DataLinkPanelProps) {
+  const t = useT();
   const [servers, setServers] = useState<DatalinkServerDto[]>([]);
   const [serverId, setServerId] = useState("");
   const [graph, setGraph] = useState<DatalinkGraphDto | null>(null);
@@ -163,35 +165,43 @@ export function DataLinkPanel({ onBack, onOpenMcpSettings }: DataLinkPanelProps)
   const loadServers = useCallback(async () => {
     setLoadingServers(true);
     setError(null);
+    // Avoid flashing stale servers/graph from a previous open while refetching.
+    setServers([]);
+    setServerId("");
+    setGraph(null);
     try {
       const response = await configApi.listDatalinkServers();
       setServers(response.servers);
-      setServerId((current) => current || response.servers[0]?.id || "");
+      setServerId(response.servers[0]?.id || "");
     } catch (loadError) {
-      setError(loadError instanceof Error ? loadError.message : "Failed to load datalink servers");
+      setError(loadError instanceof Error ? loadError.message : t("dataLink.loadServersFailed"));
       setServers([]);
+      setServerId("");
+      setGraph(null);
     } finally {
       setLoadingServers(false);
     }
-  }, []);
+  }, [t]);
 
   const loadGraph = useCallback(async (targetServerId: string) => {
     if (!targetServerId) {
       setGraph(null);
+      setLoadingGraph(false);
       return;
     }
     setLoadingGraph(true);
     setError(null);
+    setGraph(null);
     try {
       const response = await configApi.getDatalinkGraph(targetServerId);
       setGraph(response.graph);
     } catch (loadError) {
       setGraph(null);
-      setError(loadError instanceof Error ? loadError.message : "Failed to load data link");
+      setError(loadError instanceof Error ? loadError.message : t("dataLink.loadGraphFailed"));
     } finally {
       setLoadingGraph(false);
     }
-  }, []);
+  }, [t]);
 
   const selectRootNode = useCallback((nodeId: string) => {
     setRootNodeId(nodeId);
@@ -283,132 +293,138 @@ export function DataLinkPanel({ onBack, onOpenMcpSettings }: DataLinkPanelProps)
         <div className="flex flex-col gap-4">
           {error ? <ErrorBanner message={error} /> : null}
 
-          <ServerToolbar
-            loadingServers={loadingServers}
-            serverId={serverId}
-            servers={servers}
-            onServerChange={setServerId}
-          />
-
-          {servers.length === 0 && !loadingServers ? (
-            <EmptyGraphState onOpenMcpSettings={onOpenMcpSettings} />
+          {loadingServers ? (
+            <LoadingServersState />
           ) : (
             <>
-              <StatsStrip graphStats={graphStats} visibleGraph={visibleGraph.data} />
-              <section className={explorerShellClass}>
-                <RootEntryPanel
-                  entryMode={entryMode}
-                  entryNodes={entryNodes}
-                  entrySearch={entrySearch}
-                  rootNodeId={rootNodeId}
-                  onEntryModeChange={setEntryMode}
-                  onEntrySearchChange={setEntrySearch}
-                  onSelectRoot={selectRootNode}
-                />
-                <div className="min-w-0 space-y-3">
-                  <EdgeTypeToolbar
-                    edgeTypeCounts={indexes.edgeTypeCounts}
-                    enabledEdgeTypes={enabledEdgeTypes}
-                    visibleEdgeTypeCounts={visibleEdgeTypeCounts}
-                    onReset={resetExplorer}
-                    onToggleEdgeType={(type) =>
-                      setEnabledEdgeTypes((current) => toggleSetValue(current, type))
-                    }
-                  />
-                  <DataLinkCanvas
-                    activeLinkIds={visibleGraph.activeLinkIds}
-                    activeNodeIds={visibleGraph.activeNodeIds}
-                    graphData={visibleGraph.data}
-                    hasFocus={visibleGraph.hasFocus}
-                    isLoading={loadingGraph}
-                    selectedItem={selectedItem}
-                    onLinkClick={handleLinkClick}
-                    onLinkHover={setHoverLinkId}
-                    onNodeClick={handleNodeClick}
-                    onNodeHover={setHoverNodeId}
-                  />
-                </div>
-                <InspectorPanel
-                  activeNodeId={activeNodeId}
-                  edge={selectedEdge}
-                  node={selectedNode}
-                  rootNodeId={rootNodeId}
-                  server={selectedServer}
-                  onCollapseNode={collapseSelectedNode}
-                  onExpandNode={setActiveNodeId}
-                />
-              </section>
+              <ServerToolbar
+                loadingServers={loadingServers}
+                serverId={serverId}
+                servers={servers}
+                onServerChange={setServerId}
+              />
 
-              <section className="grid gap-4 xl:grid-cols-3">
-                <ExplorePanel
-                  busy={busyAction === "explore"}
-                  focus={exploreFocus}
-                  query={exploreQuery}
-                  result={exploreResult}
-                  onFocusChange={setExploreFocus}
-                  onQueryChange={setExploreQuery}
-                  onRun={() =>
-                    runAction(
-                      "explore",
-                      async () => {
-                        const response = await configApi.exploreDatalink(serverId, {
-                          query: exploreQuery,
-                          ...(exploreFocus ? { focus: exploreFocus } : {}),
-                          maskCredential: true,
-                          maxNodes: 12,
-                        });
-                        setExploreResult(response.result);
-                        return response.result;
-                      },
-                      false,
-                      false,
-                    )
-                  }
-                />
-                <AddTablePanel
-                  busy={busyAction === "add_table"}
-                  schemaName={schemaName}
-                  source={source}
-                  sourceType={sourceType}
-                  table={table}
-                  onRun={() =>
-                    runAction("add_table", async () => {
-                      const response = await configApi.addDatalinkTable(serverId, {
-                        source,
-                        sourceType,
-                        ...(schemaName.trim() ? { schemaName } : {}),
-                        ...(table.trim() ? { table } : {}),
-                      });
-                      return response.result;
-                    })
-                  }
-                  onSchemaNameChange={setSchemaName}
-                  onSourceChange={setSource}
-                  onSourceTypeChange={setSourceType}
-                  onTableChange={setTable}
-                />
-                <GraphMaintenancePanel
-                  actionResult={actionResult}
-                  busyAction={busyAction}
-                  selectedNode={selectedNode}
-                  tableNodes={tableNodes}
-                  onRebuild={() =>
-                    runAction("rebuild", async () => {
-                      const response = await configApi.rebuildDatalink(serverId);
-                      return response.result;
-                    })
-                  }
-                  onRemoveTable={(tableId) =>
-                    runAction("remove_table", async () => {
-                      const response = await configApi.removeDatalinkTable(serverId, {
-                        cleanupOrphans: true,
-                        tableId,
-                      });
-                      return response.result;
-                    })
-                  }
-                />
-              </section>
+              {servers.length === 0 ? (
+                <EmptyGraphState onOpenMcpSettings={onOpenMcpSettings} />
+              ) : (
+                <>
+                  <StatsStrip graphStats={graphStats} visibleGraph={visibleGraph.data} />
+                  <section className={explorerShellClass}>
+                    <RootEntryPanel
+                      entryMode={entryMode}
+                      entryNodes={entryNodes}
+                      entrySearch={entrySearch}
+                      rootNodeId={rootNodeId}
+                      onEntryModeChange={setEntryMode}
+                      onEntrySearchChange={setEntrySearch}
+                      onSelectRoot={selectRootNode}
+                    />
+                    <div className="min-w-0 space-y-3">
+                      <EdgeTypeToolbar
+                        edgeTypeCounts={indexes.edgeTypeCounts}
+                        enabledEdgeTypes={enabledEdgeTypes}
+                        visibleEdgeTypeCounts={visibleEdgeTypeCounts}
+                        onReset={resetExplorer}
+                        onToggleEdgeType={(type) =>
+                          setEnabledEdgeTypes((current) => toggleSetValue(current, type))
+                        }
+                      />
+                      <DataLinkCanvas
+                        activeLinkIds={visibleGraph.activeLinkIds}
+                        activeNodeIds={visibleGraph.activeNodeIds}
+                        graphData={visibleGraph.data}
+                        hasFocus={visibleGraph.hasFocus}
+                        isLoading={loadingGraph}
+                        selectedItem={selectedItem}
+                        onLinkClick={handleLinkClick}
+                        onLinkHover={setHoverLinkId}
+                        onNodeClick={handleNodeClick}
+                        onNodeHover={setHoverNodeId}
+                      />
+                    </div>
+                    <InspectorPanel
+                      activeNodeId={activeNodeId}
+                      edge={selectedEdge}
+                      node={selectedNode}
+                      rootNodeId={rootNodeId}
+                      server={selectedServer}
+                      onCollapseNode={collapseSelectedNode}
+                      onExpandNode={setActiveNodeId}
+                    />
+                  </section>
+
+                  <section className="grid gap-4 xl:grid-cols-3">
+                    <ExplorePanel
+                      busy={busyAction === "explore"}
+                      focus={exploreFocus}
+                      query={exploreQuery}
+                      result={exploreResult}
+                      onFocusChange={setExploreFocus}
+                      onQueryChange={setExploreQuery}
+                      onRun={() =>
+                        runAction(
+                          "explore",
+                          async () => {
+                            const response = await configApi.exploreDatalink(serverId, {
+                              query: exploreQuery,
+                              ...(exploreFocus ? { focus: exploreFocus } : {}),
+                              maskCredential: true,
+                              maxNodes: 12,
+                            });
+                            setExploreResult(response.result);
+                            return response.result;
+                          },
+                          false,
+                          false,
+                        )
+                      }
+                    />
+                    <AddTablePanel
+                      busy={busyAction === "add_table"}
+                      schemaName={schemaName}
+                      source={source}
+                      sourceType={sourceType}
+                      table={table}
+                      onRun={() =>
+                        runAction("add_table", async () => {
+                          const response = await configApi.addDatalinkTable(serverId, {
+                            source,
+                            sourceType,
+                            ...(schemaName.trim() ? { schemaName } : {}),
+                            ...(table.trim() ? { table } : {}),
+                          });
+                          return response.result;
+                        })
+                      }
+                      onSchemaNameChange={setSchemaName}
+                      onSourceChange={setSource}
+                      onSourceTypeChange={setSourceType}
+                      onTableChange={setTable}
+                    />
+                    <GraphMaintenancePanel
+                      actionResult={actionResult}
+                      busyAction={busyAction}
+                      selectedNode={selectedNode}
+                      tableNodes={tableNodes}
+                      onRebuild={() =>
+                        runAction("rebuild", async () => {
+                          const response = await configApi.rebuildDatalink(serverId);
+                          return response.result;
+                        })
+                      }
+                      onRemoveTable={(tableId) =>
+                        runAction("remove_table", async () => {
+                          const response = await configApi.removeDatalinkTable(serverId, {
+                            cleanupOrphans: true,
+                            tableId,
+                          });
+                          return response.result;
+                        })
+                      }
+                    />
+                  </section>
+                </>
+              )}
             </>
           )}
         </div>
@@ -430,28 +446,29 @@ function PanelHeader({
   onOpenMcpSettings: () => void;
   onRefresh: () => void;
 }) {
+  const t = useT();
   return (
     <div className="flex h-16 items-center gap-3 border-b border-border px-4">
       <button
         type="button"
         onClick={onBack}
         className={backButtonClass}
-        aria-label="Back to workspace"
-        title="Back to workspace"
+        aria-label={t("common.backToWorkspace")}
+        title={t("common.backToWorkspace")}
       >
         <BackIcon />
       </button>
       <div className="min-w-0 flex-1">
-        <h2 className={panelTitleClass}>Data Link</h2>
+        <h2 className={panelTitleClass}>{t("dataLink.title")}</h2>
         <p className="text-xs text-muted-light">
-          {graph ? `${graph.nodes.length} nodes, ${graph.edges.length} edges` : "Datalink MCP workspace"}
+          {graph ? t("dataLink.nodesEdges", { nodes: graph.nodes.length, edges: graph.edges.length }) : t("dataLink.subtitle")}
         </p>
       </div>
       <button type="button" onClick={onRefresh} className={btnSecondaryClass}>
-        {loadingGraph ? "Refreshing..." : "Refresh"}
+        {loadingGraph ? t("common.refreshing") : t("common.refresh")}
       </button>
       <button type="button" onClick={onOpenMcpSettings} className={btnSecondaryClass}>
-        MCP settings
+        {t("dataLink.mcpSettings")}
       </button>
     </div>
   );
@@ -468,17 +485,18 @@ function ServerToolbar({
   servers: DatalinkServerDto[];
   onServerChange: (value: string) => void;
 }) {
+  const t = useT();
   return (
     <section className="flex flex-wrap items-end gap-3 border-b border-border pb-4">
       <label className="min-w-[260px] flex-1">
-        <span className={sectionLabelClass}>Server</span>
+        <span className={sectionLabelClass}>{t("dataLink.server")}</span>
         <select
           value={serverId}
           disabled={loadingServers || servers.length === 0}
           onChange={(event) => onServerChange(event.target.value)}
           className={`${fieldClass} mt-1 w-full`}
         >
-          {servers.length === 0 ? <option value="">No datalink server</option> : null}
+          {servers.length === 0 ? <option value="">{t("dataLink.noServer")}</option> : null}
           {servers.map((server) => (
             <option key={server.id} value={server.id}>
               {server.name}
@@ -491,13 +509,14 @@ function ServerToolbar({
 }
 
 function StatsStrip({ graphStats, visibleGraph }: { graphStats: GraphStats; visibleGraph: ExplorerGraphData }) {
+  const t = useT();
   return (
     <section className="grid gap-3 md:grid-cols-5">
-      <StatPill label="Tables" value={graphStats.table} />
-      <StatPill label="Entities" value={graphStats.entity} />
-      <StatPill label="Columns" value={graphStats.column} />
-      <StatPill label="Edges" value={graphStats.edge} />
-      <StatPill label="Visible" value={`${visibleGraph.nodes.length}/${visibleGraph.links.length}`} />
+      <StatPill label={t("dataLink.tables")} value={graphStats.table} />
+      <StatPill label={t("dataLink.entities")} value={graphStats.entity} />
+      <StatPill label={t("dataLink.columns")} value={graphStats.column} />
+      <StatPill label={t("dataLink.edges")} value={graphStats.edge} />
+      <StatPill label={t("dataLink.visible")} value={`${visibleGraph.nodes.length}/${visibleGraph.links.length}`} />
     </section>
   );
 }
@@ -519,9 +538,10 @@ function RootEntryPanel({
   onEntrySearchChange: (value: string) => void;
   onSelectRoot: (nodeId: string) => void;
 }) {
+  const t = useT();
   return (
     <aside className={sidePanelClass}>
-      <div className={sectionLabelClass}>Entry</div>
+      <div className={sectionLabelClass}>{t("dataLink.entry")}</div>
       <div className="mt-3 grid grid-cols-2 gap-1 rounded-lg border border-border bg-surface-subtle p-1">
         {(["table", "entity"] as EntryMode[]).map((mode) => (
           <button
@@ -535,14 +555,14 @@ function RootEntryPanel({
                 : "text-muted-light hover:text-foreground",
             ].join(" ")}
           >
-            {mode === "table" ? "Tables" : "Entities"}
+            {mode === "table" ? t("dataLink.tables") : t("dataLink.entities")}
           </button>
         ))}
       </div>
       <input
         value={entrySearch}
         onChange={(event) => onEntrySearchChange(event.target.value)}
-        placeholder={`Search ${entryMode}s`}
+        placeholder={t("dataLink.searchEntry", { mode: entryMode === "table" ? t("dataLink.tables") : t("dataLink.entities") })}
         className={`${fieldClass} mt-3 w-full`}
       />
       <div className="mt-3 max-h-[516px] space-y-1 overflow-y-auto pr-1">
@@ -564,7 +584,7 @@ function RootEntryPanel({
         ))}
         {entryNodes.length === 0 ? (
           <div className="rounded-lg border border-dashed border-border bg-surface-subtle px-3 py-5 text-center">
-            <span className="text-xs text-muted-light">No entries</span>
+            <span className="text-xs text-muted-light">{t("dataLink.noEntries")}</span>
           </div>
         ) : null}
       </div>
@@ -585,10 +605,11 @@ function EdgeTypeToolbar({
   onReset: () => void;
   onToggleEdgeType: (type: string) => void;
 }) {
+  const t = useT();
   return (
     <div className="rounded-lg border border-border bg-white px-3 py-2">
       <div className="flex flex-wrap items-center gap-2">
-        <span className={sectionLabelClass}>Edges</span>
+        <span className={sectionLabelClass}>{t("dataLink.edges")}</span>
         <div className="flex min-w-0 flex-1 flex-wrap gap-1.5">
           {edgeTypeCounts.map((edgeType) => (
             <button
@@ -610,7 +631,7 @@ function EdgeTypeToolbar({
           ))}
         </div>
         <button type="button" onClick={onReset} className={btnSecondaryClass}>
-          Reset
+          {t("common.reset")}
         </button>
       </div>
     </div>
@@ -640,6 +661,7 @@ function DataLinkCanvas({
   onNodeClick: (nodeId: string) => void;
   onNodeHover: (nodeId: string | null) => void;
 }) {
+  const t = useT();
   const containerRef = useRef<HTMLDivElement | null>(null);
   const svgRef = useRef<SVGSVGElement | null>(null);
   const [dragNodeId, setDragNodeId] = useState<string | null>(null);
@@ -759,8 +781,8 @@ function DataLinkCanvas({
           ))}
         </g>
       </svg>
-      {isLoading ? <CanvasOverlay title="Loading data link" /> : null}
-      {!isLoading && graphData.nodes.length === 0 ? <CanvasOverlay title="No visible nodes" /> : null}
+      {isLoading ? <CanvasOverlay title={t("dataLink.loading")} /> : null}
+      {!isLoading && graphData.nodes.length === 0 ? <CanvasOverlay title={t("dataLink.noVisibleNodes")} /> : null}
     </div>
   );
 }
@@ -792,6 +814,7 @@ function InspectorPanel({
   onCollapseNode: () => void;
   onExpandNode: (nodeId: string) => void;
 }) {
+  const t = useT();
   const properties = node?.properties ?? {};
   const propertyEntries = Object.entries(properties).slice(0, 12);
   const edgeProperties = edge?.properties ?? {};
@@ -799,7 +822,7 @@ function InspectorPanel({
 
   return (
     <aside className={sidePanelClass}>
-      <div className={sectionLabelClass}>Inspector</div>
+      <div className={sectionLabelClass}>{t("dataLink.inspector")}</div>
       {node ? (
         <div className="mt-3 space-y-3">
           <div>
@@ -812,7 +835,7 @@ function InspectorPanel({
               onClick={() => onExpandNode(node.id)}
               className={smallActionClass}
             >
-              Focus
+              {t("dataLink.focus")}
             </button>
             <button
               type="button"
@@ -820,7 +843,7 @@ function InspectorPanel({
               onClick={onCollapseNode}
               className={smallActionClass}
             >
-              Back to root
+              {t("dataLink.backToRoot")}
             </button>
           </div>
           <DetailRow label="ID" value={node.id} />
@@ -839,27 +862,37 @@ function InspectorPanel({
             </p>
           </div>
           <DetailRow label="ID" value={edge.id} />
-          {edge.confidence !== undefined ? <DetailRow label="Confidence" value={String(edge.confidence)} /> : null}
+          {edge.confidence !== undefined ? <DetailRow label={t("dataLink.confidence")} value={String(edge.confidence)} /> : null}
           {edgePropertyEntries.map(([key, value]) => (
             <DetailRow key={key} label={key} value={formatPropertyValue(value)} />
           ))}
         </div>
       ) : (
         <div className="mt-3 space-y-3 text-sm text-slate-500">
-          <p>{server ? server.name : "No server selected"}</p>
-          {server?.serverUrl ? <DetailRow label="Endpoint" value={server.serverUrl} /> : null}
+          <p>{server ? server.name : t("dataLink.noServerSelected")}</p>
+          {server?.serverUrl ? <DetailRow label={t("dataLink.endpoint")} value={server.serverUrl} /> : null}
         </div>
       )}
     </aside>
   );
 }
 
-function EmptyGraphState({ onOpenMcpSettings }: { onOpenMcpSettings: () => void }) {
+function LoadingServersState() {
+  const t = useT();
   return (
     <section className="rounded-lg border border-dashed border-slate-300 bg-slate-50 px-5 py-8 text-center">
-      <p className="text-sm font-semibold text-slate-800">No datalink MCP server detected.</p>
+      <p className="text-sm font-semibold text-slate-800">{t("dataLink.loading")}</p>
+    </section>
+  );
+}
+
+function EmptyGraphState({ onOpenMcpSettings }: { onOpenMcpSettings: () => void }) {
+  const t = useT();
+  return (
+    <section className="rounded-lg border border-dashed border-slate-300 bg-slate-50 px-5 py-8 text-center">
+      <p className="text-sm font-semibold text-slate-800">{t("dataLink.emptyTitle")}</p>
       <button type="button" onClick={onOpenMcpSettings} className={`mt-4 ${btnSecondaryClass}`}>
-        Open MCP settings
+        {t("dataLink.openMcpSettings")}
       </button>
     </section>
   );
@@ -908,9 +941,10 @@ function ExplorePanel({
   onQueryChange: (value: string) => void;
   onRun: () => void;
 }) {
+  const t = useT();
   return (
     <section className={toolPanelClass}>
-      <div className={sectionLabelClass}>Explore</div>
+      <div className={sectionLabelClass}>{t("dataLink.explore")}</div>
       <input
         value={query}
         onChange={(event) => onQueryChange(event.target.value)}
@@ -922,13 +956,13 @@ function ExplorePanel({
         onChange={(event) => onFocusChange(event.target.value)}
         className={`${fieldClass} w-full`}
       >
-        <option value="">Balanced</option>
-        <option value="join_paths">Join paths</option>
-        <option value="schema">Schema</option>
-        <option value="data_profile">Data profile</option>
+        <option value="">{t("dataLink.balanced")}</option>
+        <option value="join_paths">{t("dataLink.joinPaths")}</option>
+        <option value="schema">{t("dataLink.schemaFocus")}</option>
+        <option value="data_profile">{t("dataLink.dataProfile")}</option>
       </select>
       <button type="button" disabled={busy || !query.trim()} onClick={onRun} className={primaryButtonClass}>
-        {busy ? "Exploring..." : "Explore"}
+        {busy ? t("dataLink.exploring") : t("dataLink.explore")}
       </button>
       {result ? <ResultBlock value={result} /> : null}
     </section>
@@ -958,13 +992,14 @@ function AddTablePanel({
   onSourceTypeChange: (value: string) => void;
   onTableChange: (value: string) => void;
 }) {
+  const t = useT();
   return (
     <section className={toolPanelClass}>
-      <div className={sectionLabelClass}>Add Table</div>
+      <div className={sectionLabelClass}>{t("dataLink.addTable")}</div>
       <input
         value={source}
         onChange={(event) => onSourceChange(event.target.value)}
-        placeholder="Source path or connection string"
+        placeholder={t("dataLink.sourcePlaceholder")}
         className={`${fieldClass} w-full`}
       />
       <div className="grid gap-2 sm:grid-cols-2">
@@ -980,18 +1015,18 @@ function AddTablePanel({
         <input
           value={table}
           onChange={(event) => onTableChange(event.target.value)}
-          placeholder="Table"
+          placeholder={t("dataLink.tablePlaceholder")}
           className={fieldClass}
         />
       </div>
       <input
         value={schemaName}
         onChange={(event) => onSchemaNameChange(event.target.value)}
-        placeholder="Schema"
+        placeholder={t("dataLink.schemaPlaceholder")}
         className={`${fieldClass} w-full`}
       />
       <button type="button" disabled={busy || !source.trim()} onClick={onRun} className={primaryButtonClass}>
-        {busy ? "Adding..." : "Add table"}
+        {busy ? t("dataLink.adding") : t("dataLink.addTableAction")}
       </button>
     </section>
   );
@@ -1012,6 +1047,7 @@ function GraphMaintenancePanel({
   onRebuild: () => void;
   onRemoveTable: (tableId: string) => void;
 }) {
+  const t = useT();
   const [tableId, setTableId] = useState("");
   useEffect(() => {
     if (selectedNode?.type === "table") {
@@ -1021,13 +1057,13 @@ function GraphMaintenancePanel({
 
   return (
     <section className={toolPanelClass}>
-      <div className={sectionLabelClass}>Maintain</div>
+      <div className={sectionLabelClass}>{t("dataLink.maintain")}</div>
       <select
         value={tableId}
         onChange={(event) => setTableId(event.target.value)}
         className={`${fieldClass} w-full`}
       >
-        <option value="">Select table</option>
+        <option value="">{t("dataLink.selectTable")}</option>
         {tableNodes.map((node) => (
           <option key={node.id} value={node.id}>
             {node.name || node.id}
@@ -1039,25 +1075,25 @@ function GraphMaintenancePanel({
           type="button"
           disabled={busyAction === "remove_table" || !tableId}
           onClick={() => {
-            if (window.confirm("Remove this table from the data link?")) {
+            if (window.confirm(t("dataLink.confirmRemoveTable"))) {
               onRemoveTable(tableId);
             }
           }}
           className={dangerButtonClass}
         >
-          {busyAction === "remove_table" ? "Removing..." : "Remove table"}
+          {busyAction === "remove_table" ? t("dataLink.removing") : t("dataLink.removeTable")}
         </button>
         <button
           type="button"
           disabled={busyAction === "rebuild"}
           onClick={() => {
-            if (window.confirm("Rebuild the full data link?")) {
+            if (window.confirm(t("dataLink.confirmRebuild"))) {
               onRebuild();
             }
           }}
           className={btnSecondaryClass}
         >
-          {busyAction === "rebuild" ? "Rebuilding..." : "Rebuild"}
+          {busyAction === "rebuild" ? t("dataLink.rebuilding") : t("dataLink.rebuild")}
         </button>
       </div>
       {actionResult ? <ResultBlock value={actionResult} /> : null}

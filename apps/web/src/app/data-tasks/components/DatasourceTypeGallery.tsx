@@ -2,9 +2,11 @@
 
 import { useMemo, useState } from "react";
 import type { DatasourceTypeDto } from "../../../lib/config-api";
+import { useT } from "../../../i18n/locale-context";
 import {
   filterDatasourceTypeGroups,
   groupDatasourceTypes,
+  localizeDatasourceTypeGroups,
 } from "../datasource-metadata";
 import { DatasourceTypeIcon } from "./DatasourceTypeIcon";
 
@@ -14,8 +16,12 @@ type DatasourceTypeGalleryProps = {
 };
 
 export function DatasourceTypeGallery({ types, onSelect }: DatasourceTypeGalleryProps) {
+  const t = useT();
   const [query, setQuery] = useState("");
-  const groups = useMemo(() => groupDatasourceTypes(types), [types]);
+  const groups = useMemo(
+    () => localizeDatasourceTypeGroups(groupDatasourceTypes(types), t),
+    [t, types],
+  );
   const filteredGroups = useMemo(
     () => filterDatasourceTypeGroups(groups, query),
     [groups, query],
@@ -26,17 +32,17 @@ export function DatasourceTypeGallery({ types, onSelect }: DatasourceTypeGallery
       <div className="rounded-2xl border border-border bg-surface-subtle p-4">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
-            <h3 className="text-sm font-semibold text-slate-950">Choose a datasource type</h3>
+            <h3 className="text-sm font-semibold text-slate-950">{t("gallery.title")}</h3>
             <p className="mt-1 max-w-2xl text-xs leading-5 text-slate-600">
-              Select one of the backend-enabled adapters. The next step renders the exact connection fields returned by the datasource type schema.
+              {t("gallery.help")}
             </p>
           </div>
           <label className="min-w-[220px] flex-1 sm:max-w-xs">
-            <span className="sr-only">Search datasource types</span>
+            <span className="sr-only">{t("gallery.searchAria")}</span>
             <input
               value={query}
               onChange={(event) => setQuery(event.target.value)}
-              placeholder="Search database, engine, file..."
+              placeholder={t("gallery.searchPlaceholder")}
               className="h-9 w-full rounded-lg border border-border bg-white px-3 text-sm text-slate-900 outline-none transition-colors duration-200 placeholder:text-slate-400 focus:border-primary-light"
             />
           </label>
@@ -45,7 +51,7 @@ export function DatasourceTypeGallery({ types, onSelect }: DatasourceTypeGallery
 
       {filteredGroups.length === 0 ? (
         <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50 p-6 text-center text-sm text-slate-500">
-          No datasource types match your search.
+          {t("gallery.empty")}
         </div>
       ) : (
         filteredGroups.map((group) => (
@@ -77,7 +83,7 @@ export function DatasourceTypeGallery({ types, onSelect }: DatasourceTypeGallery
                         {type.name}
                       </span>
                       <span className="mt-1.5 line-clamp-2 block text-xs leading-5 text-slate-500">
-                        {type.description || "Backend-enabled datasource adapter."}
+                        {type.description || t("gallery.defaultDescription")}
                       </span>
                     </span>
                   </button>

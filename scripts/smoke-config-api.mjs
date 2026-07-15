@@ -817,19 +817,22 @@ try {
   assert.equal(upload.response.status, 201);
   assert.equal(upload.body.data.status, "ready");
 
-  // KB type gate: multipart PDF/DOCX and forged MIME / JSON filename bypasses must be 415.
-  const rejectedPdfForm = new FormData();
-  rejectedPdfForm.append(
+  // KB type gate: Office stays 415; invalid PDF payloads are 422 (PDF is now allowed).
+  const invalidPdfForm = new FormData();
+  invalidPdfForm.append(
     "file",
     new Blob(["%PDF-1.4"], { type: "application/pdf" }),
     "doc.pdf"
   );
-  const rejectedPdf = await requestJson("/api/v1/knowledge-bases/metrics-docs/files", {
+  const invalidPdf = await requestJson("/api/v1/knowledge-bases/metrics-docs/files", {
     method: "POST",
-    body: rejectedPdfForm
+    body: invalidPdfForm
   });
-  assert.equal(rejectedPdf.response.status, 415);
-  assert.match(String(rejectedPdf.body?.error?.message ?? ""), /KNOWLEDGE_FILE_TYPE_UNSUPPORTED/);
+  assert.equal(invalidPdf.response.status, 422);
+  assert.match(
+    String(invalidPdf.body?.error?.message ?? ""),
+    /KNOWLEDGE_PDF_(EMPTY|PARSE_FAILED)/
+  );
 
   const rejectedDocxForm = new FormData();
   rejectedDocxForm.append(
@@ -844,7 +847,9 @@ try {
     body: rejectedDocxForm
   });
   assert.equal(rejectedDocx.response.status, 415);
+  assert.match(String(rejectedDocx.body?.error?.message ?? ""), /KNOWLEDGE_FILE_TYPE_UNSUPPORTED/);
 
+  // MIME spoofing must not bypass extension handling: .pdf still goes through PDF parse.
   const forgedMimeForm = new FormData();
   forgedMimeForm.append(
     "file",
@@ -855,15 +860,22 @@ try {
     method: "POST",
     body: forgedMimeForm
   });
-  assert.equal(forgedMime.response.status, 415);
+  assert.equal(forgedMime.response.status, 422);
+  assert.match(
+    String(forgedMime.body?.error?.message ?? ""),
+    /KNOWLEDGE_PDF_(EMPTY|PARSE_FAILED)/
+  );
 
   const rejectedJsonPdf = await requestJson("/api/v1/knowledge-bases/metrics-docs/files", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ filename: "doc.pdf", content: "not a pdf but must still be rejected" })
   });
-  assert.equal(rejectedJsonPdf.response.status, 415);
-  assert.match(String(rejectedJsonPdf.body?.error?.message ?? ""), /KNOWLEDGE_FILE_TYPE_UNSUPPORTED/);
+  assert.equal(rejectedJsonPdf.response.status, 422);
+  assert.match(
+    String(rejectedJsonPdf.body?.error?.message ?? ""),
+    /KNOWLEDGE_PDF_(EMPTY|PARSE_FAILED)/
+  );
 
   // Light upload → promote → list(scope=workspace) path for workspace assets.
   const workspaceSessionId = "config-smoke-workspace-promote";

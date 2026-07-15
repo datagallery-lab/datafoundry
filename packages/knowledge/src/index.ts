@@ -54,7 +54,7 @@ export class LocalKnowledgeService implements KnowledgeService {
     private readonly options: LocalKnowledgeServiceOptions = {}
   ) {
     this.documentStore = new LocalSqliteKnowledgeDocumentStore(metadataStore);
-    this.embeddingService = new OpenAICompatibleEmbeddingService();
+    this.embeddingService = options.embeddingService ?? new OpenAICompatibleEmbeddingService();
     this.vectorStore = new LocalSqliteVectorStore(metadataStore);
     this.retriever = new LocalKnowledgeRetriever(this.documentStore, this.vectorStore, this.embeddingService);
     this.initializeSchema();
@@ -118,6 +118,67 @@ export class LocalKnowledgeService implements KnowledgeService {
     });
   }
 
+  /**
+   * Hard-delete one document and cascade clear chunks/FTS + embeddings.
+   * MVP: hard delete (not soft `deleted` status) so list/search cannot resurface it.
+   */
+  deleteDocument(input: {
+    user_id: string;
+    collection_id: string;
+    document_id: string;
+  }): { deleted: boolean; id: string } {
+    const document = this.documentStore.getDocument({
+      user_id: input.user_id,
+      document_id: input.document_id
+    });
+    if (document.collection_id !== input.collection_id) {
+      throw new Error(`KNOWLEDGE_DOCUMENT_NOT_FOUND:${input.document_id}`);
+    }
+    this.vectorStore.clearDocument({ user_id: input.user_id, document_id: input.document_id });
+    this.documentStore.deleteDocument({ user_id: input.user_id, document_id: input.document_id });
+    return { deleted: true, id: input.document_id };
+  }
+
+  /**
+   * Rebuild vectors for one document. Success → status ready; failure → status failed.
+   * Failed docs may still match FTS until deleted/retry succeeds (MVP: keep status quo).
+   */
+  async reindexDocument(input: {
+    user_id: string;
+    workspace_id?: string;
+    collection_id: string;
+    document_id: string;
+  }): Promise<DocumentRecord> {
+    const document = this.documentStore.getDocument({
+      user_id: input.user_id,
+      document_id: input.document_id
+    });
+    if (document.collection_id !== input.collection_id) {
+      throw new Error(`KNOWLEDGE_DOCUMENT_NOT_FOUND:${input.document_id}`);
+    }
+    const embedding = this.resolveEmbeddingConfig(
+      input.user_id,
+      input.collection_id,
+      input.workspace_id ?? "default"
+    );
+    this.vectorStore.clearDocument({ user_id: input.user_id, document_id: input.document_id });
+    try {
+      if (embedding?.api_key) {
+        const rows = this.documentStore.listChunkRowsForDocument({
+          user_id: input.user_id,
+          document_id: input.document_id
+        });
+        await this.indexRows(input.user_id, input.collection_id, rows, embedding);
+      }
+    } catch (error) {
+      this.vectorStore.clearDocument({ user_id: input.user_id, document_id: input.document_id });
+      this.documentStore.markDocumentFailed({ user_id: input.user_id, document_id: input.document_id });
+      throw error;
+    }
+    this.documentStore.markDocumentReady({ user_id: input.user_id, document_id: input.document_id });
+    return this.documentStore.getDocument({ user_id: input.user_id, document_id: input.document_id });
+  }
+
   /** Rebuild vector entries for every current document in one collection. */
   async reindex(input: {
     user_id: string;
@@ -127,14 +188,37 @@ export class LocalKnowledgeService implements KnowledgeService {
     const embedding = this.resolveEmbeddingConfig(input.user_id, input.collection_id, input.workspace_id ?? "default");
     this.vectorStore.clearCollection({ user_id: input.user_id, collection_id: input.collection_id });
     if (!embedding?.api_key) {
+      // FTS-only mode still clears failed→ready so prior vector failures are not stuck forever.
+      this.documentStore.markDocumentsReady({
+        user_id: input.user_id,
+        collection_id: input.collection_id
+      });
       return { chunks: 0, mode: "fts" };
     }
-    const rows = this.documentStore.listChunkRows({
-      user_id: input.user_id,
-      collection_id: input.collection_id
-    });
-    await this.indexRows(input.user_id, input.collection_id, rows, embedding);
-    return { chunks: rows.length, mode: "vector" };
+    try {
+      const rows = this.documentStore.listChunkRows({
+        user_id: input.user_id,
+        collection_id: input.collection_id
+      });
+      await this.indexRows(input.user_id, input.collection_id, rows, embedding);
+      this.documentStore.markDocumentsReady({
+        user_id: input.user_id,
+        collection_id: input.collection_id
+      });
+      return { chunks: rows.length, mode: "vector" };
+    } catch (error) {
+      // Align with reindexDocument: drop partial upserts and mark the collection failed so
+      // status matches vector state and per-document retry remains available.
+      this.vectorStore.clearCollection({
+        user_id: input.user_id,
+        collection_id: input.collection_id
+      });
+      this.documentStore.markDocumentsFailed({
+        user_id: input.user_id,
+        collection_id: input.collection_id
+      });
+      throw error;
+    }
   }
 
   private resolveEmbeddingConfig(userId: string, collectionId: string, workspaceId: string): EmbeddingConfig | undefined {

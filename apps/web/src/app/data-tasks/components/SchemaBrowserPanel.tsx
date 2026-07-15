@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useT } from "../../../i18n/locale-context";
+import type { TranslateFn } from "../../../i18n/types";
 import { configApi } from "../../../lib/config-api";
 import type { DatasourceSchemaDto } from "../../../lib/config-api";
 import { btnSecondaryClass, panelTitleClass, sectionLabelClass } from "../ui-tokens";
@@ -12,11 +13,11 @@ type DatasourceSchemaPreviewPopoverProps = {
   onClose: () => void;
 };
 
-function formatStats(table: DatasourceSchemaDto["tables"][number]): string {
+function formatStats(table: DatasourceSchemaDto["tables"][number], t: TranslateFn): string {
   const stats = table.stats;
   if (!stats) return "";
   const parts = [
-    stats.rowCount !== undefined ? `${stats.rowCount.toLocaleString()} rows` : "",
+    stats.rowCount !== undefined ? t("schema.rows", { count: stats.rowCount.toLocaleString() }) : "",
     stats.sizeBytes !== undefined ? `${stats.sizeBytes.toLocaleString()} B` : "",
   ].filter(Boolean);
   return parts.join(" · ");
@@ -57,7 +58,7 @@ export function DatasourceSchemaPreviewPopover({
       })
       .catch((err: unknown) => {
         if (!cancelled) {
-          setError(err instanceof Error ? err.message : "Failed to load schema");
+          setError(err instanceof Error ? err.message : t("schema.loadFailed"));
           setSchema(null);
         }
       })
@@ -70,7 +71,7 @@ export function DatasourceSchemaPreviewPopover({
     return () => {
       cancelled = true;
     };
-  }, [datasourceId]);
+  }, [datasourceId, t]);
 
   const handleCopy = async (value: string) => {
     await copyText(value);
@@ -92,21 +93,21 @@ export function DatasourceSchemaPreviewPopover({
           >
             <span className="truncate">{datasourceName}</span>
             <span className="shrink-0 rounded-full border border-border bg-surface-subtle px-1.5 py-0.5 text-[10px] font-medium text-muted">
-              preview
+              {t("schema.preview")}
             </span>
           </h3>
           <p className="mt-1 text-xs text-muted-light">
-            Preview tables and fields available to this conversation.
+            {t("schema.previewHelp")}
           </p>
         </div>
         <button type="button" onClick={onClose} className={btnSecondaryClass}>
-          Close
+          {t("common.close")}
         </button>
       </div>
 
       <div className="min-h-0 overflow-y-auto p-4">
         {loading ? (
-          <p className="mb-3 text-xs text-muted-light">Loading schema...</p>
+          <p className="mb-3 text-xs text-muted-light">{t("schema.loading")}</p>
         ) : null}
 
         {error ? (
@@ -127,8 +128,8 @@ export function DatasourceSchemaPreviewPopover({
                         {tableName}
                       </div>
                       <div className="mt-1 flex flex-wrap gap-2 text-[10px] text-muted-light">
-                        {table.sampleAvailable ? <span>Sample available</span> : null}
-                        {formatStats(table) ? <span>{formatStats(table)}</span> : null}
+                        {table.sampleAvailable ? <span>{t("schema.sampleAvailable")}</span> : null}
+                        {formatStats(table, t) ? <span>{formatStats(table, t)}</span> : null}
                       </div>
                     </div>
                     <button
@@ -163,14 +164,14 @@ export function DatasourceSchemaPreviewPopover({
             })
           ) : (
             <p className="text-xs text-muted-light">
-              {schema ? "No tables or fields available." : null}
+              {schema ? t("schema.empty") : null}
             </p>
           )}
         </div>
 
         <div className="mt-3">
           <span className={sectionLabelClass}>
-            Copied table and field names can be pasted into the chat input.
+            {t("schema.pasteHint")}
           </span>
         </div>
       </div>

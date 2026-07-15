@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import type { JobDto } from "../../../lib/config-api";
+import { useT } from "../../../i18n/locale-context";
 import { statusTone } from "../ui-tokens";
 
 export function JobProgressBanner({
@@ -13,6 +14,7 @@ export function JobProgressBanner({
   onCancel?: (jobId: string) => void | Promise<void>;
   onDismiss?: () => void;
 }) {
+  const t = useT();
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
@@ -27,11 +29,11 @@ export function JobProgressBanner({
   if (!job) return null;
 
   const statusLabel: Record<JobDto["status"], string> = {
-    pending: "Queued",
-    running: "Running",
-    completed: "Completed",
-    failed: "Failed",
-    canceled: "Canceled",
+    pending: t("jobs.queued"),
+    running: t("common.running"),
+    completed: t("common.completed"),
+    failed: t("common.failed"),
+    canceled: t("common.canceled"),
   };
 
   const tone =
@@ -48,7 +50,7 @@ export function JobProgressBanner({
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="text-sm font-semibold">
-            {job.type === "datasource-introspect" ? "Schema sync" : "Index rebuild"}
+            {job.type === "datasource-introspect" ? t("jobs.schemaSync") : t("jobs.indexRebuild")}
           </div>
           <div className="mt-1 text-xs opacity-80">
             {statusLabel[job.status]} · {job.progress}%
@@ -70,7 +72,7 @@ export function JobProgressBanner({
               }}
               className="rounded-lg border border-current/20 px-2 py-1 text-xs font-medium"
             >
-              Cancel
+              {t("common.cancel")}
             </button>
           ) : null}
           {(job.status === "completed" ||
@@ -82,7 +84,7 @@ export function JobProgressBanner({
               onClick={onDismiss}
               className="rounded-lg border border-current/20 px-2 py-1 text-xs font-medium"
             >
-              Close
+              {t("common.close")}
             </button>
           ) : null}
         </div>

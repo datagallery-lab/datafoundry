@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useT } from "../../../../i18n/locale-context";
 import { configApi } from "../../../../lib/config-api";
 import type { FileAssetRefDto } from "../../../../lib/config-api";
 import { filterWorkspaceAssetFiles, hasCapability } from "../../data-task-state";
@@ -27,6 +28,7 @@ export function WorkspaceFileAssetsPanel({
   sessionId,
   onFilesChange,
 }: WorkspaceFileAssetsPanelProps) {
+  const t = useT();
   const [files, setFiles] = useState<FileAssetRefDto[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -52,11 +54,11 @@ export function WorkspaceFileAssetsPanel({
       setFiles(workspaceFiles);
       onFilesChange?.(workspaceFiles);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load file assets");
+      setError(err instanceof Error ? err.message : t("assets.loadFailed"));
     } finally {
       setLoading(false);
     }
-  }, [onFilesChange]);
+  }, [onFilesChange, t]);
 
   useEffect(() => {
     void refresh();
@@ -69,7 +71,7 @@ export function WorkspaceFileAssetsPanel({
   const handleUpload = async (selected: FileList | null) => {
     if (!selected?.length) return;
     if (!canUpload) {
-      setError("Select or open a chat session before uploading workspace files.");
+      setError(t("assets.needSessionError"));
       return;
     }
     setLoading(true);
@@ -85,7 +87,7 @@ export function WorkspaceFileAssetsPanel({
           await refresh({ clearError: false });
         }
       } else {
-        setError(err instanceof Error ? err.message : "Upload failed");
+        setError(err instanceof Error ? err.message : t("assets.uploadFailed"));
       }
     } finally {
       setLoading(false);
@@ -105,12 +107,12 @@ export function WorkspaceFileAssetsPanel({
       anchor.click();
       URL.revokeObjectURL(url);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Download failed");
+      setError(err instanceof Error ? err.message : t("assets.downloadFailed"));
     }
   };
 
   const handleDelete = async (file: FileAssetRefDto) => {
-    const confirmed = window.confirm(`Delete workspace file "${file.filename}"? This cannot be undone.`);
+    const confirmed = window.confirm(t("assets.deleteConfirm", { name: file.filename }));
     if (!confirmed) return;
     setLoading(true);
     setError(null);
@@ -118,7 +120,7 @@ export function WorkspaceFileAssetsPanel({
       await configApi.deleteWorkspaceFile(file.id);
       await refresh();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Delete failed");
+      setError(err instanceof Error ? err.message : t("assets.deleteFailed"));
     } finally {
       setLoading(false);
     }
@@ -127,7 +129,7 @@ export function WorkspaceFileAssetsPanel({
   return (
     <section className={panelShellClass}>
       <div className="mb-3 flex items-center justify-between gap-2">
-        <h3 className={panelTitleClass}>Workspace File Assets</h3>
+        <h3 className={panelTitleClass}>{t("assets.panelTitle")}</h3>
         <div className="flex items-center gap-2">
           <button
             type="button"
@@ -135,16 +137,16 @@ export function WorkspaceFileAssetsPanel({
             disabled={loading}
             className={`${btnSecondaryClass} disabled:opacity-60`}
           >
-            Refresh
+            {t("common.refresh")}
           </button>
           <button
             type="button"
             onClick={() => inputRef.current?.click()}
             disabled={loading || !canUpload}
-            title={canUpload ? undefined : "Select or open a chat session before uploading"}
+            title={canUpload ? undefined : t("assets.needSessionTitle")}
             className={`${btnSecondaryClass} disabled:opacity-60`}
           >
-            Upload
+            {t("common.upload")}
           </button>
           <input
             ref={inputRef}
@@ -157,11 +159,11 @@ export function WorkspaceFileAssetsPanel({
         </div>
       </div>
       <p className="mb-3 text-[11px] leading-4 text-muted-light">
-        Manage reusable workspace files for later @file selection or run_config.fileIds injection. These are separate from chat attachments.
+        {t("assets.panelHelp")}
       </p>
       {!canUpload ? (
         <p className="mb-3 text-[11px] leading-4 text-muted-light">
-          Open a chat session to enable workspace file upload.
+          {t("assets.needSession")}
         </p>
       ) : null}
       {error ? (
@@ -170,9 +172,9 @@ export function WorkspaceFileAssetsPanel({
         </p>
       ) : null}
       {loading && files.length === 0 ? (
-        <p className="text-xs text-muted-light">Loading...</p>
+        <p className="text-xs text-muted-light">{t("assets.loading")}</p>
       ) : files.length === 0 ? (
-        <p className="text-xs text-muted-light">No reusable workspace files yet. Upload a file to add one.</p>
+        <p className="text-xs text-muted-light">{t("assets.empty")}</p>
       ) : (
         <div className="grid gap-2">
           {files.map((file) => (
@@ -196,7 +198,7 @@ export function WorkspaceFileAssetsPanel({
                   onClick={() => void handleDownload(file)}
                   className={btnSecondaryClass}
                 >
-                  Download
+                  {t("common.download")}
                 </button>
                 <button
                   type="button"
@@ -204,7 +206,7 @@ export function WorkspaceFileAssetsPanel({
                   disabled={loading}
                   className={`${btnSecondaryClass} text-step-error hover:border-step-error/40 hover:text-step-error disabled:opacity-60`}
                 >
-                  Delete
+                  {t("common.delete")}
                 </button>
               </div>
             </div>
@@ -212,7 +214,7 @@ export function WorkspaceFileAssetsPanel({
         </div>
       )}
       <div className="mt-2">
-        <span className={sectionLabelClass}>{files.length} files</span>
+        <span className={sectionLabelClass}>{t("assets.fileCount", { count: files.length })}</span>
       </div>
     </section>
   );
