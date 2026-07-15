@@ -1224,6 +1224,13 @@ const handleGenericResourceRequest = async (
     user_id: context.userId,
     kind
   });
+  if (kind === "knowledge-base" && action === "files" && !segments[2] && request.method === "GET") {
+    const documents = context.knowledgeService.listDocuments({
+      user_id: context.userId,
+      collection_id: id
+    }).map(knowledgeDocumentDto);
+    return ok({ documents });
+  }
   if (kind === "knowledge-base" && action === "files" && segments[2] === "import" && request.method === "POST") {
     const body = await readJsonBody(request);
     const fileIds = stringArrayValue(body.fileIds ?? body.file_ids);
@@ -1242,7 +1249,7 @@ const handleGenericResourceRequest = async (
           workspace_id: context.workspaceId,
           id: fileId
         });
-        const content = knowledgeDocumentTextFromFile(resolved.ref.filename, file.mimeType, file.body);
+        const content = await knowledgeDocumentTextFromFile(resolved.ref.filename, file.mimeType, file.body);
         const document = await context.knowledgeService.ingestText({
           user_id: context.userId,
           workspace_id: context.workspaceId,
@@ -1252,7 +1259,7 @@ const handleGenericResourceRequest = async (
           file_asset_ref_id: resolved.ref.id,
           mime_type: file.mimeType
         });
-        return { fileId, document, status: "ready" };
+        return { fileId, document: knowledgeDocumentDto(document), status: "ready" };
       } catch (error) {
         return { fileId, error: messageOf(error), status: "failed" };
       }
@@ -1275,23 +1282,57 @@ const handleGenericResourceRequest = async (
     }
     return ok({ results }, 207);
   }
+  // Single-document hard delete: clears document + FTS chunks + embeddings.
+  if (
+    kind === "knowledge-base"
+    && action === "files"
+    && segments[2]
+    && segments[2] !== "import"
+    && !segments[3]
+    && request.method === "DELETE"
+  ) {
+    const documentId = decodeURIComponent(segments[2]);
+    return ok(context.knowledgeService.deleteDocument({
+      user_id: context.userId,
+      collection_id: id,
+      document_id: documentId
+    }));
+  }
+  // Single-document reindex/retry: success marks status ready.
+  if (
+    kind === "knowledge-base"
+    && action === "files"
+    && segments[2]
+    && segments[2] !== "import"
+    && segments[3] === "reindex"
+    && request.method === "POST"
+  ) {
+    const documentId = decodeURIComponent(segments[2]);
+    const document = await context.knowledgeService.reindexDocument({
+      user_id: context.userId,
+      workspace_id: context.workspaceId,
+      collection_id: id,
+      document_id: documentId
+    });
+    return ok(knowledgeDocumentDto(document));
+  }
   if (kind === "knowledge-base" && action === "files" && request.method === "POST") {
     const upload = isMultipart(request) ? await readMultipartUpload(request) : undefined;
     const body = upload ? upload.fields : await readJsonBody(request);
     const filename = upload?.file.filename ?? stringValue(body.filename) ?? "document.txt";
     const mimeType = upload?.file.mimeType ?? stringValue(body.mimeType) ?? "";
-    // Textual documents only — extension whitelist via knowledgeDocumentTextFromFile.
+    // Text + PDF — extension whitelist via knowledgeDocumentTextFromFile.
     // JSON body path must use the same gate whenever a filename is present (incl. default),
-    // so `{filename:"doc.pdf", content:"..."}` cannot skip validation.
+    // so `{filename:"doc.docx", content:"..."}` cannot skip validation.
     let content: string | undefined;
     if (upload) {
-      content = knowledgeDocumentTextFromFile(filename, mimeType, upload.file.content);
+      content = await knowledgeDocumentTextFromFile(filename, mimeType, upload.file.content);
     } else {
       const raw = stringValue(body.content);
       if (!raw) {
         throw new Error("KNOWLEDGE_DOCUMENT_CONTENT_REQUIRED");
       }
-      content = knowledgeDocumentTextFromFile(filename, mimeType || "text/plain", Buffer.from(raw, "utf8"));
+      content = await knowledgeDocumentTextFromFile(filename, mimeType || "text/plain", Buffer.from(raw, "utf8"));
     }
     if (!content) {
       throw new Error("KNOWLEDGE_DOCUMENT_CONTENT_REQUIRED");
@@ -1318,7 +1359,7 @@ const handleGenericResourceRequest = async (
       status: "ready",
       expected_revision: targetResource.revision
     });
-    return ok(document, 201);
+    return ok(knowledgeDocumentDto(document), 201);
   }
   if (kind === "knowledge-base" && action === "search" && request.method === "POST") {
     const body = await readJsonBody(request);
@@ -3553,6 +3594,24 @@ const configResourceDto = (record: ConfigResourceRecord): Record<string, unknown
   updatedAt: record.updated_at
 });
 
+const knowledgeDocumentDto = (document: {
+  id: string;
+  user_id: string;
+  collection_id: string;
+  filename: string;
+  file_asset_ref_id?: string;
+  mime_type: string;
+  status: string;
+}): Record<string, unknown> => ({
+  id: document.id,
+  userId: document.user_id,
+  collectionId: document.collection_id,
+  filename: document.filename,
+  ...(document.file_asset_ref_id ? { fileAssetRefId: document.file_asset_ref_id } : {}),
+  mimeType: document.mime_type,
+  status: document.status
+});
+
 const readJsonBody = async (request: IncomingMessage): Promise<Record<string, unknown>> => {
   const chunks: Buffer[] = [];
   let size = 0;
@@ -3773,6 +3832,13 @@ const errorResponse = (error: unknown): ConfigApiResponse => {
     || message.startsWith("KNOWLEDGE_FILE_TYPE_UNSUPPORTED")
   ) {
     return fail(415, "UNSUPPORTED_FILE_TYPE", message);
+  }
+  // PDF is an allowed knowledge type; empty/unparseable payloads are client errors.
+  if (
+    message.startsWith("KNOWLEDGE_PDF_EMPTY")
+    || message.startsWith("KNOWLEDGE_PDF_PARSE_FAILED")
+  ) {
+    return fail(422, "BAD_REQUEST", message);
   }
   if (message.startsWith("PROVIDER_") || message.startsWith("MODEL_FALLBACK")) {
     return fail(422, "PROVIDER_TEST_FAILED", message);

@@ -7,6 +7,8 @@ import type {
   DatasourceSchemaTableDto,
   DatasourceTablePreviewDto,
 } from "../../../lib/config-api";
+import { useT } from "../../../i18n/locale-context";
+import type { TranslateFn } from "../../../i18n/types";
 import { normalizeSqlTable } from "../table-rows";
 import type { WorkspaceConfigItem } from "../data-task-state";
 import {
@@ -29,13 +31,13 @@ function tableNameOf(table: DatasourceSchemaTableDto): string {
   return table.table ?? table.name;
 }
 
-function formatStats(table?: DatasourceSchemaTableDto | null): string {
+function formatStats(table: DatasourceSchemaTableDto | null | undefined, t: TranslateFn): string {
   const stats = table?.stats;
-  if (!stats) return "No stats";
+  if (!stats) return t("explorer.noStats");
   return [
-    stats.rowCount !== undefined ? `${stats.rowCount.toLocaleString()} rows` : "",
+    stats.rowCount !== undefined ? t("explorer.rows", { count: stats.rowCount.toLocaleString() }) : "",
     stats.sizeBytes !== undefined ? `${stats.sizeBytes.toLocaleString()} B` : "",
-  ].filter(Boolean).join(" · ") || "No stats";
+  ].filter(Boolean).join(" · ") || t("explorer.noStats");
 }
 
 function cellText(value: unknown): string {
@@ -50,11 +52,11 @@ function cellText(value: unknown): string {
   return String(value);
 }
 
-function nonSqlNotice(type?: string): string | null {
-  if (type === "mongodb") return "MongoDB collections are exposed as table-like objects for simple readonly SELECT previews.";
-  if (type === "redis") return "Redis keyspace is exposed through a redis_keys pseudo table.";
+function nonSqlNotice(type: string | undefined, t: TranslateFn): string | null {
+  if (type === "mongodb") return t("explorer.noticeMongodb");
+  if (type === "redis") return t("explorer.noticeRedis");
   if (type === "elasticsearch" || type === "opensearch") {
-    return "Search indexes are exposed as table-like objects from mappings.";
+    return t("explorer.noticeSearch");
   }
   return null;
 }
@@ -66,6 +68,7 @@ export function DatasourceExplorerPanel({
   onTest,
   onIntrospect,
 }: DatasourceExplorerPanelProps) {
+  const t = useT();
   const [schema, setSchema] = useState<DatasourceSchemaDto | null>(null);
   const [query, setQuery] = useState("");
   const [selectedTableName, setSelectedTableName] = useState("");
@@ -79,7 +82,7 @@ export function DatasourceExplorerPanel({
 
   const settings = item.settings ?? {};
   const type = settings.type ?? "unknown";
-  const notice = nonSqlNotice(type);
+  const notice = nonSqlNotice(type, t);
 
   const filteredTables = useMemo(() => {
     const tables = schema?.tables ?? [];
@@ -119,7 +122,7 @@ export function DatasourceExplorerPanel({
           : firstName,
       );
     } catch (error) {
-      setSchemaError(error instanceof Error ? error.message : "Failed to load schema");
+      setSchemaError(error instanceof Error ? error.message : t("explorer.loadSchemaFailed"));
     } finally {
       setSchemaLoading(false);
     }
@@ -140,7 +143,7 @@ export function DatasourceExplorerPanel({
       setPreviewError(
         error instanceof Error
           ? error.message
-          : "Datasource row preview API is not available yet.",
+          : t("explorer.previewApiUnavailable"),
       );
     } finally {
       setPreviewLoading(false);
@@ -161,7 +164,7 @@ export function DatasourceExplorerPanel({
     <section className="flex min-h-[640px] flex-col overflow-hidden rounded-2xl border border-border bg-white shadow-[var(--shadow-card)]">
       <header className="flex flex-wrap items-center gap-3 border-b border-border bg-slate-50 px-4 py-3">
         <button type="button" onClick={onBack} className={btnSecondaryClass}>
-          Back
+          {t("common.back")}
         </button>
         <DatasourceTypeIcon
           typeName={type}
@@ -175,7 +178,7 @@ export function DatasourceExplorerPanel({
           </p>
         </div>
         <span className="rounded-full border border-border bg-white px-2.5 py-1 text-[11px] font-medium text-slate-500">
-          {item.status ?? "untested"}
+          {item.status ?? t("explorer.untested")}
         </span>
         {onTest ? (
           <button
@@ -187,7 +190,7 @@ export function DatasourceExplorerPanel({
             }}
             className={`${btnSecondaryClass} disabled:opacity-50`}
           >
-            Test
+            {t("common.test")}
           </button>
         ) : null}
         {onIntrospect ? (
@@ -202,11 +205,11 @@ export function DatasourceExplorerPanel({
             }}
             className={`${btnSecondaryClass} disabled:opacity-50`}
           >
-            Sync schema
+            {t("configPanel.syncSchema")}
           </button>
         ) : null}
         <button type="button" onClick={onEdit} className={btnSecondaryClass}>
-          Edit
+          {t("common.edit")}
         </button>
       </header>
 
@@ -222,7 +225,7 @@ export function DatasourceExplorerPanel({
             <input
               value={query}
               onChange={(event) => setQuery(event.target.value)}
-              placeholder="Search tables or fields"
+              placeholder={t("explorer.searchPlaceholder")}
                 className="h-9 min-w-0 flex-1 rounded-lg border border-border bg-white px-3 text-xs text-slate-900 outline-none focus:border-primary-light"
             />
             <button
@@ -231,7 +234,7 @@ export function DatasourceExplorerPanel({
               disabled={schemaLoading}
               className={`${btnSecondaryClass} disabled:opacity-50`}
             >
-              {schemaLoading ? "..." : "Search"}
+              {schemaLoading ? "..." : t("common.search")}
             </button>
           </div>
           {schemaError ? (
@@ -242,7 +245,7 @@ export function DatasourceExplorerPanel({
           <div className="mt-3 max-h-[520px] space-y-1 overflow-y-auto">
             {filteredTables.length === 0 ? (
               <p className="rounded-lg border border-dashed border-border bg-white p-3 text-xs text-slate-500">
-                {schema ? "No matching objects." : "Load schema to browse tables, collections, indexes, or pseudo tables."}
+                {schema ? t("explorer.noMatchingObjects") : t("explorer.loadSchemaHint")}
               </p>
             ) : (
               filteredTables.map((table) => {
@@ -266,7 +269,10 @@ export function DatasourceExplorerPanel({
                   >
                     <span className="block truncate text-xs font-semibold">{name}</span>
                     <span className="mt-0.5 block truncate text-[10px] text-slate-500">
-                      {table.columns.length} columns · {formatStats(table)}
+                      {t("explorer.columnsMeta", {
+                        count: table.columns.length,
+                        stats: formatStats(table, t),
+                      })}
                     </span>
                   </button>
                 );
@@ -279,15 +285,15 @@ export function DatasourceExplorerPanel({
           <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
             <div className="min-w-0">
               <h4 className="truncate text-sm font-semibold text-slate-950">
-                {selectedName || "No object selected"}
+                {selectedName || t("explorer.noObjectSelected")}
               </h4>
-              <p className="text-xs text-slate-500">{formatStats(selectedTable)}</p>
+              <p className="text-xs text-slate-500">{formatStats(selectedTable, t)}</p>
             </div>
             <div className="inline-flex rounded-lg border border-border bg-slate-50 p-0.5">
               {([
-                ["columns", "Columns"],
-                ["data", "Data"],
-                ["info", "Info"],
+                ["columns", t("explorer.tabColumns")],
+                ["data", t("explorer.tabData")],
+                ["info", t("explorer.tabInfo")],
               ] as const).map(([id, label]) => (
                 <button
                   key={id}
@@ -311,10 +317,10 @@ export function DatasourceExplorerPanel({
               <table className="w-full min-w-[640px] text-left text-xs">
                 <thead className="bg-slate-50 text-slate-500">
                   <tr>
-                    <th className="px-3 py-2 font-semibold">Column</th>
-                    <th className="px-3 py-2 font-semibold">Type</th>
-                    <th className="px-3 py-2 font-semibold">Nullable</th>
-                    <th className="px-3 py-2 font-semibold">Description</th>
+                    <th className="px-3 py-2 font-semibold">{t("explorer.column")}</th>
+                    <th className="px-3 py-2 font-semibold">{t("explorer.type")}</th>
+                    <th className="px-3 py-2 font-semibold">{t("explorer.nullable")}</th>
+                    <th className="px-3 py-2 font-semibold">{t("explorer.description")}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -322,7 +328,7 @@ export function DatasourceExplorerPanel({
                             <tr key={column.name} className="border-t border-border hover:bg-primary-light/5">
                       <td className="px-3 py-2 font-mono font-medium text-slate-900">{column.name}</td>
                       <td className="px-3 py-2 font-mono text-slate-600">{column.type || "-"}</td>
-                      <td className="px-3 py-2 text-slate-500">{column.nullable === false ? "No" : "Yes"}</td>
+                      <td className="px-3 py-2 text-slate-500">{column.nullable === false ? t("common.no") : t("common.yes")}</td>
                       <td className="px-3 py-2 text-slate-500">{column.description || "-"}</td>
                     </tr>
                   ))}
@@ -335,7 +341,7 @@ export function DatasourceExplorerPanel({
             <div className="space-y-3">
               <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-primary-light/20 bg-primary-light/5 px-3 py-2">
                 <p className="text-xs text-primary">
-                  Row preview uses the planned datasource table preview REST endpoint and respects sample/masking policy.
+                  {t("explorer.previewHint")}
                 </p>
                 <button
                   type="button"
@@ -343,13 +349,13 @@ export function DatasourceExplorerPanel({
                   disabled={!selectedName || previewLoading}
                   className={`${btnSecondaryClass} bg-white disabled:opacity-50`}
                 >
-                  {previewLoading ? "Loading preview..." : "Load 50 rows"}
+                  {previewLoading ? t("explorer.loadingPreview") : t("explorer.loadRows")}
                 </button>
               </div>
               {previewError ? (
                 <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-3 text-xs leading-5 text-amber-900">
                   {previewError}
-                  <div className="mt-1 font-medium">Backend endpoint pending: GET /api/v1/datasources/:id/tables/:table/preview</div>
+                  <div className="mt-1 font-medium">{t("explorer.previewEndpointPending")}</div>
                 </div>
               ) : null}
               {previewTable ? (
@@ -377,13 +383,15 @@ export function DatasourceExplorerPanel({
                     </tbody>
                   </table>
                   <div className="border-t border-border bg-slate-50 px-3 py-2 text-[11px] text-slate-500">
-                    {preview?.total !== undefined ? `${preview.total.toLocaleString()} total rows` : "Total unknown"}
-                    {preview?.hasMore ? " · more rows available" : ""}
+                    {preview?.total !== undefined
+                      ? t("explorer.totalRows", { count: preview.total.toLocaleString() })
+                      : t("explorer.totalUnknown")}
+                    {preview?.hasMore ? t("explorer.moreRows") : ""}
                   </div>
                 </div>
               ) : previewError ? null : (
                 <div className="rounded-xl border border-dashed border-border bg-slate-50 p-6 text-center text-sm text-slate-500">
-                  Select a table and load a preview when the backend endpoint is available.
+                  {t("explorer.previewEmpty")}
                 </div>
               )}
             </div>
@@ -392,14 +400,14 @@ export function DatasourceExplorerPanel({
           {activeTab === "info" ? (
             <div className="grid gap-3 sm:grid-cols-2">
               {[
-                ["Datasource ID", item.id],
-                ["Type", type],
-                ["Connection", summarizeDatasourceConnection(item)],
-                ["Status", item.status ?? "untested"],
-                ["Enabled by default", item.enabled ? "Yes" : "No"],
-                ["Selected object", selectedName || "-"],
-                ["Sample available", selectedTable?.sampleAvailable ? "Yes" : "No"],
-                ["Inspected at", schema?.inspectedAt ?? "-"],
+                [t("explorer.infoDatasourceId"), item.id],
+                [t("explorer.infoType"), type],
+                [t("explorer.infoConnection"), summarizeDatasourceConnection(item)],
+                [t("explorer.infoStatus"), item.status ?? t("explorer.untested")],
+                [t("explorer.infoEnabled"), item.enabled ? t("common.yes") : t("common.no")],
+                [t("explorer.infoSelectedObject"), selectedName || "-"],
+                [t("explorer.infoSampleAvailable"), selectedTable?.sampleAvailable ? t("common.yes") : t("common.no")],
+                [t("explorer.infoInspectedAt"), schema?.inspectedAt ?? "-"],
               ].map(([label, value]) => (
                 <div key={label} className="rounded-xl border border-border bg-slate-50 px-3 py-2.5">
                   <dt className="text-[10px] font-semibold uppercase tracking-[0.06em] text-slate-400">

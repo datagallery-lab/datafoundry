@@ -29,6 +29,7 @@ import { ArtifactMarkdownPreview } from "./ArtifactMarkdownPreview";
 import { SelectableDataGrid, SelectableText } from "./evidence-selection";
 import { ActionMenu, type ActionMenuItem } from "./ActionMenu";
 import { IconSelection } from "./console-icons";
+import { useT } from "../../../../i18n/locale-context";
 
 /** Resolves the full artifact detail, fetching preview data lazily when required. */
 function useResolvedArtifactDetail(artifact: DataArtifact): {
@@ -103,13 +104,17 @@ export function ExpandedArtifactView({
   runId,
   onReferenceEvidence,
   onArtifactExportJob,
+  presentation = "page",
 }: {
   artifact: DataArtifact;
   sessionId: string;
   runId?: string;
   onReferenceEvidence: (ref: EvidenceRef) => void;
   onArtifactExportJob?: (job: JobDto) => void;
+  /** `modal` hides the peer-page reference hint to reduce chrome in the overlay. */
+  presentation?: "page" | "modal";
 }) {
+  const t = useT();
   const { detail, loading, error } = useResolvedArtifactDetail(artifact);
   const baseRef = useMemo(
     () => artifactEvidenceRef(artifact, sessionId, runId),
@@ -134,25 +139,25 @@ export function ExpandedArtifactView({
   const downloadItems: ActionMenuItem[] = [
     {
       key: "whole",
-      label: busy === "whole" ? "Downloading…" : "Download file",
+      label: busy === "whole" ? t("console.downloadingEllipsis") : t("console.downloadFile"),
       disabled: downloadBusy,
       onSelect: () => void downloadWhole(artifact),
     },
     {
       key: "csv",
-      label: busy === "csv" ? "Preparing CSV…" : "Download CSV",
+      label: busy === "csv" ? t("console.preparingCsv") : t("console.downloadCsv"),
       disabled: downloadBusy,
       onSelect: () => void downloadFormat(artifact, "csv"),
     },
     {
       key: "xlsx",
-      label: busy === "xlsx" ? "Preparing XLSX…" : "Download XLSX",
+      label: busy === "xlsx" ? t("console.preparingXlsx") : t("console.downloadXlsx"),
       disabled: downloadBusy,
       onSelect: () => void downloadFormat(artifact, "xlsx"),
     },
     {
       key: "job",
-      label: busy === "job" ? "Submitting…" : "Background export XLSX",
+      label: busy === "job" ? t("console.submitting") : t("console.backgroundExportXlsx"),
       disabled: downloadBusy,
       onSelect: () => void exportJob(artifact, "xlsx"),
     },
@@ -180,15 +185,15 @@ export function ExpandedArtifactView({
           </div>
           <div className="flex shrink-0 items-center gap-2">
             <button type="button" onClick={referenceWhole} className={btnPrimaryClass}>
-              Reference whole
+              {t("console.referenceWhole")}
             </button>
             {exportReady ? (
               formatExport ? (
                 <ActionMenu
                   items={downloadItems}
                   triggerClass={`inline-flex items-center gap-1 ${btnSecondaryClass}`}
-                  triggerLabel="Download"
-                  ariaLabel="Download output"
+                  triggerLabel={t("console.download")}
+                  ariaLabel={t("console.downloadOutput")}
                 />
               ) : (
                 <button
@@ -196,18 +201,20 @@ export function ExpandedArtifactView({
                   onClick={() => void downloadWhole(artifact)}
                   disabled={downloadBusy}
                   className={`${btnSecondaryClass} disabled:cursor-not-allowed disabled:opacity-60`}
-                  title="Download output file"
+                  title={t("console.downloadOutputFile")}
                 >
-                  {busy === "whole" ? "Downloading" : "Download"}
+                  {busy === "whole" ? t("console.downloading") : t("console.download")}
                 </button>
               )
             ) : null}
           </div>
         </div>
-        <div className="flex items-center gap-1.5 text-[11px] leading-4 text-muted-light">
-          <IconSelection className="h-3.5 w-3.5 shrink-0" />
-          Select a table region or text to reference just that part, or use “Reference whole” for the entire artifact.
-        </div>
+        {presentation === "page" ? (
+          <div className="flex items-center gap-1.5 text-[11px] leading-4 text-muted-light">
+            <IconSelection className="h-3.5 w-3.5 shrink-0" />
+            {t("console.referenceWholeHint")}
+          </div>
+        ) : null}
       </header>
 
       <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-3 p-4">

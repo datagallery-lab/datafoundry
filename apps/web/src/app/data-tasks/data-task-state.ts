@@ -5,6 +5,7 @@ import {
   RIGHT_PANEL_DEFAULT_WIDTH,
 } from "./workspace-layout";
 import type { EvidenceRef } from "@datafoundry/contracts";
+import type { TranslateFn } from "../../i18n/types";
 
 export type ArtifactKind = "chart" | "csv" | "memo" | "dashboard" | "file";
 export type DataArtifactType = "dataset" | "chart" | "sql" | "report" | "file";
@@ -50,7 +51,10 @@ export function dataStepKindForTool(toolName?: string): DataStepKind {
 }
 
 /** Short human label for a data step kind (used in trace/console chips). */
-export function dataStepLabel(kind: DataStepKind): string {
+export function dataStepLabel(kind: DataStepKind, t?: TranslateFn): string {
+  if (t) {
+    return t(`steps.${kind}`);
+  }
   switch (kind) {
     case "inspect":
       return "Schema";
@@ -93,9 +97,9 @@ const toolDisplayTitles: Record<string, string> = {
 };
 
 /** Human-readable title for a backend tool name (console / trace / progress). */
-export function toolDisplayTitle(toolName?: string): string {
+export function toolDisplayTitle(toolName?: string, t?: TranslateFn): string {
   if (!toolName || toolName === "tool" || toolName === "unknown") {
-    return "Run tool";
+    return t ? t("tools.runTool") : "Run tool";
   }
   const trimmed = toolName.trim();
   if (/[\u4e00-\u9fff]/.test(trimmed)) {
@@ -104,6 +108,12 @@ export function toolDisplayTitle(toolName?: string): string {
   const lookupName = trimmed.startsWith("mcp__")
     ? trimmed.split("__").slice(2).join("__")
     : trimmed;
+  if (t) {
+    for (const key of [`tools.${lookupName}`, `tools.${trimmed}`]) {
+      const translated = t(key);
+      if (translated !== key) return translated;
+    }
+  }
   return toolDisplayTitles[lookupName] ?? toolDisplayTitles[trimmed] ?? lookupName;
 }
 
@@ -785,14 +795,16 @@ export interface WorkspaceConfigItem {
 
 export function workspaceConfigItemStatusBadge(
   item: WorkspaceConfigItem,
+  t: TranslateFn,
 ): { label: string; className: string } | null {
+  const label = configItemStatusLabel(item.status, t);
   if (item.status === "connected") {
-    return { label: "Connected", className: "bg-emerald-50 text-emerald-700" };
+    return { label, className: "bg-emerald-50 text-emerald-700" };
   }
   if (item.status === "failed") {
-    return { label: "Failed", className: "bg-rose-50 text-rose-700" };
+    return { label, className: "bg-rose-50 text-rose-700" };
   }
-  return { label: "Not tested", className: "bg-slate-100 text-slate-400" };
+  return { label, className: "bg-slate-100 text-slate-400" };
 }
 
 /**
@@ -806,10 +818,13 @@ export function isConfigItemUsable(
 }
 
 /** Short status word for compact rows/pickers (mirrors the badge labels). */
-export function configItemStatusLabel(status: ConfigItemStatus | undefined): string {
-  if (status === "connected") return "Connected";
-  if (status === "failed") return "Unavailable";
-  return "Not tested";
+export function configItemStatusLabel(
+  status: ConfigItemStatus | undefined,
+  t: TranslateFn,
+): string {
+  if (status === "connected") return t("common.connected");
+  if (status === "failed") return t("common.unavailable");
+  return t("common.notTested");
 }
 
 export type ConfigFieldDef = {
@@ -2739,17 +2754,16 @@ export function resolveSendBlockReason(
   store: WorkspaceConfigStore,
   activeLlmId: string | null,
   activeDatasourceId: string | undefined,
+  t: TranslateFn,
 ): string | null {
   const llm = store.llm.find((item) => item.id === activeLlmId) ?? store.llm[0] ?? null;
   if (llm && !isConfigItemUsable(llm)) {
-    return `Model "${llm.name}" has not passed a connection test. `
-      + `Open the model configuration and run "Test connection" before using it.`;
+    return t("chatInput.modelBlocked", { name: llm.name });
   }
   if (activeDatasourceId) {
     const db = store.db.find((item) => item.id === activeDatasourceId);
     if (db && !isConfigItemUsable(db)) {
-      return `Data source "${db.name}" has not passed a connection test. `
-        + `Open the data source configuration and run "Test connection" before using it.`;
+      return t("chatInput.datasourceBlocked", { name: db.name });
     }
   }
   return null;

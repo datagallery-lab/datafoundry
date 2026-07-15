@@ -1,4 +1,5 @@
 import type { Citation } from "@datafoundry/contracts";
+import type { EmbeddingService } from "./embedding-service.js";
 
 export type KnowledgeCollection = {
   id: string;
@@ -51,6 +52,8 @@ export type EmbeddingConfig = {
 
 export type LocalKnowledgeServiceOptions = {
   embedding?: EmbeddingConfig;
+  /** Optional override used by tests and custom runtimes. */
+  embeddingService?: EmbeddingService;
 };
 
 export interface KnowledgeService {

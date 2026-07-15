@@ -18,14 +18,19 @@ export type CreateKnowledgeDocumentInput = {
 
 export interface KnowledgeDocumentStore {
   createDocumentWithChunks(input: CreateKnowledgeDocumentInput): string;
+  /** Hard-delete document row and FTS chunks. Callers clear embeddings separately. */
+  deleteDocument(input: { document_id: string; user_id: string }): void;
   ensureDocumentFileAssetRefColumn(): void;
   findChunkId(input: { document_id: string; index: number; user_id: string }): string;
   getDocument(input: { document_id: string; user_id: string }): DocumentRecord;
   initializeSchema(): void;
   listChunkRows(input: { collection_id: string; user_id: string }): KnowledgeChunkRow[];
+  listChunkRowsForDocument(input: { document_id: string; user_id: string }): KnowledgeChunkRow[];
   listDocuments(input: { collection_id: string; user_id: string }): DocumentRecord[];
   markDocumentFailed(input: { document_id: string; user_id: string }): void;
   markDocumentReady(input: { document_id: string; user_id: string }): void;
+  markDocumentsFailed(input: { collection_id: string; user_id: string }): void;
+  markDocumentsReady(input: { collection_id: string; user_id: string }): void;
   retrieveFullText(input: {
     collection_id: string;
     policy: KnowledgeRetrievalPolicy;
@@ -65,6 +70,15 @@ export class LocalSqliteKnowledgeDocumentStore implements KnowledgeDocumentStore
       `).run(randomUUID(), input.user_id, input.collection_id, documentId, input.filename, index, content);
     });
     return documentId;
+  }
+
+  deleteDocument(input: { document_id: string; user_id: string }): void {
+    this.metadataStore.db.prepare(
+      "DELETE FROM knowledge_chunks WHERE user_id = ? AND document_id = ?"
+    ).run(input.user_id, input.document_id);
+    this.metadataStore.db.prepare(
+      "DELETE FROM knowledge_documents WHERE user_id = ? AND id = ?"
+    ).run(input.user_id, input.document_id);
   }
 
   ensureDocumentFileAssetRefColumn(): void {
@@ -136,6 +150,19 @@ export class LocalSqliteKnowledgeDocumentStore implements KnowledgeDocumentStore
     }));
   }
 
+  listChunkRowsForDocument(input: { document_id: string; user_id: string }): KnowledgeChunkRow[] {
+    return this.metadataStore.db.prepare(`
+      SELECT id, document_id, filename, content FROM knowledge_chunks
+      WHERE user_id = ? AND document_id = ?
+      ORDER BY chunk_index
+    `).all(input.user_id, input.document_id).filter(isRecord).map((row) => ({
+      id: requiredString(row, "id"),
+      document_id: requiredString(row, "document_id"),
+      filename: requiredString(row, "filename"),
+      content: requiredString(row, "content")
+    }));
+  }
+
   listDocuments(input: { collection_id: string; user_id: string }): DocumentRecord[] {
     return this.metadataStore.db.prepare(`
       SELECT * FROM knowledge_documents WHERE user_id = ? AND collection_id = ? ORDER BY created_at DESC
@@ -152,6 +179,20 @@ export class LocalSqliteKnowledgeDocumentStore implements KnowledgeDocumentStore
     this.metadataStore.db.prepare(`
       UPDATE knowledge_documents SET status = 'ready', updated_at = ? WHERE user_id = ? AND id = ?
     `).run(new Date().toISOString(), input.user_id, input.document_id);
+  }
+
+  markDocumentsFailed(input: { collection_id: string; user_id: string }): void {
+    this.metadataStore.db.prepare(`
+      UPDATE knowledge_documents SET status = 'failed', updated_at = ?
+      WHERE user_id = ? AND collection_id = ?
+    `).run(new Date().toISOString(), input.user_id, input.collection_id);
+  }
+
+  markDocumentsReady(input: { collection_id: string; user_id: string }): void {
+    this.metadataStore.db.prepare(`
+      UPDATE knowledge_documents SET status = 'ready', updated_at = ?
+      WHERE user_id = ? AND collection_id = ?
+    `).run(new Date().toISOString(), input.user_id, input.collection_id);
   }
 
   retrieveFullText(input: {

@@ -864,7 +864,7 @@ function ChatModelPicker({
                               : "bg-slate-100 text-slate-400",
                           ].join(" ")}
                         >
-                          {configItemStatusLabel(item.status)}
+                          {configItemStatusLabel(item.status, t)}
                         </span>
                       )}
                     </button>
@@ -883,7 +883,7 @@ function ChatModelPicker({
                 }}
                 className="chat-model-picker-footer w-full cursor-pointer rounded-lg px-3 py-2 text-left text-xs font-medium text-foreground transition-colors duration-200 hover:bg-surface-subtle hover:text-primary"
               >
-                Manage model configuration...
+                {t("chatInput.manageModelConfig")}
               </button>
             </div>
           )}

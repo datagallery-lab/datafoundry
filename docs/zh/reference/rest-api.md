@@ -182,10 +182,13 @@ curl http://127.0.0.1:8787/api/v1/capabilities
 | PATCH | `/api/v1/knowledge-bases/:id` | 更新知识库。 |
 | DELETE | `/api/v1/knowledge-bases/:id` | 删除知识库。 |
 | POST | `/api/v1/knowledge-bases/:id/test` | 验证配置。 |
+| GET | `/api/v1/knowledge-bases/:id/files` | 列出文档。 |
 | POST | `/api/v1/knowledge-bases/:id/files` | 上传文档。 |
+| DELETE | `/api/v1/knowledge-bases/:id/files/:documentId` | 硬删除单个文档（级联清理 chunks/FTS/embeddings）。 |
+| POST | `/api/v1/knowledge-bases/:id/files/:documentId/reindex` | 重试/重建单个文档向量；成功后 status 置为 `ready`。 |
 | POST | `/api/v1/knowledge-bases/:id/files/import` | 从 FileAssetRef 导入文档。 |
 | POST | `/api/v1/knowledge-bases/:id/search` | 检索调试。 |
-| POST | `/api/v1/knowledge-bases/:id/reindex` | 重建索引，返回 job。 |
+| POST | `/api/v1/knowledge-bases/:id/reindex` | 重建索引，返回 job；成功后文档 status 置为 `ready`。 |
 
 ## MCP 与 Skill
 

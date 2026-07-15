@@ -103,7 +103,7 @@ import {
   type ConfigTestPresentation,
 } from "./config-test-result";
 import { useWorkspaceConfigApi } from "./hooks/use-workspace-config-api";
-import type { DatasourceTypeDto, FileAssetRefDto, JobDto } from "../../lib/config-api";
+import type { DatasourceTypeDto, FileAssetRefDto, JobDto, KnowledgeDocumentDto } from "../../lib/config-api";
 import type {
   CopilotChatAssistantMessageProps,
   JsonSerializable,
@@ -154,6 +154,10 @@ const DatasourceSchemaPreviewPopover = nextDynamic(
 );
 const DatasourceExplorerPanel = nextDynamic(
   () => import("./components/DatasourceExplorerPanel").then((m) => m.DatasourceExplorerPanel),
+  { ssr: false, loading: () => null },
+);
+const KnowledgeDocumentsPanel = nextDynamic(
+  () => import("./components/KnowledgeDocumentsPanel").then((m) => m.KnowledgeDocumentsPanel),
   { ssr: false, loading: () => null },
 );
 const DatasourceTypeGallery = nextDynamic(
@@ -308,6 +312,10 @@ import {
 } from "./session-pane-ui";
 import { LocaleProvider, useT } from "../../i18n/locale-context";
 import {
+  translateConfigField,
+  translateConfigFieldOptions,
+} from "../../i18n/config-labels";
+import {
   getAgentRuntimeUrl,
   getBackendCapabilities,
   isResourcePanelSupported,
@@ -406,11 +414,11 @@ export type WorkspaceConfigPanelKey = "db" | "kb" | "mcp" | "skill" | "llm";
 
 const NEW_CONFIG_ITEM_ID = "__new__";
 
-const CONFIG_ITEM_CARD_GRID_CLASS =
-  "grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(min(100%,280px),280px))]";
-
 const DATASOURCE_CARD_GRID_CLASS =
   "grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(min(100%,360px),360px))]";
+
+const CONFIG_CARD_PRIMARY_BUTTON_CLASS =
+  "cursor-pointer rounded-lg bg-slate-950 px-3 py-1.5 text-xs font-semibold text-white transition-colors duration-200 hover:bg-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-300";
 
 const CONFIG_DETAIL_MAX_WIDTH_CLASS = "max-w-3xl";
 
@@ -426,6 +434,7 @@ function StableDataTaskChatInput({
 }: {
   inputProps: ComponentProps<typeof DataTaskChatInput>;
 }) {
+  const t = useT();
   const bindings = useDataTaskChatInputBindings();
   const { agent } = useAgent({ agentId: bindings.agentId });
   const { copilotkit } = useCopilotKit();
@@ -523,6 +532,7 @@ function StableDataTaskChatInput({
           bindings.workspaceConfig,
           bindings.activeLlmId,
           forwardedProps.datasourceId,
+          t,
         );
         if (blockReason) {
           reportRunError(new Error(blockReason));
@@ -826,6 +836,9 @@ function DataTaskWorkspace({
     introspectDatasource,
     reindexKnowledgeBase,
     uploadKnowledgeFile,
+    listKnowledgeFiles,
+    deleteKnowledgeFile,
+    reindexKnowledgeFile,
     replaceSkillPackage,
     validateSkill,
     pollJob,
@@ -1941,6 +1954,21 @@ function DataTaskWorkspace({
             onUploadKnowledgeFile={
               configPanel === "kb"
                 ? (itemId, file) => uploadKnowledgeFile(itemId, file)
+                : undefined
+            }
+            onListKnowledgeFiles={
+              configPanel === "kb"
+                ? (itemId) => listKnowledgeFiles(itemId)
+                : undefined
+            }
+            onDeleteKnowledgeFile={
+              configPanel === "kb"
+                ? (itemId, documentId) => deleteKnowledgeFile(itemId, documentId)
+                : undefined
+            }
+            onRetryKnowledgeFile={
+              configPanel === "kb"
+                ? (itemId, documentId) => reindexKnowledgeFile(itemId, documentId).then(() => undefined)
                 : undefined
             }
             onReplaceSkill={
@@ -3237,13 +3265,14 @@ function StepAssistantMessage({
     shouldShowCollaborationRecapOnMessage(message, response, allMessages),
   );
   const toolNames = rawToolNames
-    .map((call) => toolDisplayTitle(call))
+    .map((call) => toolDisplayTitle(call, t))
     .filter(Boolean)
     .join("、");
   const toolSummaries = buildStepToolSummaries({
     toolCalls: effectiveToolCalls,
     liveRun,
     isActive,
+    t,
   });
   const stepElapsed = stepElapsedLabel(
     buildStepElapsedInput({
@@ -3251,6 +3280,7 @@ function StepAssistantMessage({
       liveRun,
       isActive,
     }),
+    t,
   );
   const collapsedStepSummary = buildCollapsedStepSummary({
     thinking: processContent,
@@ -3379,9 +3409,11 @@ function StepAssistantMessage({
           className="inline-flex cursor-pointer items-center gap-1.5 rounded-md px-1.5 py-1 font-medium transition-colors duration-150 hover:bg-surface-subtle hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/20"
           aria-expanded={false}
         >
-          <span>Work process</span>
+          <span>{t("chat.workProcess")}</span>
           <span className="tabular">
-            {processStepCount} step{processStepCount === 1 ? "" : "s"}
+            {t(processStepCount === 1 ? "chat.stepCount" : "chat.stepCountPlural", {
+              count: processStepCount,
+            })}
           </span>
           <StepChevron expanded={false} />
         </button>
@@ -3399,9 +3431,11 @@ function StepAssistantMessage({
           className="inline-flex cursor-pointer items-center gap-1.5 rounded-md px-1.5 py-1 font-medium transition-colors duration-150 hover:bg-surface-subtle hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/20"
           aria-expanded={!processTimelineCollapse.collapsed}
         >
-          <span>Work process</span>
+          <span>{t("chat.workProcess")}</span>
           <span className="tabular">
-            {processStepCount} step{processStepCount === 1 ? "" : "s"}
+            {t(processStepCount === 1 ? "chat.stepCount" : "chat.stepCountPlural", {
+              count: processStepCount,
+            })}
           </span>
           <StepChevron expanded={!processTimelineCollapse.collapsed} />
         </button>
@@ -3428,17 +3462,17 @@ function StepAssistantMessage({
               className="cursor-pointer rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/20"
               title={
                 displayHasToolCalls
-                  ? "View step details in the task console"
+                  ? t("chat.viewStepDetails")
                   : collapsed
-                    ? "Expand step"
-                    : "Collapse step"
+                    ? t("chat.expandStep")
+                    : t("chat.collapseStep")
               }
               aria-label={
                 displayHasToolCalls
-                  ? "View step details in the task console"
+                  ? t("chat.viewStepDetails")
                   : collapsed
-                    ? "Expand step"
-                    : "Collapse step"
+                    ? t("chat.expandStep")
+                    : t("chat.collapseStep")
               }
             >
               <StepBadge
@@ -3494,7 +3528,10 @@ function StepAssistantMessage({
                 stepHeaderLabel ? "text-muted-light" : `font-semibold ${theme.label}`,
               ].join(" ")}
             >
-              {effectiveToolCalls.length} tool{effectiveToolCalls.length === 1 ? "" : "s"} · {stepElapsed}
+              {t(
+                effectiveToolCalls.length === 1 ? "chat.toolCount" : "chat.toolCountPlural",
+                { count: effectiveToolCalls.length, elapsed: stepElapsed },
+              )}
             </span>
           ) : null}
         </div>
@@ -3519,8 +3556,8 @@ function StepAssistantMessage({
               toggleCollapsed();
             }}
             className="cursor-pointer rounded-md p-0.5 text-muted-light transition-colors duration-150 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/20"
-            title={collapsed ? "Expand step" : "Collapse step"}
-            aria-label={collapsed ? "Expand step" : "Collapse step"}
+            title={collapsed ? t("chat.expandStep") : t("chat.collapseStep")}
+            aria-label={collapsed ? t("chat.expandStep") : t("chat.collapseStep")}
           >
             <StepChevron expanded={!collapsed} />
           </button>
@@ -4876,6 +4913,9 @@ function WorkspaceConfigPanel({
   onIntrospect,
   onReindex,
   onUploadKnowledgeFile,
+  onListKnowledgeFiles,
+  onDeleteKnowledgeFile,
+  onRetryKnowledgeFile,
   onReplaceSkill,
   onValidateSkill,
 }: {
@@ -4901,6 +4941,9 @@ function WorkspaceConfigPanel({
   onIntrospect?: (itemId: string) => Promise<void>;
   onReindex?: (itemId: string) => Promise<void>;
   onUploadKnowledgeFile?: (itemId: string, file: File) => Promise<void>;
+  onListKnowledgeFiles?: (itemId: string) => Promise<{ documents: KnowledgeDocumentDto[] }>;
+  onDeleteKnowledgeFile?: (itemId: string, documentId: string) => Promise<void>;
+  onRetryKnowledgeFile?: (itemId: string, documentId: string) => Promise<void>;
   onReplaceSkill?: (itemId: string, file: File) => Promise<void>;
   onValidateSkill?: (itemId: string) => Promise<void>;
 }) {
@@ -4914,6 +4957,7 @@ function WorkspaceConfigPanel({
   const [testResult, setTestResult] = useState<ConfigTestPresentation | null>(null);
   const [dbGalleryOpen, setDbGalleryOpen] = useState(false);
   const [explorerItemId, setExplorerItemId] = useState<string | null>(null);
+  const [kbDocumentsItemId, setKbDocumentsItemId] = useState<string | null>(null);
 
   useEffect(() => {
     setDetailItemId(null);
@@ -4924,6 +4968,7 @@ function WorkspaceConfigPanel({
     setTestResult(null);
     setDbGalleryOpen(false);
     setExplorerItemId(null);
+    setKbDocumentsItemId(null);
   }, [panel]);
 
   useEffect(() => {
@@ -4953,6 +4998,10 @@ function WorkspaceConfigPanel({
   const explorerItem =
     panel === "db" && explorerItemId
       ? items.find((entry) => entry.id === explorerItemId) ?? null
+      : null;
+  const kbDocumentsItem =
+    panel === "kb" && kbDocumentsItemId
+      ? items.find((entry) => entry.id === kbDocumentsItemId) ?? null
       : null;
 
   const titles: Record<typeof panel, string> = {
@@ -4993,6 +5042,9 @@ function WorkspaceConfigPanel({
       setExplorerItemId(null);
       return;
     }
+    if (panel === "kb") {
+      setKbDocumentsItemId(null);
+    }
     setDraftItem({
       id: NEW_CONFIG_ITEM_ID,
       name: "",
@@ -5006,8 +5058,8 @@ function WorkspaceConfigPanel({
   const openDbCreateFromType = (type: DatasourceTypeDto) => {
     setDraftItem({
       id: NEW_CONFIG_ITEM_ID,
-      name: `${type.label} datasource`,
-      description: type.description ?? "Custom data source",
+      name: t("configPanel.datasourceSuffix", { label: type.label }),
+      description: type.description ?? t("configPanel.customDataSource"),
       enabled: true,
       settings: buildDatasourceSettingsForType(type),
     });
@@ -5036,6 +5088,10 @@ function WorkspaceConfigPanel({
       setExplorerItemId(null);
       return;
     }
+    if (kbDocumentsItem) {
+      setKbDocumentsItemId(null);
+      return;
+    }
     onBack();
   };
 
@@ -5047,7 +5103,7 @@ function WorkspaceConfigPanel({
       const saved = await onSaveItem(editDraftItem);
       setEditDraftItem(saved);
     } catch (error) {
-      setPanelError(error instanceof Error ? error.message : "Save failed");
+      setPanelError(error instanceof Error ? error.message : t("configPanel.saveFailed"));
     } finally {
       setActionBusy(false);
     }
@@ -5070,7 +5126,7 @@ function WorkspaceConfigPanel({
       const createdId = await onAdd(
         {
           name,
-          description: draftItem.description.trim() || "Custom configuration item",
+          description: draftItem.description.trim() || t("configPanel.customConfigurationItem"),
           enabled: draftItem.enabled,
           settings: draftItem.settings,
         },
@@ -5080,7 +5136,7 @@ function WorkspaceConfigPanel({
       setDraftItem(null);
       setPendingSkillFile(null);
     } catch (error) {
-      setPanelError(error instanceof Error ? error.message : "Create failed");
+      setPanelError(error instanceof Error ? error.message : t("configPanel.createFailed"));
     } finally {
       setActionBusy(false);
     }
@@ -5092,7 +5148,7 @@ function WorkspaceConfigPanel({
         <button
           type="button"
           onClick={handleHeaderBack}
-          aria-label={detailItem || dbGalleryOpen || explorerItem ? t("configPanel.backToList", { panel: titles[panel] }) : t("common.backToWorkspace")}
+          aria-label={detailItem || dbGalleryOpen || explorerItem || kbDocumentsItem ? t("configPanel.backToList", { panel: titles[panel] }) : t("common.backToWorkspace")}
           className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-slate-500 transition hover:bg-slate-100 hover:text-slate-700"
         >
           <ChevronIcon direction="left" />
@@ -5120,6 +5176,8 @@ function WorkspaceConfigPanel({
                 ? t("configPanel.chooseDataSource")
                 : explorerItem
                   ? explorerItem.name || t("configPanel.dataSourceBrowser")
+                : kbDocumentsItem
+                  ? kbDocumentsItem.name || t("configPanel.knowledgeDocuments")
               : titles[panel]}
           </h2>
           <p className="text-xs text-slate-500">
@@ -5129,6 +5187,8 @@ function WorkspaceConfigPanel({
                 ? t("configPanel.pickAdapter")
                 : explorerItem
                   ? t("configPanel.browseSchema")
+                  : kbDocumentsItem
+                    ? t("configPanel.browseKnowledgeDocuments")
                   : t("configPanel.workspaceConfiguration")}
           </p>
         </div>
@@ -5174,7 +5234,7 @@ function WorkspaceConfigPanel({
                 try {
                   await onTestItem(explorerItem.id);
                 } catch (error) {
-                  setPanelError(formatConfigTestError(error).details[0] ?? "Test failed");
+                  setPanelError(formatConfigTestError(error, t).details[0] ?? t("configPanel.testFailed"));
                 } finally {
                   setActionBusy(false);
                 }
@@ -5187,11 +5247,39 @@ function WorkspaceConfigPanel({
                       try {
                         await onIntrospect(explorerItem.id);
                       } catch (error) {
-                        setPanelError(error instanceof Error ? error.message : "Schema sync failed");
+                        setPanelError(error instanceof Error ? error.message : t("configPanel.schemaSyncFailed"));
                       } finally {
                         setActionBusy(false);
                       }
                     }
+                  : undefined
+              }
+            />
+          ) : kbDocumentsItem && onUploadKnowledgeFile && onListKnowledgeFiles ? (
+            <KnowledgeDocumentsPanel
+              item={kbDocumentsItem}
+              onBack={() => setKbDocumentsItemId(null)}
+              onEdit={() => {
+                setKbDocumentsItemId(null);
+                setDetailItemId(kbDocumentsItem.id);
+              }}
+              onUpload={(file) => onUploadKnowledgeFile(kbDocumentsItem.id, file)}
+              onList={() => onListKnowledgeFiles(kbDocumentsItem.id)}
+              onReindex={
+                onReindex
+                  ? async () => {
+                      await onReindex(kbDocumentsItem.id);
+                    }
+                  : undefined
+              }
+              onDeleteDocument={
+                onDeleteKnowledgeFile
+                  ? (documentId) => onDeleteKnowledgeFile(kbDocumentsItem.id, documentId)
+                  : undefined
+              }
+              onRetryDocument={
+                onRetryKnowledgeFile
+                  ? (documentId) => onRetryKnowledgeFile(kbDocumentsItem.id, documentId)
                   : undefined
               }
             />
@@ -5253,7 +5341,7 @@ function WorkspaceConfigPanel({
                         setDetailItemId(null);
                       } catch (error) {
                         setPanelError(
-                          error instanceof Error ? error.message : "Delete failed",
+                          error instanceof Error ? error.message : t("configPanel.deleteFailed"),
                         );
                       } finally {
                         setActionBusy(false);
@@ -5269,9 +5357,9 @@ function WorkspaceConfigPanel({
                       setTestResult(null);
                       try {
                         const result = await onTestItem(detailItem.id);
-                        setTestResult(formatConfigTestResult(panel, result));
+                        setTestResult(formatConfigTestResult(panel, result, t));
                       } catch (error) {
-                        setTestResult(formatConfigTestError(error));
+                        setTestResult(formatConfigTestError(error, t));
                       } finally {
                         setActionBusy(false);
                       }
@@ -5288,7 +5376,7 @@ function WorkspaceConfigPanel({
                         await onIntrospect(detailItem.id);
                       } catch (error) {
                         setPanelError(
-                          error instanceof Error ? error.message : "Schema sync failed",
+                          error instanceof Error ? error.message : t("configPanel.schemaSyncFailed"),
                         );
                       } finally {
                         setActionBusy(false);
@@ -5304,7 +5392,7 @@ function WorkspaceConfigPanel({
                         await onReindex(detailItem.id);
                       } catch (error) {
                         setPanelError(
-                          error instanceof Error ? error.message : "Reindex failed",
+                          error instanceof Error ? error.message : t("configPanel.reindexFailed"),
                         );
                       } finally {
                         setActionBusy(false);
@@ -5321,7 +5409,7 @@ function WorkspaceConfigPanel({
                         await onUploadKnowledgeFile(detailItem.id, file);
                       } catch (error) {
                         setPanelError(
-                          error instanceof Error ? error.message : "Upload failed",
+                          error instanceof Error ? error.message : t("configPanel.uploadFailed"),
                         );
                         throw error;
                       } finally {
@@ -5338,7 +5426,7 @@ function WorkspaceConfigPanel({
                         await onReplaceSkill(detailItem.id, file);
                       } catch (error) {
                         setPanelError(
-                          error instanceof Error ? error.message : "Failed to replace Skill",
+                          error instanceof Error ? error.message : t("configPanel.replaceSkillFailed"),
                         );
                       } finally {
                         setActionBusy(false);
@@ -5354,7 +5442,7 @@ function WorkspaceConfigPanel({
                         await onValidateSkill(detailItem.id);
                       } catch (error) {
                         setPanelError(
-                          error instanceof Error ? error.message : "Validation failed",
+                          error instanceof Error ? error.message : t("configPanel.validationFailed"),
                         );
                       } finally {
                         setActionBusy(false);
@@ -5386,7 +5474,7 @@ function WorkspaceConfigPanel({
                     void onTestItem(itemId)
                       .catch((error) => {
                         setPanelError(
-                          formatConfigTestError(error).details[0] ?? "Test failed",
+                          formatConfigTestError(error, t).details[0] ?? t("configPanel.testFailed"),
                         );
                       })
                       .finally(() => {
@@ -5394,20 +5482,117 @@ function WorkspaceConfigPanel({
                       });
                   }}
                 />
+              ) : panel === "kb" ? (
+                <KnowledgeConfigList
+                  items={items}
+                  uploadBusy={actionBusy}
+                  onAdd={openCreate}
+                  onBrowse={(itemId) => setKbDocumentsItemId(itemId)}
+                  onEdit={(itemId) => setDetailItemId(itemId)}
+                  onUpload={
+                    onUploadKnowledgeFile
+                      ? async (itemId, file) => {
+                          setActionBusy(true);
+                          setPanelError(null);
+                          try {
+                            await onUploadKnowledgeFile(itemId, file);
+                          } catch (error) {
+                            setPanelError(
+                              error instanceof Error ? error.message : t("configPanel.uploadFailed"),
+                            );
+                            throw error;
+                          } finally {
+                            setActionBusy(false);
+                          }
+                        }
+                      : undefined
+                  }
+                  onReindex={
+                    onReindex
+                      ? async (itemId) => {
+                          setActionBusy(true);
+                          setPanelError(null);
+                          try {
+                            await onReindex(itemId);
+                          } catch (error) {
+                            setPanelError(
+                              error instanceof Error ? error.message : t("configPanel.reindexFailed"),
+                            );
+                          } finally {
+                            setActionBusy(false);
+                          }
+                        }
+                      : undefined
+                  }
+                />
+              ) : panel === "mcp" ? (
+                <McpConfigList
+                  items={items}
+                  testBusy={actionBusy}
+                  onAdd={openCreate}
+                  onEdit={(itemId) => setDetailItemId(itemId)}
+                  onTest={(itemId) => {
+                    if (actionBusy) return;
+                    setActionBusy(true);
+                    setPanelError(null);
+                    void onTestItem(itemId)
+                      .catch((error) => {
+                        setPanelError(
+                          formatConfigTestError(error, t).details[0] ?? t("configPanel.testFailed"),
+                        );
+                      })
+                      .finally(() => {
+                        setActionBusy(false);
+                      });
+                  }}
+                />
+              ) : panel === "skill" ? (
+                <SkillConfigList
+                  items={items}
+                  actionBusy={actionBusy}
+                  onAdd={openCreate}
+                  onEdit={(itemId) => setDetailItemId(itemId)}
+                  onValidate={
+                    onValidateSkill
+                      ? async (itemId) => {
+                          setActionBusy(true);
+                          setPanelError(null);
+                          try {
+                            await onValidateSkill(itemId);
+                          } catch (error) {
+                            setPanelError(
+                              error instanceof Error
+                                ? error.message
+                                : t("configPanel.validationFailed"),
+                            );
+                          } finally {
+                            setActionBusy(false);
+                          }
+                        }
+                      : undefined
+                  }
+                />
               ) : (
-                <div className={CONFIG_ITEM_CARD_GRID_CLASS}>
-                  {items.map((item) => (
-                    <ConfigItemCard
-                      key={item.id}
-                      item={item}
-                      onSelect={() => setDetailItemId(item.id)}
-                    />
-                  ))}
-                  <AddConfigCard
-                    label={addLabels[panel]}
-                    onClick={openCreate}
-                  />
-                </div>
+                <ModelConfigList
+                  items={items}
+                  testBusy={actionBusy}
+                  onAdd={openCreate}
+                  onEdit={(itemId) => setDetailItemId(itemId)}
+                  onTest={(itemId) => {
+                    if (actionBusy) return;
+                    setActionBusy(true);
+                    setPanelError(null);
+                    void onTestItem(itemId)
+                      .catch((error) => {
+                        setPanelError(
+                          formatConfigTestError(error, t).details[0] ?? t("configPanel.testFailed"),
+                        );
+                      })
+                      .finally(() => {
+                        setActionBusy(false);
+                      });
+                  }}
+                />
               )}
             </>
           )}
@@ -5428,11 +5613,12 @@ function AgentToolsTabs({
   skillCount: number;
   onSelect: (panel: "mcp" | "skill") => void;
 }) {
+  const t = useT();
   return (
     <div className="inline-flex rounded-xl border border-border bg-slate-50 p-1">
       {([
-        ["mcp", "MCP", mcpCount],
-        ["skill", "Skills", skillCount],
+        ["mcp", t("configPanel.tabMcp"), mcpCount],
+        ["skill", t("configPanel.tabSkills"), skillCount],
       ] as const).map(([panel, label, count]) => (
         <button
           key={panel}
@@ -5503,7 +5689,7 @@ function DatasourceConfigList({
           {items.map((item) => {
             const type = item.settings?.type ?? "unknown";
             const typeLabel = typeLabelByName.get(type) ?? type;
-            const status = workspaceConfigItemStatusBadge(item);
+            const status = workspaceConfigItemStatusBadge(item, t);
             const connection = summarizeDatasourceConnection(item);
             return (
               <article
@@ -5540,7 +5726,7 @@ function DatasourceConfigList({
                         </span>
                       ) : null}
                       <span className="rounded-full border border-border bg-slate-50 px-2 py-0.5">
-                        Browse schema and data
+                        {t("configPanel.browseSchemaAndData")}
                       </span>
                     </div>
                   </div>
@@ -5552,17 +5738,492 @@ function DatasourceConfigList({
                     onClick={() => onTest(item.id)}
                     className={`${btnSecondaryClass} disabled:opacity-50`}
                   >
-                    Test
+                    {t("common.test")}
                   </button>
                   <button type="button" onClick={() => onEdit(item.id)} className={btnSecondaryClass}>
-                    Edit
+                    {t("common.edit")}
                   </button>
                   <button
                     type="button"
                     onClick={() => onBrowse(item.id)}
-                    className="cursor-pointer rounded-lg bg-slate-950 px-3 py-1.5 text-xs font-semibold text-white transition-colors duration-200 hover:bg-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-300"
+                    className={CONFIG_CARD_PRIMARY_BUTTON_CLASS}
                   >
-                    Browse
+                    {t("common.browse")}
+                  </button>
+                </div>
+              </article>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function KnowledgeConfigList({
+  items,
+  onAdd,
+  onBrowse,
+  onEdit,
+  onUpload,
+  onReindex,
+  uploadBusy = false,
+}: {
+  items: WorkspaceConfigItem[];
+  onAdd: () => void;
+  onBrowse: (itemId: string) => void;
+  onEdit: (itemId: string) => void;
+  onUpload?: (itemId: string, file: File) => Promise<void>;
+  onReindex?: (itemId: string) => Promise<void>;
+  uploadBusy?: boolean;
+}) {
+  const t = useT();
+  const inputRefs = useRef<Record<string, HTMLInputElement | null>>({});
+  const [uploadingId, setUploadingId] = useState<string | null>(null);
+
+  const handleUpload = async (itemId: string, file: File | undefined) => {
+    if (!file || !onUpload) return;
+    setUploadingId(itemId);
+    try {
+      await onUpload(itemId, file);
+    } finally {
+      setUploadingId(null);
+    }
+  };
+
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-border bg-surface-subtle px-4 py-3">
+        <div>
+          <h3 className="text-sm font-semibold text-slate-950">{t("configPanel.configuredKnowledgeBases")}</h3>
+          <p className="mt-1 text-xs text-slate-600">
+            {t("configPanel.configuredKnowledgeBasesHelp")}
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={onAdd}
+          className="h-9 cursor-pointer rounded-lg bg-slate-950 px-4 text-sm font-semibold text-white transition-colors duration-200 hover:bg-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-300"
+        >
+          {t("configPanel.addKnowledgeBase")}
+        </button>
+      </div>
+
+      {items.length === 0 ? (
+        <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50 p-6 text-center">
+          <p className="text-sm font-medium text-slate-700">{t("configPanel.noKnowledgeBases")}</p>
+          <p className="mt-1 text-xs text-slate-500">{t("configPanel.startKnowledgeBase")}</p>
+        </div>
+      ) : (
+        <div className={DATASOURCE_CARD_GRID_CLASS}>
+          {items.map((item) => {
+            const status = workspaceConfigItemStatusBadge(item, t);
+            const indexStatus = item.settings?.indexStatus || item.status || "empty";
+            const provider = item.settings?.embeddingProvider || "—";
+            const model = item.settings?.embeddingModel || "—";
+            const busy = uploadBusy || uploadingId === item.id;
+            return (
+              <article
+                key={item.id}
+                className="group rounded-2xl border border-border bg-white p-4 transition-colors duration-200 hover:border-primary-light/30 hover:bg-primary-light/5"
+              >
+                <div className="flex items-start gap-3">
+                  <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border border-border bg-surface-subtle text-muted-light">
+                    <WorkspaceResourceIcon icon="book" />
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <h4 className="truncate text-sm font-semibold text-slate-950">{item.name}</h4>
+                      {status ? (
+                        <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium ${status.className}`}>
+                          {status.label}
+                        </span>
+                      ) : null}
+                    </div>
+                    <p className="mt-0.5 truncate font-mono text-[10px] text-slate-400">{item.id}</p>
+                    <p className="mt-2 truncate text-xs text-slate-600">
+                      <span className="font-medium text-slate-800">{provider}</span>
+                      {` · ${model}`}
+                    </p>
+                    <div className="mt-3 flex flex-wrap gap-1.5 text-[10px] text-slate-500">
+                      <span className="rounded-full border border-border bg-slate-50 px-2 py-0.5">
+                        {item.enabled ? t("configPanel.workspaceDefault") : t("configPanel.disabledByDefault")}
+                      </span>
+                      {item.hasSecret ? (
+                        <span className="rounded-full border border-emerald-100 bg-emerald-50 px-2 py-0.5 text-emerald-700">
+                          {t("configPanel.secretSaved")}
+                        </span>
+                      ) : null}
+                      <span className="rounded-full border border-border bg-slate-50 px-2 py-0.5">
+                        {t("configPanel.indexStatusLabel", { status: indexStatus })}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+                <div className="mt-4 flex flex-wrap justify-end gap-2">
+                  {onReindex ? (
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={() => void onReindex(item.id)}
+                      className={`${btnSecondaryClass} disabled:opacity-50`}
+                    >
+                      {t("configPanel.reindex")}
+                    </button>
+                  ) : null}
+                  <button type="button" onClick={() => onEdit(item.id)} className={btnSecondaryClass}>
+                    {t("common.edit")}
+                  </button>
+                  {onUpload ? (
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={() => inputRefs.current[item.id]?.click()}
+                      className={`${btnSecondaryClass} disabled:opacity-50`}
+                    >
+                      {uploadingId === item.id
+                        ? t("configPanel.uploading")
+                        : t("configPanel.uploadAndVectorize")}
+                    </button>
+                  ) : null}
+                  <button
+                    type="button"
+                    onClick={() => onBrowse(item.id)}
+                    className={CONFIG_CARD_PRIMARY_BUTTON_CLASS}
+                  >
+                    {t("configPanel.viewDocuments")}
+                  </button>
+                  {onUpload ? (
+                    <input
+                      ref={(node) => {
+                        inputRefs.current[item.id] = node;
+                      }}
+                      type="file"
+                      accept=".txt,.md,.csv,.tsv,.json,.yaml,.yml,.pdf,text/plain,text/markdown,text/csv,application/json,application/pdf"
+                      className="hidden"
+                      onChange={(event) => {
+                        void handleUpload(item.id, event.target.files?.[0]).catch(() => undefined);
+                        event.target.value = "";
+                      }}
+                    />
+                  ) : null}
+                </div>
+              </article>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function summarizeMcpConnection(item: WorkspaceConfigItem): string {
+  const settings = normalizeMcpSettings(item.settings);
+  if (settings.transport === "stdio") {
+    return [settings.transport, settings.command].filter(Boolean).join(" · ");
+  }
+  return [settings.transport, settings.serverUrl || settings.apiUrl].filter(Boolean).join(" · ");
+}
+
+function summarizeSkillPackage(item: WorkspaceConfigItem, builtinLabel: string): string {
+  const settings = normalizeSkillSettings(item.settings);
+  if (item.builtin || settings.packageSource?.startsWith("builtin://")) {
+    return builtinLabel;
+  }
+  return [settings.packageFormat, settings.packageFileName || settings.packageSource || item.description]
+    .filter(Boolean)
+    .join(" · ");
+}
+
+function summarizeModelProfile(item: WorkspaceConfigItem, serverEnvLabel: string): string {
+  if (item.builtin) return serverEnvLabel;
+  const settings = normalizeLlmSettings(item.settings);
+  return [settings.provider, settings.modelName].filter(Boolean).join(" · ");
+}
+
+function McpConfigList({
+  items,
+  onAdd,
+  onEdit,
+  onTest,
+  testBusy = false,
+}: {
+  items: WorkspaceConfigItem[];
+  onAdd: () => void;
+  onEdit: (itemId: string) => void;
+  onTest: (itemId: string) => void;
+  testBusy?: boolean;
+}) {
+  const t = useT();
+
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-border bg-surface-subtle px-4 py-3">
+        <div>
+          <h3 className="text-sm font-semibold text-slate-950">{t("configPanel.configuredMcpServers")}</h3>
+          <p className="mt-1 text-xs text-slate-600">{t("configPanel.configuredMcpServersHelp")}</p>
+        </div>
+        <button
+          type="button"
+          onClick={onAdd}
+          className="h-9 cursor-pointer rounded-lg bg-slate-950 px-4 text-sm font-semibold text-white transition-colors duration-200 hover:bg-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-300"
+        >
+          {t("configPanel.addMcpServer")}
+        </button>
+      </div>
+
+      {items.length === 0 ? (
+        <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50 p-6 text-center">
+          <p className="text-sm font-medium text-slate-700">{t("configPanel.noMcpServers")}</p>
+          <p className="mt-1 text-xs text-slate-500">{t("configPanel.startMcpServer")}</p>
+        </div>
+      ) : (
+        <div className={DATASOURCE_CARD_GRID_CLASS}>
+          {items.map((item) => {
+            const status = workspaceConfigItemStatusBadge(item, t);
+            const connection = summarizeMcpConnection(item);
+            return (
+              <article
+                key={item.id}
+                className="group rounded-2xl border border-border bg-white p-4 transition-colors duration-200 hover:border-primary-light/30 hover:bg-primary-light/5"
+              >
+                <div className="flex items-start gap-3">
+                  <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border border-border bg-surface-subtle text-muted-light">
+                    <WorkspaceResourceIcon icon="tools" />
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <h4 className="truncate text-sm font-semibold text-slate-950">{item.name}</h4>
+                      {status ? (
+                        <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium ${status.className}`}>
+                          {status.label}
+                        </span>
+                      ) : null}
+                    </div>
+                    <p className="mt-0.5 truncate font-mono text-[10px] text-slate-400">{item.id}</p>
+                    <p className="mt-2 truncate text-xs text-slate-600">{connection || item.description}</p>
+                    <div className="mt-3 flex flex-wrap gap-1.5 text-[10px] text-slate-500">
+                      <span className="rounded-full border border-border bg-slate-50 px-2 py-0.5">
+                        {item.enabled ? t("configPanel.workspaceDefault") : t("configPanel.disabledByDefault")}
+                      </span>
+                      {item.hasSecret ? (
+                        <span className="rounded-full border border-emerald-100 bg-emerald-50 px-2 py-0.5 text-emerald-700">
+                          {t("configPanel.secretSaved")}
+                        </span>
+                      ) : null}
+                    </div>
+                  </div>
+                </div>
+                <div className="mt-4 flex flex-wrap justify-end gap-2">
+                  <button
+                    type="button"
+                    disabled={testBusy}
+                    onClick={() => onTest(item.id)}
+                    className={`${btnSecondaryClass} disabled:opacity-50`}
+                  >
+                    {t("common.test")}
+                  </button>
+                  <button type="button" onClick={() => onEdit(item.id)} className={CONFIG_CARD_PRIMARY_BUTTON_CLASS}>
+                    {t("common.edit")}
+                  </button>
+                </div>
+              </article>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SkillConfigList({
+  items,
+  onAdd,
+  onEdit,
+  onValidate,
+  actionBusy = false,
+}: {
+  items: WorkspaceConfigItem[];
+  onAdd: () => void;
+  onEdit: (itemId: string) => void;
+  onValidate?: (itemId: string) => Promise<void>;
+  actionBusy?: boolean;
+}) {
+  const t = useT();
+  const builtinLabel = t("configPanel.builtinBadge");
+
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-border bg-surface-subtle px-4 py-3">
+        <div>
+          <h3 className="text-sm font-semibold text-slate-950">{t("configPanel.configuredSkills")}</h3>
+          <p className="mt-1 text-xs text-slate-600">{t("configPanel.configuredSkillsHelp")}</p>
+        </div>
+        <button
+          type="button"
+          onClick={onAdd}
+          className="h-9 cursor-pointer rounded-lg bg-slate-950 px-4 text-sm font-semibold text-white transition-colors duration-200 hover:bg-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-300"
+        >
+          {t("configPanel.addSkill")}
+        </button>
+      </div>
+
+      {items.length === 0 ? (
+        <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50 p-6 text-center">
+          <p className="text-sm font-medium text-slate-700">{t("configPanel.noSkills")}</p>
+          <p className="mt-1 text-xs text-slate-500">{t("configPanel.startSkill")}</p>
+        </div>
+      ) : (
+        <div className={DATASOURCE_CARD_GRID_CLASS}>
+          {items.map((item) => {
+            const status = workspaceConfigItemStatusBadge(item, t);
+            const summary = summarizeSkillPackage(item, builtinLabel);
+            return (
+              <article
+                key={item.id}
+                className="group rounded-2xl border border-border bg-white p-4 transition-colors duration-200 hover:border-primary-light/30 hover:bg-primary-light/5"
+              >
+                <div className="flex items-start gap-3">
+                  <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border border-border bg-surface-subtle text-muted-light">
+                    <WorkspaceResourceIcon icon="tools" />
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <h4 className="truncate text-sm font-semibold text-slate-950">{item.name}</h4>
+                      {status ? (
+                        <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium ${status.className}`}>
+                          {status.label}
+                        </span>
+                      ) : null}
+                    </div>
+                    <p className="mt-0.5 truncate font-mono text-[10px] text-slate-400">{item.id}</p>
+                    <p className="mt-2 truncate text-xs text-slate-600">{summary || item.description}</p>
+                    <div className="mt-3 flex flex-wrap gap-1.5 text-[10px] text-slate-500">
+                      <span className="rounded-full border border-border bg-slate-50 px-2 py-0.5">
+                        {item.enabled ? t("configPanel.workspaceDefault") : t("configPanel.disabledByDefault")}
+                      </span>
+                      {item.builtin ? (
+                        <span className="rounded-full border border-border bg-slate-50 px-2 py-0.5">
+                          {builtinLabel}
+                        </span>
+                      ) : null}
+                    </div>
+                  </div>
+                </div>
+                <div className="mt-4 flex flex-wrap justify-end gap-2">
+                  {onValidate ? (
+                    <button
+                      type="button"
+                      disabled={actionBusy}
+                      onClick={() => void onValidate(item.id)}
+                      className={`${btnSecondaryClass} disabled:opacity-50`}
+                    >
+                      {t("configPanel.validateSemantics")}
+                    </button>
+                  ) : null}
+                  <button type="button" onClick={() => onEdit(item.id)} className={CONFIG_CARD_PRIMARY_BUTTON_CLASS}>
+                    {t("common.edit")}
+                  </button>
+                </div>
+              </article>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ModelConfigList({
+  items,
+  onAdd,
+  onEdit,
+  onTest,
+  testBusy = false,
+}: {
+  items: WorkspaceConfigItem[];
+  onAdd: () => void;
+  onEdit: (itemId: string) => void;
+  onTest: (itemId: string) => void;
+  testBusy?: boolean;
+}) {
+  const t = useT();
+  const serverEnvLabel = t("configPanel.serverEnvVars");
+
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-border bg-surface-subtle px-4 py-3">
+        <div>
+          <h3 className="text-sm font-semibold text-slate-950">{t("configPanel.configuredModels")}</h3>
+          <p className="mt-1 text-xs text-slate-600">{t("configPanel.configuredModelsHelp")}</p>
+        </div>
+        <button
+          type="button"
+          onClick={onAdd}
+          className="h-9 cursor-pointer rounded-lg bg-slate-950 px-4 text-sm font-semibold text-white transition-colors duration-200 hover:bg-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-300"
+        >
+          {t("configPanel.addModel")}
+        </button>
+      </div>
+
+      {items.length === 0 ? (
+        <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50 p-6 text-center">
+          <p className="text-sm font-medium text-slate-700">{t("configPanel.noModels")}</p>
+          <p className="mt-1 text-xs text-slate-500">{t("configPanel.startModel")}</p>
+        </div>
+      ) : (
+        <div className={DATASOURCE_CARD_GRID_CLASS}>
+          {items.map((item) => {
+            const status = workspaceConfigItemStatusBadge(item, t);
+            const summary = summarizeModelProfile(item, serverEnvLabel);
+            return (
+              <article
+                key={item.id}
+                className="group rounded-2xl border border-border bg-white p-4 transition-colors duration-200 hover:border-primary-light/30 hover:bg-primary-light/5"
+              >
+                <div className="flex items-start gap-3">
+                  <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border border-border bg-surface-subtle text-muted-light">
+                    <WorkspaceResourceIcon icon="models" />
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <h4 className="truncate text-sm font-semibold text-slate-950">{item.name}</h4>
+                      {status ? (
+                        <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium ${status.className}`}>
+                          {status.label}
+                        </span>
+                      ) : null}
+                    </div>
+                    <p className="mt-0.5 truncate font-mono text-[10px] text-slate-400">{item.id}</p>
+                    <p className="mt-2 truncate text-xs text-slate-600">{summary || item.description}</p>
+                    <div className="mt-3 flex flex-wrap gap-1.5 text-[10px] text-slate-500">
+                      <span className="rounded-full border border-border bg-slate-50 px-2 py-0.5">
+                        {item.enabled ? t("configPanel.workspaceDefault") : t("configPanel.disabledByDefault")}
+                      </span>
+                      {item.builtin ? (
+                        <span className="rounded-full border border-border bg-slate-50 px-2 py-0.5">
+                          {t("configPanel.builtinBadge")}
+                        </span>
+                      ) : null}
+                      {item.hasSecret ? (
+                        <span className="rounded-full border border-emerald-100 bg-emerald-50 px-2 py-0.5 text-emerald-700">
+                          {t("configPanel.secretSaved")}
+                        </span>
+                      ) : null}
+                    </div>
+                  </div>
+                </div>
+                <div className="mt-4 flex flex-wrap justify-end gap-2">
+                  <button
+                    type="button"
+                    disabled={testBusy}
+                    onClick={() => onTest(item.id)}
+                    className={`${btnSecondaryClass} disabled:opacity-50`}
+                  >
+                    {t("common.test")}
+                  </button>
+                  <button type="button" onClick={() => onEdit(item.id)} className={CONFIG_CARD_PRIMARY_BUTTON_CLASS}>
+                    {t("common.edit")}
                   </button>
                 </div>
               </article>
@@ -5645,7 +6306,7 @@ function ConfigItemDetailView({
       .catch((error: unknown) => {
         if (!cancelled) {
           setMcpTools(null);
-          setMcpToolsError(error instanceof Error ? error.message : "Unable to load tools manifest");
+          setMcpToolsError(error instanceof Error ? error.message : t("configPanel.loadToolsFailed"));
         }
       });
     return () => {
@@ -5692,17 +6353,13 @@ function ConfigItemDetailView({
             : t("configPanel.kindSkill");
 
   const notes: Record<WorkspaceConfigPanelKey, string> = {
-    db:
-      "Data sources are registered through the REST API. Credentials are stored in secretRef and never returned in reads." +
-      "Connection tests and schema sync update connectionStatus.",
-    kb: "Knowledge documents and indexes are managed through the REST API. Runs retrieve by run_config.enabledKnowledgeIds.",
-    mcp:
-      "MCP servers are registered through the REST API. Connection tests refresh toolManifest and healthStatus.",
-    llm:
-      "Model profiles are managed through the REST API. Runs switch with run_config.activeLlmProfileId.",
+    db: t("configPanel.notesDb"),
+    kb: t("configPanel.notesKb"),
+    mcp: t("configPanel.notesMcp"),
+    llm: t("configPanel.notesLlm"),
     skill: isBuiltinSkill
-      ? "Built-in Skills are provided by the server. Runs send only the skill id."
-      : "Custom Skills are uploaded through multipart REST. Package content is stored server-side.",
+      ? t("configPanel.notesSkillBuiltin")
+      : t("configPanel.notesSkillCustom"),
   };
 
   const createDisabledFinal =
@@ -5813,21 +6470,27 @@ function ConfigItemDetailView({
                 item.hasSecret &&
                 isSecretField &&
                 !(settings[field.key] ?? "").trim()
-                  ? "Saved (leave blank to keep unchanged)"
-                  : field.placeholder;
+                  ? t("configPanel.secretKeepPlaceholder")
+                  : undefined;
               const lockField = panel === "skill";
               const pending = lockField && isFieldPending(field, settings);
               const disabled = lockField ? isFieldDisabled(field, item, settings) : false;
-              const options = resolveConfigFieldOptions(field, fieldOptionsContext);
+              const options = translateConfigFieldOptions(
+                panel,
+                field,
+                resolveConfigFieldOptions(field, fieldOptionsContext),
+                t,
+              );
+              const fieldCopy = translateConfigField(panel, field, t);
               if (panel === "db" && field.key === "filePath") {
                 return (
                   <DatasourceFilePathField
                     key={field.key}
-                    label={field.label}
+                    label={fieldCopy.label}
                     value={settings.filePath ?? ""}
                     uploadedFileName={settings.uploadedFileName ?? ""}
-                    placeholder={secretPlaceholder}
-                    helpText={field.helpText}
+                    placeholder={secretPlaceholder ?? fieldCopy.placeholder}
+                    helpText={fieldCopy.helpText}
                     required={field.required && !pending}
                     datasourceType={settings.type ?? "duckdb"}
                     onChange={(value) => onUpdate({ settings: { filePath: value } })}
@@ -5845,10 +6508,10 @@ function ConfigItemDetailView({
               return (
               <EditableField
                 key={field.key}
-                label={field.label}
+                label={fieldCopy.label}
                 value={settings[field.key] ?? ""}
-                placeholder={secretPlaceholder}
-                helpText={field.helpText}
+                placeholder={secretPlaceholder ?? fieldCopy.placeholder}
+                helpText={fieldCopy.helpText}
                 inputType={field.inputType}
                 options={options}
                 isOptionPending={
@@ -5876,8 +6539,9 @@ function ConfigItemDetailView({
         <p className="mt-2 text-sm leading-6 text-slate-600">{notes[panel]}</p>
         {mode === "edit" && (
           <p className="mt-2 text-xs text-slate-400">
-            {item.builtin ? "Built-in configuration item" : "Custom configuration item"}
-            {" · Available by default in the workspace"}
+            {item.builtin ? t("configPanel.builtinItem") : t("configPanel.customItem")}
+            {" · "}
+            {t("configPanel.availableByDefault")}
           </p>
         )}
       </section>
@@ -5911,7 +6575,7 @@ function ConfigItemDetailView({
             onClick={onSave}
             className="h-9 rounded-lg bg-code-bg px-4 text-sm font-medium text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-40"
           >
-            {saveBusy ? "Saving..." : "Save"}
+            {saveBusy ? t("common.saving") : t("common.save")}
           </button>
         </div>
       ) : null}
@@ -5979,7 +6643,7 @@ function KnowledgeFileUpload({
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const accept =
-    ".txt,.md,.csv,.tsv,.json,.yaml,.yml,text/plain,text/markdown,text/csv,text/tab-separated-values,application/json,application/x-yaml,text/yaml";
+    ".txt,.md,.csv,.tsv,.json,.yaml,.yml,.pdf,text/plain,text/markdown,text/csv,text/tab-separated-values,application/json,application/x-yaml,text/yaml,application/pdf";
 
   const handleFile = async (file: File | undefined) => {
     if (!file) return;
@@ -5989,7 +6653,7 @@ function KnowledgeFileUpload({
       await onUpload(file);
     } catch (uploadError) {
       setError(
-        uploadError instanceof Error ? uploadError.message : "Failed to upload knowledge document",
+        uploadError instanceof Error ? uploadError.message : t("configPanel.uploadKnowledgeFailed"),
       );
     } finally {
       setUploading(false);
@@ -6062,6 +6726,7 @@ function DatasourceFilePathField({
   onChange: (value: string) => void;
   onUploaded: (result: { path: string; originalName: string }) => void;
 }) {
+  const t = useT();
   const inputRef = useRef<HTMLInputElement>(null);
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -6078,7 +6743,7 @@ function DatasourceFilePathField({
       onUploaded({ path: result.path, originalName: result.originalName });
     } catch (uploadError) {
       setError(
-        uploadError instanceof Error ? uploadError.message : "Failed to upload datasource file",
+        uploadError instanceof Error ? uploadError.message : t("configPanel.uploadDatasourceFailed"),
       );
     } finally {
       setUploading(false);
@@ -6107,7 +6772,7 @@ function DatasourceFilePathField({
           onClick={() => inputRef.current?.click()}
           className="h-9 shrink-0 rounded-lg border border-border bg-white px-3 text-xs font-medium text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
         >
-          {uploading ? "Uploading..." : "Choose local file"}
+          {uploading ? t("common.uploading") : t("configPanel.chooseLocalFile")}
         </button>
       </div>
       <input
@@ -6122,7 +6787,7 @@ function DatasourceFilePathField({
       />
       {uploadedFileName ? (
         <span className="mt-1 block text-[11px] leading-4 text-slate-500">
-          Uploaded: <span className="font-medium text-slate-700">{uploadedFileName}</span>
+          {t("configPanel.uploadedFile", { name: uploadedFileName })}
         </span>
       ) : null}
       {error ? (
@@ -6144,6 +6809,7 @@ function SkillPackageUpload({
   onImport: (pkg: ParsedSkillPackage) => void;
   onSelectFile?: (file: File) => void;
 }) {
+  const t = useT();
   const inputRef = useRef<HTMLInputElement>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -6166,9 +6832,9 @@ function SkillPackageUpload({
     <section className="space-y-3 rounded-xl border border-dashed border-slate-300 bg-white px-5 py-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h4 className="text-sm font-medium text-slate-900">Upload Skill package</h4>
+          <h4 className="text-sm font-medium text-slate-900">{t("configPanel.uploadSkillPackage")}</h4>
           <p className="mt-1 text-xs leading-5 text-slate-500">
-            Supports SKILL.md (with YAML frontmatter) or a .zip package. Create/replace uploads through REST API.
+            {t("configPanel.uploadSkillPackageHelp")}
           </p>
         </div>
         <button
@@ -6177,12 +6843,12 @@ function SkillPackageUpload({
           onClick={() => inputRef.current?.click()}
           className="h-9 rounded-lg border border-border bg-white px-4 text-sm font-medium text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
         >
-          {loading ? "Parsing..." : fileName ? "Choose another file" : "Choose file"}
+          {loading ? t("common.parsing") : fileName ? t("configPanel.chooseAnotherFile") : t("configPanel.chooseFile")}
         </button>
       </div>
       {fileName && (
         <p className="text-xs text-slate-600">
-          Selected: <span className="font-medium text-slate-900">{fileName}</span>
+          {t("configPanel.selectedFile", { name: fileName })}
         </p>
       )}
       {error && (
@@ -6205,23 +6871,17 @@ function SkillPackageUpload({
 }
 
 function SkillConfigProtocolHint({ builtin }: { builtin: boolean }) {
+  const t = useT();
   return (
     <div className="rounded-lg border border-violet-200 bg-violet-50 px-3 py-2.5 text-xs leading-5 text-violet-900">
-      <p className="font-medium">Skill package notes</p>
+      <p className="font-medium">{t("configPanel.skillNotesTitle")}</p>
       <ul className="mt-1 list-inside list-disc space-y-0.5 text-violet-800/90">
-        <li>
-          Standard structure: directory contains{" "}
-          <code className="text-[11px]">SKILL.md</code>(YAML frontmatter + instructions)
-        </li>
-        <li>
-          Backend contract: <code className="text-[11px]">POST /api/v1/skills</code>{" "}
-          multipart upload; runs send only{" "}
-          <code className="text-[11px]">activeSkillId</code>, not package content
-        </li>
+        <li>{t("configPanel.skillNotesStructure")}</li>
+        <li>{t("configPanel.skillNotesContract")}</li>
         {builtin ? (
-          <li>Built-in Skills are provided by the server; the frontend only shows metadata</li>
+          <li>{t("configPanel.skillNotesBuiltin")}</li>
         ) : (
-          <li>Custom Skills are uploaded through REST multipart; AG-UI context carries only the skill id</li>
+          <li>{t("configPanel.skillNotesCustom")}</li>
         )}
       </ul>
     </div>
@@ -6229,51 +6889,29 @@ function SkillConfigProtocolHint({ builtin }: { builtin: boolean }) {
 }
 
 function McpConfigProtocolHint() {
+  const t = useT();
   return (
     <div className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2.5 text-xs leading-5 text-rose-900">
-      <p className="font-medium">MCP connection notes</p>
+      <p className="font-medium">{t("configPanel.mcpNotesTitle")}</p>
       <ul className="mt-1 list-inside list-disc space-y-0.5 text-rose-800/90">
-        <li>
-          Remote services commonly use SSE / Streamable HTTP URLs, for example{" "}
-          <code className="text-[11px]">https://host/mcp</code>
-        </li>
-        <li>
-          Configuration is persisted through <code className="text-[11px]">POST /api/v1/mcp-servers</code>{" "}
-          ; tokens are stored in secretRef
-        </li>
-        <li>
-          Runs use <code className="text-[11px]">run_config.enabledMcpServerIds</code>{" "}
-          mount MCP tools
-        </li>
+        <li>{t("configPanel.mcpNotesRemote")}</li>
+        <li>{t("configPanel.mcpNotesPersist")}</li>
+        <li>{t("configPanel.mcpNotesRuns")}</li>
       </ul>
     </div>
   );
 }
 
 function LlmConfigProtocolHint({ builtin }: { builtin: boolean }) {
+  const t = useT();
   return (
     <div className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2.5 text-xs leading-5 text-blue-900">
-      <p className="font-medium">AG-UI / dataFoundry alignment notes</p>
+      <p className="font-medium">{t("configPanel.llmNotesTitle")}</p>
       <ul className="mt-1 list-inside list-disc space-y-0.5 text-blue-800/90">
-        <li>
-          Server env: <code className="text-[11px]">LLM_PROVIDER</code>、
-          <code className="text-[11px]">LLM_BASE_URL</code>、
-          <code className="text-[11px]">LLM_API_KEY</code>、
-          <code className="text-[11px]">LLM_MODEL</code>
-        </li>
-        <li>
-          Model profiles are managed through{" "}
-          <code className="text-[11px]">POST /api/v1/model-profiles</code>{" "}
-          ; API keys are stored in secretRef
-        </li>
-        <li>
-          Runs switch through{" "}
-          <code className="text-[11px]">run_config.activeLlmProfileId</code>{" "}
-          switch models
-        </li>
-        {builtin && (
-          <li>The Server default item is read-only and maps to LLM configuration from server env</li>
-        )}
+        <li>{t("configPanel.llmNotesEnv")}</li>
+        <li>{t("configPanel.llmNotesPersist")}</li>
+        <li>{t("configPanel.llmNotesRuns")}</li>
+        {builtin ? <li>{t("configPanel.llmNotesBuiltin")}</li> : null}
       </ul>
     </div>
   );
@@ -6289,11 +6927,11 @@ function McpToolsManifest({
   const t = useT();
   return (
     <div className="rounded-lg border border-slate-200 bg-white px-3 py-2.5 sm:col-span-2">
-      <h5 className="text-xs font-semibold text-slate-700">Tools Manifest</h5>
+      <h5 className="text-xs font-semibold text-slate-700">{t("configPanel.toolsManifest")}</h5>
       {error ? (
         <p className="mt-1 text-xs text-rose-600">{error}</p>
       ) : tools === null ? (
-        <p className="mt-1 text-xs text-slate-400">Loading...</p>
+        <p className="mt-1 text-xs text-slate-400">{t("common.loading")}</p>
       ) : tools.length === 0 ? (
         <p className="mt-1 text-xs text-slate-500">{t("configPanel.noToolsYet")}</p>
       ) : (
@@ -6435,19 +7073,6 @@ function EditableField({
   );
 }
 
-function AddConfigCard({ label, onClick }: { label: string; onClick: () => void }) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className="flex h-full min-h-[88px] w-full flex-col items-center justify-center rounded-xl border border-dashed border-slate-300 bg-slate-50 text-slate-500 transition hover:border-slate-400 hover:bg-slate-100 hover:text-slate-700"
-    >
-      <span className="text-2xl leading-none">+</span>
-      <span className="mt-1 text-xs font-medium">{label}</span>
-    </button>
-  );
-}
-
 function DetailField({ label, value }: { label: string; value: string }) {
   return (
     <div className="rounded-lg border border-border bg-slate-50 px-3 py-2.5">
@@ -6457,51 +7082,6 @@ function DetailField({ label, value }: { label: string; value: string }) {
       <dd className="mt-0.5 break-all text-sm text-slate-800">{value}</dd>
     </div>
   );
-}
-
-function ConfigItemCard({
-  item,
-  onSelect,
-}: {
-  item: WorkspaceConfigItem;
-  onSelect?: () => void;
-}) {
-  const className = [
-    "w-full rounded-xl border px-4 py-3 transition",
-    "border-border bg-white hover:border-slate-300",
-    onSelect ? "cursor-pointer hover:bg-slate-50" : "",
-  ].join(" ");
-
-  const status = workspaceConfigItemStatusBadge(item);
-  const content = (
-    <div className="min-w-0">
-      <div className="flex items-center gap-2">
-        <div className="min-w-0 flex-1 truncate text-sm font-medium text-slate-900">
-          {item.name}
-        </div>
-        {status && (
-          <span
-            className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium ${status.className}`}
-          >
-            {status.label}
-          </span>
-        )}
-      </div>
-      <div className="mt-1 line-clamp-2 text-xs leading-5 text-slate-500">
-        {item.description}
-      </div>
-    </div>
-  );
-
-  if (onSelect) {
-    return (
-      <button type="button" onClick={onSelect} className={`text-left ${className}`}>
-        {content}
-      </button>
-    );
-  }
-
-  return <div className={className}>{content}</div>;
 }
 
 function ResourceNavCard({
@@ -7046,7 +7626,7 @@ function ChatOpenConsoleButton({ onOpenRightPanel }: { onOpenRightPanel: () => v
     <button
       type="button"
       onClick={onOpenRightPanel}
-      className={`h-8 ${btnSecondaryClass}`}
+      className="h-8 cursor-pointer rounded-lg bg-foreground px-3 py-1.5 text-xs font-semibold text-white transition-colors duration-200 hover:bg-foreground/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-foreground/25"
     >
       {t("chat.openConsole")}
     </button>

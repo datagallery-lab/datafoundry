@@ -259,6 +259,6 @@ describe("quick start guide state", () => {
     });
 
     expect(query.body).toContain("查询最近 30 天的订单总量，按日期分组");
-    expect(query.cta).toBe("Use this query");
+    expect(query.cta).toBe("使用此查询");
   });
 });

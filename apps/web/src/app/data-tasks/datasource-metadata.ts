@@ -1,4 +1,6 @@
 import type { DatasourceTypeDto, DatasourceTypeParamDto } from "../../lib/config-api";
+import type { TranslateFn } from "../../i18n/types";
+import { tx } from "../../i18n/config-labels";
 import type { WorkspaceConfigItem } from "./data-task-state";
 
 export type DatasourceTypeCategoryId =
@@ -182,6 +184,21 @@ export function groupDatasourceTypes(types: DatasourceTypeDto[]): DatasourceType
   }
 
   return groups;
+}
+
+export function localizeDatasourceTypeGroups(
+  groups: DatasourceTypeGroup[],
+  t: TranslateFn,
+): DatasourceTypeGroup[] {
+  return groups.map((group) => ({
+    ...group,
+    title: tx(t, `datasourceCategories.${group.id}.title`, group.title),
+    description: tx(
+      t,
+      `datasourceCategories.${group.id}.description`,
+      group.description,
+    ),
+  }));
 }
 
 export function buildDatasourceSettingsForType(type: DatasourceTypeDto): Record<string, string> {
