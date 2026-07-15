@@ -4,6 +4,11 @@ import { isMouseInput } from '../../input/mouse-wheel.js';
 import { CommandCompletion, CommandHistory, DEFAULT_COMMANDS } from '../keybindings.js';
 import { inkColors } from '../theme.js';
 import { TextBuffer, cpLen, cpSlice, toCodePoints } from './text-buffer.js';
+import {
+  SlashCommandPopover,
+  filterSlashCommands,
+} from '../SlashCommandPopover.js';
+import { commandProcessor } from '../../commands/CommandProcessor.js';
 
 interface EnhancedInputBoxProps {
   value?: string;
@@ -170,6 +175,8 @@ export const EnhancedInputBox: React.FC<EnhancedInputBoxProps> = ({
 }) => {
   const [, forceRender] = useState(0);
   const [completionHint, setCompletionHint] = useState('');
+  const [showSlashPopover, setShowSlashPopover] = useState(false);
+  const [slashPopoverActiveIndex, setSlashPopoverActiveIndex] = useState(0);
   const pendingPastesRef = useRef<Map<string, string>>(new Map());
   const activePlaceholderIds = useRef<Map<number, Set<number>>>(new Map());
   const localHistoryRef = useRef(new CommandHistory());
@@ -182,6 +189,8 @@ export const EnhancedInputBox: React.FC<EnhancedInputBoxProps> = ({
   const bufferRef = useRef<TextBuffer>(new TextBuffer('', INPUT_VIEWPORT_HEIGHT, visualWidth));
   const buffer = bufferRef.current;
   const inputIsActive = isRawModeSupported;
+
+  const availableCommands = React.useMemo(() => commandProcessor.getCommands(), []);
 
   const accent = disabled ? inkColors.muted : inkColors.accent;
   const metaParts = [
@@ -199,16 +208,6 @@ export const EnhancedInputBox: React.FC<EnhancedInputBoxProps> = ({
     lastReportedLayoutRows.current = rows;
     onLayoutChange?.(rows);
   }, [onLayoutChange]);
-
-  const currentLayoutRows = useCallback(() => {
-    return ENHANCED_INPUT_RESERVED_ROWS;
-  }, []);
-
-  const syncChange = useCallback(() => {
-    onChange(buffer.text);
-    reportLayoutRows(currentLayoutRows());
-    redraw();
-  }, [buffer, currentLayoutRows, onChange, redraw, reportLayoutRows]);
 
   const setPendingPaste = useCallback((placeholderText: string, pasted: string) => {
     pendingPastesRef.current.set(placeholderText, pasted);
@@ -234,6 +233,44 @@ export const EnhancedInputBox: React.FC<EnhancedInputBoxProps> = ({
       setCompletionHint('');
     }
   }, []);
+
+  const getSlashQuery = useCallback((): string | undefined => {
+    return buffer.text.match(/^\/([^\s]*)$/u)?.[1];
+  }, [buffer]);
+
+  const getFilteredCommands = useCallback(() => (
+    filterSlashCommands(availableCommands, getSlashQuery() ?? '')
+  ), [availableCommands, getSlashQuery]);
+
+  const currentLayoutRows = useCallback(() => ENHANCED_INPUT_RESERVED_ROWS, []);
+
+  const syncChange = useCallback(() => {
+    onChange(buffer.text);
+    reportLayoutRows(currentLayoutRows());
+    redraw();
+  }, [buffer, currentLayoutRows, onChange, redraw, reportLayoutRows]);
+
+  const selectSlashCommand = useCallback((index: number) => {
+    const filtered = getFilteredCommands();
+    const cmd = filtered[index];
+    if (cmd) {
+      buffer.setText(`/${cmd.name} `);
+      buffer.move('end');
+      setShowSlashPopover(false);
+      setSlashPopoverActiveIndex(0);
+      resetCompletion();
+      syncChange();
+    }
+  }, [buffer, getFilteredCommands, resetCompletion, syncChange]);
+
+  useEffect(() => {
+    if (getSlashQuery() !== undefined && !disabled) {
+      setShowSlashPopover(true);
+      setSlashPopoverActiveIndex(0);
+    } else {
+      setShowSlashPopover(false);
+    }
+  }, [buffer.text, disabled, getSlashQuery]);
 
   const parsePlaceholder = useCallback(
     (placeholderText: string): { charCount: number; id: number } | null => {
@@ -283,8 +320,7 @@ export const EnhancedInputBox: React.FC<EnhancedInputBoxProps> = ({
     );
   }, []);
 
-  const submitBuffer = useCallback(() => {
-    const rawText = buffer.text;
+  const submitText = useCallback((rawText: string) => {
     const trimmed = rawText.trim();
     if (!trimmed) {
       return;
@@ -316,6 +352,18 @@ export const EnhancedInputBox: React.FC<EnhancedInputBoxProps> = ({
     redraw,
     reportLayoutRows,
   ]);
+
+  const submitBuffer = useCallback(() => {
+    submitText(buffer.text);
+  }, [buffer, submitText]);
+
+  const submitSlashCommand = useCallback((index: number) => {
+    const command = getFilteredCommands()[index];
+    if (!command) return;
+    setShowSlashPopover(false);
+    setSlashPopoverActiveIndex(0);
+    submitText(`/${command.name}`);
+  }, [getFilteredCommands, submitText]);
 
   const clearBuffer = useCallback(() => {
     buffer.setText('');
@@ -499,6 +547,14 @@ export const EnhancedInputBox: React.FC<EnhancedInputBoxProps> = ({
       }
 
       if (isPlainReturn(key)) {
+        if (showSlashPopover) {
+          const filtered = getFilteredCommands();
+          if (filtered.length > 0) {
+            submitSlashCommand(slashPopoverActiveIndex);
+            return;
+          }
+          setShowSlashPopover(false);
+        }
         submitBuffer();
         return;
       }
@@ -529,6 +585,11 @@ export const EnhancedInputBox: React.FC<EnhancedInputBoxProps> = ({
       }
 
       if (key.escape) {
+        if (showSlashPopover) {
+          setShowSlashPopover(false);
+          setSlashPopoverActiveIndex(0);
+          return;
+        }
         if (completionHint) {
           resetCompletion();
         } else if (restoreQueuedMessages()) {
@@ -618,6 +679,14 @@ export const EnhancedInputBox: React.FC<EnhancedInputBoxProps> = ({
       }
 
       if (key.upArrow || (key.ctrl && input === 'p')) {
+        if (showSlashPopover) {
+          const filtered = getFilteredCommands();
+          if (filtered.length > 0) {
+            setSlashPopoverActiveIndex((previous) => Math.max(0, previous - 1));
+          }
+          return;
+        }
+
         const [visualRow, visualCol] = buffer.visualCursor;
         if (visualRow > 0) {
           buffer.move('up');
@@ -637,6 +706,16 @@ export const EnhancedInputBox: React.FC<EnhancedInputBoxProps> = ({
       }
 
       if (key.downArrow) {
+        if (showSlashPopover) {
+          const filtered = getFilteredCommands();
+          if (filtered.length > 0) {
+            setSlashPopoverActiveIndex((previous) => (
+              Math.min(filtered.length - 1, previous + 1)
+            ));
+          }
+          return;
+        }
+
         const [visualRow, visualCol] = buffer.visualCursor;
         const lastVisualRow = buffer.allVisualLines.length - 1;
         const lastVisualLineLength = cpLen(buffer.allVisualLines[lastVisualRow] ?? '');
@@ -655,6 +734,16 @@ export const EnhancedInputBox: React.FC<EnhancedInputBoxProps> = ({
       }
 
       if (key.tab) {
+        if (showSlashPopover) {
+          const filtered = getFilteredCommands();
+          if (filtered.length > 0) {
+            selectSlashCommand(slashPopoverActiveIndex);
+          } else {
+            setShowSlashPopover(false);
+          }
+          return;
+        }
+
         const completion = completionRef.current.complete(buffer.text);
         if (completion !== null) {
           buffer.setText(completion);
@@ -686,7 +775,7 @@ export const EnhancedInputBox: React.FC<EnhancedInputBoxProps> = ({
   const relativeCursorRow = cursorVisualRow - buffer.visualScrollOffset;
   const placeholderFirst = cpSlice(placeholder, 0, 1);
   const placeholderRest = cpSlice(placeholder, 1);
-  const layoutRows = ENHANCED_INPUT_RESERVED_ROWS;
+  const layoutRows = currentLayoutRows();
   const layoutSignature = [
     layoutRows,
     visualWidth,
@@ -764,7 +853,27 @@ export const EnhancedInputBox: React.FC<EnhancedInputBoxProps> = ({
     );
   };
   return (
-    <Box flexDirection="column" flexShrink={0} minHeight={4} width="100%">
+    <Box
+      flexDirection="column"
+      flexShrink={0}
+      height={ENHANCED_INPUT_RESERVED_ROWS}
+      width="100%"
+      position="relative"
+    >
+      {showSlashPopover && !disabled && (
+        <Box
+          position="absolute"
+          left={0}
+          right={0}
+          bottom={ENHANCED_INPUT_RESERVED_ROWS}
+        >
+          <SlashCommandPopover
+            commands={getFilteredCommands()}
+            activeIndex={slashPopoverActiveIndex}
+          />
+        </Box>
+      )}
+
       <Box
         flexDirection="row"
         width="100%"
@@ -795,7 +904,7 @@ export const EnhancedInputBox: React.FC<EnhancedInputBoxProps> = ({
               <Text color={inkColors.warning} wrap="truncate-end">
                 Press Ctrl+C again to exit.
               </Text>
-            ) : !disabled && completionHint ? (
+            ) : !disabled && completionHint && !showSlashPopover ? (
               <Text dimColor color={inkColors.accent} wrap="truncate-end">
                 {completionHint}
               </Text>

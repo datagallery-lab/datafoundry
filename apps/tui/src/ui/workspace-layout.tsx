@@ -94,7 +94,7 @@ export function WorkspaceFrame({
         <Box
           width={mainColumns}
           height={controlsRows}
-          overflowY="hidden"
+          overflowY="visible"
           flexShrink={0}
           flexDirection="column"
           justifyContent="flex-end"

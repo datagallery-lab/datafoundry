@@ -2,7 +2,7 @@ import React from 'react';
 import assert from 'node:assert/strict';
 import { PassThrough } from 'node:stream';
 import { afterEach, describe, it } from 'node:test';
-import { render } from 'ink';
+import { Box, render } from 'ink';
 import { CommandHistory } from '../keybindings.js';
 import { EnhancedInputBox, inputLineFragments } from './EnhancedInputBox.js';
 
@@ -247,5 +247,99 @@ describe('EnhancedInputBox history navigation', () => {
     await waitForInput();
 
     assert.equal(changes.at(-1), 'remember me');
+  });
+});
+
+describe('EnhancedInputBox slash command menu', () => {
+  it('keeps the composer height fixed while the menu overlays the chat viewport', async () => {
+    const layoutRows: number[] = [];
+    const view = renderInputBox(
+      <Box height={20} width="100%" flexDirection="column" justifyContent="flex-end">
+        <EnhancedInputBox
+          onChange={() => {}}
+          onSubmit={() => {}}
+          onLayoutChange={(rows) => layoutRows.push(rows)}
+        />
+      </Box>,
+    );
+    await waitForInput();
+
+    assert.equal(layoutRows.at(-1), 7);
+
+    view.stdin.write('/');
+    await waitForInput();
+    await waitForInput();
+
+    assert.equal(layoutRows.at(-1), 7);
+    assert.match(view.output.join(''), /\/clear\s+Clear chat history/);
+    assert.doesNotMatch(view.output.join(''), /Slash Commands/);
+  });
+
+  it('uses Enter to execute the selected command immediately', async () => {
+    const submissions: string[] = [];
+    const view = renderInputBox(
+      <Box height={20} width="100%" flexDirection="column" justifyContent="flex-end">
+        <EnhancedInputBox
+          onChange={() => {}}
+          onSubmit={(value) => submissions.push(value)}
+        />
+      </Box>,
+    );
+    await waitForInput();
+
+    view.stdin.write('/');
+    await waitForInput();
+    view.stdin.write('\x1b[B');
+    await waitForInput();
+    view.stdin.write('\r');
+    await waitForInput();
+
+    assert.deepEqual(submissions, ['/datasource']);
+  });
+
+  it('keeps Tab as completion without executing the selected command', async () => {
+    const changes: string[] = [];
+    const submissions: string[] = [];
+    const view = renderInputBox(
+      <Box height={20} width="100%" flexDirection="column" justifyContent="flex-end">
+        <EnhancedInputBox
+          onChange={(value) => changes.push(value)}
+          onSubmit={(value) => submissions.push(value)}
+        />
+      </Box>,
+    );
+    await waitForInput();
+
+    view.stdin.write('/');
+    await waitForInput();
+    view.stdin.write('\x1b[B');
+    await waitForInput();
+    view.stdin.write('\t');
+    await waitForInput();
+
+    assert.equal(changes.at(-1), '/datasource ');
+    assert.deepEqual(submissions, []);
+  });
+
+  it('submits an unmatched slash command instead of trapping Enter in an empty menu', async () => {
+    const submissions: string[] = [];
+    const view = renderInputBox(
+      <Box height={20} width="100%" flexDirection="column" justifyContent="flex-end">
+        <EnhancedInputBox
+          onChange={() => {}}
+          onSubmit={(value) => submissions.push(value)}
+        />
+      </Box>,
+    );
+    await waitForInput();
+
+    view.stdin.write('/no-such-command');
+    await waitForInput();
+    assert.match(view.output.join(''), /No matching commands/);
+
+    view.stdin.write('\r');
+    await waitForInput();
+
+    assert.deepEqual(submissions, ['/no-such-command']);
   });
 });

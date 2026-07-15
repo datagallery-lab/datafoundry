@@ -3,6 +3,8 @@ import { Box, Text, useInput, useStdin } from 'ink';
 import { isMouseInput } from '../input/mouse-wheel.js';
 import { CommandHistory, CommandCompletion, DEFAULT_COMMANDS } from './keybindings.js';
 import { inkColors } from './theme.js';
+import { SlashCommandPopover, filterSlashCommands } from './SlashCommandPopover.js';
+import { commandProcessor } from '../commands/CommandProcessor.js';
 
 interface InputBoxProps {
   value?: string;
@@ -35,6 +37,8 @@ export const InputBox: React.FC<InputBoxProps> = ({
 }) => {
   const [localValue, setLocalValue] = useState('');
   const [completionHint, setCompletionHint] = useState<string>('');
+  const [showSlashPopover, setShowSlashPopover] = useState(false);
+  const [slashPopoverActiveIndex, setSlashPopoverActiveIndex] = useState(0);
   const { isRawModeSupported } = useStdin();
   const accent = disabled ? inkColors.muted : inkColors.accent;
   const metaParts = [
@@ -46,6 +50,8 @@ export const InputBox: React.FC<InputBoxProps> = ({
   const historyRef = useRef(new CommandHistory());
   const completionRef = useRef(new CommandCompletion(commands));
 
+  const availableCommands = React.useMemo(() => commandProcessor.getCommands(), []);
+
   const inputIsActive = Boolean(
     isRawModeSupported &&
       typeof process.stdin.setRawMode === 'function',
@@ -56,6 +62,45 @@ export const InputBox: React.FC<InputBoxProps> = ({
     completionRef.current.setCommands(commands);
   }, [commands]);
 
+  useEffect(() => {
+    if (/^\/[^\s]*$/u.test(localValue) && !disabled) {
+      setShowSlashPopover(true);
+      setSlashPopoverActiveIndex(0);
+    } else {
+      setShowSlashPopover(false);
+    }
+  }, [localValue, disabled]);
+
+  const getSlashFilter = (): string => {
+    return localValue.match(/^\/([^\s]*)$/u)?.[1] ?? '';
+  };
+
+  const getFilteredCommands = () => filterSlashCommands(availableCommands, getSlashFilter());
+
+  // Handle slash command selection
+  const selectSlashCommand = (index: number) => {
+    const filtered = getFilteredCommands();
+    const cmd = filtered[index];
+    if (cmd) {
+      setLocalValue(`/${cmd.name} `);
+      setShowSlashPopover(false);
+      setCompletionHint('');
+    }
+  };
+
+  const submitValue = (submittedValue: string) => {
+    if (!submittedValue || (disabled && !submittedValue.startsWith('/'))) return;
+    historyRef.current.add(submittedValue);
+    onSubmit(submittedValue);
+    setLocalValue('');
+    onChange('');
+    setCompletionHint('');
+    setShowSlashPopover(false);
+    setSlashPopoverActiveIndex(0);
+    historyRef.current.reset();
+    completionRef.current.reset();
+  };
+
   // Handle keyboard input
   useInput(
     (input, key) => {
@@ -63,25 +108,46 @@ export const InputBox: React.FC<InputBoxProps> = ({
         return;
       }
 
+      if (key.escape && showSlashPopover) {
+        setShowSlashPopover(false);
+        setSlashPopoverActiveIndex(0);
+        return;
+      }
+
+      if (showSlashPopover) {
+        const filtered = getFilteredCommands();
+
+        if (key.upArrow) {
+          if (filtered.length > 0) {
+            setSlashPopoverActiveIndex((previous) => Math.max(0, previous - 1));
+          }
+          return;
+        }
+
+        if (key.downArrow) {
+          if (filtered.length > 0) {
+            setSlashPopoverActiveIndex((previous) => (
+              Math.min(filtered.length - 1, previous + 1)
+            ));
+          }
+          return;
+        }
+      }
+
       // Handle Enter key
       if (key.return) {
-        const submittedValue = localValue.trim();
-        if (submittedValue) {
-          if (disabled && !submittedValue.startsWith('/')) {
+        if (showSlashPopover) {
+          const command = getFilteredCommands()[slashPopoverActiveIndex];
+          if (command) {
+            submitValue(`/${command.name}`);
             return;
           }
+          setShowSlashPopover(false);
+        }
 
-          // Add to history
-          historyRef.current.add(submittedValue);
-
-          onSubmit(submittedValue);
-          setLocalValue('');
-          onChange('');
-          setCompletionHint('');
-
-          // Reset history navigation
-          historyRef.current.reset();
-          completionRef.current.reset();
+        const submittedValue = localValue.trim();
+        if (submittedValue) {
+          submitValue(submittedValue);
         }
         return;
       }
@@ -95,8 +161,8 @@ export const InputBox: React.FC<InputBoxProps> = ({
         return;
       }
 
-      // Handle up arrow - previous command in history
-      if (key.upArrow) {
+      // Handle up arrow - previous command in history (only when popover is closed)
+      if (key.upArrow && !showSlashPopover) {
         const prevCommand = historyRef.current.previous(localValue);
         if (prevCommand !== null) {
           setLocalValue(prevCommand);
@@ -106,13 +172,22 @@ export const InputBox: React.FC<InputBoxProps> = ({
         return;
       }
 
-      // Handle down arrow - next command in history
-      if (key.downArrow) {
+      // Handle down arrow - next command in history (only when popover is closed)
+      if (key.downArrow && !showSlashPopover) {
         const nextCommand = historyRef.current.next();
         if (nextCommand !== null) {
           setLocalValue(nextCommand);
           setCompletionHint('');
           completionRef.current.reset();
+        }
+        return;
+      }
+
+      if (key.tab && showSlashPopover) {
+        if (getFilteredCommands().length > 0) {
+          selectSlashCommand(slashPopoverActiveIndex);
+        } else {
+          setShowSlashPopover(false);
         }
         return;
       }
@@ -185,12 +260,14 @@ export const InputBox: React.FC<InputBoxProps> = ({
       const newValue = localValue + input;
       setLocalValue(newValue);
 
-      // Update completion hint
-      const completions = completionRef.current.getCompletions(newValue);
-      if (completions.length > 0) {
-        setCompletionHint(`Tab: ${completions.slice(0, 3).join(', ')}${completions.length > 3 ? '...' : ''}`);
-      } else {
-        setCompletionHint('');
+      // Update completion hint (only when popover is closed)
+      if (!showSlashPopover) {
+        const completions = completionRef.current.getCompletions(newValue);
+        if (completions.length > 0) {
+          setCompletionHint(`Tab: ${completions.slice(0, 3).join(', ')}${completions.length > 3 ? '...' : ''}`);
+        } else {
+          setCompletionHint('');
+        }
       }
 
       completionRef.current.reset();
@@ -199,7 +276,16 @@ export const InputBox: React.FC<InputBoxProps> = ({
   );
 
   return (
-    <Box flexDirection="column" flexShrink={0} minHeight={4}>
+    <Box flexDirection="column" flexShrink={0} minHeight={4} position="relative">
+      {showSlashPopover && !disabled && (
+        <Box position="absolute" left={0} right={0} bottom="100%">
+          <SlashCommandPopover
+            commands={getFilteredCommands()}
+            activeIndex={slashPopoverActiveIndex}
+          />
+        </Box>
+      )}
+
       <Box flexDirection="row" width="100%">
         <Text color={accent} bold>
           {disabled ? '│' : '┃'}
@@ -219,7 +305,7 @@ export const InputBox: React.FC<InputBoxProps> = ({
             </Text>
           </Box>
 
-          {!disabled && completionHint && (
+          {!disabled && completionHint && !showSlashPopover && (
             <Box paddingTop={1}>
               <Text dimColor color={inkColors.accent} wrap="truncate-end">
                 {completionHint}
