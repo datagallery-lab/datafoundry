@@ -12,7 +12,9 @@
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",
+    "prestart": "npm run build",
     "start": "node dist/index.js",
+    "test": "npm run build && node --test dist/ui/components/EnhancedInputBox.test.js",
     "clean": "rm -rf dist"
   },
   "keywords": [

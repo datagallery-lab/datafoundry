@@ -97,7 +97,7 @@ export const InputBox: React.FC<InputBoxProps> = ({
 
       // Handle up arrow - previous command in history
       if (key.upArrow) {
-        const prevCommand = historyRef.current.previous();
+        const prevCommand = historyRef.current.previous(localValue);
         if (prevCommand !== null) {
           setLocalValue(prevCommand);
           setCompletionHint('');

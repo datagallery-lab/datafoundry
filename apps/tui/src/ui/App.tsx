@@ -16,7 +16,7 @@ import { useTerminalSize } from './use-terminal-size.js';
 import { SessionPicker } from './SessionPicker.js';
 import { ResourcePicker, type ResourcePickerItem } from './ResourcePicker.js';
 import { HomeSplash } from './HomeSplash.js';
-import { DEFAULT_COMMANDS } from './keybindings.js';
+import { CommandHistory, DEFAULT_COMMANDS } from './keybindings.js';
 import { AssistantTextStreamBuffer, type AssistantTextFlush } from './assistant-stream-buffer.js';
 import { createWheelScrollDecoder } from '../input/mouse-wheel.js';
 import { inkColors } from './theme.js';
@@ -367,6 +367,9 @@ export const App: React.FC<AppProps> = ({
   const [ctrlCPressedOnce, setCtrlCPressedOnce] = useState(false);
   const [compactMode, setCompactMode] = useState(true);
   const [thoughtExpanded, setThoughtExpanded] = useState(false);
+  // The home composer is replaced by the chat composer after the first
+  // submit, so the history must live above both component instances.
+  const inputHistoryRef = useRef(new CommandHistory());
   const chatAreaRef = useRef<ChatAreaRef>(null);
   const mainControlsRef = useRef<DOMElement | null>(null);
   const ctrlCTimerRef = useRef<NodeJS.Timeout | null>(null);
@@ -1704,6 +1707,7 @@ export const App: React.FC<AppProps> = ({
                           datasourceId={activeDatasourceId}
                           skillId={activeSkillId}
                           inputWidth={promptWidth}
+                          history={inputHistoryRef.current}
                         />
                       )}
                     />
@@ -1797,6 +1801,7 @@ export const App: React.FC<AppProps> = ({
                   skillId={activeSkillId}
                   inputWidth={chatPaneColumns}
                   outputCount={visibleArtifacts.length}
+                  history={inputHistoryRef.current}
                 />
               )}
 

@@ -98,8 +98,9 @@ Type `/` and use `Tab` to complete. Built-in commands:
 | `Ctrl+N` | New session. |
 | `PageUp` / `PageDown` | Scroll in Chat view. |
 | `Home` / `End` | Jump to top or bottom of Chat scroll area. |
+| Terminal paste shortcut | Paste text; content over 1000 characters or 10 lines is folded in the composer and expanded when sent. |
 | `Tab` | Complete commands in the input box. |
-| `↑` / `↓` | Browse input history. |
+| `↑` / `↓` | Move through multiline input first, then snap to the start/end before browsing history; the original draft and history are retained. |
 | `Ctrl+U` | Clear current input. |
 | `Ctrl+W` | Delete the previous word in input. |
 | `Enter` | Send message or run command. |

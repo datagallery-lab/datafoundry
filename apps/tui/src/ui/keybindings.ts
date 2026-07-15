@@ -16,6 +16,7 @@ export interface KeybindingAction {
 export class CommandHistory {
   private history: string[] = [];
   private currentIndex: number = -1;
+  private draft: string = '';
   private maxSize: number;
 
   constructor(maxSize: number = 100) {
@@ -45,10 +46,11 @@ export class CommandHistory {
   /**
    * Navigate to previous command (↑)
    */
-  previous(): string | null {
+  previous(draft: string = ''): string | null {
     if (this.history.length === 0) return null;
 
     if (this.currentIndex === -1) {
+      this.draft = draft;
       this.currentIndex = this.history.length - 1;
     } else if (this.currentIndex > 0) {
       this.currentIndex--;
@@ -67,9 +69,11 @@ export class CommandHistory {
       this.currentIndex++;
       return this.history[this.currentIndex];
     } else {
-      // At the end, return empty to allow new input
+      // At the end, restore the text that was present before navigation.
+      const draft = this.draft;
       this.currentIndex = -1;
-      return '';
+      this.draft = '';
+      return draft;
     }
   }
 
@@ -78,6 +82,7 @@ export class CommandHistory {
    */
   reset(): void {
     this.currentIndex = -1;
+    this.draft = '';
   }
 
   /**
@@ -93,6 +98,7 @@ export class CommandHistory {
   clear(): void {
     this.history = [];
     this.currentIndex = -1;
+    this.draft = '';
   }
 
   /**
@@ -186,6 +192,7 @@ export const KEYBINDINGS: KeybindingAction[] = [
   { key: 'Ctrl+R', description: 'Reset session', category: 'session' },
 
   // Input shortcuts
+  { key: 'Terminal paste', description: 'Paste text into input', category: 'input' },
   { key: '↑', description: 'Previous command', category: 'input' },
   { key: '↓', description: 'Next command', category: 'input' },
   { key: 'Tab (input)', description: 'Command completion', category: 'input' },

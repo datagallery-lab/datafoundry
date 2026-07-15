@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { Box, Text, useInput, useStdin, useStdout, type Key } from 'ink';
+import { Box, Text, useInput, usePaste, useStdin, useStdout, type Key } from 'ink';
 import { isMouseInput } from '../../input/mouse-wheel.js';
 import { CommandCompletion, CommandHistory, DEFAULT_COMMANDS } from '../keybindings.js';
 import { inkColors } from '../theme.js';
@@ -24,6 +24,7 @@ interface EnhancedInputBoxProps {
   skillId?: string | undefined;
   inputWidth?: number | undefined;
   outputCount?: number | undefined;
+  history?: CommandHistory | undefined;
 }
 
 const INPUT_VIEWPORT_HEIGHT = 3;
@@ -109,6 +110,43 @@ function isPrintableInput(input: string, key: Key): boolean {
   return true;
 }
 
+export interface InputLineFragment {
+  text: string;
+  isPastePlaceholder: boolean;
+  hasCursor: boolean;
+}
+
+export function inputLineFragments(
+  lineText: string,
+  cursorPos: number | null,
+): InputLineFragment[] {
+  const chars = toCodePoints(lineText);
+  const placeholderMask = Array.from({ length: chars.length }, () => false);
+
+  for (const match of lineText.matchAll(/\[Pasted Content \d+ chars\](?: #\d+)?/g)) {
+    const start = cpLen(lineText.slice(0, match.index));
+    const end = start + cpLen(match[0]);
+    placeholderMask.fill(true, start, end);
+  }
+
+  const fragments: InputLineFragment[] = [];
+  chars.forEach((char, index) => {
+    const isPastePlaceholder = placeholderMask[index] ?? false;
+    const hasCursor = cursorPos === index;
+    const previous = fragments.at(-1);
+    if (
+      previous
+      && previous.isPastePlaceholder === isPastePlaceholder
+      && previous.hasCursor === hasCursor
+    ) {
+      previous.text += char;
+      return;
+    }
+    fragments.push({ text: char, isPastePlaceholder, hasCursor });
+  });
+  return fragments;
+}
+
 export const EnhancedInputBox: React.FC<EnhancedInputBoxProps> = ({
   value,
   onChange,
@@ -128,12 +166,14 @@ export const EnhancedInputBox: React.FC<EnhancedInputBoxProps> = ({
   skillId,
   inputWidth,
   outputCount = 0,
+  history,
 }) => {
   const [, forceRender] = useState(0);
   const [completionHint, setCompletionHint] = useState('');
   const pendingPastesRef = useRef<Map<string, string>>(new Map());
   const activePlaceholderIds = useRef<Map<number, Set<number>>>(new Map());
-  const historyRef = useRef(new CommandHistory());
+  const localHistoryRef = useRef(new CommandHistory());
+  const commandHistory = history ?? localHistoryRef.current;
   const completionRef = useRef(new CommandCompletion(commands));
   const { isRawModeSupported } = useStdin();
   const { stdout } = useStdout();
@@ -141,9 +181,7 @@ export const EnhancedInputBox: React.FC<EnhancedInputBoxProps> = ({
   const visualWidth = Math.max(12, Math.floor((inputWidth ?? fallbackWidth) - 6));
   const bufferRef = useRef<TextBuffer>(new TextBuffer('', INPUT_VIEWPORT_HEIGHT, visualWidth));
   const buffer = bufferRef.current;
-  const inputIsActive = Boolean(
-    isRawModeSupported && typeof process.stdin.setRawMode === 'function',
-  );
+  const inputIsActive = isRawModeSupported;
 
   const accent = disabled ? inkColors.muted : inkColors.accent;
   const metaParts = [
@@ -256,8 +294,8 @@ export const EnhancedInputBox: React.FC<EnhancedInputBoxProps> = ({
     }
 
     const finalValue = expandPendingPastes(rawText);
-    historyRef.current.add(finalValue);
-    historyRef.current.reset();
+    commandHistory.add(finalValue);
+    commandHistory.reset();
     completionRef.current.reset();
     clearPendingPastes();
     setCompletionHint('');
@@ -269,6 +307,7 @@ export const EnhancedInputBox: React.FC<EnhancedInputBoxProps> = ({
   }, [
     buffer,
     clearPendingPastes,
+    commandHistory,
     currentLayoutRows,
     disabled,
     expandPendingPastes,
@@ -315,6 +354,11 @@ export const EnhancedInputBox: React.FC<EnhancedInputBoxProps> = ({
     },
     [buffer, nextLargePastePlaceholder, setPendingPaste, syncChange, updateCompletionHint],
   );
+
+  // Bracketed paste keeps pasted newlines and control-like characters out of
+  // the normal key handler. Without it, terminal paste shortcuts can be
+  // parsed as individual key presses (and appear to do nothing).
+  usePaste(handlePaste, { isActive: inputIsActive });
 
   const deletePlaceholderBeforeCursor = useCallback((): boolean => {
     if (pendingPastesRef.current.size === 0) {
@@ -588,7 +632,7 @@ export const EnhancedInputBox: React.FC<EnhancedInputBoxProps> = ({
         if (restoreQueuedMessages()) {
           return;
         }
-        restoreHistory(historyRef.current.previous(), 'start');
+        restoreHistory(commandHistory.previous(buffer.text), 'start');
         return;
       }
 
@@ -606,7 +650,7 @@ export const EnhancedInputBox: React.FC<EnhancedInputBoxProps> = ({
           redraw();
           return;
         }
-        restoreHistory(historyRef.current.next(), 'end');
+        restoreHistory(commandHistory.next(), 'end');
         return;
       }
 
@@ -694,43 +738,27 @@ export const EnhancedInputBox: React.FC<EnhancedInputBoxProps> = ({
       );
     }
 
-    // Render content line without cursor
-    if (!shouldShowCursor) {
-      return (
-        <Box key={`input-line-${index}`} minHeight={1}>
-          <Text
-            color={disabled ? inkColors.muted : inkColors.text}
-            wrap="truncate-end"
-          >
-            {lineText}
-          </Text>
-        </Box>
-      );
-    }
-
-    // Render content line with cursor
     const codePoints = toCodePoints(lineText);
-    const cursorPos = Math.min(cursorVisualCol, codePoints.length);
+    const cursorPos = shouldShowCursor
+      ? Math.min(cursorVisualCol, codePoints.length)
+      : null;
+    const fragments = inputLineFragments(lineText, cursorPos);
+    const textColor = disabled ? inkColors.muted : inkColors.text;
 
-    if (cursorPos >= codePoints.length) {
-      // Cursor at end of line
-      return (
-        <Box key={`input-line-${index}`} minHeight={1}>
-          <Text color={inkColors.text} wrap="truncate-end">
-            {lineText}
-            <Text inverse> </Text>
-          </Text>
-        </Box>
-      );
-    }
-
-    // Cursor in middle of line
     return (
       <Box key={`input-line-${index}`} minHeight={1}>
-        <Text color={inkColors.text} wrap="truncate-end">
-          {cpSlice(lineText, 0, cursorPos)}
-          <Text inverse>{cpSlice(lineText, cursorPos, cursorPos + 1)}</Text>
-          {cpSlice(lineText, cursorPos + 1)}
+        <Text color={textColor} wrap="truncate-end">
+          {fragments.map((fragment, fragmentIndex) => (
+            <Text
+              key={`${index}:${fragmentIndex}`}
+              color={fragment.isPastePlaceholder ? inkColors.accent : textColor}
+              bold={fragment.isPastePlaceholder}
+              inverse={fragment.hasCursor}
+            >
+              {fragment.text}
+            </Text>
+          ))}
+          {cursorPos === codePoints.length && <Text inverse> </Text>}
         </Text>
       </Box>
     );
