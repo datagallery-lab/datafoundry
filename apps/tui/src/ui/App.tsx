@@ -326,10 +326,9 @@ export const App: React.FC<AppProps> = ({
   const { stdin } = useStdin();
   const { write: writeToStdout } = useStdout();
   const { columns: terminalColumns, rows: terminalRows } = useTerminalSize();
-  // Leave physical terminal rows unused. Ink switches to full-screen clears when
-  // rendered output reaches stdout.rows; the extra slack keeps scroll updates on
-  // the incremental erase-lines path instead of the flickery clearTerminal path.
-  const appRows = Math.max(1, terminalRows - 2);
+  // Ink 7 renders an exact-height frame without a trailing newline, so the app
+  // can safely use the full viewport and keep the status bar on the bottom row.
+  const appRows = Math.max(1, terminalRows);
   const workspaceRows = Math.max(0, appRows - 1);
   const [state, setState] = useState<TuiAppState>(store.getState());
   const [inputFocused, setInputFocused] = useState(false);
