@@ -12,6 +12,9 @@ export function formatRunErrorMessage(message?: string): string {
   if (trimmed === "RUN_CANCELLED") {
     return "Run was cancelled.";
   }
+  if (/^RUN_ALREADY_ACTIVE\b/u.test(trimmed)) {
+    return "This chat already has an active run. Wait for it to finish, or interrupt it to take over.";
+  }
   if (trimmed.startsWith("RUN_SUBSCRIBER_CLOSED")) {
     return "Run stopped because the connection closed. Retry the query or refresh the page.";
   }

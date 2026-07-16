@@ -307,6 +307,14 @@ const CapabilitiesSchema = z.object({
 
 // ==================== Session Schemas ====================
 
+const SessionActiveRunSchema = z.object({
+  sessionId: z.string(),
+  activeRunId: z.string(),
+  status: z.enum(["queued", "running", "suspended"]),
+  startedAt: z.string(),
+  userInputPreview: z.string(),
+});
+
 const SessionListItemSchema = z.object({
   id: z.string(),
   threadId: z.string(),
@@ -315,6 +323,7 @@ const SessionListItemSchema = z.object({
   createdAt: z.string().optional(),
   updatedAt: z.string().optional(),
   lastMessageAt: z.string().optional(),
+  activeRun: SessionActiveRunSchema.nullish(),
 });
 
 const SessionListResponseSchema = z.object({
@@ -401,6 +410,7 @@ const SessionConversationSchema = z.object({
   runEventRefs: z.array(ConversationRunEventRefSchema),
   checkpoints: z.array(ConversationCheckpointSchema).optional(),
   toolCalls: z.array(ConversationToolCallSchema),
+  activeRun: SessionActiveRunSchema.nullish(),
 });
 
 const SessionArtifactSchema = z.object({
@@ -825,6 +835,17 @@ export class ConfigClient {
         body: { title },
         schema: SessionTitleSchema,
       }
+    );
+  }
+
+  async deleteSession(sessionId: string): Promise<{
+    sessionId: string;
+    deleted: boolean;
+    deletedSessionIds: string[];
+  }> {
+    return this.request(
+      "DELETE",
+      `/api/v1/sessions/${encodeURIComponent(sessionId)}`,
     );
   }
 

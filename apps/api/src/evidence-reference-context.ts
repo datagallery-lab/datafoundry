@@ -96,14 +96,22 @@ const artifactEvidenceItems = (
   const maxChars = input.maxCharsPerEvidence ?? 6000;
   const focus = resolveSelectionFocus(ref.source.selection, preview, maxChars);
   const includeFullPreview = preview !== undefined && (!focus || !focus.replaceFullPreview);
+  // When a table subset is already inlined, omit file_id so the model is not nudged
+  // to open the full artifact file for a partial cite.
+  const fileIdLine = artifact.file_asset_ref_id && !focus?.replaceFullPreview
+    ? `file_id=${artifact.file_asset_ref_id}`
+    : undefined;
   const content = evidenceText({
     body: [
       `artifact_id=${artifact.id}`,
       `artifact_type=${artifact.type}`,
       `artifact_name=${artifact.name}`,
-      artifact.file_asset_ref_id ? `file_id=${artifact.file_asset_ref_id}` : undefined,
+      fileIdLine,
       includeFullPreview ? `preview=${boundJson(preview, maxChars)}` : undefined,
       metadata !== undefined ? `metadata=${boundJson(metadata, 1200)}` : undefined,
+      focus?.replaceFullPreview
+        ? "note: selected subset is already inlined below; do not open the full artifact file unless the user asks for broader context"
+        : undefined,
       ...(focus?.lines ?? [])
     ],
     ref

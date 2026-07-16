@@ -405,6 +405,36 @@ export const DATA_SKILLS: DataSkill[] = [
     name: "数据分析",
     description: "回答指标查询、深度分析和报告类数据问题",
   },
+  {
+    id: "tabular-file-import",
+    name: "表格文件导入",
+    description: "将 CSV/Excel/JSON/Parquet 导入工作区并规范化",
+  },
+  {
+    id: "data-cleaning-for-load",
+    name: "入库前清洗",
+    description: "清洗校验表格数据，处理缺失、类型与去重",
+  },
+  {
+    id: "batch-file-merge",
+    name: "批量文件合并",
+    description: "多文件对齐字段、去重合并并生成合并报告",
+  },
+  {
+    id: "etl-pipeline-patterns",
+    name: "ETL 管道模式",
+    description: "设计可靠的 staging、幂等与增量导入流程",
+  },
+  {
+    id: "api-json-ingest",
+    name: "API/JSON 接入",
+    description: "从 API 或 JSON/JSONL 拉取并展平为表格文件",
+  },
+  {
+    id: "database-load-planning",
+    name: "数据库入库规划",
+    description: "映射字段并规划只读校验后的装载策略",
+  },
 ];
 
 export const DEFAULT_SKILL_ID = DATA_SKILLS[0]!.id;

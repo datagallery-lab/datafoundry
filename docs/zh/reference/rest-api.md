@@ -112,6 +112,7 @@ curl http://127.0.0.1:8787/api/v1/capabilities
 | --- | --- | --- |
 | GET | `/api/v1/sessions` | 列出服务端会话。支持 `limit`、`cursor`。 |
 | PATCH | `/api/v1/sessions/:sessionId` | 更新会话标题。 |
+| DELETE | `/api/v1/sessions/:sessionId` | 永久删除会话及其对话、run、产物与子分支。 |
 | GET | `/api/v1/sessions/:sessionId/conversation` | 读取服务端权威对话历史。支持 `limit`。 |
 | GET | `/api/v1/sessions/:sessionId/checkpoints` | 列出已持久化的上下文 checkpoint。支持 `limit`。 |
 | GET | `/api/v1/sessions/:sessionId/trace-dag` | 读取 run/step/tool/output 语义图。支持 `limit`。 |

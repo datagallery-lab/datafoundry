@@ -494,8 +494,18 @@ describe("config api adapter", () => {
       }), { headers: { "Content-Type": "application/json" }, status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
 
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({
+      success: true,
+      data: {
+        sessionId: "thread-1",
+        deleted: true,
+        deletedSessionIds: ["thread-1", "thread-1-branch"],
+      },
+    }), { headers: { "Content-Type": "application/json" }, status: 200 }));
+
     const list = await configApi.listSessions({ limit: 20, cursor: "cursor-1" });
     const patched = await configApi.patchSessionTitle("thread-1", "我的复盘");
+    const deleted = await configApi.deleteSession("thread-1");
 
     expect(fetchMock).toHaveBeenNthCalledWith(
       1,
@@ -510,10 +520,17 @@ describe("config api adapter", () => {
         body: JSON.stringify({ title: "我的复盘" }),
       }),
     );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      3,
+      "http://config.test/api/v1/sessions/thread-1",
+      expect.objectContaining({ method: "DELETE" }),
+    );
     expect(list.sessions[0]?.title).toBe("渠道订单分析");
     expect(list.nextCursor).toBe("cursor-2");
     expect(patched.sessionId).toBe("thread-1");
     expect(patched.titleSource).toBe("user");
+    expect(deleted.deleted).toBe(true);
+    expect(deleted.deletedSessionIds).toEqual(["thread-1", "thread-1-branch"]);
   });
 
   it("calls datalink endpoints through the config client", async () => {

@@ -9,7 +9,6 @@ import {
   useMemo,
   useRef,
   useState,
-  type Dispatch,
   type ReactNode,
   type SetStateAction,
 } from "react";
@@ -67,8 +66,14 @@ type LiveRunSetters = {
 };
 
 type ConversationRestoreGate = {
-  isRestoringConversation: boolean;
-  setIsRestoringConversation: Dispatch<SetStateAction<boolean>>;
+  /** Threads currently loading persisted conversation history. */
+  restoringThreadIds: ReadonlySet<string>;
+  /** Threads that completed at least one restore cycle (including empty history). */
+  restoredThreadIds: ReadonlySet<string>;
+  isThreadRestoring: (threadId: string | null | undefined) => boolean;
+  isThreadRestored: (threadId: string | null | undefined) => boolean;
+  setThreadRestoring: (threadId: string, restoring: boolean) => void;
+  markThreadRestored: (threadId: string) => void;
 };
 
 const emptyLiveRun = createInitialLiveRun();
@@ -147,8 +152,48 @@ export function LiveRunProvider({ children }: { children: ReactNode }) {
     Record<string, string | undefined>
   >({});
   const [runningThreadIds, setRunningThreadIds] = useState<Set<string>>(() => new Set());
-  const [isRestoringConversation, setIsRestoringConversation] = useState(false);
+  const [restoringThreadIds, setRestoringThreadIds] = useState<Set<string>>(() => new Set());
+  const [restoredThreadIds, setRestoredThreadIds] = useState<Set<string>>(() => new Set());
   const prevRunStatusByThreadRef = useRef<Record<string, LiveRunStatus>>({});
+
+  const setThreadRestoring = useCallback((threadId: string, restoring: boolean) => {
+    setRestoringThreadIds((current) => {
+      const has = current.has(threadId);
+      if (restoring === has) {
+        return current;
+      }
+      const next = new Set(current);
+      if (restoring) {
+        next.add(threadId);
+      } else {
+        next.delete(threadId);
+      }
+      return next;
+    });
+  }, []);
+
+  const markThreadRestored = useCallback((threadId: string) => {
+    setRestoredThreadIds((current) => {
+      if (current.has(threadId)) {
+        return current;
+      }
+      const next = new Set(current);
+      next.add(threadId);
+      return next;
+    });
+  }, []);
+
+  const isThreadRestoring = useCallback(
+    (threadId: string | null | undefined) =>
+      Boolean(threadId && restoringThreadIds.has(threadId)),
+    [restoringThreadIds],
+  );
+
+  const isThreadRestored = useCallback(
+    (threadId: string | null | undefined) =>
+      Boolean(threadId && restoredThreadIds.has(threadId)),
+    [restoredThreadIds],
+  );
 
   const setLiveRunForThread = useCallback(
     (threadId: string | undefined, action: SetStateAction<LiveRun>) => {
@@ -226,10 +271,21 @@ export function LiveRunProvider({ children }: { children: ReactNode }) {
 
   const restoreGate = useMemo(
     () => ({
-      isRestoringConversation,
-      setIsRestoringConversation,
+      restoringThreadIds,
+      restoredThreadIds,
+      isThreadRestoring,
+      isThreadRestored,
+      setThreadRestoring,
+      markThreadRestored,
     }),
-    [isRestoringConversation],
+    [
+      isThreadRestored,
+      isThreadRestoring,
+      markThreadRestored,
+      restoredThreadIds,
+      restoringThreadIds,
+      setThreadRestoring,
+    ],
   );
 
   useLayoutEffect(() => {
@@ -333,7 +389,8 @@ export function LiveRunEventSubscriber({
     setLatestQuestionForThread,
     syncRunningThreadStatus,
   } = setters;
-  const { isRestoringConversation } = useConversationRestoreGate();
+  const { isThreadRestoring } = useConversationRestoreGate();
+  const isRestoringConversation = isThreadRestoring(threadId);
   const isRestoringConversationRef = useRef(isRestoringConversation);
   isRestoringConversationRef.current = isRestoringConversation;
 

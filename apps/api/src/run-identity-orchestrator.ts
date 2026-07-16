@@ -8,6 +8,8 @@ import {
   validateParentRun
 } from "./run-identity.js";
 import type { EffectiveRunConfig } from "./run-input.js";
+import type { RunCancelRegistry } from "./run-cancel-registry.js";
+import { resolveLiveSessionActiveRun } from "./stale-active-runs.js";
 
 export type RunIdentityResolution =
   | {
@@ -25,6 +27,7 @@ type ResolveRunIdentityInput = {
   interactionResume?: InteractionResume | undefined;
   metadataStore: MetadataStore;
   modelName: string;
+  runCancelRegistry: RunCancelRegistry;
   runEventWriter: RunEventWriter;
   runInput: RunAgentInput;
   userId: string;
@@ -68,10 +71,12 @@ export const resolveRunIdentity = (input: ResolveRunIdentityInput): RunIdentityR
     };
   }
 
-  const activeSessionRun = input.metadataStore.runs.findActiveBySession({
-    user_id: input.userId,
-    session_id: sessionId,
-    exclude_run_id: runId
+  const activeSessionRun = resolveLiveSessionActiveRun({
+    metadataStore: input.metadataStore,
+    runCancelRegistry: input.runCancelRegistry,
+    userId: input.userId,
+    sessionId,
+    excludeRunId: runId
   });
 
   if (activeSessionRun) {

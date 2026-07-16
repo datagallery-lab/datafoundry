@@ -79,6 +79,7 @@ import {
   workspaceConfigItemStatusBadge,
 } from "./data-task-state";
 import { configApi } from "../../lib/config-api/client";
+import { ConfigApiError } from "../../lib/config-api";
 import {
   hasMeaningfulText,
   isOrphanPreambleMergedIntoFollowingToolStep,
@@ -182,13 +183,22 @@ import {
   createQueuedChatPrompt,
   deleteQueuedChatPrompt,
   editQueuedChatPrompt,
+  isForeignSessionActiveRun,
+  loadQueuedChatPrompts,
   markQueuedChatPromptInterrupting,
+  parseAlreadyActiveRunId,
+  persistQueuedChatPrompts,
   queuedPromptToRunInput,
   resolveQueuedSubmitMode,
   shouldShowRunningStopControl,
   takeNextQueuedChatPrompt,
   type QueuedChatPrompt,
 } from "./components/chat/queued-chat-runs";
+import {
+  SessionBusyPrompt,
+  SessionRemoteBusyBanner,
+} from "./components/chat/SessionBusyPrompt";
+import type { SessionActiveRunDto } from "../../lib/config-api/types";
 import { scheduleChatTextareaResize } from "./components/chat/use-chat-textarea-autoresize";
 import { invokeWithReportedError } from "./invoke-with-reported-error";
 import { formatRunErrorMessage } from "./run-error-message";
@@ -430,6 +440,21 @@ async function uploadChatDataFile(
   return configApi.uploadChatFile(file, sessionId);
 }
 
+type PendingBusySubmit = {
+  text: string;
+  attachments: ReturnType<
+    ReturnType<typeof useAttachments>["consumeAttachments"]
+  >;
+  forwardedProps: ReturnType<
+    ReturnType<typeof useDataTaskChatInputBindings>["getRunForwardedProps"]
+  >;
+};
+
+type SessionBusyDialogState = {
+  activeRun: SessionActiveRunDto;
+  pending: PendingBusySubmit;
+};
+
 function StableDataTaskChatInput({
   inputProps,
 }: {
@@ -442,6 +467,9 @@ function StableDataTaskChatInput({
   const [queuedPrompts, setQueuedPrompts] = useState<QueuedChatPrompt[]>([]);
   const [draftText, setDraftText] = useState("");
   const [submitError, setSubmitError] = useState<string | null>(null);
+  const [remoteActiveRun, setRemoteActiveRun] = useState<SessionActiveRunDto | null>(null);
+  const [sessionBusyDialog, setSessionBusyDialog] = useState<SessionBusyDialogState | null>(null);
+  const [busyAction, setBusyAction] = useState<"idle" | "waiting" | "interrupting">("idle");
   const awaitingQueuedRunCompletionRef = useRef(false);
   const queuedRunSawActiveRef = useRef(false);
 
@@ -490,6 +518,79 @@ function StableDataTaskChatInput({
     reportDataFoundryRunError(error, bindings.activeThreadId, { source: "client" });
   }, [bindings.activeThreadId]);
 
+  const fetchForeignActiveRun = useCallback(async (): Promise<SessionActiveRunDto | null> => {
+    const threadId = bindings.activeThreadId;
+    if (!threadId) return null;
+    const localRunActive =
+      Boolean(agent?.isRunning) ||
+      bindings.liveRunStatus === "running" ||
+      bindings.liveRunStatus === "suspended";
+    try {
+      const response = await configApi.listSessions({ limit: 50 });
+      const session = response.sessions.find(
+        (item) => item.id === threadId || item.threadId === threadId,
+      );
+      const activeRun = session?.activeRun ?? null;
+      if (isForeignSessionActiveRun(activeRun, bindings.liveRunRunId, localRunActive)) {
+        return activeRun;
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  }, [agent?.isRunning, bindings.activeThreadId, bindings.liveRunRunId, bindings.liveRunStatus]);
+
+  const clearPerRunSelections = useCallback(() => {
+    bindings.onClearPerRunMentions();
+    bindings.onClearPerRunFileMentions();
+    bindings.onClearEvidenceRefs();
+    requestAnimationFrame(scheduleChatTextareaResize);
+  }, [bindings]);
+
+  const unlockOrReportActiveRunError = useCallback(
+    async (error: unknown, pending?: PendingBusySubmit) => {
+      const message = error instanceof Error ? error.message : String(error);
+      const blockingRunId = parseAlreadyActiveRunId(message);
+      if (!blockingRunId) {
+        reportRunError(error);
+        return;
+      }
+
+      const foreign = await fetchForeignActiveRun();
+      if (foreign) {
+        setRemoteActiveRun(foreign);
+        if (pending) {
+          setSessionBusyDialog({
+            activeRun: foreign,
+            pending,
+          });
+          setBusyAction("idle");
+        }
+        return;
+      }
+
+      // Metadata can retain queued/running/suspended after the worker died.
+      // Cancel may 404 if the server already reclaimed the orphan — still retry once.
+      try {
+        await configApi.cancelRun(blockingRunId, "stale-active-run-unlock");
+      } catch {
+        // Ignore cancel failures; retry below if the lock is already gone.
+      }
+      setRemoteActiveRun(null);
+      if (pending && agent) {
+        // Message was already appended by the failed dispatch; only retry the run.
+        agent.setState(buildAgentRunStatePatch(pending.forwardedProps, agent.state));
+        void copilotkit
+          .runAgent({ agent, forwardedProps: pending.forwardedProps })
+          .catch(reportRunError);
+        clearPerRunSelections();
+        return;
+      }
+      reportRunError(error);
+    },
+    [agent, clearPerRunSelections, copilotkit, fetchForeignActiveRun, reportRunError],
+  );
+
   const dispatchRun = useCallback(
     ({
       text,
@@ -500,6 +601,7 @@ function StableDataTaskChatInput({
       attachments: ReturnType<typeof attachmentsApi.consumeAttachments>;
       forwardedProps: ReturnType<typeof bindings.getRunForwardedProps>;
     }) => {
+      const pending: PendingBusySubmit = { text, attachments, forwardedProps };
       invokeWithReportedError(() => {
         if (!agent) return;
         bindings.onUserMessageSubmitted(text);
@@ -510,10 +612,14 @@ function StableDataTaskChatInput({
         } else {
           agent.addMessage({ id: createClientId("msg"), role: "user", content: text });
         }
-        void copilotkit.runAgent({ agent, forwardedProps }).catch(reportRunError);
+        void copilotkit
+          .runAgent({ agent, forwardedProps })
+          .catch((error) => {
+            void unlockOrReportActiveRunError(error, pending);
+          });
       }, reportRunError);
     },
-    [agent, bindings, copilotkit, reportRunError],
+    [agent, bindings, copilotkit, reportRunError, unlockOrReportActiveRunError],
   );
 
   useEffect(() => {
@@ -522,6 +628,49 @@ function StableDataTaskChatInput({
     }
     bindings.stopActiveChatRunRef.current = inputProps.onStop;
   }, [bindings.stopActiveChatRunRef, inputProps.onStop]);
+
+  useEffect(() => {
+    const threadId = bindings.activeThreadId;
+    setQueuedPrompts(loadQueuedChatPrompts(threadId));
+    setSessionBusyDialog(null);
+    setBusyAction("idle");
+    setRemoteActiveRun(null);
+    awaitingQueuedRunCompletionRef.current = false;
+    queuedRunSawActiveRef.current = false;
+  }, [bindings.activeThreadId]);
+
+  useEffect(() => {
+    persistQueuedChatPrompts(bindings.activeThreadId, queuedPrompts);
+  }, [bindings.activeThreadId, queuedPrompts]);
+
+  useEffect(() => {
+    const threadId = bindings.activeThreadId;
+    if (!threadId || !bindings.capabilitiesReady) {
+      setRemoteActiveRun(null);
+      return;
+    }
+    let cancelled = false;
+    const refresh = async () => {
+      const foreign = await fetchForeignActiveRun();
+      if (!cancelled) {
+        setRemoteActiveRun(foreign);
+      }
+    };
+    void refresh();
+    const timer = window.setInterval(() => {
+      void refresh();
+    }, 3000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [
+    bindings.activeThreadId,
+    bindings.capabilitiesReady,
+    bindings.liveRunRunId,
+    fetchForeignActiveRun,
+    queuedPrompts.length,
+  ]);
 
   const handleSubmitMessage = (value: string) => {
     setDraftText("");
@@ -557,19 +706,76 @@ function StableDataTaskChatInput({
               createdAt: Date.now(),
             }),
           ]);
-        } else {
-          dispatchRun({ text: value, attachments: ready, forwardedProps });
+          clearPerRunSelections();
+          return;
         }
-      } else {
-        inputProps.onSubmitMessage?.(value);
-      }
 
-      bindings.onClearPerRunMentions();
-      bindings.onClearPerRunFileMentions();
-      bindings.onClearEvidenceRefs();
-      requestAnimationFrame(scheduleChatTextareaResize);
+        void (async () => {
+          const foreign = remoteActiveRun ?? (await fetchForeignActiveRun());
+          if (foreign) {
+            setRemoteActiveRun(foreign);
+            setSessionBusyDialog({
+              activeRun: foreign,
+              pending: { text: value, attachments: ready, forwardedProps },
+            });
+            setBusyAction("idle");
+            return;
+          }
+          dispatchRun({ text: value, attachments: ready, forwardedProps });
+          clearPerRunSelections();
+        })().catch(reportRunError);
+        return;
+      }
+      inputProps.onSubmitMessage?.(value);
+      clearPerRunSelections();
     }, reportRunError);
   };
+
+  const handleBusyWait = useCallback(() => {
+    if (!sessionBusyDialog) return;
+    setBusyAction("waiting");
+    setQueuedPrompts((current) => [
+      ...current,
+      createQueuedChatPrompt({
+        id: createClientId("queue"),
+        text: sessionBusyDialog.pending.text,
+        attachments: sessionBusyDialog.pending.attachments,
+        forwardedProps: sessionBusyDialog.pending.forwardedProps,
+        createdAt: Date.now(),
+      }),
+    ]);
+    setRemoteActiveRun(sessionBusyDialog.activeRun);
+    setSessionBusyDialog(null);
+    setBusyAction("idle");
+    clearPerRunSelections();
+  }, [clearPerRunSelections, sessionBusyDialog]);
+
+  const handleBusyInterrupt = useCallback(() => {
+    if (!sessionBusyDialog) return;
+    const { activeRun, pending } = sessionBusyDialog;
+    setBusyAction("interrupting");
+    void (async () => {
+      try {
+        await configApi.cancelRun(activeRun.activeRunId, "user-requested-takeover");
+        setRemoteActiveRun(null);
+        setSessionBusyDialog(null);
+        setBusyAction("idle");
+        dispatchRun(pending);
+        clearPerRunSelections();
+      } catch (error) {
+        setBusyAction("idle");
+        reportRunError(error);
+      }
+    })();
+  }, [clearPerRunSelections, dispatchRun, reportRunError, sessionBusyDialog]);
+
+  const handleBusyDismiss = useCallback(() => {
+    if (!sessionBusyDialog) return;
+    setDraftText(sessionBusyDialog.pending.text);
+    setSessionBusyDialog(null);
+    setBusyAction("idle");
+  }, [sessionBusyDialog]);
+
   const handleInputChange = useCallback(
     (value: string) => {
       setDraftText(value);
@@ -588,13 +794,10 @@ function StableDataTaskChatInput({
   );
 
   useEffect(() => {
-    setQueuedPrompts([]);
-    awaitingQueuedRunCompletionRef.current = false;
-    queuedRunSawActiveRef.current = false;
-  }, [bindings.activeThreadId]);
-
-  useEffect(() => {
     if (!agent || queuedPrompts.length === 0) {
+      return;
+    }
+    if (remoteActiveRun) {
       return;
     }
     const activeRun =
@@ -623,7 +826,7 @@ function StableDataTaskChatInput({
     setQueuedPrompts(next.queue);
     const runInput = queuedPromptToRunInput(next.prompt);
     dispatchRun(runInput);
-  }, [agent, bindings.liveRunStatus, dispatchRun, queuedPrompts]);
+  }, [agent, bindings.liveRunStatus, dispatchRun, queuedPrompts, remoteActiveRun]);
 
   const handleEditQueuedPrompt = useCallback((id: string, text: string) => {
     setQueuedPrompts((current) => editQueuedChatPrompt(current, id, text));
@@ -650,6 +853,18 @@ function StableDataTaskChatInput({
     draftText,
   });
 
+  const sessionLockSlot = sessionBusyDialog ? (
+    <SessionBusyPrompt
+      activeRun={sessionBusyDialog.activeRun}
+      busyAction={busyAction}
+      onWait={handleBusyWait}
+      onInterrupt={handleBusyInterrupt}
+      onDismiss={handleBusyDismiss}
+    />
+  ) : remoteActiveRun && !showStopControl ? (
+    <SessionRemoteBusyBanner activeRun={remoteActiveRun} />
+  ) : null;
+
   return (
     <DataTaskChatInput
       {...inputProps}
@@ -666,6 +881,7 @@ function StableDataTaskChatInput({
       onSendQueuedPromptNow={handleSendQueuedPromptNow}
       submitError={submitError}
       showDisclaimer={false}
+      sessionLockSlot={sessionLockSlot}
     />
   );
 }
@@ -1248,6 +1464,7 @@ function DataTaskWorkspace({
   );
 
   const { liveRun, sessionUsage, latestQuestion, runningThreadIds } = useLiveRun(activeThreadId);
+  const { isThreadRestored, setThreadRestoring } = useConversationRestoreGate();
   const agentRenderSnapshot = useAgentMessageRenderSnapshot();
   const sessionStartedHints = useMemo<SessionStartedHints>(
     () => ({
@@ -1486,7 +1703,13 @@ function DataTaskWorkspace({
 
   const deleteSession = useCallback(
     (sessionId: string) => {
+      const target = sessions.find((session) => session.id === sessionId);
+      const serverSessionId = target?.threadId ?? sessionId;
+      let previousSessions: ChatSession[] | null = null;
+      let previousActiveSessionId: string | null = activeSessionId;
+
       setSessions((current) => {
+        previousSessions = current;
         const next = deleteChatSession(current, sessionId);
         if (next.length === 0) {
           const fallback = createChatSession(defaultSessionTitle);
@@ -1499,8 +1722,43 @@ function DataTaskWorkspace({
         return next;
       });
       setSelection(null);
+
+      void configApi.deleteSession(serverSessionId)
+        .then((result) => {
+          const deletedIds = new Set(result.deletedSessionIds ?? [serverSessionId]);
+          setSessions((current) => {
+            const filtered = current.filter(
+              (session) => !deletedIds.has(session.id) && !deletedIds.has(session.threadId),
+            );
+            if (filtered.length === current.length) return current;
+            if (filtered.length === 0) {
+              const fallback = createChatSession(defaultSessionTitle);
+              setActiveSessionId(fallback.id);
+              return [fallback];
+            }
+            setActiveSessionId((active) => {
+              if (active && filtered.some((session) => session.id === active)) return active;
+              return filtered[0]?.id ?? active;
+            });
+            return filtered;
+          });
+          setSessionSyncError(null);
+        })
+        .catch((error) => {
+          if (error instanceof ConfigApiError && error.status === 404) {
+            setSessionSyncError(null);
+            return;
+          }
+          if (previousSessions) {
+            setSessions(previousSessions);
+            setActiveSessionId(previousActiveSessionId);
+          }
+          setSessionSyncError(
+            error instanceof Error ? error.message : "Failed to delete session on server",
+          );
+        });
     },
-    [activeSessionId, defaultSessionTitle],
+    [activeSessionId, defaultSessionTitle, sessions],
   );
 
   const togglePinSession = useCallback((sessionId: string) => {
@@ -1872,8 +2130,13 @@ function DataTaskWorkspace({
         onQueryChange={setQuery}
         onToggleCollapse={toggleSidebar}
         onSelectSession={(sessionId) => {
-          setConversationScrollIntent({ kind: "bottom" });
+          // Apply session id first so a single click always wins over slower panel teardown.
           setActiveSessionId(sessionId);
+          // Eager loading gate for threads that have never restored in this tab.
+          if (!isThreadRestored(sessionId)) {
+            setThreadRestoring(sessionId, true);
+          }
+          setConversationScrollIntent({ kind: "bottom" });
           setSelection(null);
           setArtifactFocusId(null);
           setIsTraceOpen(false);
@@ -4513,8 +4776,19 @@ function SessionListItem({
   return (
     <div
       id={`session-item-${session.id}`}
+      role="button"
+      tabIndex={0}
+      data-testid={`session-item-${session.id}`}
+      onClick={onSelect}
+      onKeyDown={(event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          onSelect();
+        }
+      }}
+      title={session.title}
       className={[
-        "group flex items-center gap-2 rounded-lg px-2 py-1.5 transition-colors duration-150",
+        "group flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 transition-colors duration-150",
         active ? "bg-surface shadow-[var(--shadow-card)]" : "hover:bg-surface",
       ].join(" ")}
     >
@@ -4523,17 +4797,14 @@ function SessionListItem({
       ) : iconSlots.leading === "session" ? (
         <SessionBubbleIcon />
       ) : null}
-      <button
-        type="button"
-        onClick={onSelect}
-        title={session.title}
+      <span
         className={[
           "min-w-0 flex-1 truncate text-left text-sm transition",
-          active ? "font-medium text-foreground" : "text-muted hover:text-foreground",
+          active ? "font-medium text-foreground" : "text-muted group-hover:text-foreground",
         ].join(" ")}
       >
         {session.title}
-      </button>
+      </span>
       {iconSlots.trailing === "pin" && (
         <span
           className="shrink-0 text-muted"
@@ -7256,9 +7527,28 @@ function ChatWelcomeOverlay({
   liveRunStatus: LiveRun["runStatus"];
   onUseExamplePrompt: (prompt: string) => void;
 }) {
+  const t = useT();
   const chatConfig = useCopilotChatConfiguration();
+  const threadId = chatConfig?.threadId;
   const { agent } = useAgent({ agentId: chatConfig?.agentId ?? runtimeAgentId });
+  const { isThreadRestoring, isThreadRestored } = useConversationRestoreGate();
+  const isRestoringConversation = isThreadRestoring(threadId);
   const hasVisibleMessages = (agent.messages?.length ?? 0) > 0 || liveRunStatus !== "idle";
+  // Until the first restore cycle finishes, keep loading — never flash welcome.
+  const awaitingFirstRestore = Boolean(threadId) && !isThreadRestored(threadId);
+
+  if (isRestoringConversation || awaitingFirstRestore) {
+    return (
+      <div
+        data-testid="conversation-restore-loading"
+        className="pointer-events-none absolute inset-x-0 top-0 bottom-32 z-10 flex items-center justify-center"
+      >
+        <div className="rounded-lg bg-surface/80 px-3 py-2 text-sm text-muted shadow-[var(--shadow-card)]">
+          {t("common.loading")}
+        </div>
+      </div>
+    );
+  }
 
   if (hasVisibleMessages) return null;
 
@@ -7286,7 +7576,8 @@ function PendingBranchRunDispatcher({
   const { agent } = useAgent({ agentId: chatConfig?.agentId ?? runtimeAgentId });
   const { copilotkit } = useCopilotKit();
   const restoredConversation = useConversationBranchSnapshot(chatConfig?.threadId);
-  const { isRestoringConversation } = useConversationRestoreGate();
+  const { isThreadRestoring } = useConversationRestoreGate();
+  const isRestoringConversation = isThreadRestoring(chatConfig?.threadId);
 
   useEffect(() => {
     if (!pending || chatConfig?.threadId !== pending.sessionId) {

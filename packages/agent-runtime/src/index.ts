@@ -717,12 +717,19 @@ const buildAgentInstructions = (input: AgentInstructionsInput): string => {
   const evidenceRefs = context.evidence_refs;
   if (evidenceRefs && evidenceRefs.length > 0) {
     const labels = evidenceRefs
-      .map((ref) => `${ref.kind}:${ref.label}`)
+      .map((ref) => {
+        const selection = ref.source.selection;
+        if (!selection) return `${ref.kind}:${ref.label}`;
+        if (selection.mode === "text") return `${ref.kind}:${ref.label} (text selection)`;
+        return `${ref.kind}:${ref.label} (${selection.mode} selection)`;
+      })
       .slice(0, 12)
       .join("; ");
     toolGroups.push(
-      `User-selected evidence focus this run: ${labels}. Treat these references as the primary context for the `
-        + "follow-up question. You may run new data tools when needed; make new queries and outputs visible in steps."
+      `User-selected evidence focus this run: ${labels}. Selected evidence content (including any table/text `
+        + "subsets) is already provided in context — prefer that over opening the full artifact file. "
+        + "Treat these references as the primary context for the follow-up question. You may run new data "
+        + "tools when needed; make new queries and outputs visible in steps."
     );
   }
   const taskTools = ["task_write", "task_update", "task_complete", "task_check"].filter(enabled);

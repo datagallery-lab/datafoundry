@@ -30,4 +30,8 @@ describe("formatRunErrorMessage", () => {
   it("falls back when message is empty", () => {
     expect(formatRunErrorMessage()).toBe("Agent run failed");
   });
+
+  it("explains RUN_ALREADY_ACTIVE session locks", () => {
+    expect(formatRunErrorMessage("RUN_ALREADY_ACTIVE:run-1")).toContain("active run");
+  });
 });

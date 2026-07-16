@@ -52,19 +52,28 @@ export function SessionConversationRestore({
     setLatestQuestionForThread,
     setSessionUsageForThread,
   } = useLiveRunSetters();
-  const { setIsRestoringConversation } = useConversationRestoreGate();
+  const { setThreadRestoring, markThreadRestored } = useConversationRestoreGate();
   const fetchGenerationRef = useRef(0);
   const prevThreadIdRef = useRef<string | undefined>(undefined);
+  const agentRef = useRef(agent);
+  agentRef.current = agent;
   const restoreRunActive = isConversationRestoreRunActive({
     agentIsRunning: Boolean(agent.isRunning),
     liveRunStatus: liveRun.runStatus,
   });
 
   useLayoutEffect(() => {
-    if (!threadId || !capabilitiesReady) {
+    if (!threadId) {
+      return;
+    }
+    // Gate while capabilities load so welcome cannot paint before restore starts.
+    if (!capabilitiesReady) {
+      setThreadRestoring(threadId, true);
       return;
     }
     if (!getRuntimeCapabilities().conversationMemory) {
+      setThreadRestoring(threadId, false);
+      markThreadRestored(threadId);
       return;
     }
     const threadChanged = prevThreadIdRef.current !== threadId;
@@ -72,15 +81,23 @@ export function SessionConversationRestore({
     if (!threadChanged) {
       return;
     }
+    // Always gate the UI for this thread on first mount so welcome cannot flash
+    // while history is loading — even if a live run later skips message rewrite.
+    setThreadRestoring(threadId, true);
     if (restoreRunActive) {
       return;
     }
-    setIsRestoringConversation(true);
-    agent.setMessages([]);
+    agentRef.current.setMessages([]);
     clearRestoredInterrupts(threadId);
     clearPendingCollaborationInterrupt(threadId);
     clearConversationBranchSnapshot(threadId);
-  }, [agent, capabilitiesReady, restoreRunActive, setIsRestoringConversation, threadId]);
+  }, [
+    capabilitiesReady,
+    markThreadRestored,
+    restoreRunActive,
+    setThreadRestoring,
+    threadId,
+  ]);
 
   useEffect(() => {
     if (!threadId || !capabilitiesReady) {
@@ -89,14 +106,21 @@ export function SessionConversationRestore({
 
     const conversationMemoryEnabled = getRuntimeCapabilities().conversationMemory;
     if (!conversationMemoryEnabled) {
+      setThreadRestoring(threadId, false);
+      markThreadRestored(threadId);
       return;
     }
 
     if (restoreRunActive) {
       fetchGenerationRef.current += 1;
+      // Active streaming already owns the transcript; release the loading gate.
+      setThreadRestoring(threadId, false);
+      markThreadRestored(threadId);
       return;
     }
 
+    // Cover both first mount and deferred restore after a live run settles.
+    setThreadRestoring(threadId, true);
     const generation = fetchGenerationRef.current + 1;
     fetchGenerationRef.current = generation;
     let cancelled = false;
@@ -109,17 +133,18 @@ export function SessionConversationRestore({
         }
         setConversationBranchSnapshot(threadId, conversation);
 
+        const currentAgent = agentRef.current;
         if (
           shouldRestoreConversationMessages({
             conversationMemoryEnabled,
             isRunning: restoreRunActive,
-            agentMessages: agent.messages,
+            agentMessages: currentAgent.messages,
             dto: conversation,
           })
         ) {
           const restored = conversationToAgentMessages(conversation);
           if (restored.length > 0) {
-            agent.setMessages(restored);
+            currentAgent.setMessages(restored);
           }
         }
 
@@ -161,7 +186,8 @@ export function SessionConversationRestore({
         }
       } finally {
         if (!cancelled && fetchGenerationRef.current === generation) {
-          setIsRestoringConversation(false);
+          markThreadRestored(threadId);
+          setThreadRestoring(threadId, false);
         }
       }
     })();
@@ -170,13 +196,13 @@ export function SessionConversationRestore({
       cancelled = true;
     };
   }, [
-    agent,
     capabilitiesReady,
+    markThreadRestored,
     restoreRunActive,
-    setIsRestoringConversation,
     setLatestQuestionForThread,
     setLiveRunForThread,
     setSessionUsageForThread,
+    setThreadRestoring,
     threadId,
   ]);
 
