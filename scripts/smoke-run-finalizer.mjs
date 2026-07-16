@@ -16,6 +16,7 @@ try {
 
   await runCanceledDraftScenario(metadataStore);
   await runCanceledEmptyDraftScenario(metadataStore);
+  await runCompletionRequiresDecisionScenario(metadataStore);
   await runCompletedNoDuplicateScenario(metadataStore);
 
   console.log("Run finalizer smoke OK: canceled runs persist assistant drafts without completion memory.");
@@ -84,6 +85,11 @@ async function runCompletedNoDuplicateScenario(metadataStore) {
 
   const finalizer = createFinalizer(metadataStore, sessionId, runId, observer, []);
   await finalizer.complete({
+    terminalDecision: {
+      status: "completed",
+      evaluatedContextPackageRef: { packageId: "context-complete", revision: 1 },
+      evidenceRefs: []
+    },
     terminalEvent: { type: EventType.RUN_FINISHED, timestamp: Date.now() },
   });
 
@@ -94,6 +100,19 @@ async function runCompletedNoDuplicateScenario(metadataStore) {
   });
   assert.equal(messages.filter((message) => message.role === "assistant").length, 1);
   assert.equal(metadataStore.runs.get({ user_id: userId, run_id: runId }).status, "completed");
+}
+
+async function runCompletionRequiresDecisionScenario(metadataStore) {
+  const sessionId = "complete-requires-decision-session";
+  const runId = "complete-requires-decision-run";
+  const observer = createObservedRun(metadataStore, sessionId, runId, "Complete only when governed");
+  const finalizer = createFinalizer(metadataStore, sessionId, runId, observer, []);
+
+  await assert.rejects(
+    finalizer.complete({ terminalEvent: { type: EventType.RUN_FINISHED, timestamp: Date.now() } }),
+    /PROTOCOL_TERMINAL_DECISION_REQUIRED/
+  );
+  assert.equal(metadataStore.runs.get({ user_id: userId, run_id: runId }).status, "running");
 }
 
 function createObservedRun(metadataStore, sessionId, runId, userInput) {

@@ -51,6 +51,9 @@ import {
   sendAuthError
 } from "./auth/routes.js";
 import { createMetadataContextPackageRecorder } from "./context-package-recorder.js";
+import { MetadataProtocolStateStore } from "./protocol-state-store.js";
+import { replayPendingProtocolEvents } from "./protocol-event-recovery.js";
+import { assistantMessageIdFromEvent, completeProtocolRun } from "./protocol-run-completion.js";
 import { persistCurrentUserMessage } from "./conversation-memory.js";
 import { resolveEvidenceReferenceContext } from "./evidence-reference-context.js";
 import { createRunAgentAssembly, createRunAgentContext } from "./run-agent-assembly.js";
@@ -627,6 +630,10 @@ class DataFoundryAgUiAgent extends AbstractAgent {
           sessionId,
           userId: this.input.user.id
         });
+        const protocolStateStore = new MetadataProtocolStateStore(
+          this.input.metadataStore,
+          this.input.user.id
+        );
         const runAbortController = new AbortController();
         const interactionRuntime = new InteractionRuntimeAdapter(
           this.input.metadataStore,
@@ -649,9 +656,17 @@ class DataFoundryAgUiAgent extends AbstractAgent {
         const emit = (event: BaseEvent): void => {
           eventPipeline.emit(event);
         };
+        replayPendingProtocolEvents({ runId, stateStore: protocolStateStore, emit });
         const agentAssembly = await createRunAgentAssembly({
           abortSignal: runAbortController.signal,
           contextPackageRecorder,
+          contextPackageExists: (reference) => Boolean(
+            this.input.metadataStore.contextPackageSnapshots.findByPackageRevision({
+              user_id: this.input.user.id,
+              package_id: reference.packageId,
+              revision: reference.revision
+            })
+          ),
           dataGateway: this.input.dataGateway,
           artifactService: this.input.artifactService,
           sessionOutputService: this.input.sessionOutputService,
@@ -668,6 +683,7 @@ class DataFoundryAgUiAgent extends AbstractAgent {
           messages: conversationMessages,
           ...(modelContextProfile ? { modelContextProfile } : {}),
           modelProvider,
+          protocolStateStore,
           ...(modelSettings ? { modelSettings } : {}),
           runContext,
           selectedSkills,
@@ -701,6 +717,7 @@ class DataFoundryAgUiAgent extends AbstractAgent {
         let runTimeout: ReturnType<typeof setTimeout> | undefined;
         let terminalStarted = false;
         let sessionTitleStarted = false;
+        let lastAssistantMessageId: string | undefined;
         /** toolCallIds that already persisted TOOL_CALL_START in this run (HITL atomic contract). */
         const startedToolCallIds = new Set<string>();
         const clearRunTimeout = (): void => {
@@ -770,6 +787,10 @@ class DataFoundryAgUiAgent extends AbstractAgent {
             if (terminalStarted) {
               return;
             }
+            const assistantMessageId = assistantMessageIdFromEvent(event);
+            if (assistantMessageId) {
+              lastAssistantMessageId = assistantMessageId;
+            }
             const interactionRequested = interactionRuntime.capture(event);
             if (interactionRequested) {
               terminalStarted = true;
@@ -813,7 +834,24 @@ class DataFoundryAgUiAgent extends AbstractAgent {
               terminalStarted = true;
               clearRunTimeout();
               unregisterCancel();
-              finalization = finalizer.complete({ goalRuntime: agentAssembly.goalRuntime, terminalEvent: event });
+              const persistedAssistantMessage = lastAssistantMessageId
+                ? undefined
+                : this.input.metadataStore.conversationMessages.findLatestAssistantByRun({
+                    user_id: this.input.user.id,
+                    session_id: sessionId,
+                    run_id: runId
+                  });
+              finalization = completeProtocolRun({
+                finalizer,
+                ...(agentAssembly.goalRuntime ? { goalRuntime: agentAssembly.goalRuntime } : {}),
+                ...(lastAssistantMessageId ? { lastAssistantMessageId } : {}),
+                ...(persistedAssistantMessage?.message_id
+                  ? { persistedAssistantMessageId: persistedAssistantMessage.message_id }
+                  : {}),
+                protocol: agentAssembly.protocol,
+                runId,
+                terminalEvent: event
+              });
               return;
             }
             if (event.type === EventType.RUN_ERROR) {
@@ -828,6 +866,10 @@ class DataFoundryAgUiAgent extends AbstractAgent {
               startedToolCallIds.add(event.toolCallId);
             }
             emit(event);
+
+            if (event.type === EventType.RUN_STARTED) {
+              agentAssembly.flushProtocolEvents();
+            }
 
             if (
               interactionResume

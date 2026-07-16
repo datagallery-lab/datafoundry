@@ -50,6 +50,10 @@ export type EffectiveRunConfig = {
   pinnedPaths?: string[];
   /** User-selected evidence references for this run. Resolved server-side before prompt assembly. */
   evidenceRefs: EvidenceRef[];
+  protocol?: {
+    protocolId: string;
+    protocolVersion: string;
+  };
   /**
    * Resources silently dropped from `enabled*Ids` because `default_enabled=false` (R-020).
    * The run continues; this list is surfaced in `run.config.resolved` for diagnostics.
@@ -123,6 +127,7 @@ export const extractEffectiveRunConfig = (
   // R-024: parse pinned session-relative paths. Drop anything that escapes or is unsafe.
   const pinnedPaths = pinnedPathsFromAliases(runConfig, ["pinnedPaths", "pinned_paths"]);
   const evidenceRefs = evidenceRefsFromAliases(runConfig, ["evidenceRefs", "evidence_refs"]);
+  const protocol = protocolSelectionFromRunConfig(runConfig);
 
   if (
     activeDatasourceId
@@ -151,6 +156,7 @@ export const extractEffectiveRunConfig = (
     ...(goal ? { goal } : {}),
     ...(mentioned ? { mentioned } : {}),
     ...(pinnedPaths.length > 0 ? { pinnedPaths } : {}),
+    ...(protocol ? { protocol } : {}),
     evidenceRefs
   };
 };
@@ -376,6 +382,24 @@ const stringFromAliases = (record: Record<string, unknown>, aliases: string[]): 
     }
   }
   return undefined;
+};
+
+const protocolSelectionFromRunConfig = (
+  runConfig: Record<string, unknown>
+): EffectiveRunConfig["protocol"] => {
+  const value = runConfig.protocol;
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!isRecord(value)) {
+    throw new Error("INVALID_PROTOCOL_SELECTION");
+  }
+  const protocolId = stringFromAliases(value, ["id", "protocolId", "protocol_id"]);
+  const protocolVersion = stringFromAliases(value, ["version", "protocolVersion", "protocol_version"]);
+  if (!protocolId || !protocolVersion) {
+    throw new Error("INVALID_PROTOCOL_SELECTION");
+  }
+  return { protocolId, protocolVersion };
 };
 
 const stringArrayFromAliases = (record: Record<string, unknown>, aliases: string[]): string[] => {

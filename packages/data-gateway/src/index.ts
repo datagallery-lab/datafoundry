@@ -57,6 +57,7 @@ import type {
   DataGatewayPolicy,
   DataSourceAdapter,
   DataSourceRuntimePolicy,
+  DataSourceType,
   InspectSchemaInput,
   ListDataSourcesInput,
   PreviewTableInput,
@@ -101,6 +102,9 @@ const DEFAULT_DATA_GATEWAY_POLICY: DataGatewayPolicy = {
   maxLimit: 1000,
   timeoutMs: 10000
 };
+
+const sqlDialectForDataSourceType = (type: DataSourceType): string =>
+  type === "csv" || type === "xlsx" ? "duckdb" : type;
 
 export class LocalDataGateway implements DataGateway {
   private readonly artifactService: LocalArtifactService;
@@ -158,6 +162,7 @@ export class LocalDataGateway implements DataGateway {
 
     return {
       datasource_id: input.datasource_id,
+      dialect: sqlDialectForDataSourceType(dataSource.type),
       tables: tableNames.size > 0 ? schema.tables.filter((table) => tableNames.has(table.name)) : schema.tables
     };
   }

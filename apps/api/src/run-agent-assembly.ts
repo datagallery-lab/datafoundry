@@ -10,6 +10,9 @@ import {
   type ContextPackage,
   type ContextPackageRecorder,
   type GoalRuntimeAdapter,
+  type RunProtocolBoundary,
+  type ContextPackageRef,
+  type ProtocolStateStore,
   type TaskStateRuntime,
   type WorkspaceAttachment
 } from "@datafoundry/agent-runtime";
@@ -29,6 +32,8 @@ export type RunAgentAssembly = {
   goalRuntime?: GoalRuntimeAdapter | undefined;
   governedMessages: RunAgentInput["messages"];
   mastraAgent: MastraAgent;
+  protocol: RunProtocolBoundary;
+  flushProtocolEvents(): void;
   workspace: {
     command_execution_enabled: boolean;
     isolation: "bwrap" | "none" | "seatbelt";
@@ -57,6 +62,7 @@ type CreateRunAgentAssemblyInput = {
   effectiveRunConfig: EffectiveRunConfig;
   emitter: AgUiEventEmitter;
   contextPackageRecorder?: ContextPackageRecorder;
+  contextPackageExists(reference: ContextPackageRef): boolean;
   evidenceContextItems?: AgentContextItem[] | undefined;
   fileAssetService: FileAssetService;
   goal?: EffectiveRunConfig["goal"] | undefined;
@@ -68,6 +74,7 @@ type CreateRunAgentAssemblyInput = {
   messages: RunAgentInput["messages"];
   modelContextProfile?: ResolvedRunConfig["modelContextProfile"] | undefined;
   modelProvider: ResolvedRunConfig["modelProvider"];
+  protocolStateStore: ProtocolStateStore;
   modelSettings?: ResolvedRunConfig["modelSettings"] | undefined;
   runContext: AgentRunContext;
   sessionOutputService: SessionOutputService;
@@ -134,13 +141,16 @@ export const createRunAgentAssembly = async (
     destroyWorkspace,
     goalRuntime,
     governedMessages,
+    flushProtocolEvents,
     isolation,
+    protocol,
     workspaceDir,
     sessionDir
   } = await createDataFoundry({
     ...(input.abortSignal ? { abortSignal: input.abortSignal } : {}),
     artifactService: input.artifactService,
     ...(input.contextPackageRecorder ? { contextPackageRecorder: input.contextPackageRecorder } : {}),
+    contextPackageExists: input.contextPackageExists,
     dataGateway: input.dataGateway,
     fileAssetService: input.fileAssetService,
     ...(input.initialContextPackage ? { initialContextPackage: input.initialContextPackage } : {}),
@@ -148,9 +158,14 @@ export const createRunAgentAssembly = async (
     ...(input.mcpRuntime.toolNames.length > 0 ? { mcpToolNames: input.mcpRuntime.toolNames } : {}),
     ...(Object.keys(mcpTools).length > 0 ? { mcpTools } : {}),
     emitter: input.emitter,
+    ...(input.effectiveRunConfig.protocol ? { explicitProtocol: input.effectiveRunConfig.protocol } : {}),
     messages: input.messages,
     ...(input.modelContextProfile ? { modelContextProfile: input.modelContextProfile } : {}),
     modelProvider: input.modelProvider,
+    protocolStateStore: input.protocolStateStore,
+    ...(input.effectiveRunConfig.resourceRevisions
+      ? { resourceRevisions: input.effectiveRunConfig.resourceRevisions }
+      : {}),
     ...(input.modelSettings ? { modelSettings: input.modelSettings } : {}),
     ...(input.evidenceContextItems?.length ? { evidenceContextItems: input.evidenceContextItems } : {}),
     ...(input.longTermMemories.length > 0 ? { longTermMemory: { records: input.longTermMemories } } : {}),
@@ -172,9 +187,11 @@ export const createRunAgentAssembly = async (
 
   return {
     destroyWorkspace,
+    flushProtocolEvents,
     ...(goalRuntime ? { goalRuntime } : {}),
     governedMessages,
     mastraAgent,
+    protocol,
     workspace: {
       command_execution_enabled: commandExecutionEnabled,
       isolation

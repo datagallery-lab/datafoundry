@@ -2,12 +2,15 @@ import type { ContextPackage } from "../context/inventory/context-package.js";
 import type { ToolObservationDispatcher } from "../context/tool-observation/tool-observation-dispatcher.js";
 import { toolObservationModelFromPackage } from "../context/tool-observation/tool-observation-projection-items.js";
 import { createToolCallResult } from "../events.js";
+import { ToolExecutionError, toolErrorObservation } from "../errors/tool-execution-error.js";
 import type { AgUiEventEmitter } from "../types.js";
+import type { ActionExecutionResult, ExecuteActionInput } from "../capabilities/action-router.js";
 
 type ToolExecution = (...args: any[]) => unknown | Promise<unknown>;
 
 type MastraToolExecuteOptions = {
   agent?: { toolCallId?: string };
+  abortSignal?: AbortSignal;
 };
 
 type ExecutableTool = {
@@ -31,6 +34,7 @@ export type GovernedToolErrorHandler = (input: {
 }) => void | Promise<void>;
 
 export type GovernedToolFactoryOptions = {
+  actionRouter?: { execute(input: ExecuteActionInput): Promise<ActionExecutionResult> };
   /** When set, the boundary emits an authoritative TOOL_CALL_RESULT for every governed tool. */
   emitter?: AgUiEventEmitter;
   /**
@@ -39,11 +43,18 @@ export type GovernedToolFactoryOptions = {
    * clobbering the suspend/resume contract.
    */
   externallyResolvedToolNames?: Set<string>;
+  runId?: string;
+  segmentId?: string;
+  getSegmentId?(): string;
 };
 
 export class GovernedToolFactory {
   private readonly emitter: AgUiEventEmitter | undefined;
   private readonly externallyResolvedToolNames: Set<string>;
+  private readonly actionRouter: GovernedToolFactoryOptions["actionRouter"];
+  private readonly runId: string | undefined;
+  private readonly segmentId: string | undefined;
+  private readonly getSegmentId: (() => string) | undefined;
 
   constructor(
     private readonly dispatcher: ToolObservationDispatcher,
@@ -53,6 +64,10 @@ export class GovernedToolFactory {
   ) {
     this.emitter = options.emitter;
     this.externallyResolvedToolNames = options.externallyResolvedToolNames ?? new Set<string>();
+    this.actionRouter = options.actionRouter;
+    this.runId = options.runId;
+    this.segmentId = options.segmentId;
+    this.getSegmentId = options.getSegmentId;
   }
 
   /** Wrap every registered tool at its execution boundary. */
@@ -76,6 +91,35 @@ export class GovernedToolFactory {
         const toolCallId = toolCallIdFromOptions(options);
         const toolInput = args[0];
         try {
+          if (this.actionRouter) {
+            const segmentId = this.getSegmentId?.() ?? this.segmentId;
+            if (!this.runId || !segmentId) {
+              throw new Error("GOVERNED_ACTION_ROUTER_SCOPE_REQUIRED");
+            }
+            const actionResult = await this.actionRouter.execute({
+              actionId: toolCallId ?? `${toolName}:${Date.now()}`,
+              actionName: toolName,
+              runId: this.runId,
+              segmentId,
+              input: toolInput,
+              ...(options?.abortSignal ? { abortSignal: options.abortSignal } : {}),
+              invocationArgs: args.slice(1)
+            });
+            if (this.onResult) {
+              if (!actionResult.contextPackage) {
+                throw new Error(`GOVERNED_CONTEXT_PACKAGE_REQUIRED:${toolName}`);
+              }
+              await this.onResult({
+                contextPackage: actionResult.contextPackage as ContextPackage,
+                rawResult: actionResult.rawResult,
+                toolName,
+                ...(toolCallId ? { toolCallId } : {}),
+                ...(toolInput !== undefined ? { toolInput } : {})
+              });
+            }
+            this.emitToolCallResult(toolCallId, toolName, serializeToolResultContent(actionResult.observation));
+            return actionResult.observation;
+          }
           const rawResult = await execute(...args);
           if (rawResult === undefined) {
             return undefined;
@@ -92,9 +136,10 @@ export class GovernedToolFactory {
           this.emitToolCallResult(toolCallId, toolName, serializeToolResultContent(observation));
           return observation;
         } catch (error) {
+          const errorObservation = toolErrorObservation(error, { toolName });
           await this.onError?.({
             error,
-            rawResult: undefined,
+            rawResult: error instanceof ToolExecutionError ? error.rawResult : undefined,
             toolName,
             ...(toolCallId ? { toolCallId } : {}),
             ...(toolInput !== undefined ? { toolInput } : {})
@@ -102,10 +147,7 @@ export class GovernedToolFactory {
           this.emitToolCallResult(
             toolCallId,
             toolName,
-            JSON.stringify({
-              error: stringifyToolError(error),
-              isError: true,
-            }),
+            JSON.stringify(errorObservation),
           );
           throw error;
         }
@@ -140,17 +182,3 @@ const toolCallIdFromOptions = (options?: MastraToolExecuteOptions): string | und
 
 const serializeToolResultContent = (observation: unknown): string =>
   typeof observation === "string" ? observation : JSON.stringify(observation);
-
-const stringifyToolError = (error: unknown): string => {
-  if (error instanceof Error) {
-    return error.message;
-  }
-  if (typeof error === "string") {
-    return error;
-  }
-  try {
-    return JSON.stringify(error);
-  } catch {
-    return String(error);
-  }
-};

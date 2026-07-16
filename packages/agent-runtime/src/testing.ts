@@ -8,6 +8,36 @@ export {
 } from "./index.js";
 export { createDataFoundryToolRegistry } from "./tools/data-tools.js";
 export { GovernedToolFactory } from "./tools/governed-tool-factory.js";
+export { ActionRouter } from "./capabilities/action-router.js";
+export { CapabilityRegistry } from "./capabilities/capability-registry.js";
+export { createToolCapabilityPlugin } from "./capabilities/tool-capability-plugin.js";
+export type * from "./capabilities/types.js";
+export { ToolExecutionError, toToolExecutionError, toolErrorObservation } from "./errors/tool-execution-error.js";
+export type * from "./errors/tool-execution-error.js";
+export { validateProtocolDefinition } from "./protocol/definition-validator.js";
+export { evaluateProtocolHandoff } from "./protocol/protocol-handoff.js";
+export { ProtocolHandoffCoordinator } from "./protocol/protocol-handoff-coordinator.js";
+export { InMemoryProtocolStateStore } from "./protocol/in-memory-protocol-state-store.js";
+export { ProtocolRegistry } from "./protocol/protocol-registry.js";
+export { ProtocolRouter } from "./protocol/protocol-router.js";
+export { ProtocolRuntime } from "./protocol/protocol-runtime.js";
+export {
+  createModelProtocolClassifier,
+  createProtocolClassificationPrompt
+} from "./protocol/model-protocol-classifier.js";
+export { createRunProtocolBoundary } from "./protocol/run-protocol-boundary.js";
+export { createGeneralTaskProtocol } from "./protocol/protocols/general-task.js";
+export { createDataAnalysisProtocol } from "./protocol/protocols/data-analysis.js";
+export type * from "./protocol/protocol-handoff.js";
+export type * from "./protocol/protocol-handoff-coordinator.js";
+export type * from "./protocol/protocol-router.js";
+export type * from "./protocol/protocol-runtime.js";
+export type * from "./protocol/types.js";
+export { DataLinkSemanticProvider } from "./semantic/datalink-semantic-provider.js";
+export { LocalSemanticProvider } from "./semantic/local-semantic-provider.js";
+export { SemanticProviderChain } from "./semantic/semantic-provider-chain.js";
+export { createDefaultSemanticProvider } from "./semantic/default-semantic-provider.js";
+export type * from "./semantic/types.js";
 
 export { createContextItem, hashContextContent } from "./context/inventory/context-item.js";
 export type {
