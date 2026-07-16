@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import type { EvidenceSelection } from "@datafoundry/contracts";
+import { useT } from "../../../../i18n/locale-context";
 import { describeEvidenceSelection } from "../../evidence";
 import { consoleTableShellClass } from "./console-scroll-styles";
 
@@ -21,9 +22,10 @@ function FloatingReferenceButton({
   title: string;
   onReference: () => void;
 }) {
+  const t = useT();
   return (
     <div
-      className="fixed z-50 -translate-x-1/2 -translate-y-full"
+      className="fixed z-[70] -translate-x-1/2 -translate-y-full"
       style={{ left: anchor.x, top: Math.max(anchor.y - 8, 12) }}
       onMouseDown={(event) => event.preventDefault()}
     >
@@ -33,7 +35,7 @@ function FloatingReferenceButton({
         onClick={onReference}
         className="cursor-pointer rounded-lg bg-primary px-2.5 py-1 text-[11px] font-semibold text-white shadow-lg transition-colors hover:bg-primary/90"
       >
-        Reference
+        {t("console.reference")}
       </button>
     </div>
   );

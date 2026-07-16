@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useState } from "react";
 import type { EvidenceRef } from "@datafoundry/contracts";
+import { useT } from "../../../../i18n/locale-context";
+import { CONSOLE_PEER_PAGE_ID, shouldRevealConsoleForSelection } from "../../task-console-layout";
 import { artifactToneForType } from "../../ui-tokens";
 import { TaskConsole, type TaskConsoleProps } from "./TaskConsole";
 import { ExpandedArtifactView } from "./ExpandedArtifactView";
@@ -16,8 +18,6 @@ type TaskConsolePanelProps = Omit<
   onReferenceEvidence: (ref: EvidenceRef) => void;
 };
 
-const CONSOLE_PAGE = "console";
-
 /**
  * Right-panel shell that hosts the Task Console and any number of expanded artifact
  * pages as sibling tabs. The console tab is fixed; each opened artifact becomes its
@@ -27,12 +27,14 @@ export function TaskConsolePanel({
   sessionId,
   runId,
   onReferenceEvidence,
+  selection,
   ...consoleProps
 }: TaskConsolePanelProps) {
+  const t = useT();
   const { artifacts } = consoleProps;
   const { artifactFocusId, onArtifactFocusHandled } = consoleProps;
   const [openArtifactIds, setOpenArtifactIds] = useState<string[]>([]);
-  const [activePageId, setActivePageId] = useState<string>(CONSOLE_PAGE);
+  const [activePageId, setActivePageId] = useState<string>(CONSOLE_PEER_PAGE_ID);
   const [previewArtifactId, setPreviewArtifactId] = useState<string | null>(null);
 
   // Drop pages whose artifact is gone (e.g. after switching sessions/runs).
@@ -45,17 +47,28 @@ export function TaskConsolePanel({
   }, [artifacts]);
 
   useEffect(() => {
-    if (activePageId === CONSOLE_PAGE) return;
+    if (activePageId === CONSOLE_PEER_PAGE_ID) return;
     if (!artifacts.some((artifact) => artifact.id === activePageId)) {
-      setActivePageId(CONSOLE_PAGE);
+      setActivePageId(CONSOLE_PEER_PAGE_ID);
     }
   }, [activePageId, artifacts]);
+
+  // Chat tool chips / process steps select Details — leave artifact peer pages and
+  // dismiss preview overlay so the console (and its Details tab) is actually visible.
+  useEffect(() => {
+    if (shouldRevealConsoleForSelection(selection)) {
+      setActivePageId(CONSOLE_PEER_PAGE_ID);
+      setPreviewArtifactId(null);
+    }
+  }, [selection]);
 
   const openArtifactPage = useCallback((artifactId: string) => {
     setOpenArtifactIds((current) =>
       current.includes(artifactId) ? current : [...current, artifactId],
     );
     setActivePageId(artifactId);
+    // Peer page replaces the floating preview — don't leave the overlay on top.
+    setPreviewArtifactId(null);
   }, []);
 
   const openArtifactPreview = useCallback((artifactId: string) => {
@@ -82,13 +95,30 @@ export function TaskConsolePanel({
   const closeArtifactPage = useCallback(
     (artifactId: string) => {
       setOpenArtifactIds((current) => current.filter((id) => id !== artifactId));
-      setActivePageId((current) => (current === artifactId ? CONSOLE_PAGE : current));
+      setActivePageId((current) =>
+        current === artifactId ? CONSOLE_PEER_PAGE_ID : current,
+      );
     },
     [],
   );
 
+  // Esc ladder inside the panel: preview is handled by ArtifactPreviewModal (capture).
+  // On an artifact peer page, Esc returns to the console tab (does not close the panel).
+  useEffect(() => {
+    if (previewArtifactId) return;
+    if (activePageId === CONSOLE_PEER_PAGE_ID) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || event.defaultPrevented) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      setActivePageId(CONSOLE_PEER_PAGE_ID);
+    };
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => window.removeEventListener("keydown", onKeyDown, true);
+  }, [activePageId, previewArtifactId]);
+
   const activeArtifact =
-    activePageId === CONSOLE_PAGE
+    activePageId === CONSOLE_PEER_PAGE_ID
       ? null
       : artifacts.find((artifact) => artifact.id === activePageId) ?? null;
 
@@ -103,9 +133,9 @@ export function TaskConsolePanel({
       {hasPages ? (
         <nav className="flex shrink-0 items-stretch gap-1 overflow-x-auto border-b border-l border-border bg-surface px-2 py-1.5">
           <PageTab
-            label="Console"
-            active={activePageId === CONSOLE_PAGE}
-            onSelect={() => setActivePageId(CONSOLE_PAGE)}
+            label={t("console.pageConsole")}
+            active={activePageId === CONSOLE_PEER_PAGE_ID}
+            onSelect={() => setActivePageId(CONSOLE_PEER_PAGE_ID)}
           />
           {openArtifactIds.map((id) => {
             const artifact = artifacts.find((entry) => entry.id === id);
@@ -119,6 +149,7 @@ export function TaskConsolePanel({
                 active={activePageId === id}
                 onSelect={() => setActivePageId(id)}
                 onClose={() => closeArtifactPage(id)}
+                closeAriaLabel={t("console.closePage", { title: artifact.title })}
               />
             );
           })}
@@ -140,6 +171,7 @@ export function TaskConsolePanel({
         ) : (
           <TaskConsole
             {...consoleProps}
+            selection={selection}
             sessionId={sessionId}
             onOpenArtifactPage={openArtifactPage}
             onPreviewArtifact={openArtifactPreview}
@@ -168,12 +200,14 @@ function PageTab({
   active,
   onSelect,
   onClose,
+  closeAriaLabel,
 }: {
   label: string;
   icon?: string;
   active: boolean;
   onSelect: () => void;
   onClose?: () => void;
+  closeAriaLabel?: string;
 }) {
   return (
     <div
@@ -193,8 +227,11 @@ function PageTab({
       {onClose ? (
         <button
           type="button"
-          aria-label={`Close ${label}`}
-          onClick={onClose}
+          aria-label={closeAriaLabel ?? label}
+          onClick={(event) => {
+            event.stopPropagation();
+            onClose();
+          }}
           className={[
             "grid h-4 w-4 shrink-0 place-items-center rounded transition-colors",
             active ? "text-white/70 hover:bg-white/20" : "text-muted-light hover:bg-surface",
