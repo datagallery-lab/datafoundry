@@ -2,10 +2,16 @@ import React from 'react';
 import assert from 'node:assert/strict';
 import { PassThrough } from 'node:stream';
 import { afterEach, describe, it } from 'node:test';
+import chalk from 'chalk';
 import { Box, render } from 'ink';
 import { CommandHistory } from '../keybindings.js';
+import { OutputsScreen } from '../OutputsView.js';
+import { ResourcePicker } from '../ResourcePicker.js';
+import { SessionPicker } from '../SessionPicker.js';
 import { SlashCommandPopover } from '../SlashCommandPopover.js';
 import { StatusBar } from '../StatusBar.js';
+import { selectionColors } from '../theme.js';
+import { themeManager } from '../themes/theme-manager.js';
 import { EnhancedInputBox, inputLineFragments } from './EnhancedInputBox.js';
 
 const waitForInput = () => new Promise<void>((resolve) => setImmediate(resolve));
@@ -253,19 +259,27 @@ describe('EnhancedInputBox history navigation', () => {
 });
 
 describe('EnhancedInputBox slash command menu', () => {
-  it('inherits the terminal background instead of painting a color block', async () => {
-    const view = renderInputBox(
-      <SlashCommandPopover
-        activeIndex={0}
-        commands={[
-          { name: 'reset', description: 'Reset session and start fresh' },
-          { name: 'resume', description: 'Resume a server session' },
-        ]}
-      />,
-    );
-    await waitForInput();
+  it('paints a solid surface behind the overlaid command rows', async () => {
+    const previousColorLevel = chalk.level;
+    chalk.level = 3;
+    try {
+      const view = renderInputBox(
+        <SlashCommandPopover
+          activeIndex={0}
+          commands={[
+            { name: 'reset', description: 'Reset session and start fresh' },
+            { name: 'resume', description: 'Resume a server session' },
+          ]}
+        />,
+      );
+      await waitForInput();
 
-    assert.doesNotMatch(view.output.join(''), /\u001B\[48(?:;\d+)*m/);
+      const output = view.output.join('');
+      assert.match(output, /\u001B\[48;2;17;23;25m/);
+      assert.match(output, /\u001B\[48;2;27;39;44m/);
+    } finally {
+      chalk.level = previousColorLevel;
+    }
   });
 
   it('keeps the composer height fixed while the menu overlays the chat viewport', async () => {
@@ -463,5 +477,92 @@ describe('StatusBar', () => {
     assert.match(output, /Running/);
     assert.doesNotMatch(output, /source: /);
     assert.doesNotMatch(output, /model: /);
+  });
+});
+
+describe('shared selection theme', () => {
+  it('uses the same mist palette for session, resource, and output selection screens', async () => {
+    const previousColorLevel = chalk.level;
+    chalk.level = 3;
+    try {
+      const sessionView = renderInputBox(
+        <SessionPicker
+          sessions={[
+            {
+              id: 'session-1',
+              threadId: 'thread-1',
+              title: 'Revenue analysis',
+              updatedAt: new Date().toISOString(),
+            },
+          ]}
+          loading={false}
+          columns={72}
+          rows={20}
+          onSelect={() => {}}
+          onCancel={() => {}}
+        />,
+      );
+      const resourceView = renderInputBox(
+        <ResourcePicker
+          title="Select a data source"
+          items={[
+            {
+              id: 'dtc-growth-demo',
+              name: 'DTC Growth Demo',
+              description: 'Built-in analytics data source',
+              enabled: true,
+            },
+          ]}
+          loading={false}
+          columns={72}
+          rows={20}
+          emptyMessage="No data sources configured."
+          onSelect={() => {}}
+          onCancel={() => {}}
+        />,
+      );
+      const outputsView = renderInputBox(
+        <OutputsScreen
+          artifacts={[
+            {
+              id: 'artifact-1',
+              title: 'Revenue by channel',
+              kind: 'csv',
+              type: 'dataset',
+              summary: 'Monthly revenue grouped by channel',
+            },
+          ]}
+          events={[]}
+          columns={72}
+          rows={20}
+          onCancel={() => {}}
+        />,
+      );
+      await waitForInput();
+      await waitForInput();
+
+      for (const output of [
+        sessionView.output.join(''),
+        resourceView.output.join(''),
+        outputsView.output.join(''),
+      ]) {
+        assert.match(output, /\u001B\[48;2;17;23;25m/);
+        assert.match(output, /\u001B\[48;2;27;39;44m/);
+        assert.match(output, /\u001B\[38;2;121;165;169m/);
+      }
+    } finally {
+      chalk.level = previousColorLevel;
+    }
+  });
+
+  it('switches all semantic colors through one preset manager', () => {
+    assert.equal(themeManager.setActiveTheme('legacy'), true);
+    assert.equal(selectionColors.accent, '#6CA8E8');
+    assert.equal(selectionColors.background, '#121820');
+
+    assert.equal(themeManager.setActiveTheme('mist-dark'), true);
+    assert.equal(selectionColors.accent, '#79A5A9');
+    assert.equal(selectionColors.background, '#111719');
+    assert.equal(themeManager.setActiveTheme('unknown-theme'), false);
   });
 });

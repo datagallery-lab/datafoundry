@@ -14,7 +14,7 @@ import {
   isMarkdownArtifact,
 } from './ArtifactCard.js';
 import { textWidth, truncateToWidth } from './text-width.js';
-import { inkColors } from './theme.js';
+import { inkColors, selectionColors } from './theme.js';
 
 interface OutputsViewProps {
   artifacts: DataArtifact[];
@@ -210,17 +210,17 @@ export const OutputsView: React.FC<OutputsViewProps> = ({
     <Box flexDirection="column" flexGrow={1} paddingX={1} overflow="hidden">
       {artifacts.length === 0 ? (
         <Box flexDirection="column" paddingY={2}>
-          <Text dimColor wrap="truncate-end">
+          <Text color={selectionColors.disabled} wrap="truncate-end">
             {truncate('暂无产出。', contentWidth)}
           </Text>
-          <Text dimColor wrap="truncate-end">
+          <Text color={selectionColors.description} wrap="truncate-end">
             {truncate('Agent 生成 SQL 结果、图表、报告或文件后会显示在这里。', contentWidth)}
           </Text>
         </Box>
       ) : (
         <Box flexDirection="column" flexGrow={1} overflow="hidden">
           <Box marginBottom={1}>
-            <Text dimColor wrap="truncate-end">
+            <Text color={selectionColors.description} wrap="truncate-end">
               {truncate('最新产出排在前面。上下选择，Enter 查看详情。', contentWidth)}
             </Text>
           </Box>
@@ -230,7 +230,7 @@ export const OutputsView: React.FC<OutputsViewProps> = ({
             const isFirst = index === 0;
             const isLast = index === visibleArtifacts.length - 1;
             const prefix = selected
-              ? '> '
+              ? '› '
               : isFirst && showScrollUp
                 ? '^ '
                 : isLast && showScrollDown
@@ -250,25 +250,47 @@ export const OutputsView: React.FC<OutputsViewProps> = ({
                 key={artifact.id}
                 flexDirection="column"
                 marginBottom={isLast ? 0 : 1}
+                backgroundColor={selected
+                  ? selectionColors.selectedBackground
+                  : selectionColors.background}
               >
                 <Box>
-                  <Text color={selected ? inkColors.accent : inkColors.text} bold={selected}>
+                  <Text color={selected ? selectionColors.accent : selectionColors.disabled}>
                     {prefix}
                   </Text>
-                  <Text color={selected ? inkColors.accent : inkColors.text} bold={selected} wrap="truncate-end">
+                  <Text
+                    color={selected ? selectionColors.selectedTitle : selectionColors.title}
+                    bold={selected}
+                    wrap="truncate-end"
+                  >
                     {title}
                   </Text>
-                  <Text dimColor wrap="truncate-end">
+                  <Text
+                    color={selected
+                      ? selectionColors.selectedDescription
+                      : selectionColors.description}
+                    wrap="truncate-end"
+                  >
                     {truncate(typeLabel, Math.max(1, titleWidth - textWidth(title)))}
                   </Text>
                 </Box>
                 <Box paddingLeft={2}>
-                  <Text dimColor wrap="truncate-end">
+                  <Text
+                    color={selected
+                      ? selectionColors.selectedDescription
+                      : selectionColors.description}
+                    wrap="truncate-end"
+                  >
                     {truncate(artifact.summary, summaryWidth)}
                   </Text>
                 </Box>
                 <Box paddingLeft={2}>
-                  <Text dimColor wrap="truncate-end">
+                  <Text
+                    color={selected
+                      ? selectionColors.selectedDescription
+                      : selectionColors.disabled}
+                    wrap="truncate-end"
+                  >
                     {truncate(artifactMetadata(artifact, events), metadataWidth)}
                   </Text>
                 </Box>
@@ -333,7 +355,7 @@ export const OutputsSidebar: React.FC<{
       </Box>
 
       <Box>
-        <Text color="gray">{'-'.repeat(separatorWidth)}</Text>
+        <Text color={inkColors.border}>{'-'.repeat(separatorWidth)}</Text>
       </Box>
 
       <Box flexDirection="column" flexGrow={1} paddingX={1} overflow="hidden">
@@ -392,7 +414,7 @@ export const OutputsSidebar: React.FC<{
       </Box>
 
       <Box>
-        <Text color="gray">{'-'.repeat(separatorWidth)}</Text>
+        <Text color={inkColors.border}>{'-'.repeat(separatorWidth)}</Text>
       </Box>
 
       <Box paddingX={1}>
@@ -425,7 +447,7 @@ const OutputsDetailView: React.FC<{
     <Box flexDirection="column" flexGrow={1} paddingX={1} overflow="hidden">
       <Box>
         <Text dimColor>#{index + 1} </Text>
-        <Text color={inkColors.accent} wrap="truncate-end">
+        <Text color={selectionColors.accent} wrap="truncate-end">
           {truncate(sourceLabel(artifact, events), Math.max(1, contentWidth - 4))}
         </Text>
       </Box>
@@ -658,20 +680,21 @@ export const OutputsScreen: React.FC<OutputsScreenProps> = ({
       <Box
         flexDirection="column"
         borderStyle="single"
-        borderColor={inkColors.border}
+        borderColor={selectionColors.border}
+        backgroundColor={selectionColors.background}
         width={panelWidth}
         height={panelHeight}
         overflow="hidden"
       >
         <Box paddingX={1}>
-          <Text bold color={inkColors.accent} wrap="truncate-end">{headerTitle}</Text>
-          <Text dimColor wrap="truncate-end">
+          <Text bold color={selectionColors.heading} wrap="truncate-end">{headerTitle}</Text>
+          <Text color={selectionColors.description} wrap="truncate-end">
             {truncate(headerSuffix, Math.max(1, contentWidth - textWidth(headerTitle)))}
           </Text>
         </Box>
 
         <Box>
-          <Text color="gray">{'-'.repeat(separatorWidth)}</Text>
+          <Text color={selectionColors.border}>{'-'.repeat(separatorWidth)}</Text>
         </Box>
 
         <Box flexDirection="column" flexGrow={1} overflow="hidden">
@@ -698,11 +721,11 @@ export const OutputsScreen: React.FC<OutputsScreenProps> = ({
         </Box>
 
         <Box>
-          <Text color="gray">{'-'.repeat(separatorWidth)}</Text>
+          <Text color={selectionColors.border}>{'-'.repeat(separatorWidth)}</Text>
         </Box>
 
         <Box paddingX={1}>
-          <Text dimColor wrap="truncate-end">
+          <Text color={selectionColors.disabled} wrap="truncate-end">
             {truncate(footerText, contentWidth)}
           </Text>
         </Box>

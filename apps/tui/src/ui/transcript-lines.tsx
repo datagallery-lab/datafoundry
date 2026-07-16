@@ -72,11 +72,6 @@ const MAX_REASONING_LINES = 120;
 const MAX_TOOL_PAYLOAD_LINES = 28;
 const MAX_TABLE_ROWS = 12;
 const MIN_TABLE_CELL_WIDTH = 3;
-const TOOL_BLOCK_LABEL_COLOR = inkColors.accent;
-const TOOL_BLOCK_FIELD_COLOR = inkColors.muted;
-const TOOL_BLOCK_VALUE_COLOR = inkColors.text;
-const TOOL_BLOCK_MUTED_COLOR = inkColors.muted;
-const TOOL_BLOCK_ERROR_COLOR = inkColors.error;
 const TOOL_DETAIL_INDENT_WIDTH = textWidth(TOOL_DETAIL_INDENT);
 const STARTUP_BANNER_ART = [
   ' ____        _        _____                     _            ',
@@ -440,7 +435,7 @@ function pushPayloadBlock(
       key={key}
       width={blockWidth}
       segments={[
-        { text: label, color: TOOL_BLOCK_LABEL_COLOR, bold: true },
+        { text: label, color: inkColors.accent, bold: true },
       ]}
     />,
   );
@@ -472,7 +467,7 @@ function pushPayloadBlock(
         segments={[
           {
             text: `${detailIndent}... ${hidden} more lines hidden ...`,
-            color: TOOL_BLOCK_MUTED_COLOR,
+            color: inkColors.muted,
           },
         ]}
       />,
@@ -488,20 +483,20 @@ function detailRowSegments(indent: string, row: string): StyledSegment[] {
   const separatorIndex = row.indexOf(': ');
   if (separatorIndex <= 0) {
     return [
-      { text: indent, color: TOOL_BLOCK_MUTED_COLOR },
-      { text: row, color: TOOL_BLOCK_VALUE_COLOR },
+      { text: indent, color: inkColors.muted },
+      { text: row, color: inkColors.text },
     ];
   }
 
   const field = row.slice(0, separatorIndex + 1);
   const value = row.slice(separatorIndex + 2);
   const fieldName = row.slice(0, separatorIndex).toLowerCase();
-  const valueColor = fieldName === 'error' ? TOOL_BLOCK_ERROR_COLOR : TOOL_BLOCK_VALUE_COLOR;
+  const valueColor = fieldName === 'error' ? inkColors.error : inkColors.text;
 
   return [
-    { text: indent, color: TOOL_BLOCK_MUTED_COLOR },
-    { text: field, color: TOOL_BLOCK_FIELD_COLOR, bold: true },
-    { text: ' ', color: TOOL_BLOCK_MUTED_COLOR },
+    { text: indent, color: inkColors.muted },
+    { text: field, color: inkColors.muted, bold: true },
+    { text: ' ', color: inkColors.muted },
     { text: value, color: valueColor },
   ];
 }

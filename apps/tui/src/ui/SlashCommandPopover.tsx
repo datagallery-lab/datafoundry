@@ -1,6 +1,6 @@
 import React from 'react';
 import { Box, Text } from 'ink';
-import { inkColors } from './theme.js';
+import { selectionColors } from './theme.js';
 
 export interface SlashCommandItem {
   name: string;
@@ -57,11 +57,18 @@ export const SlashCommandPopover: React.FC<SlashCommandPopoverProps> = ({
   if (commands.length === 0) {
     return (
       <Box
-        height={1}
+        height={2}
         width="100%"
         paddingLeft={1}
+        borderStyle="single"
+        borderTop
+        borderBottom={false}
+        borderLeft={false}
+        borderRight={false}
+        borderColor={selectionColors.border}
+        backgroundColor={selectionColors.background}
       >
-        <Text color={inkColors.subtle} wrap="truncate-end">No matching commands</Text>
+        <Text color={selectionColors.disabled} wrap="truncate-end">No matching commands</Text>
       </Box>
     );
   }
@@ -83,9 +90,16 @@ export const SlashCommandPopover: React.FC<SlashCommandPopoverProps> = ({
   return (
     <Box
       flexDirection="column"
-      height={visibleRows}
+      height={visibleRows + 1}
       width="100%"
       overflowY="hidden"
+      borderStyle="single"
+      borderTop
+      borderBottom={false}
+      borderLeft={false}
+      borderRight={false}
+      borderColor={selectionColors.border}
+      backgroundColor={selectionColors.background}
     >
       {visibleCommands.map((command, rowIndex) => {
         const isActive = offset + rowIndex === selectedIndex;
@@ -96,23 +110,32 @@ export const SlashCommandPopover: React.FC<SlashCommandPopoverProps> = ({
             width="100%"
             height={1}
             paddingRight={1}
+            backgroundColor={isActive
+              ? selectionColors.selectedBackground
+              : selectionColors.background}
           >
             <Box width={2} flexShrink={0}>
-              <Text color={isActive ? inkColors.accent : inkColors.surface}>
-                {isActive ? '› ' : '  '}
-              </Text>
+              {isActive
+                ? <Text color={selectionColors.accent}>› </Text>
+                : <Text>  </Text>}
             </Box>
-            <Box width={commandColumnWidth} flexShrink={0}>
+            <Box width={1} flexShrink={0}>
+              <Text color={selectionColors.accent}>/</Text>
+            </Box>
+            <Box width={commandColumnWidth - 1} flexShrink={0}>
               <Text
-                color={isActive ? inkColors.emphasis : inkColors.muted}
+                color={isActive ? selectionColors.selectedTitle : selectionColors.title}
+                bold={isActive}
                 wrap="truncate-end"
               >
-                /{command.name}
+                {command.name}
               </Text>
             </Box>
             <Box flexGrow={1} minWidth={0}>
               <Text
-                color={isActive ? inkColors.muted : inkColors.subtle}
+                color={isActive
+                  ? selectionColors.selectedDescription
+                  : selectionColors.description}
                 wrap="truncate-end"
               >
                 {command.description ?? ''}

@@ -1,72 +1,59 @@
+import { themeManager } from './themes/theme-manager.js';
+import type { TuiThemeTokens } from './themes/types.js';
+
 /**
- * DataFoundry TUI 统一颜色主题
- *
- * 设计原则：
- * - 只保留一种主强调色（accent）用于交互和选中状态
- * - 其他颜色仅用于表达状态（success/warning/error）
- * - 避免多种颜色同时争夺注意力
- * - 使用低饱和度颜色提升专业感
+ * 动态语义主题访问层。组件应优先使用这里的语义分组，而不是直接写色值。
  */
-
-export const theme = {
-  // 背景和基础
-  background: '#0B0F14',
-  surface: '#121820',
-  border: '#27313C',
-  focus: '#496783',
-
-  // 文本
-  text: '#E6EDF3',
-  emphasis: '#B7C0C8',
-  muted: '#7D8590',
-  subtle: '#5F6975',
-
-  // 语义色（低饱和度）
-  accent: '#6CA8E8',    // 主强调色：当前模式、选中项、主要交互
-  success: '#88C980',   // 成功状态：工具执行成功、连接正常
-  warning: '#D8B76A',   // 警告状态：仅用于真正需要注意的问题
-  error: '#F87171',     // 错误状态：失败、错误
-} as const;
+export const tuiTheme: TuiThemeTokens = {
+  get background() {
+    return themeManager.getTokens().background;
+  },
+  get text() {
+    return themeManager.getTokens().text;
+  },
+  get border() {
+    return themeManager.getTokens().border;
+  },
+  get structure() {
+    return themeManager.getTokens().structure;
+  },
+  get interaction() {
+    return themeManager.getTokens().interaction;
+  },
+  get status() {
+    return themeManager.getTokens().status;
+  },
+  get selection() {
+    return themeManager.getTokens().selection;
+  },
+};
 
 /**
  * 颜色使用映射
  * 定义了各个UI元素应该使用的颜色
  */
 export const colorUsage = {
-  // 标题和品牌
-  appTitle: theme.accent,
-
-  // 选中和激活状态
-  selectedItem: theme.accent,
-  activeMode: theme.accent,
-  activeBorder: theme.accent,
-
-  // 文件和资源名称
-  fileName: theme.accent,
-  resourceName: theme.text,
-
-  // 状态指示器
-  connected: theme.success,
-  running: theme.warning,
-  completed: theme.success,
-  failed: theme.error,
-  idle: theme.muted,
-
-  // 工具调用
-  toolSuccess: theme.success,
-  toolRunning: theme.warning,
-  toolFailed: theme.error,
-  toolName: theme.muted,
-
-  // 系统通知（降级处理，不再使用 magenta）
-  systemNotice: theme.muted,
-  outputsNotice: theme.muted,
-
-  // 次要信息
-  timestamp: theme.muted,
-  metadata: theme.muted,
-  dimText: theme.muted,
-} as const;
+  get appTitle() { return tuiTheme.structure.accent; },
+  get selectedItem() { return tuiTheme.selection.selectedTitle; },
+  get activeMode() { return tuiTheme.interaction.accent; },
+  get activeBorder() { return tuiTheme.border.focused; },
+  get fileName() { return tuiTheme.structure.accent; },
+  get resourceName() { return tuiTheme.text.primary; },
+  get connected() { return tuiTheme.status.success; },
+  get running() { return tuiTheme.status.warning; },
+  get completed() { return tuiTheme.status.success; },
+  get failed() { return tuiTheme.status.error; },
+  get idle() { return tuiTheme.text.secondary; },
+  get toolSuccess() { return tuiTheme.status.success; },
+  get toolRunning() { return tuiTheme.status.warning; },
+  get toolFailed() { return tuiTheme.status.error; },
+  get toolName() { return tuiTheme.text.secondary; },
+  get systemNotice() { return tuiTheme.text.secondary; },
+  get outputsNotice() { return tuiTheme.text.secondary; },
+  get timestamp() { return tuiTheme.text.secondary; },
+  get metadata() { return tuiTheme.text.secondary; },
+  get dimText() { return tuiTheme.text.secondary; },
+};
 
 /**
  * Ink 颜色映射。
@@ -75,24 +62,40 @@ export const colorUsage = {
  * 退回到高饱和的 cyan/yellow/green。
  */
 export const inkColors = {
-  background: theme.background,
-  surface: theme.surface,
-  border: theme.border,
-  focus: theme.focus,
-  accent: theme.accent,
-  success: theme.success,
-  warning: theme.warning,
-  error: theme.error,
-  emphasis: theme.emphasis,
-  muted: theme.muted,
-  subtle: theme.subtle,
-  text: theme.text,
-} as const;
+  get background() { return tuiTheme.background.canvas; },
+  get surface() { return tuiTheme.background.surface; },
+  get border() { return tuiTheme.border.default; },
+  get focus() { return tuiTheme.border.focused; },
+  get accent() { return tuiTheme.structure.accent; },
+  get success() { return tuiTheme.status.success; },
+  get warning() { return tuiTheme.status.warning; },
+  get error() { return tuiTheme.status.error; },
+  get emphasis() { return tuiTheme.text.emphasis; },
+  get muted() { return tuiTheme.text.secondary; },
+  get subtle() { return tuiTheme.text.muted; },
+  get text() { return tuiTheme.text.primary; },
+};
+
+/**
+ * 所有命令补全和资源选择界面共享这一语义层。
+ */
+export const selectionColors = {
+  get background() { return tuiTheme.selection.background; },
+  get selectedBackground() { return tuiTheme.selection.selectedBackground; },
+  get border() { return tuiTheme.selection.border; },
+  get heading() { return tuiTheme.selection.heading; },
+  get selectedTitle() { return tuiTheme.selection.selectedTitle; },
+  get title() { return tuiTheme.selection.title; },
+  get accent() { return tuiTheme.selection.accent; },
+  get selectedDescription() { return tuiTheme.selection.selectedDescription; },
+  get description() { return tuiTheme.selection.description; },
+  get disabled() { return tuiTheme.selection.disabled; },
+};
 
 /**
  * 获取状态对应的颜色
  */
-export function getStatusColor(status: string): typeof inkColors[keyof typeof inkColors] {
+export function getStatusColor(status: string): string {
   switch (status) {
     case 'success':
     case 'completed':
@@ -130,10 +133,12 @@ export function basename(path: string): string {
  * 颜色使用指南
  *
  * ✅ 推荐使用：
- * - accent: 选中项、当前模式、可交互元素、文件名
+ * - selectionColors: 命令补全、资源选择、会话选择和产出选择
+ * - inkColors.accent: 主界面结构、链接、产出等蓝色结构语义
+ * - tuiTheme.interaction.accent: 雾青色操作语义
  * - success: 工具执行成功、连接正常
  * - warning: 真正需要用户注意的警告（不是所有运行中状态）
- * - muted (dimColor): 时间戳、快捷键、系统通知、次要信息
+ * - text.secondary / text.muted: 时间戳、快捷键、系统通知、次要信息
  *
  * ❌ 避免使用：
  * - magenta/purple: 已移除，用 muted 或 accent 替代
@@ -142,10 +147,12 @@ export function basename(path: string): string {
  *
  * 示例：
  * ```tsx
- * import { inkColors, getStatusColor } from './theme.js';
+ * import { inkColors, selectionColors, getStatusColor } from './theme.js';
  *
  * // 选中项
- * <Text color={selected ? inkColors.accent : undefined}>Item</Text>
+ * <Box backgroundColor={selected ? selectionColors.selectedBackground : selectionColors.background}>
+ *   <Text color={selected ? selectionColors.selectedTitle : selectionColors.title}>Item</Text>
+ * </Box>
  *
  * // 状态指示
  * <Text color={getStatusColor(toolCall.status)}>✓</Text>

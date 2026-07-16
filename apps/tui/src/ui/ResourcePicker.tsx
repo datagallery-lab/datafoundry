@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Box, Text, useInput } from 'ink';
-import { inkColors } from './theme.js';
+import { inkColors, selectionColors } from './theme.js';
 
 export interface ResourcePickerItem {
   id: string;
@@ -133,7 +133,8 @@ export const ResourcePicker: React.FC<ResourcePickerProps> = ({
     <Box
       flexDirection="column"
       borderStyle="single"
-      borderColor={inkColors.border}
+      borderColor={selectionColors.border}
+      backgroundColor={selectionColors.background}
       width={panelWidth}
       height={panelHeight}
       overflow={fullscreen ? 'hidden' : undefined}
@@ -141,10 +142,10 @@ export const ResourcePicker: React.FC<ResourcePickerProps> = ({
       paddingY={1}
       marginX={fullscreen ? 0 : 1}
     >
-      <Text bold color={inkColors.accent}>{title}</Text>
+      <Text bold color={selectionColors.heading}>{title}</Text>
       <Box>
-        <Text dimColor>Type to search: </Text>
-        <Text>{query}</Text>
+        <Text color={selectionColors.description}>Type to search: </Text>
+        <Text color={selectionColors.title}>{query}</Text>
         <Text inverse> </Text>
       </Box>
 
@@ -162,13 +163,13 @@ export const ResourcePicker: React.FC<ResourcePickerProps> = ({
         overflow={fullscreen ? 'hidden' : undefined}
       >
         {loading ? (
-          <Text dimColor>Loading...</Text>
+          <Text color={selectionColors.description}>Loading...</Text>
         ) : error ? (
           <Text color={inkColors.error}>{error}</Text>
         ) : items.length === 0 ? (
-          <Text dimColor>{emptyMessage}</Text>
+          <Text color={selectionColors.disabled}>{emptyMessage}</Text>
         ) : filteredItems.length === 0 ? (
-          <Text dimColor>No items match "{query}".</Text>
+          <Text color={selectionColors.disabled}>No items match "{query}".</Text>
         ) : (
           visibleItems.map((item, index) => {
             const absoluteIndex = windowStart + index;
@@ -177,21 +178,45 @@ export const ResourcePicker: React.FC<ResourcePickerProps> = ({
             const titleText = truncate(item.name || item.id, titleMaxWidth);
             const idText = truncate(item.id, idMaxWidth);
             const detailText = item.detail ? truncate(item.detail, detailMaxWidth) : '';
-            const itemColor = selected ? inkColors.accent : item.enabled === false ? inkColors.muted : inkColors.text;
+            const itemColor = selected
+              ? selectionColors.selectedTitle
+              : item.enabled === false
+                ? selectionColors.disabled
+                : selectionColors.title;
 
             return (
-              <Box key={item.id} flexDirection="column">
+              <Box
+                key={item.id}
+                flexDirection="column"
+                backgroundColor={selected
+                  ? selectionColors.selectedBackground
+                  : selectionColors.background}
+              >
                 <Box>
-                  <Text color={selected ? inkColors.accent : inkColors.text}>{selected ? '>' : ' '} </Text>
-                  <Text dimColor>{stateMarker} </Text>
+                  <Text color={selected ? selectionColors.accent : selectionColors.disabled}>
+                    {selected ? '› ' : '  '}
+                  </Text>
+                  <Text color={item.active ? selectionColors.accent : selectionColors.disabled}>
+                    {stateMarker}{' '}
+                  </Text>
                   <Text color={itemColor} bold={selected}>
                     {titleText}
                   </Text>
-                  <Text dimColor> ({idText})</Text>
+                  <Text
+                    color={selected
+                      ? selectionColors.selectedDescription
+                      : selectionColors.description}
+                  >
+                    {' '}({idText})
+                  </Text>
                 </Box>
                 {(item.description || detailText) ? (
                   <Box paddingLeft={4}>
-                    <Text dimColor>
+                    <Text
+                      color={selected
+                        ? selectionColors.selectedDescription
+                        : selectionColors.description}
+                    >
                       {truncate(item.description ?? detailText, descriptionMaxWidth)}
                       {item.description && detailText ? ` - ${detailText}` : ''}
                     </Text>
@@ -204,7 +229,9 @@ export const ResourcePicker: React.FC<ResourcePickerProps> = ({
       </Box>
 
       <Box marginTop={1}>
-        <Text dimColor>Up/Down Navigate - Enter Select - Esc Cancel - * active, + enabled</Text>
+        <Text color={selectionColors.disabled}>
+          Up/Down Navigate - Enter Select - Esc Cancel - * active, + enabled
+        </Text>
       </Box>
     </Box>
   );

@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Box, Text } from 'ink';
-import { inkColors } from '../theme.js';
+import { inkColors, selectionColors } from '../theme.js';
 
 // Configuration types
 export type ConfigType = 'datasources' | 'models' | 'skills' | 'mcp' | 'kb';
@@ -154,7 +154,7 @@ export const ConfigView: React.FC<ConfigViewProps> = ({
             <Box key={tabKey} marginRight={1}>
               <Text
                 bold={isActive}
-                color={isActive ? 'cyan' : 'gray'}
+                color={isActive ? selectionColors.accent : selectionColors.description}
                 underline={isActive}
               >
                 [{TAB_NAMES[tabKey]}]
@@ -183,7 +183,7 @@ export const ConfigView: React.FC<ConfigViewProps> = ({
                 {/* Config item header */}
                 <Box>
                   {/* Active indicator */}
-                  <Text color={item.active ? 'yellow' : 'gray'}>
+                  <Text color={item.active ? selectionColors.accent : selectionColors.disabled}>
                     {item.active ? '● ' : '○ '}
                   </Text>
 
@@ -193,7 +193,7 @@ export const ConfigView: React.FC<ConfigViewProps> = ({
                   </Text>
 
                   {/* Name */}
-                  <Text bold color={item.active ? 'white' : 'gray'}>
+                  <Text bold color={item.active ? selectionColors.selectedTitle : selectionColors.title}>
                     {item.name}
                   </Text>
 

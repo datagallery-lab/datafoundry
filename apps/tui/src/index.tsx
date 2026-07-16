@@ -10,6 +10,7 @@ import { store } from "./state/store.js";
 import { installTerminalRedrawOptimizer } from "./terminal-redraw-optimizer.js";
 import { withAlternateScreen } from "./terminal-screen.js";
 import { App } from "./ui/App.js";
+import { themeManager } from "./ui/themes/theme-manager.js";
 
 const args = process.argv.slice(2);
 const STARTUP_PREFLIGHT_TIMEOUT_MS = 1200;
@@ -28,6 +29,8 @@ Options:
                           (default: backend run-defaults; demo: api-duckdb-demo)
   --agent <name>          Agent name
                           (default: dataFoundry)
+  --theme <name>          TUI color theme
+                          (mist-dark or legacy-dark; env: DATAFOUNDRY_TUI_THEME)
   --resume [sessionId]    Resume the latest server session, or a specific session
   --demo                  Show mock messages and use a local mock stream
   --help, -h              Show this help message
@@ -36,6 +39,7 @@ Examples:
   datafoundry-tui
   datafoundry-tui --runtime-url http://localhost:8787/api/copilotkit
   datafoundry-tui --datasource-id my-database
+  datafoundry-tui --theme mist-dark
   datafoundry-tui --resume
   datafoundry-tui --resume thread-001
   datafoundry-tui --demo
@@ -58,6 +62,13 @@ function getOptionalArg(name: string): string | undefined {
   }
   const next = args[index + 1];
   return next && !next.startsWith("-") ? next : undefined;
+}
+
+const requestedTheme = getOptionalArg("--theme") ?? process.env.DATAFOUNDRY_TUI_THEME;
+if (requestedTheme && !themeManager.setActiveTheme(requestedTheme)) {
+  const availableThemes = themeManager.getAvailableThemes().map((theme) => theme.name).join(", ");
+  console.error(`Unknown TUI theme "${requestedTheme}". Available themes: ${availableThemes}.`);
+  process.exit(1);
 }
 
 function resolveResumeRequest(): { enabled: boolean; sessionId?: string | undefined } | undefined {

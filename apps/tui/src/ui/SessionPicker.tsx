@@ -3,7 +3,7 @@ import { Box, Text, useInput } from 'ink';
 import type { SessionListItem } from '../config/index.js';
 import { isMouseInput } from '../input/mouse-wheel.js';
 import { textWidth, truncateToWidth } from './text-width.js';
-import { inkColors } from './theme.js';
+import { inkColors, selectionColors } from './theme.js';
 
 interface SessionPickerProps {
   sessions: SessionListItem[];
@@ -154,17 +154,18 @@ export const SessionPicker: React.FC<SessionPickerProps> = ({
       <Box
         flexDirection="column"
         borderStyle="single"
-        borderColor={inkColors.accent}
+        borderColor={selectionColors.border}
+        backgroundColor={selectionColors.background}
         width={panelWidth}
         height={panelHeight}
         overflow="hidden"
       >
         <Box paddingX={1}>
-          <Text bold color={inkColors.accent} wrap="truncate-end">
+          <Text bold color={selectionColors.heading} wrap="truncate-end">
             {titleText}
           </Text>
           {matchText ? (
-            <Text dimColor wrap="truncate-end">
+            <Text color={selectionColors.description} wrap="truncate-end">
               {truncate(matchText, Math.max(1, contentWidth - textWidth(titleText)))}
             </Text>
           ) : null}
@@ -173,24 +174,26 @@ export const SessionPicker: React.FC<SessionPickerProps> = ({
         <Box paddingX={1}>
           {query ? (
             <>
-              <Text dimColor>Search: </Text>
-              <Text wrap="truncate-end">{truncate(query, queryWidth)}</Text>
+              <Text color={selectionColors.description}>Search: </Text>
+              <Text color={selectionColors.title} wrap="truncate-end">
+                {truncate(query, queryWidth)}
+              </Text>
             </>
           ) : (
-            <Text dimColor wrap="truncate-end">
+            <Text color={selectionColors.disabled} wrap="truncate-end">
               {truncate('Type to search', contentWidth)}
             </Text>
           )}
         </Box>
 
         <Box>
-          <Text color="gray">{'-'.repeat(separatorWidth)}</Text>
+          <Text color={selectionColors.border}>{'-'.repeat(separatorWidth)}</Text>
         </Box>
 
         <Box flexDirection="column" flexGrow={1} paddingX={1} overflow="hidden">
           {loading ? (
             <Box paddingY={1}>
-              <Text dimColor wrap="truncate-end">
+              <Text color={selectionColors.description} wrap="truncate-end">
                 {truncate('Loading recent sessions...', contentWidth)}
               </Text>
             </Box>
@@ -202,13 +205,13 @@ export const SessionPicker: React.FC<SessionPickerProps> = ({
             </Box>
           ) : sessions.length === 0 ? (
             <Box paddingY={1}>
-              <Text dimColor wrap="truncate-end">
+              <Text color={selectionColors.disabled} wrap="truncate-end">
                 {truncate('No server sessions found.', contentWidth)}
               </Text>
             </Box>
           ) : filteredSessions.length === 0 ? (
             <Box paddingY={1}>
-              <Text dimColor wrap="truncate-end">
+              <Text color={selectionColors.disabled} wrap="truncate-end">
                 {truncate(`No sessions match "${query}".`, contentWidth)}
               </Text>
             </Box>
@@ -219,7 +222,7 @@ export const SessionPicker: React.FC<SessionPickerProps> = ({
               const isFirst = index === 0;
               const isLast = index === visibleSessions.length - 1;
               const prefix = selected
-                ? '> '
+                ? '› '
                 : isFirst && showScrollUp
                   ? '^ '
                   : isLast && showScrollDown
@@ -238,17 +241,29 @@ export const SessionPicker: React.FC<SessionPickerProps> = ({
                   key={session.threadId}
                   flexDirection="column"
                   marginBottom={isLast ? 0 : 1}
+                  backgroundColor={selected
+                    ? selectionColors.selectedBackground
+                    : selectionColors.background}
                 >
                   <Box>
-                    <Text color={selected ? inkColors.accent : inkColors.text} bold={selected}>
+                    <Text color={selected ? selectionColors.accent : selectionColors.disabled}>
                       {prefix}
                     </Text>
-                    <Text color={selected ? inkColors.accent : inkColors.text} bold={selected} wrap="truncate-end">
+                    <Text
+                      color={selected ? selectionColors.selectedTitle : selectionColors.title}
+                      bold={selected}
+                      wrap="truncate-end"
+                    >
                       {title}
                     </Text>
                   </Box>
                   <Box paddingLeft={2}>
-                    <Text dimColor wrap="truncate-end">
+                    <Text
+                      color={selected
+                        ? selectionColors.selectedDescription
+                        : selectionColors.description}
+                      wrap="truncate-end"
+                    >
                       {metadata}
                     </Text>
                   </Box>
@@ -259,11 +274,11 @@ export const SessionPicker: React.FC<SessionPickerProps> = ({
         </Box>
 
         <Box>
-          <Text color="gray">{'-'.repeat(separatorWidth)}</Text>
+          <Text color={selectionColors.border}>{'-'.repeat(separatorWidth)}</Text>
         </Box>
 
         <Box paddingX={1}>
-          <Text dimColor wrap="truncate-end">
+          <Text color={selectionColors.disabled} wrap="truncate-end">
             {truncate('Up/Down/j/k navigate - Enter resume - Esc cancel', contentWidth)}
           </Text>
         </Box>
