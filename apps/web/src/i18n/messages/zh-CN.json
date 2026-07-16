@@ -157,7 +157,17 @@
     "deleteQueued": "删除排队消息",
     "saveQueued": "保存",
     "cancelQueued": "取消",
-    "dropFiles": "将文件拖放到此处上传"
+    "dropFiles": "将文件拖放到此处上传",
+    "sessionBusyTitle": "会话正在其他端运行",
+    "sessionBusyBody": "同一对话同时只能有一个进行中的任务。你可以排队等待、中断对方任务后发送，或取消本次发送。",
+    "sessionBusyPreview": "对方正在处理：{{preview}}",
+    "sessionBusyWait": "排队等待",
+    "sessionBusyWaiting": "已加入队列…",
+    "sessionBusyInterrupt": "中断并发送",
+    "sessionBusyInterrupting": "正在中断…",
+    "sessionBusyDismiss": "取消发送",
+    "sessionRemoteBusyBanner": "此对话正在其他端运行中，发送新消息前会提示你选择处理方式。",
+    "localQueuedNotice": "当前任务未完成，消息已加入发送队列。"
   },
   "sessionConfig": {
     "agentToolsSettings": "Agent 工具会话设置",

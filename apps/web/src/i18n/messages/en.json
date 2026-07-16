@@ -157,7 +157,17 @@
     "deleteQueued": "Delete queued prompt",
     "saveQueued": "Save",
     "cancelQueued": "Cancel",
-    "dropFiles": "Drop files here to upload"
+    "dropFiles": "Drop files here to upload",
+    "sessionBusyTitle": "This chat is busy on another device",
+    "sessionBusyBody": "Only one active run is allowed per chat. You can wait in queue, interrupt the other run and send, or cancel.",
+    "sessionBusyPreview": "Other device is working on: {{preview}}",
+    "sessionBusyWait": "Wait in queue",
+    "sessionBusyWaiting": "Queued…",
+    "sessionBusyInterrupt": "Interrupt and send",
+    "sessionBusyInterrupting": "Interrupting…",
+    "sessionBusyDismiss": "Cancel send",
+    "sessionRemoteBusyBanner": "This chat is running on another device. You will be asked how to proceed before sending.",
+    "localQueuedNotice": "A run is still in progress, so your message was added to the send queue."
   },
   "sessionConfig": {
     "agentToolsSettings": "Agent Tools session settings",

@@ -21,8 +21,22 @@ const agentState = {
 };
 
 const restoreGate = {
-  isRestoringConversation: false,
-  setIsRestoringConversation: vi.fn(),
+  restoringThreadIds: new Set<string>(),
+  restoredThreadIds: new Set<string>(),
+  isThreadRestoring: (threadId: string | null | undefined) =>
+    Boolean(threadId && restoreGate.restoringThreadIds.has(threadId)),
+  isThreadRestored: (threadId: string | null | undefined) =>
+    Boolean(threadId && restoreGate.restoredThreadIds.has(threadId)),
+  setThreadRestoring: vi.fn((threadId: string, restoring: boolean) => {
+    if (restoring) {
+      restoreGate.restoringThreadIds.add(threadId);
+    } else {
+      restoreGate.restoringThreadIds.delete(threadId);
+    }
+  }),
+  markThreadRestored: vi.fn((threadId: string) => {
+    restoreGate.restoredThreadIds.add(threadId);
+  }),
 };
 
 vi.mock("@copilotkit/react-core/v2", () => ({
@@ -75,7 +89,8 @@ describe("SessionConversationScrollRestore branch switch regression", () => {
     document.body.innerHTML = "";
     agentState.messages = [{ id: "m1", role: "user" }];
     agentState.threadId = "thread-a";
-    restoreGate.isRestoringConversation = false;
+    restoreGate.restoringThreadIds.clear();
+    restoreGate.restoredThreadIds.clear();
     setConversationScrollIntent({ kind: "bottom" });
     host = document.createElement("div");
     document.body.appendChild(host);
@@ -98,7 +113,7 @@ describe("SessionConversationScrollRestore branch switch regression", () => {
 
     setConversationScrollIntent({ kind: "preserve", scrollTop: 240 });
     agentState.threadId = "thread-b";
-    restoreGate.isRestoringConversation = true;
+    restoreGate.restoringThreadIds.add("thread-b");
 
     await act(async () => {
       root!.render(createElement(SessionConversationScrollRestore, { agentId: "dataFoundry" }));
@@ -107,7 +122,7 @@ describe("SessionConversationScrollRestore branch switch regression", () => {
     // Still restoring: must not jump yet.
     expect(scroll.scrollTop).toBe(240);
 
-    restoreGate.isRestoringConversation = false;
+    restoreGate.restoringThreadIds.clear();
     agentState.messages = [
       { id: "m1", role: "user" },
       { id: "m2", role: "assistant" },
@@ -129,13 +144,13 @@ describe("SessionConversationScrollRestore branch switch regression", () => {
     const scroll = mountScrollFixture(80);
     setConversationScrollIntent({ kind: "bottom" });
     agentState.threadId = "thread-c";
-    restoreGate.isRestoringConversation = true;
+    restoreGate.restoringThreadIds.add("thread-c");
 
     await act(async () => {
       root!.render(createElement(SessionConversationScrollRestore, { agentId: "dataFoundry" }));
     });
 
-    restoreGate.isRestoringConversation = false;
+    restoreGate.restoringThreadIds.clear();
     await act(async () => {
       root!.render(createElement(SessionConversationScrollRestore, { agentId: "dataFoundry" }));
     });

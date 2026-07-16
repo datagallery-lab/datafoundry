@@ -48,7 +48,12 @@ export function AuthFlow({
     setMessage(null);
   }, []);
 
-  const goToLogin = useCallback(() => router.push("/login"), [router]);
+  // Forgot/reset/verify are in-page sub-modes of /login or /register. Pushing
+  // `/login` alone is a no-op when already on that route, so also reset mode.
+  const goToLogin = useCallback(() => {
+    goToSubMode("login");
+    router.push("/login");
+  }, [goToSubMode, router]);
   const goToRegister = useCallback(() => router.push("/register"), [router]);
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {

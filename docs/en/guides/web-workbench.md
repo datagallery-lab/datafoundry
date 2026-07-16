@@ -204,6 +204,7 @@ The Web workbench restores history through server session APIs:
 | --- | --- |
 | `GET /api/v1/sessions` | Read the left session list. |
 | `PATCH /api/v1/sessions/:id` | Update session title. |
+| `DELETE /api/v1/sessions/:id` | Permanently delete a session (including history and child branches); the sidebar delete action calls this. |
 | `GET /api/v1/sessions/:id/conversation` | Restore conversation, tool calls, pending interactions, and run events. |
 | `GET /api/v1/artifacts?sessionId=:id` | Restore outputs for that session. |
 

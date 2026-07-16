@@ -204,6 +204,7 @@ Web 工作台使用服务端会话接口恢复历史：
 | --- | --- |
 | `GET /api/v1/sessions` | 读取左侧会话列表。 |
 | `PATCH /api/v1/sessions/:id` | 更新会话标题。 |
+| `DELETE /api/v1/sessions/:id` | 永久删除会话（含对话历史与子分支）；侧栏删除会调用此接口。 |
 | `GET /api/v1/sessions/:id/conversation` | 恢复对话、工具调用、pending interaction 和 run events。 |
 | `GET /api/v1/artifacts?sessionId=:id` | 恢复该会话的产出。 |
 

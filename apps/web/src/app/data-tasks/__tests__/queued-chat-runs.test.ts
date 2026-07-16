@@ -5,7 +5,11 @@ import {
   createQueuedChatPrompt,
   deleteQueuedChatPrompt,
   editQueuedChatPrompt,
+  isForeignSessionActiveRun,
+  loadQueuedChatPrompts,
   markQueuedChatPromptInterrupting,
+  parseAlreadyActiveRunId,
+  persistQueuedChatPrompts,
   queuedPromptToRunInput,
   resolveQueuedSubmitMode,
   shouldShowRunningStopControl,
@@ -33,6 +37,7 @@ const forwardedProps = (datasourceId: string): RunForwardedProps => ({
     fileIds: [],
     pinnedPaths: [],
     evidenceRefs: [],
+    activeSkillId: "",
   },
 });
 
@@ -209,5 +214,66 @@ describe("queued chat runs", () => {
     expect(runInput.forwardedProps).toEqual(savedProps);
     expect(runInput.forwardedProps).not.toEqual(latestProps);
     expect(runInput.text).toBe("use saved context");
+  });
+
+  it("detects foreign active runs for multi-device session locks", () => {
+    const activeRun = {
+      sessionId: "thread-1",
+      activeRunId: "run-other",
+      status: "running" as const,
+      startedAt: "2026-07-15T00:00:00.000Z",
+      userInputPreview: "hello",
+    };
+    expect(isForeignSessionActiveRun(activeRun, null)).toBe(true);
+    expect(isForeignSessionActiveRun(activeRun, "run-local")).toBe(true);
+    expect(isForeignSessionActiveRun(activeRun, "run-other")).toBe(false);
+    expect(isForeignSessionActiveRun(activeRun, null, true)).toBe(false);
+    expect(isForeignSessionActiveRun(null, null)).toBe(false);
+  });
+
+  it("parses RUN_ALREADY_ACTIVE run ids for unlock retries", () => {
+    expect(parseAlreadyActiveRunId("RUN_ALREADY_ACTIVE:run-abc")).toBe("run-abc");
+    expect(parseAlreadyActiveRunId("RUN_ALREADY_ACTIVE run-abc")).toBe("run-abc");
+    expect(parseAlreadyActiveRunId("Error: RUN_ALREADY_ACTIVE:run-xyz")).toBe("run-xyz");
+    expect(parseAlreadyActiveRunId("something else")).toBeNull();
+  });
+
+  it("persists queued prompts across refresh for a thread", () => {
+    const memory = new Map<string, string>();
+    const storage = {
+      getItem: (key: string) => memory.get(key) ?? null,
+      setItem: (key: string, value: string) => {
+        memory.set(key, value);
+      },
+      removeItem: (key: string) => {
+        memory.delete(key);
+      },
+    };
+    Object.defineProperty(globalThis, "window", {
+      configurable: true,
+      value: { sessionStorage: storage },
+    });
+    Object.defineProperty(globalThis, "sessionStorage", {
+      configurable: true,
+      value: storage,
+    });
+
+    const prompt = createQueuedChatPrompt({
+      id: "queued-1",
+      text: "persist me",
+      attachments: [attachment("att-1")],
+      forwardedProps: forwardedProps("db-1"),
+      createdAt: 42,
+    });
+    persistQueuedChatPrompts("thread-1", [prompt]);
+    expect(loadQueuedChatPrompts("thread-1")).toEqual([
+      expect.objectContaining({
+        id: "queued-1",
+        text: "persist me",
+        status: "queued",
+      }),
+    ]);
+    persistQueuedChatPrompts("thread-1", []);
+    expect(loadQueuedChatPrompts("thread-1")).toEqual([]);
   });
 });

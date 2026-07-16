@@ -58,6 +58,7 @@ export type {
   QueryHistoryListResponseDto,
   RunCancelDto,
   RunDefaultsDto,
+  SessionActiveRunDto,
   SessionConversationDto,
   SessionListItemDto,
   SessionListResponseDto,

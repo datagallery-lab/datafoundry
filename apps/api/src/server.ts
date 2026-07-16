@@ -40,6 +40,7 @@ import { Observable } from "rxjs";
 import { handleConfigApiRequest } from "./config-api.js";
 import { createAsyncMemoByKey, createStartupTimer } from "./async-memo.js";
 import { ensureBuiltinDtcGrowthDatasource } from "./builtin-dtc-growth-datasource.js";
+import { reclaimOrphanedQueuedAndRunningRuns } from "./stale-active-runs.js";
 import { loadPasswordAuthConfig, type PasswordAuthConfig } from "./auth/config.js";
 import { AuthService, type AuthIdentity } from "./auth/service.js";
 import { serverDefaultConnectionStatus, isServerLlmEnvConfigured } from "./model-profile-connection-status.js";
@@ -219,6 +220,17 @@ export const createServer = async (options: CreateServerOptions = {}): Promise<S
       ensureBuiltinConfigResourcesOnce(fileAssetService, metadataStore, DEV_USER.id, DEFAULT_WORKSPACE_ID),
     ),
   ]);
+
+  // After restart, cancel-registry is empty — reclaim queued/running rows left by dead workers.
+  const reclaimedActiveRuns = await timer.measure("stale_active_run_reclaim", () =>
+    reclaimOrphanedQueuedAndRunningRuns({
+      metadataStore,
+      runCancelRegistry,
+    }),
+  );
+  if (reclaimedActiveRuns > 0) {
+    console.log(`[startup] stale active run reclaim: canceled=${reclaimedActiveRuns}`);
+  }
 
   startupTimings = timer.timings();
   startupTotalMs = timer.totalMs();
@@ -527,6 +539,7 @@ class DataFoundryAgUiAgent extends AbstractAgent {
           ...(interactionResume ? { interactionResume } : {}),
           metadataStore: this.input.metadataStore,
           modelName: modelProvider.model_name,
+          runCancelRegistry: this.input.runCancelRegistry,
           runEventWriter,
           runInput: normalizedRunInput,
           userId: this.input.user.id,
@@ -915,11 +928,10 @@ class DataFoundryAgUiAgent extends AbstractAgent {
               if (!isResume && !sessionTitleStarted) {
                 sessionTitleStarted = true;
                 startSessionTitleTask({
-                  emit: (titleEvent) => {
-                    if (!terminalStarted) {
-                      emit(titleEvent);
-                    }
-                  },
+                  // Title generation is async and may finish after the agent run
+                  // terminals; still forward the event while the stream is open
+                  // (finalizer continues emitting after RUN_FINISHED).
+                  emit,
                   metadataStore: this.input.metadataStore,
                   model: modelProvider.model,
                   modelTemperature: modelSettings?.temperature,

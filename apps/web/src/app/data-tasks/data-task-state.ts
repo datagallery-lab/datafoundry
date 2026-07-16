@@ -398,7 +398,12 @@ export function applyAutoTitle(
   const normalized = normalizeSessionTitle(title);
   if (!normalized) return sessions;
   return sessions.map((session) => {
-    if (session.id !== id || session.titleSource === "user") return session;
+    if (
+      (session.id !== id && session.threadId !== id) ||
+      session.titleSource === "user"
+    ) {
+      return session;
+    }
     return { ...session, title: normalized, titleSource: source };
   });
 }
@@ -422,6 +427,8 @@ function timestampFromIso(value: string | undefined, fallback: number): number {
 
 function normalizeTitleSource(value: string | undefined): ChatSessionTitleSource {
   if (value === "auto-snippet" || value === "llm" || value === "user") return value;
+  // Backend persists non-LLM auto titles as "fallback"; treat like a snippet.
+  if (value === "fallback") return "auto-snippet";
   return "default";
 }
 
@@ -711,6 +718,36 @@ export const DATA_SKILLS: DataSkill[] = [
     id: "data-analysis",
     name: "Data analysis",
     description: "Answer data questions from metric lookups to full reports",
+  },
+  {
+    id: "tabular-file-import",
+    name: "Tabular file import",
+    description: "Import CSV/Excel/JSON/Parquet files into the workspace",
+  },
+  {
+    id: "data-cleaning-for-load",
+    name: "Data cleaning for load",
+    description: "Clean and validate tabular data before analysis or load",
+  },
+  {
+    id: "batch-file-merge",
+    name: "Batch file merge",
+    description: "Merge multiple tabular files with mapping and dedup",
+  },
+  {
+    id: "etl-pipeline-patterns",
+    name: "ETL pipeline patterns",
+    description: "Design reliable staging, idempotent, and incremental loads",
+  },
+  {
+    id: "api-json-ingest",
+    name: "API / JSON ingest",
+    description: "Ingest API or JSON/JSONL payloads into tabular files",
+  },
+  {
+    id: "database-load-planning",
+    name: "Database load planning",
+    description: "Map files to tables and plan read-only-validated loads",
   },
 ];
 

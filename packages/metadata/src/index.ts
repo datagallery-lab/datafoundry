@@ -1270,6 +1270,165 @@ export class SessionRepository {
       .run(title, input.title_source, now, input.user_id, input.session_id);
     return result.changes === 1 ? this.get({ user_id: input.user_id, session_id: input.session_id }) : undefined;
   }
+
+  /**
+   * Permanently delete a session and its dependent rows (runs, conversation,
+   * artifacts, branches, etc.). Also cascades to descendant branch sessions.
+   * Idempotent: missing sessions are a no-op (returns deleted: false).
+   */
+  delete(input: { user_id: string; session_id: string }): { deleted: boolean; deletedSessionIds: string[] } {
+    const existing = mapSessionRow(
+      this.db.prepare("SELECT * FROM sessions WHERE user_id = ? AND id = ?").get(input.user_id, input.session_id)
+    );
+    if (!existing) {
+      return { deleted: false, deletedSessionIds: [] };
+    }
+
+    const sessionIds = collectDescendantSessionIds(this.db, input.user_id, input.session_id);
+    sessionIds.push(input.session_id);
+
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const placeholders = sessionIds.map(() => "?").join(", ");
+      const scope = [input.user_id, ...sessionIds];
+
+      this.db.prepare(`
+        DELETE FROM session_branches
+        WHERE user_id = ?
+          AND (
+            child_session_id IN (${placeholders})
+            OR parent_session_id IN (${placeholders})
+            OR root_session_id IN (${placeholders})
+          )
+      `).run(input.user_id, ...sessionIds, ...sessionIds, ...sessionIds);
+
+      this.db.prepare(`
+        DELETE FROM artifact_versions
+        WHERE user_id = ?
+          AND artifact_id IN (
+            SELECT id FROM artifacts WHERE user_id = ? AND session_id IN (${placeholders})
+          )
+      `).run(input.user_id, input.user_id, ...sessionIds);
+
+      this.db.prepare(`
+        DELETE FROM artifacts WHERE user_id = ? AND session_id IN (${placeholders})
+      `).run(...scope);
+
+      this.db.prepare(`
+        UPDATE checkpoints
+        SET parent_checkpoint_id = NULL
+        WHERE user_id = ? AND session_id IN (${placeholders})
+      `).run(...scope);
+
+      this.db.prepare(`
+        DELETE FROM checkpoints WHERE user_id = ? AND session_id IN (${placeholders})
+      `).run(...scope);
+
+      this.db.prepare(`
+        DELETE FROM trace_sections WHERE user_id = ? AND session_id IN (${placeholders})
+      `).run(...scope);
+
+      this.db.prepare(`
+        DELETE FROM context_package_snapshots WHERE user_id = ? AND session_id IN (${placeholders})
+      `).run(...scope);
+
+      this.db.prepare(`
+        DELETE FROM conversation_messages WHERE user_id = ? AND session_id IN (${placeholders})
+      `).run(...scope);
+
+      this.db.prepare(`
+        DELETE FROM conversation_summaries WHERE user_id = ? AND session_id IN (${placeholders})
+      `).run(...scope);
+
+      this.db.prepare(`
+        DELETE FROM interactions WHERE user_id = ? AND session_id IN (${placeholders})
+      `).run(...scope);
+
+      this.db.prepare(`
+        DELETE FROM query_history WHERE user_id = ? AND session_id IN (${placeholders})
+      `).run(...scope);
+
+      this.db.prepare(`
+        DELETE FROM long_term_memories WHERE user_id = ? AND session_id IN (${placeholders})
+      `).run(...scope);
+
+      this.db.prepare(`
+        DELETE FROM run_events WHERE user_id = ? AND session_id IN (${placeholders})
+      `).run(...scope);
+
+      const runIds = this.db.prepare(`
+        SELECT id FROM runs WHERE user_id = ? AND session_id IN (${placeholders})
+      `).all(...scope)
+        .map((row) => (isRecord(row) && typeof row.id === "string" ? row.id : null))
+        .filter((id): id is string => Boolean(id));
+
+      if (runIds.length > 0) {
+        const runPlaceholders = runIds.map(() => "?").join(", ");
+        this.db.prepare(`
+          DELETE FROM sql_audit_logs
+          WHERE user_id = ? AND run_id IN (${runPlaceholders})
+        `).run(input.user_id, ...runIds);
+        this.db.prepare(`
+          UPDATE runs
+          SET parent_run_id = NULL
+          WHERE user_id = ? AND parent_run_id IN (${runPlaceholders})
+        `).run(input.user_id, ...runIds);
+      }
+
+      this.db.prepare(`
+        UPDATE runs
+        SET parent_run_id = NULL
+        WHERE user_id = ? AND session_id IN (${placeholders})
+      `).run(...scope);
+
+      this.db.prepare(`
+        DELETE FROM runs WHERE user_id = ? AND session_id IN (${placeholders})
+      `).run(...scope);
+
+      this.db.prepare(`
+        DELETE FROM file_asset_refs WHERE user_id = ? AND session_id IN (${placeholders})
+      `).run(...scope);
+
+      this.db.prepare(`
+        DELETE FROM sessions WHERE user_id = ? AND id IN (${placeholders})
+      `).run(...scope);
+
+      this.db.exec("COMMIT");
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+
+    return { deleted: true, deletedSessionIds: sessionIds };
+  }
+}
+
+function collectDescendantSessionIds(db: DatabaseSync, userId: string, sessionId: string): string[] {
+  const ordered: string[] = [];
+  const seen = new Set<string>();
+  const stack = [sessionId];
+
+  while (stack.length > 0) {
+    const current = stack.pop() as string;
+    const children = db.prepare(`
+      SELECT child_session_id
+      FROM session_branches
+      WHERE user_id = ? AND parent_session_id = ?
+      ORDER BY created_at ASC, child_session_id ASC
+    `).all(userId, current);
+
+    for (const row of children) {
+      if (typeof row !== "object" || row === null) continue;
+      const childId = (row as { child_session_id?: unknown }).child_session_id;
+      if (typeof childId !== "string") continue;
+      if (seen.has(childId) || childId === sessionId) continue;
+      seen.add(childId);
+      stack.push(childId);
+      ordered.push(childId);
+    }
+  }
+
+  return ordered;
 }
 
 export class SessionBranchRepository {
@@ -1523,6 +1682,28 @@ export class RunRepository {
 
     sql += " ORDER BY started_at DESC LIMIT 1";
     return mapRunRow(this.db.prepare(sql).get(...params));
+  }
+
+  listByStatuses(input: { statuses: Array<RunRecord["status"]>; limit?: number }): RunRecord[] {
+    if (input.statuses.length === 0) {
+      return [];
+    }
+    const limit = Math.max(1, Math.min(input.limit ?? 500, 2000));
+    const placeholders = input.statuses.map(() => "?").join(", ");
+    const rows = this.db
+      .prepare(
+        `
+        SELECT *
+        FROM runs
+        WHERE status IN (${placeholders})
+        ORDER BY started_at DESC
+        LIMIT ?
+      `
+      )
+      .all(...input.statuses, limit);
+    return rows
+      .map((row) => mapRunRow(row))
+      .filter((run): run is RunRecord => run !== undefined);
   }
 
   get(input: { user_id: string; run_id: string }): RunRecord {

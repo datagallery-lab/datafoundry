@@ -28,7 +28,8 @@ export function SessionConversationScrollRestore({
   const chatConfig = useCopilotChatConfiguration();
   const threadId = chatConfig?.threadId;
   const { agent } = useAgent({ agentId });
-  const { isRestoringConversation } = useConversationRestoreGate();
+  const { isThreadRestoring } = useConversationRestoreGate();
+  const isRestoringConversation = isThreadRestoring(threadId);
   const prevRestoringRef = useRef(isRestoringConversation);
   const activeThreadRef = useRef<string | null>(null);
   const pendingScrollRef = useRef(false);

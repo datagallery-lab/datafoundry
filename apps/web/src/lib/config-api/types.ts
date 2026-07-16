@@ -570,6 +570,14 @@ export type PendingInteractionDto = {
   resumeSchema?: unknown;
 };
 
+export type SessionActiveRunDto = {
+  sessionId: string;
+  activeRunId: string;
+  status: "queued" | "running" | "suspended";
+  startedAt: string;
+  userInputPreview: string;
+};
+
 export type SessionConversationDto = {
   sessionId: string;
   title?: string;
@@ -584,6 +592,7 @@ export type SessionConversationDto = {
   toolCalls: ConversationToolCallDto[];
   pendingInteractions?: PendingInteractionDto[];
   restorableCustomEvents?: RestorableCustomEventDto[];
+  activeRun?: SessionActiveRunDto | null;
 };
 
 export type SessionListItemDto = {
@@ -594,6 +603,7 @@ export type SessionListItemDto = {
   createdAt?: string;
   updatedAt?: string;
   lastMessageAt?: string;
+  activeRun?: SessionActiveRunDto | null;
 };
 
 export type SessionListResponseDto = {

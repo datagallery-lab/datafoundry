@@ -41,6 +41,11 @@ export class RunCancelRegistry {
     return { canceled: true, runId: handle.runId, sessionId: handle.sessionId };
   }
 
+  /** True when this process still owns a live cancel handle for the run. */
+  has(input: { runId: string; userId: string }): boolean {
+    return this.handles.has(this.key(input.userId, input.runId));
+  }
+
   private key(userId: string, runId: string): string {
     return `${userId}:${runId}`;
   }

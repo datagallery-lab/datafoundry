@@ -1,4 +1,5 @@
 import { resolveSelectionFocus } from "../apps/api/dist/evidence-reference-context.js";
+import { extractEffectiveRunConfig } from "../apps/api/dist/run-input.js";
 
 const preview = {
   columns: ["a", "b", "c"],
@@ -18,6 +19,48 @@ const check = (name, condition) => {
     console.error(`  FAIL ${name}`);
   }
 };
+
+// 0) run_config intake must preserve source.selection (partial table cites).
+{
+  const selection = { mode: "cells", range: { r0: 0, c0: 1, r1: 1, c1: 2 } };
+  const config = extractEffectiveRunConfig({
+    threadId: "thread-1",
+    runId: "run-1",
+    messages: [],
+    tools: [],
+    context: [],
+    state: {},
+    forwardedProps: {
+      run_config: {
+        evidenceRefs: [
+          {
+            id: "artifact:a1:sel:cells:0,1,1,2",
+            kind: "table",
+            label: "SQL result.csv",
+            sessionId: "session-1",
+            runId: "run-1",
+            source: {
+              artifactId: "a1",
+              fileId: "file-1",
+              selection,
+            },
+          },
+        ],
+      },
+    },
+  });
+  const parsed = config.evidenceRefs[0]?.source.selection;
+  check("run-input: keeps selection.mode", parsed?.mode === "cells");
+  check(
+    "run-input: keeps selection.range",
+    parsed?.mode !== "text"
+      && parsed?.range?.r0 === 0
+      && parsed?.range?.c0 === 1
+      && parsed?.range?.r1 === 1
+      && parsed?.range?.c1 === 2,
+  );
+  check("run-input: keeps fileId alongside selection", config.evidenceRefs[0]?.source.fileId === "file-1");
+}
 
 // 1) cell range slices only the selected sub-table and replaces the full preview.
 {

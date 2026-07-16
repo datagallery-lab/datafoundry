@@ -3,7 +3,9 @@ import { createCustomEvent } from "@datafoundry/agent-runtime";
 import type { MetadataStore, SessionRecord } from "@datafoundry/metadata";
 import type { BaseEvent } from "@ag-ui/client";
 
-const TITLE_TIMEOUT_MS = 5000;
+/** Reasoning models (e.g. deepseek-v4-pro) spend output budget on thinking first. */
+const TITLE_TIMEOUT_MS = 15_000;
+const TITLE_MAX_OUTPUT_TOKENS = 256;
 const TITLE_MAX_CHARS = 32;
 
 export type SessionTitleTaskInput = {
@@ -26,17 +28,18 @@ const generateAndPersistSessionTitle = async (input: SessionTitleTaskInput): Pro
     user_id: input.userId,
     session_id: input.sessionId
   });
-  if (current.title_source === "user" || (current.title && current.title.trim().length > 0)) {
+  // Only skip manual renames / already-finalized LLM titles. Empty or fallback
+  // titles (and legacy rows with a prefilled title but no source) may still be replaced.
+  if (current.title_source === "user" || current.title_source === "llm") {
     return;
   }
 
   const title = await generateLlmTitle(input).catch(() => fallbackTitle(input.userInput));
-  const source: SessionRecord["title_source"] = title.source;
   const updated = input.metadataStore.sessions.updateAutoTitleIfAllowed({
     user_id: input.userId,
     session_id: input.sessionId,
     title: title.title,
-    title_source: source === "llm" ? "llm" : "fallback"
+    title_source: title.source === "llm" ? "llm" : "fallback"
   });
   if (!updated) {
     return;
@@ -61,7 +64,7 @@ const generateLlmTitle = async (
     defaultOptions: {
       maxSteps: 1,
       modelSettings: {
-        maxOutputTokens: 32,
+        maxOutputTokens: TITLE_MAX_OUTPUT_TOKENS,
         temperature: input.modelTemperature ?? 0.2
       },
       providerOptions: {
@@ -74,7 +77,11 @@ const generateLlmTitle = async (
   const output = await agent.generate(buildTitlePrompt(input.userInput), {
     abortSignal: AbortSignal.timeout(TITLE_TIMEOUT_MS)
   });
-  const title = sanitizeTitle(output.text) || fallbackTitle(input.userInput).title;
+  const title = sanitizeTitle(output.text);
+  if (!title) {
+    // Empty text usually means the output budget was spent on reasoning tokens.
+    throw new Error("SESSION_TITLE_EMPTY");
+  }
   return { source: "llm", title };
 };
 

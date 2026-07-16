@@ -355,6 +355,13 @@ export const configApi = {
     });
   },
 
+  deleteSession(sessionId: string): Promise<{ sessionId: string; deleted: boolean; deletedSessionIds: string[] }> {
+    return requestEnvelope<{ sessionId: string; deleted: boolean; deletedSessionIds: string[] }>(
+      `/api/v1/sessions/${encodeURIComponent(sessionId)}`,
+      { method: "DELETE" },
+    );
+  },
+
   listDatasourceTypes(): Promise<DatasourceTypeDto[]> {
     return requestEnvelope<DatasourceTypeDto[]>("/api/v1/datasource-types");
   },

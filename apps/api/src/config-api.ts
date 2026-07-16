@@ -84,6 +84,7 @@ import {
 import { buildSessionTraceDag } from "./trace-dag.js";
 import { readMultipartFiles, readMultipartUpload } from "./upload-parser.js";
 import { knowledgeDocumentTextFromFile } from "./knowledge-document-text.js";
+import { resolveLiveSessionActiveRun } from "./stale-active-runs.js";
 
 const MAX_JSON_BODY_BYTES = 1024 * 1024;
 const DEFAULT_WORKSPACE_ID = "default";
@@ -445,7 +446,17 @@ const handleSessionRequest = async (
       ...(cursor ? { cursor } : {})
     });
     return ok({
-      sessions: records.map(sessionListDto),
+      sessions: records.map((session) =>
+        sessionListDto(
+          session,
+          resolveLiveSessionActiveRun({
+            metadataStore: context.metadataStore,
+            runCancelRegistry: context.runCancelRegistry,
+            userId: context.userId,
+            sessionId: session.id
+          })
+        )
+      ),
       ...(records.length === limit ? { nextCursor: encodeSessionCursor(records.at(-1) as SessionRecord) } : {})
     });
   }
@@ -465,6 +476,20 @@ const handleSessionRequest = async (
       title_source: "user"
     });
     return ok(sessionTitleDto(session));
+  }
+  if (!action && request.method === "DELETE") {
+    const result = context.metadataStore.sessions.delete({
+      user_id: context.userId,
+      session_id: sessionId
+    });
+    if (!result.deleted) {
+      throw new Error(`Session not found: ${sessionId}`);
+    }
+    return ok({
+      sessionId,
+      deleted: true,
+      deletedSessionIds: result.deletedSessionIds
+    });
   }
   if (action === "branches" && request.method === "POST") {
     const body = await readJsonBody(request);
@@ -594,6 +619,13 @@ const handleSessionRequest = async (
     authoritativeToolNames
   );
 
+  const activeRun = resolveLiveSessionActiveRun({
+    metadataStore: context.metadataStore,
+    runCancelRegistry: context.runCancelRegistry,
+    userId: context.userId,
+    sessionId
+  });
+
   return ok({
     sessionId,
     title: session.title ?? "",
@@ -609,7 +641,8 @@ const handleSessionRequest = async (
     pendingInteractions: pendingInteractions.map(pendingInteractionDto),
     restorableCustomEvents: runEventGroups.flatMap(({ runId, events }) =>
       restorableCustomEventDtos(runId, events)
-    )
+    ),
+    ...(activeRun ? { activeRun: sessionActiveRunDto(activeRun) } : {})
   });
 };
 
@@ -2383,21 +2416,45 @@ const conversationMessageEvidenceRefsDto = (message: ConversationMessageRecord):
   return refs.length > 0 ? { evidenceRefs: refs } : {};
 };
 
-const sessionListDto = (session: SessionRecord): Record<string, unknown> => ({
+const truncateUserInputPreview = (value: string, maxLength = 120): string => {
+  const normalized = value.replace(/\s+/g, " ").trim();
+  if (normalized.length <= maxLength) {
+    return normalized;
+  }
+  return `${normalized.slice(0, Math.max(0, maxLength - 1))}…`;
+};
+
+const sessionActiveRunDto = (run: RunRecord): Record<string, unknown> => ({
+  sessionId: run.session_id,
+  activeRunId: run.id,
+  status: run.status,
+  startedAt: run.started_at,
+  userInputPreview: truncateUserInputPreview(run.user_input)
+});
+
+const sessionListDto = (
+  session: SessionRecord,
+  activeRun?: RunRecord | null
+): Record<string, unknown> => ({
   id: session.id,
   threadId: session.id,
   title: session.title ?? "",
   titleSource: session.title_source ?? "fallback",
   createdAt: session.created_at,
   updatedAt: session.updated_at,
-  lastMessageAt: session.last_message_at ?? session.updated_at
+  lastMessageAt: session.last_message_at ?? session.updated_at,
+  ...(activeRun ? { activeRun: sessionActiveRunDto(activeRun) } : {})
 });
 
 const sessionBranchCreatedDto = (
   input: { branch: SessionBranchRecord; session: SessionRecord }
 ): Record<string, unknown> => ({
   ...sessionBranchDto(input.branch, input.session),
-  session: sessionListDto(input.session)
+  session: sessionListDto(
+    input.session,
+    // Branch create does not need active-run lookup; omit to keep response light.
+    null
+  )
 });
 
 const sessionBranchDto = (

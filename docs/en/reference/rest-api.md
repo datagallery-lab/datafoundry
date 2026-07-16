@@ -112,6 +112,7 @@ curl http://127.0.0.1:8787/api/v1/capabilities
 | --- | --- | --- |
 | GET | `/api/v1/sessions` | List server sessions. Supports `limit`, `cursor`. |
 | PATCH | `/api/v1/sessions/:sessionId` | Update session title. |
+| DELETE | `/api/v1/sessions/:sessionId` | Permanently delete a session and its conversation, runs, artifacts, and child branches. |
 | GET | `/api/v1/sessions/:sessionId/conversation` | Read authoritative server conversation history. Supports `limit`. |
 | GET | `/api/v1/sessions/:sessionId/checkpoints` | List persisted context checkpoints. Supports `limit`. |
 | GET | `/api/v1/sessions/:sessionId/trace-dag` | Read the semantic run/step/tool/output graph. Supports `limit`. |

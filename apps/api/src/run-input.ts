@@ -1,5 +1,5 @@
 import type { RunAgentInput } from "@ag-ui/client";
-import type { EvidenceKind, EvidenceRef } from "@datafoundry/contracts";
+import type { EvidenceKind, EvidenceRef, EvidenceSelection } from "@datafoundry/contracts";
 import type { ConfigResourceKind, MetadataStore } from "@datafoundry/metadata";
 import type { SkillMode, SkillPolicyConfig } from "@datafoundry/skills";
 
@@ -546,6 +546,7 @@ const evidenceRefFromUnknown = (value: unknown): EvidenceRef | undefined => {
 
 const evidenceRefSourceFromUnknown = (value: unknown): EvidenceRef["source"] => {
   const source = isRecord(value) ? value : {};
+  const selection = evidenceSelectionFromUnknown(source.selection);
   return {
     ...optionalStringField(source, "artifactId", "artifact_id"),
     ...optionalStringField(source, "toolCallId", "tool_call_id"),
@@ -555,9 +556,53 @@ const evidenceRefSourceFromUnknown = (value: unknown): EvidenceRef["source"] => 
     ...optionalStringField(source, "datasourceId", "datasource_id"),
     ...optionalStringField(source, "tableName", "table_name"),
     ...optionalStringField(source, "documentId", "document_id"),
-    ...optionalStringField(source, "chunkId", "chunk_id")
+    ...optionalStringField(source, "chunkId", "chunk_id"),
+    ...(selection ? { selection } : {})
   };
 };
+
+/** Parses fine-grained table/text selections so partial cites survive run_config intake. */
+const evidenceSelectionFromUnknown = (value: unknown): EvidenceSelection | undefined => {
+  if (!isRecord(value) || typeof value.mode !== "string") {
+    return undefined;
+  }
+  if (value.mode === "text") {
+    const quote = typeof value.quote === "string" ? value.quote.trim() : "";
+    if (!quote) return undefined;
+    const offset = typeof value.offset === "number" && Number.isFinite(value.offset)
+      ? Math.trunc(value.offset)
+      : undefined;
+    return offset === undefined ? { mode: "text", quote } : { mode: "text", quote, offset };
+  }
+  if (value.mode !== "cells" && value.mode !== "rows" && value.mode !== "cols") {
+    return undefined;
+  }
+  const range = evidenceCellRangeFromUnknown(value.range);
+  if (!range) return undefined;
+  const columns = Array.isArray(value.columns)
+    ? value.columns.filter((column): column is string => typeof column === "string" && column.length > 0)
+    : undefined;
+  return columns && columns.length > 0
+    ? { mode: value.mode, range, columns }
+    : { mode: value.mode, range };
+};
+
+const evidenceCellRangeFromUnknown = (
+  value: unknown
+): { r0: number; c0: number; r1: number; c1: number } | undefined => {
+  if (!isRecord(value)) return undefined;
+  const r0 = finiteIndex(value.r0);
+  const c0 = finiteIndex(value.c0);
+  const r1 = finiteIndex(value.r1);
+  const c1 = finiteIndex(value.c1);
+  if (r0 === undefined || c0 === undefined || r1 === undefined || c1 === undefined) {
+    return undefined;
+  }
+  return { r0, c0, r1, c1 };
+};
+
+const finiteIndex = (value: unknown): number | undefined =>
+  typeof value === "number" && Number.isFinite(value) ? Math.trunc(value) : undefined;
 
 const optionalStringField = (
   record: Record<string, unknown>,

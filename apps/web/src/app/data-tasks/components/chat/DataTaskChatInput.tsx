@@ -66,6 +66,8 @@ type DataTaskChatInputProps = CopilotChatInputProps & {
   onSendQueuedPromptNow?: (id: string) => void;
   /** Client-side send/upload failure shown above the composer (never silent). */
   submitError?: string | null;
+  /** Session lock / remote-busy prompt rendered above the composer. */
+  sessionLockSlot?: ReactNode;
 };
 
 export function DataTaskChatInput({
@@ -96,6 +98,7 @@ export function DataTaskChatInput({
   onDeleteQueuedPrompt,
   onSendQueuedPromptNow,
   submitError = null,
+  sessionLockSlot = null,
   textArea,
   onChange,
   ...props
@@ -161,6 +164,7 @@ export function DataTaskChatInput({
           onDeleteQueuedPrompt={onDeleteQueuedPrompt}
           onSendQueuedPromptNow={onSendQueuedPromptNow}
           submitError={submitError}
+          sessionLockSlot={sessionLockSlot}
         />
       )}
     </CopilotChatInput>
@@ -208,6 +212,7 @@ function DataTaskChatInputLayout({
   onDeleteQueuedPrompt,
   onSendQueuedPromptNow,
   submitError = null,
+  sessionLockSlot = null,
 }: {
   textArea: ReactNode;
   sendButton: ReactNode;
@@ -250,6 +255,7 @@ function DataTaskChatInputLayout({
   onDeleteQueuedPrompt?: (id: string) => void;
   onSendQueuedPromptNow?: (id: string) => void;
   submitError?: string | null;
+  sessionLockSlot?: ReactNode;
 }) {
   const t = useT();
   const { chatColumnWidth, draftPromptRequest, onDraftPromptConsumed } =
@@ -369,6 +375,7 @@ function DataTaskChatInputLayout({
           onDelete={onDeleteQueuedPrompt}
           onSendNow={onSendQueuedPromptNow}
         />
+        {sessionLockSlot}
         {submitError ? (
           <div
             role="alert"
