@@ -23,6 +23,7 @@ import {
   consoleCodeBlockBaseClass,
   consoleCodeInnerClass,
   consoleScrollXShellClass,
+  consoleTableShellClass,
 } from "./console-scroll-styles";
 import { ChartDetailView, FileDetailView } from "./TaskConsole";
 import { ArtifactMarkdownPreview } from "./ArtifactMarkdownPreview";
@@ -37,6 +38,7 @@ function useResolvedArtifactDetail(artifact: DataArtifact): {
   loading: boolean;
   error: string | null;
 } {
+  const t = useT();
   const exportReady = hasCapability("artifact.export");
   const [detail, setDetail] = useState<ArtifactDetail | undefined>(artifact.detail);
   const [loading, setLoading] = useState(false);
@@ -63,11 +65,13 @@ function useResolvedArtifactDetail(artifact: DataArtifact): {
           setDetail((current) => mergeArtifactDetail(current, loaded));
           return;
         }
-        setError("Preview data is empty or unsupported.");
+        setError(t("console.previewUnsupported"));
       })
       .catch((fetchError: unknown) => {
         if (cancelled) return;
-        setError(fetchError instanceof Error ? fetchError.message : "Failed to load preview");
+        setError(
+          fetchError instanceof Error ? fetchError.message : t("console.failedToLoadPreview"),
+        );
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -75,7 +79,7 @@ function useResolvedArtifactDetail(artifact: DataArtifact): {
     return () => {
       cancelled = true;
     };
-  }, [artifact, detail, exportReady]);
+  }, [artifact, detail, exportReady, t]);
 
   return { detail, loading, error };
 }
@@ -94,9 +98,11 @@ function selectionKey(selection: EvidenceSelection): string {
 }
 
 /**
- * Full-panel, immersive view for a single artifact. Renders type-specific content
- * with fine-grained selection (table regions, highlighted text) that turns into
- * evidence references, plus a whole-artifact reference and download.
+ * Full-panel, immersive view for a single artifact. On the peer cite page
+ * (`presentation="page"`), supports fine-grained selection (table regions,
+ * highlighted text) as evidence references, plus whole-artifact cite and download.
+ * In preview modal (`presentation="modal"`), selection cite is disabled; whole-artifact
+ * cite remains available (use header “Cite” to open the side panel for partial cites).
  */
 export function ExpandedArtifactView({
   artifact,
@@ -111,7 +117,7 @@ export function ExpandedArtifactView({
   runId?: string;
   onReferenceEvidence: (ref: EvidenceRef) => void;
   onArtifactExportJob?: (job: JobDto) => void;
-  /** `modal` hides the peer-page reference hint to reduce chrome in the overlay. */
+  /** `modal` disables selection cite and hides the peer-page selection hint. */
   presentation?: "page" | "modal";
 }) {
   const t = useT();
@@ -126,14 +132,28 @@ export function ExpandedArtifactView({
   const { busy, error: downloadError, downloadWhole, downloadFormat, exportJob } =
     useArtifactExportActions(onArtifactExportJob);
   const downloadBusy = busy !== null;
+  const [referenceFlash, setReferenceFlash] = useState(false);
+  const selectionEnabled = presentation === "page";
 
-  const referenceWhole = () => onReferenceEvidence(baseRef);
+  useEffect(() => {
+    if (!referenceFlash) return;
+    const timer = window.setTimeout(() => setReferenceFlash(false), 2200);
+    return () => window.clearTimeout(timer);
+  }, [referenceFlash]);
+
+  const notifyReferenced = () => setReferenceFlash(true);
+
+  const referenceWhole = () => {
+    onReferenceEvidence(baseRef);
+    notifyReferenced();
+  };
   const referenceSelection = (selection: EvidenceSelection) => {
     onReferenceEvidence({
       ...baseRef,
       id: `${baseRef.id}:sel:${selectionKey(selection)}`,
       source: { ...baseRef.source, selection },
     });
+    notifyReferenced();
   };
 
   const downloadItems: ActionMenuItem[] = [
@@ -201,7 +221,11 @@ export function ExpandedArtifactView({
                   onClick={() => void downloadWhole(artifact)}
                   disabled={downloadBusy}
                   className={`${btnSecondaryClass} disabled:cursor-not-allowed disabled:opacity-60`}
-                  title={t("console.downloadOutputFile")}
+                  title={
+                    downloadBusy
+                      ? t("console.downloadingEllipsis")
+                      : t("console.downloadOutputFile")
+                  }
                 >
                   {busy === "whole" ? t("console.downloading") : t("console.download")}
                 </button>
@@ -209,11 +233,19 @@ export function ExpandedArtifactView({
             ) : null}
           </div>
         </div>
-        {presentation === "page" ? (
+        {selectionEnabled ? (
           <div className="flex items-center gap-1.5 text-[11px] leading-4 text-muted-light">
             <IconSelection className="h-3.5 w-3.5 shrink-0" />
             {t("console.referenceWholeHint")}
           </div>
+        ) : null}
+        {referenceFlash ? (
+          <p
+            role="status"
+            className="rounded-md border border-primary/20 bg-primary/8 px-2.5 py-1.5 text-[11px] font-medium text-primary"
+          >
+            {t("console.referenced")}
+          </p>
         ) : null}
       </header>
 
@@ -232,7 +264,7 @@ export function ExpandedArtifactView({
             detail={detail}
             loading={loading}
             error={error}
-            onReferenceSelection={referenceSelection}
+            onReferenceSelection={selectionEnabled ? referenceSelection : undefined}
           />
         </div>
       </div>
@@ -251,10 +283,14 @@ function ExpandedArtifactBody({
   detail: ArtifactDetail | undefined;
   loading: boolean;
   error: string | null;
-  onReferenceSelection: (selection: EvidenceSelection) => void;
+  onReferenceSelection?: (selection: EvidenceSelection) => void;
 }) {
+  const t = useT();
+
   if (!detail) {
-    if (loading) return <p className="text-xs text-muted-light">Loading preview…</p>;
+    if (loading) {
+      return <p className="text-xs text-muted-light">{t("console.loadingPreview")}</p>;
+    }
     if (error) {
       return (
         <p className="rounded-lg bg-step-error/10 px-2.5 py-2 text-xs text-step-error">{error}</p>
@@ -262,19 +298,22 @@ function ExpandedArtifactBody({
     }
     return (
       <p className="rounded-lg border border-dashed border-border bg-surface-subtle px-3 py-4 text-xs leading-5 text-muted-light">
-        This output does not include viewable details yet.
+        {t("console.noViewableDetails")}
       </p>
     );
   }
 
   if (detail.type === "dataset") {
-    return (
-      <SelectableDataGrid
-        columns={detail.columns}
-        rows={detail.rows}
-        onReference={onReferenceSelection}
-      />
-    );
+    if (onReferenceSelection) {
+      return (
+        <SelectableDataGrid
+          columns={detail.columns}
+          rows={detail.rows}
+          onReference={onReferenceSelection}
+        />
+      );
+    }
+    return <ReadOnlyDataGrid columns={detail.columns} rows={detail.rows} />;
   }
 
   if (detail.type === "chart") {
@@ -284,12 +323,20 @@ function ExpandedArtifactBody({
         <ChartDetailView detail={detail} />
         {grid.rows.length > 0 ? (
           <div className="grid gap-1.5">
-            <div className={sectionLabelClass}>Data points (select to reference)</div>
-            <SelectableDataGrid
-              columns={grid.columns}
-              rows={grid.rows}
-              onReference={onReferenceSelection}
-            />
+            <div className={sectionLabelClass}>
+              {onReferenceSelection
+                ? t("console.dataPointsSelect")
+                : t("console.dataPoints")}
+            </div>
+            {onReferenceSelection ? (
+              <SelectableDataGrid
+                columns={grid.columns}
+                rows={grid.rows}
+                onReference={onReferenceSelection}
+              />
+            ) : (
+              <ReadOnlyDataGrid columns={grid.columns} rows={grid.rows} />
+            )}
           </div>
         ) : null}
       </div>
@@ -297,17 +344,24 @@ function ExpandedArtifactBody({
   }
 
   if (detail.type === "sql") {
+    const sqlCode = (
+      <div className={consoleScrollXShellClass}>
+        <pre className={[consoleCodeBlockBaseClass, "max-h-[60vh]"].join(" ")}>
+          <code className={consoleCodeInnerClass}>{detail.sql}</code>
+        </pre>
+      </div>
+    );
     return (
       <div className="grid min-w-0 gap-3">
-        <SelectableText onReference={onReferenceSelection}>
-          <div className={consoleScrollXShellClass}>
-            <pre className={[consoleCodeBlockBaseClass, "max-h-[60vh]"].join(" ")}>
-              <code className={consoleCodeInnerClass}>{detail.sql}</code>
-            </pre>
-          </div>
-        </SelectableText>
+        {onReferenceSelection ? (
+          <SelectableText onReference={onReferenceSelection}>{sqlCode}</SelectableText>
+        ) : (
+          sqlCode
+        )}
         <div className="flex flex-wrap items-center gap-2 text-xs text-muted">
-          <span>Scanned {detail.scannedRows.toLocaleString()} rows</span>
+          <span>
+            {t("console.scannedRowsMeta", { rows: detail.scannedRows.toLocaleString() })}
+          </span>
           <span>·</span>
           <span>{detail.durationMs}ms</span>
         </div>
@@ -316,26 +370,88 @@ function ExpandedArtifactBody({
   }
 
   if (detail.type === "file") {
-    return (
-      <SelectableText onReference={onReferenceSelection}>
-        <FileDetailView detail={detail} artifact={artifact} bare />
-      </SelectableText>
+    const fileView = <FileDetailView detail={detail} artifact={artifact} bare />;
+    return onReferenceSelection ? (
+      <SelectableText onReference={onReferenceSelection}>{fileView}</SelectableText>
+    ) : (
+      fileView
     );
   }
 
-  return (
-    <SelectableText onReference={onReferenceSelection}>
-      <div className="grid min-w-0 gap-4">
-        {detail.sections.map((section) => (
-          <div key={section.heading} className="min-w-0">
-            <div className={sectionLabelClass}>{section.heading}</div>
-            <div className="mt-1 min-w-0 text-xs leading-5 text-muted">
-              <ArtifactMarkdownPreview content={section.body} bare />
-            </div>
+  const reportView = (
+    <div className="grid min-w-0 gap-4">
+      {detail.sections.map((section) => (
+        <div key={section.heading} className="min-w-0">
+          <div className={sectionLabelClass}>{section.heading}</div>
+          <div className="mt-1 min-w-0 text-xs leading-5 text-muted">
+            <ArtifactMarkdownPreview content={section.body} bare />
           </div>
-        ))}
+        </div>
+      ))}
+    </div>
+  );
+  return onReferenceSelection ? (
+    <SelectableText onReference={onReferenceSelection}>{reportView}</SelectableText>
+  ) : (
+    reportView
+  );
+}
+
+/** Plain table for preview modal — no drag-select / floating cite chrome. */
+function ReadOnlyDataGrid({
+  columns,
+  rows,
+}: {
+  columns: string[];
+  rows: string[][];
+}) {
+  return (
+    <div className={consoleTableShellClass}>
+      <div className="max-h-[min(560px,64vh)] overflow-auto">
+        <table className="min-w-max w-full text-left text-xs">
+          <thead className="sticky top-0 z-10 bg-surface-subtle text-muted-light shadow-[0_1px_0_0_var(--border)]">
+            <tr>
+              {columns.map((column, columnIndex) => (
+                <th
+                  key={`${column}-${columnIndex}`}
+                  className="whitespace-nowrap px-3 py-2 font-semibold"
+                >
+                  {column}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.length === 0 ? (
+              <tr>
+                <td
+                  colSpan={Math.max(columns.length, 1)}
+                  className="border-t border-border px-3 py-6 text-center text-muted-light"
+                >
+                  —
+                </td>
+              </tr>
+            ) : (
+              rows.map((row, rowIndex) => (
+                <tr key={rowIndex} className="border-t border-border">
+                  {row.map((cell, cellIndex) => (
+                    <td
+                      key={cellIndex}
+                      className={[
+                        "whitespace-nowrap px-3 py-2",
+                        cellIndex === 0 ? "font-medium text-foreground" : "text-muted",
+                      ].join(" ")}
+                    >
+                      {cell}
+                    </td>
+                  ))}
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
       </div>
-    </SelectableText>
+    </div>
   );
 }
 

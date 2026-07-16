@@ -273,6 +273,7 @@ import {
   CollaborationResponsesProvider,
   useThreadCollaborationResponsesForChat,
 } from "./components/chat/collaboration-responses";
+import { RichMarkdown } from "./components/task-console/ArtifactMarkdownPreview";
 import {
   findPendingCollaborationToolCall,
   messageHostsPendingCollaborationSlot,
@@ -1000,12 +1001,25 @@ function DataTaskWorkspace({
   }, [workspaceViewportWidth]);
 
   const openTaskConsole = useCallback(() => {
+    // Console and left config/files/data-link panels share the center+right
+    // column — dismiss the side panel so the console can actually appear.
+    setConfigPanel(null);
+    setWorkspaceFilesPanelOpen(false);
+    setDataLinkPanelOpen(false);
+    if (activeSessionId) {
+      setRightPanelDismissedSessions((current) => {
+        if (!current.has(activeSessionId)) return current;
+        const next = new Set(current);
+        next.delete(activeSessionId);
+        return next;
+      });
+    }
     if (canDockRightPanel) {
       setUserRightPanelOpen(true);
       return;
     }
     setIsConsoleDrawerOpen(true);
-  }, [canDockRightPanel]);
+  }, [activeSessionId, canDockRightPanel]);
 
   const toggleSidebar = useCallback(() => {
     if (sidebarCollapsed) {
@@ -1037,6 +1051,9 @@ function DataTaskWorkspace({
         return next;
       });
     }
+    // Drop selection so reopening lands on Overview instead of a stale Details tab.
+    setSelection(null);
+    setArtifactFocusId(null);
     if (canDockRightPanel) {
       setUserRightPanelOpen(false);
       return;
@@ -2119,6 +2136,7 @@ function DataTaskWorkspace({
         }}
         onSelectEvent={(eventId) => {
           setSelection({ type: "action", id: eventId });
+          openTaskConsole();
           setIsTraceOpen(false);
         }}
       />
@@ -3387,8 +3405,8 @@ function StepAssistantMessage({
           ) : null}
         </div>
         {content ? (
-          <div className="max-w-none text-sm leading-7 text-foreground [&_code]:rounded [&_code]:bg-surface-subtle [&_code]:px-1 [&_ol]:my-2 [&_ol]:list-decimal [&_ol]:pl-5 [&_p]:my-2 [&_ul]:my-2 [&_ul]:list-disc [&_ul]:pl-5">
-            <CopilotChatAssistantMessage.MarkdownRenderer content={content} />
+          <div className="max-w-none">
+            <RichMarkdown content={content} density="chat" />
             {isActive && (
               <span
                 className={`caret-blink ml-0.5 inline-block h-4 w-[2px] -translate-y-[1px] align-middle ${theme.caret}`}
@@ -3457,7 +3475,11 @@ function StepAssistantMessage({
               type="button"
               onClick={(event) => {
                 event.stopPropagation();
-                openStepDetails();
+                if (displayHasToolCalls) {
+                  openStepDetails();
+                } else {
+                  toggleCollapsed();
+                }
               }}
               className="cursor-pointer rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/20"
               title={
@@ -3695,8 +3717,8 @@ function StepAssistantMessage({
             <CopyContentButton content={content} />
           </span>
         </div>
-        <div className="max-w-none text-sm leading-7 text-foreground [&_code]:rounded [&_code]:bg-surface-subtle [&_code]:px-1 [&_ol]:my-2 [&_ol]:list-decimal [&_ol]:pl-5 [&_p]:my-2 [&_ul]:my-2 [&_ul]:list-disc [&_ul]:pl-5">
-          <CopilotChatAssistantMessage.MarkdownRenderer content={content} />
+        <div className="max-w-none">
+          <RichMarkdown content={content} density="chat" />
           {isFollowUpAnswerActive ? (
             <span className="caret-blink ml-0.5 inline-block h-4 w-[2px] -translate-y-[1px] align-middle bg-primary" />
           ) : null}
@@ -3786,6 +3808,7 @@ function ToolSummaryChip({
   chip: ToolChipSummary;
   onSelectToolAction: ((toolCallId: string) => void) | null;
 }) {
+  const t = useT();
   const tone =
     chip.status === "failed"
       ? "border-step-error/25 bg-step-error/8 text-step-error"
@@ -3842,7 +3865,7 @@ function ToolSummaryChip({
         "inline-flex max-w-full cursor-pointer items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-medium transition-colors duration-150 hover:bg-surface-subtle focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/20",
         tone,
       ].join(" ")}
-      title="View tool details in the task console"
+      title={t("chat.viewStepDetails")}
     >
       {content}
     </button>

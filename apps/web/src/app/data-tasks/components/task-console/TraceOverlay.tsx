@@ -115,11 +115,15 @@ export function TraceOverlay({
 
   useEffect(() => {
     if (!isOpen || presentation !== "overlay") return;
+    // Capture so Esc closes only the trace overlay, not an underlying console drawer.
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      onClose();
     };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => window.removeEventListener("keydown", onKeyDown, true);
   }, [isOpen, onClose, presentation]);
 
   useEffect(() => {

@@ -62,7 +62,10 @@ export function TaskConsoleDrawer({
   useEffect(() => {
     if (!isOpen) return;
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
+      // Nested overlays (preview / trace) handle Escape first via capture +
+      // stopImmediatePropagation; skip if already handled.
+      if (event.key !== "Escape" || event.defaultPrevented) return;
+      onClose();
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);

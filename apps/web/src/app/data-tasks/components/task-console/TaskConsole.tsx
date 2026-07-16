@@ -379,6 +379,8 @@ export function TaskConsole({
             <EmptyState
               title={t("console.empty.noStepSelected")}
               description={t("console.empty.noStepSelectedDescription")}
+              actionLabel={t("console.empty.goToOverview")}
+              onAction={() => handleTabClick("overview")}
             />
           )
         ) : null}
@@ -1093,9 +1095,9 @@ function ArtifactCard({
           onClick={() => onOpenArtifactPage?.(artifact.id)}
           disabled={!onOpenArtifactPage}
           className={`${btnSecondaryClass} disabled:cursor-not-allowed disabled:opacity-60`}
-          title={t("console.openPageTitle")}
+          title={t("console.citeTitle")}
         >
-          {t("console.openPage")}
+          {t("console.cite")}
         </button>
         {hasHistory && exportReady ? (
           <button
@@ -1125,7 +1127,11 @@ function ArtifactCard({
               onClick={() => void downloadWhole(artifact)}
               disabled={downloadBusy}
               className={`${btnSecondaryClass} disabled:cursor-not-allowed disabled:opacity-60`}
-              title={t("console.downloadOutputFile")}
+              title={
+                downloadBusy
+                  ? t("console.downloadingEllipsis")
+                  : t("console.downloadOutputFile")
+              }
             >
               {busy === "whole" ? t("console.downloading") : t("console.download")}
             </button>
@@ -2864,9 +2870,13 @@ function ArtifactCardHeader({
 function EmptyState({
   title,
   description,
+  actionLabel,
+  onAction,
 }: {
   title: string;
   description: string;
+  actionLabel?: string;
+  onAction?: () => void;
 }) {
   return (
     <div className={`${emptyStateClass} p-5`}>
@@ -2878,6 +2888,15 @@ function EmptyState({
       </div>
       <div className="text-sm font-semibold text-foreground">{title}</div>
       <p className="mt-2 text-xs leading-5 text-muted">{description}</p>
+      {actionLabel && onAction ? (
+        <button
+          type="button"
+          onClick={onAction}
+          className={`mt-4 ${btnSecondaryClass}`}
+        >
+          {actionLabel}
+        </button>
+      ) : null}
     </div>
   );
 }

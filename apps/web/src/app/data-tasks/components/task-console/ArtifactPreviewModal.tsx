@@ -25,8 +25,8 @@ type ArtifactPreviewModalProps = {
 
 /**
  * Full-viewport overlay for quickly reading an output without leaving the current
- * layout. Reuses ExpandedArtifactView for type-specific preview; peer-page open
- * remains available via the header action.
+ * layout. Reuses ExpandedArtifactView for type-specific preview (no selection cite
+ * in modal). Header “Cite” closes the preview and opens the right-side cite page.
  */
 export function ArtifactPreviewModal({
   artifact,
@@ -40,14 +40,19 @@ export function ArtifactPreviewModal({
   const t = useT();
 
   useEffect(() => {
+    // Capture + stopImmediatePropagation so Esc closes only the preview —
+    // not the parent console drawer (which also listens for Escape).
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      onClose();
     };
-    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("keydown", onKeyDown, true);
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     return () => {
-      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keydown", onKeyDown, true);
       document.body.style.overflow = previousOverflow;
     };
   }, [onClose]);
@@ -86,9 +91,9 @@ export function ArtifactPreviewModal({
                 onOpenPage(artifact.id);
                 onClose();
               }}
-              title={t("console.openPageTitle")}
+              title={t("console.citeTitle")}
             >
-              {t("console.openPage")}
+              {t("console.cite")}
             </button>
             <button
               type="button"
