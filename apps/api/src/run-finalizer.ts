@@ -1,5 +1,9 @@
 import { EventType, type BaseEvent } from "@ag-ui/client";
-import { createCustomEvent, type GoalRuntimeAdapter } from "@datafoundry/agent-runtime";
+import {
+  createCustomEvent,
+  type GoalRuntimeAdapter,
+  type ProtocolCompletionDecision
+} from "@datafoundry/agent-runtime";
 import type { FileAssetService } from "@datafoundry/files";
 import { readdirSync, statSync } from "node:fs";
 import { join, relative, sep } from "node:path";
@@ -70,7 +74,17 @@ export class RunFinalizer {
     this.input.emit(input.terminalEvent);
   }
 
-  async complete(input: { goalRuntime?: GoalRuntimeAdapter | undefined; terminalEvent: BaseEvent }): Promise<void> {
+  async complete(input: {
+    goalRuntime?: GoalRuntimeAdapter | undefined;
+    terminalDecision?: ProtocolCompletionDecision | undefined;
+    terminalEvent: BaseEvent;
+  }): Promise<void> {
+    if (!input.terminalDecision || input.terminalDecision.status === "continue") {
+      throw new Error("PROTOCOL_TERMINAL_DECISION_REQUIRED");
+    }
+    if (input.terminalDecision.status === "failed") {
+      throw new Error("PROTOCOL_FAILED_DECISION_REQUIRES_FAIL_FINALIZATION");
+    }
     if (input.goalRuntime) {
       this.input.emit(createCustomEvent("goal.updated", {
         goal: await input.goalRuntime.getSnapshot(),

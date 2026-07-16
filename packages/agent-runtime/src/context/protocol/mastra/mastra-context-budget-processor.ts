@@ -38,7 +38,7 @@ export type MastraContextBudgetProcessorOptions = {
 };
 
 export type ContextPackageRecorder = {
-  record(input: { contextPackage: ContextPackage; plan: ContextPlan }): void;
+  record(input: { contextPackage: ContextPackage; plan?: ContextPlan }): void;
 };
 
 export class MastraContextBudgetProcessor implements Processor<"context-budget"> {

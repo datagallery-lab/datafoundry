@@ -30,6 +30,7 @@ import {
 } from "@datafoundry/providers";
 
 import { AGENT_MAX_STEPS, SQL_MAX_EXECUTION_COUNT } from "./runtime-limits.js";
+import { AGENT_RUNTIME_LIMITS } from "./config/agent-runtime-limits.js";
 import { SQL_MAX_SQL_CHARS } from "./context/inventory/context-limits.js";
 import { createToolObservationBoundary } from "./context/tool-observation/tool-observation-boundary.js";
 import {
@@ -38,6 +39,7 @@ import {
 import type { ContextPackageRecorder } from "./context/protocol/mastra/mastra-context-budget-processor.js";
 import type { ContextPackage } from "./context/inventory/context-package.js";
 import { ToolObservationDispatcher } from "./context/tool-observation/tool-observation-dispatcher.js";
+import { toolObservationModelFromPackage } from "./context/tool-observation/tool-observation-projection-items.js";
 import { createAgUiContextEventSink } from "./context/protocol/ag-ui/ag-ui-context-event-sink.js";
 import {
   NonEmptyMessageContentCompatProcessor,
@@ -76,6 +78,26 @@ import type { AgentRunContext, AgentRunContextInput, AgUiEventEmitter } from "./
 import { createCustomEvent } from "./events.js";
 import { createTool, type ToolAction } from "@mastra/core/tools";
 import { z } from "zod";
+import {
+  createRunProtocolBoundary,
+  type RunProtocolBoundary
+} from "./protocol/run-protocol-boundary.js";
+import type { ProtocolClassifier, ProtocolIdentity } from "./protocol/protocol-router.js";
+import { createModelProtocolClassifier } from "./protocol/model-protocol-classifier.js";
+import {
+  createModelAnalysisRequirementExtractor,
+  type AnalysisRequirementExtractor
+} from "./protocol/model-analysis-requirement-extractor.js";
+import {
+  createModelAnalysisContractGrounder,
+  type AnalysisContractGrounder
+} from "./protocol/model-analysis-contract-grounder.js";
+import type { AnalysisRequirement } from "./protocol/analysis-requirements.js";
+import type { DataAnalysisState } from "./protocol/protocols/data-analysis.js";
+import { createDefaultSemanticProvider } from "./semantic/default-semantic-provider.js";
+import type { ProtocolEvent } from "./protocol/types.js";
+import type { ContextPackageRef, ProtocolStateStore } from "./protocol/types.js";
+import { toolErrorObservation as createToolErrorObservation } from "./errors/tool-execution-error.js";
 
 export type { AgentRunContext, AgentRunContextInput, AgUiEventEmitter } from "./types.js";
 export type { ContextPackage } from "./context/inventory/context-package.js";
@@ -199,6 +221,7 @@ export type CreateDataFoundryInput = {
   abortSignal?: AbortSignal | undefined;
   artifactService?: ArtifactService;
   contextPackageRecorder?: ContextPackageRecorder;
+  contextPackageExists?(reference: ContextPackageRef): boolean;
   dataGateway: DataGateway;
   emitter: AgUiEventEmitter;
   fileAssetService?: FileAssetService;
@@ -226,6 +249,13 @@ export type CreateDataFoundryInput = {
     topP?: number;
   };
   modelContextProfile?: AgentModelContextProfile;
+  explicitProtocol?: ProtocolIdentity;
+  protocolClassifier?: ProtocolClassifier;
+  analysisRequirementExtractor?: AnalysisRequirementExtractor;
+  analysisContractGrounder?: AnalysisContractGrounder;
+  onProtocolEvent?(event: ProtocolEvent): void;
+  protocolStateStore?: ProtocolStateStore;
+  resourceRevisions?: Record<string, number>;
   workspaceAttachments?: WorkspaceAttachment[];
   goal?: GoalRequest;
   /**
@@ -254,6 +284,8 @@ export const createDataFoundry = async (
   isolation: "bwrap" | "none" | "seatbelt";
   workspaceDir: string;
   sessionDir: string;
+  protocol: RunProtocolBoundary;
+  flushProtocolEvents(): void;
   destroyWorkspace(): Promise<void>;
 }> => {
   const toolObservationBoundary = createToolObservationBoundary({
@@ -269,6 +301,7 @@ export const createDataFoundry = async (
   if (input.initialContextPackage) {
     contextRunState.merge(input.initialContextPackage);
   }
+  input.contextPackageRecorder?.record({ contextPackage: contextRunState.package });
 
   const runDir = resolveWorkspaceDir({
     runContext: input.runContext,
@@ -330,17 +363,6 @@ export const createDataFoundry = async (
       emitter: input.emitter
     });
   };
-  const governedToolFactory = new GovernedToolFactory(
-    dispatcher,
-    onGovernedResultWithSessionOutput,
-    registry.onGovernanceError,
-    {
-      emitter: input.emitter,
-      // HITL tools suspend the run and have their TOOL_CALL_RESULT emitted on interaction
-      // resume; the boundary must not emit a (spurious) result for them.
-      externallyResolvedToolNames: new Set(HITL_TOOL_NAMES)
-    }
-  );
   const contextEventSink = createAgUiContextEventSink(input.emitter);
   const mastraContextProcessors = createMastraContextProcessorBoundary({
     dispatcher,
@@ -386,7 +408,7 @@ export const createDataFoundry = async (
           inputSchema: z.object({
             collection_id: z.string().min(1),
             query: z.string().min(1),
-            top_k: z.number().int().min(1).max(20).optional()
+            top_k: z.number().int().min(1).max(AGENT_RUNTIME_LIMITS.knowledgeMaxTopK).optional()
           }),
           execute: async (toolInput) => {
             if (!input.runContext.enabled_knowledge_ids?.includes(toolInput.collection_id)) {
@@ -456,7 +478,159 @@ export const createDataFoundry = async (
     ...selectedPolicyTools,
     ...(input.mcpTools ?? {})
   };
-  const tools = governedToolFactory.governTools(selectedTools);
+  const selectedDatasourceId = input.runContext.selected_datasource_id;
+  const deferredProtocolEvents: ProtocolEvent[] = [];
+  let protocolEventsReady = false;
+  const protocol = await createRunProtocolBoundary({
+    runId: input.runContext.run_id,
+    userInput: input.runContext.user_input,
+    authorizedProtocolIds: ["general-task", "data-analysis"],
+    initialContextPackageRef: {
+      packageId: contextRunState.package.packageId,
+      revision: contextRunState.package.revision
+    },
+    tools: selectedTools,
+    ...(selectedDatasourceId
+      ? {
+          semanticProvider: createDefaultSemanticProvider({ tools: selectedTools }),
+          semanticRequest: {
+            userId: input.runContext.user_id,
+            workspaceId: input.runContext.workspace_id ?? "default",
+            datasourceId: selectedDatasourceId,
+            datasourceRevision: String(
+              input.resourceRevisions?.[`datasource:${selectedDatasourceId}`] ?? "unknown"
+            )
+          }
+        }
+      : {}),
+    ...(input.explicitProtocol ? { explicitProtocol: input.explicitProtocol } : {}),
+    classifier: input.protocolClassifier ?? createModelProtocolClassifier(input.modelProvider),
+    requirementExtractor: input.analysisRequirementExtractor
+      ?? createModelAnalysisRequirementExtractor(input.modelProvider),
+    analysisContractGrounder: input.analysisContractGrounder
+      ?? createModelAnalysisContractGrounder(input.modelProvider),
+    ...(input.protocolStateStore ? { stateStore: input.protocolStateStore } : {}),
+    projectContext: ({ actionName, rawResult }) => {
+      if (isProtocolRuntimeAction(actionName)) {
+        const currentPackage = contextRunState.package;
+        return {
+          contextPackageRef: {
+            packageId: currentPackage.packageId,
+            revision: currentPackage.revision
+          },
+          contextPackage: currentPackage,
+          observation: rawResult
+        };
+      }
+      const contextPackage = dispatcher.dispatch(actionName, rawResult);
+      const currentPackage = contextRunState.package;
+      input.contextPackageRecorder?.record({ contextPackage: currentPackage });
+      return {
+        contextPackageRef: {
+          packageId: currentPackage.packageId,
+          revision: currentPackage.revision
+        },
+        contextPackage,
+        observation: toolObservationModelFromPackage(contextPackage)
+      };
+    },
+    runtimeOptions: {
+      ...(input.contextPackageExists ? { contextPackageExists: input.contextPackageExists } : {}),
+      onEvent: (event) => {
+        if (!protocolEventsReady) {
+          deferredProtocolEvents.push(event);
+          return false;
+        }
+        input.onProtocolEvent?.(event);
+        input.emitter.emit(createCustomEvent(event.type, event));
+        return true;
+      }
+    }
+  });
+  const governedToolFactory = new GovernedToolFactory(
+    dispatcher,
+    onGovernedResultWithSessionOutput,
+    registry.onGovernanceError,
+    {
+      actionRouter: protocol.actionRouter,
+      emitter: input.emitter,
+      externallyResolvedToolNames: new Set(HITL_TOOL_NAMES),
+      runId: input.runContext.run_id,
+      getSegmentId: () => protocol.segmentId
+    }
+  );
+  const protocolState = protocol.protocolRuntime.getState(input.runContext.run_id, protocol.segmentId);
+  const analysisRequirements = protocolState.protocolId === "data-analysis"
+    ? ((protocolState.domain as DataAnalysisState).requirements ?? []).filter((requirement) =>
+        requirement.source === "user")
+    : [];
+  const requirementsCommitTools = analysisRequirements.length > 0
+    ? {
+        analysis_requirements_commit: createTool({
+          id: "analysis_requirements_commit",
+          description: "Commit final claims for analysis requirements using artifact evidence from successful SQL results.",
+          inputSchema: z.object({
+            claims: z.array(z.object({
+              requirement_id: z.string().min(1),
+              claim: z.string().min(1),
+              values: z.array(z.object({
+                name: z.string().min(1),
+                value: z.union([z.string(), z.number(), z.boolean(), z.null()]),
+                unit: z.string().optional()
+              })).max(AGENT_RUNTIME_LIMITS.requirementCommitMaxOutputFields).optional(),
+              evidence_refs: z.array(z.string().min(1)).optional(),
+              evidence_requirement_ids: z.array(z.string().min(1)).optional()
+            })).min(1).max(AGENT_RUNTIME_LIMITS.requirementCommitMaxClaims)
+          }),
+          execute: async (toolInput, options) => {
+            const toolCallId = protocolToolCallId(options);
+            try {
+              const result = await protocol.actionRouter.execute({
+                runId: input.runContext.run_id,
+                segmentId: protocol.segmentId,
+                actionId: toolCallId ?? `analysis-requirements-commit:${Date.now()}`,
+                actionName: "analysis.requirements.commit",
+                input: toolInput,
+                idempotencyKey: toolCallId ?? JSON.stringify(toolInput)
+              });
+              return result.observation;
+            } catch (error) {
+              return createToolErrorObservation(error, { toolName: "analysis_requirements_commit" });
+            }
+          }
+        })
+      }
+    : {};
+  const tools = {
+    ...governedToolFactory.governTools(selectedTools),
+    ...requirementsCommitTools,
+    protocol_handoff: createTool({
+      id: "protocol_handoff",
+      description: "Propose switching this run to another authorized protocol when the current protocol is unsuitable.",
+      inputSchema: z.object({
+        targetProtocolId: z.string().min(1),
+        targetProtocolVersion: z.string().min(1),
+        reasonCodes: z.array(z.string().min(1)).min(1),
+        unresolvedGoals: z.array(z.string())
+      }),
+      execute: async (toolInput, options) => {
+        const toolCallId = protocolToolCallId(options);
+        try {
+          const result = await protocol.actionRouter.execute({
+            runId: input.runContext.run_id,
+            segmentId: protocol.segmentId,
+            actionId: toolCallId ?? `protocol-handoff:${Date.now()}`,
+            actionName: "protocol.handoff.propose",
+            input: toolInput,
+            idempotencyKey: toolCallId ?? JSON.stringify(toolInput)
+          });
+          return result.observation;
+        } catch (error) {
+          return createToolErrorObservation(error, { toolName: "protocol_handoff" });
+        }
+      }
+    })
+  };
   const agent = new Agent({
     id: "data-foundry",
     name: "DataFoundry",
@@ -467,8 +641,10 @@ export const createDataFoundry = async (
       pythonRuntimeAvailable: Boolean(runWorkspace.pythonRuntime),
       selectedSkills: input.selectedSkills ?? [],
       taskToolsEnabled: Boolean(input.taskStateRuntime),
-      toolNames: Object.keys(selectedTools),
+      toolNames: [...Object.keys(selectedTools), ...Object.keys(requirementsCommitTools), "protocol_handoff"],
       mcpToolNames: input.mcpToolNames ?? [],
+      protocolId: protocolState.protocolId,
+      analysisRequirements,
       workspaceAttachments
     }),
     model: input.modelProvider.model as never,
@@ -535,10 +711,29 @@ export const createDataFoundry = async (
   return {
     agent: agentForAgUi,
     commandExecutionEnabled: runWorkspace.commandExecutionEnabled,
-    destroyWorkspace: () => runWorkspace.destroy(),
+    destroyWorkspace: async () => {
+      try {
+        await protocol.dispose();
+      } finally {
+        await runWorkspace.destroy();
+      }
+    },
     governedMessages,
     ...(goalRuntime ? { goalRuntime } : {}),
     isolation: runWorkspace.isolation,
+    protocol,
+    flushProtocolEvents: () => {
+      protocolEventsReady = true;
+      while (deferredProtocolEvents.length > 0) {
+        const event = deferredProtocolEvents.shift();
+        if (!event) {
+          continue;
+        }
+        input.onProtocolEvent?.(event);
+        input.emitter.emit(createCustomEvent(event.type, event));
+        protocol.acknowledgeEvent(event);
+      }
+    },
     workspaceDir: runWorkspace.runDir,
     sessionDir: runWorkspace.sessionDir
   };
@@ -607,6 +802,8 @@ type AgentInstructionsInput = {
   toolNames: string[];
   /** MCP tools injected through AG-UI clientTools for this run. */
   mcpToolNames: string[];
+  protocolId: string;
+  analysisRequirements: AnalysisRequirement[];
   workspaceAttachments: MaterializedWorkspaceAttachment[];
 };
 
@@ -755,6 +952,45 @@ const buildAgentInstructions = (input: AgentInstructionsInput): string => {
         + "Never invent task IDs; reuse only those returned by tool results."
     );
   }
+  if (input.analysisRequirements.length > 0) {
+    const requirementList = input.analysisRequirements.map((requirement) => {
+      const assertions = requirement.assertions.map((assertion) => ({
+        id: assertion.id,
+        kind: assertion.kind,
+        ...(assertion.sourceTables.length > 0 ? { sourceTables: assertion.sourceTables } : {}),
+        ...(assertion.dimensions.length > 0 ? { dimensions: assertion.dimensions } : {}),
+        ...(assertion.sqlConstraints.length > 0 ? { sqlConstraints: assertion.sqlConstraints } : {}),
+        ...(assertion.resultChecks.length > 0 ? { resultChecks: assertion.resultChecks } : {}),
+        ...(assertion.claimValues.length > 0 ? { claimValues: assertion.claimValues } : {})
+      }));
+      return `${requirement.id}: ${requirement.description}; acceptance=`
+        + `${requirement.acceptanceCriteria.join(" | ") || "evidenced"}; assertions=${JSON.stringify(assertions)}`;
+    }).join("\n");
+    toolGroups.push("Analysis requirement tool: analysis_requirements_commit.");
+    policies.push(
+      "Analysis requirements are mandatory completion conditions:\n"
+        + requirementList
+        + "\nWhen using task_write, include the relevant requirement IDs in each task content. Every run_sql_readonly call "
+        + "must include requirement_ids for the claims it supports and expected_columns for its result contract. "
+        + "For every non-manual structured requirement, also include its exact assertion_ids; the runtime rejects SQL "
+        + "that violates declared source, aggregate, grain, filter, or time-range semantics. "
+        + "Include downstream validation and decision requirement IDs on the source SQL call that supplies their facts; "
+        + "one SQL result may support multiple requirement IDs and derived conclusions do not need duplicate queries. "
+        + "Preserve the user's exact metric and allocation semantics: do not substitute a requested metric with a nearby "
+        + "one. For counterfactual budgets, write the allocation formula before querying and validate budget conservation. "
+        + "A uniform percentage or rate means budget divided by the relevant cost base, then each row receives its own "
+        + "cost multiplied by that rate; it never means budget divided equally by row count. Use half-open timestamps to "
+        + "include the full requested end date. Compute threshold crossings from row-level SQL, never estimates. "
+        + "Do not defer every claim until the final step. As soon as a requirement has sufficient validated evidence, "
+        + "call analysis_requirements_commit for that requirement before starting more optional drill-downs. Commit any "
+        + "remaining evidenced requirements before writing final report files, and reserve the last two steps for task_check "
+        + "and the closing answer. Runtime resolves validated evidence already bound to that requirement, so do not guess "
+        + "artifact IDs. Every required claimValues entry must be copied into the claim values array with the exact "
+        + "verified name, numeric value, and unit; the runtime rejects unverified or mismatched values. "
+        + "For a derived claim, use evidence_requirement_ids to name the upstream requirement IDs that "
+        + "supply its facts. evidence_refs are optional hints. Missing requirements force a partial result."
+    );
+  }
   if (collaborationToolsEnabled && collaborationTools.length > 0) {
     policies.push(
       "Use ask_user only when progress requires information or a decision that cannot be inferred safely. "
@@ -804,6 +1040,11 @@ const buildAgentInstructions = (input: AgentInstructionsInput): string => {
     );
   }
   policies.push(
+    `This run is governed by ${input.protocolId}@1. Use protocol_handoff only when the user's remaining goal truly `
+      + "requires the other registered protocol (general-task@1 or data-analysis@1). Provide stable reasonCodes and "
+      + "all unresolvedGoals. Never hand off to bypass schema, SQL validation, evidence, policy, or completion gates."
+  );
+  policies.push(
     "Reply in the same natural language as the user's latest request. If the user mixes languages, use the dominant "
       + "language from the request. Keep SQL, code, table names, column names, and other technical identifiers "
       + "unchanged."
@@ -851,6 +1092,12 @@ const buildAgentInstructions = (input: AgentInstructionsInput): string => {
     "Report failures honestly. If schema inspection, SQL execution, a file write, or a command fails, explain the "
       + "failure plainly. "
       + "Do not fabricate results to mask an error."
+  );
+  policies.push(
+    "Recover from tool failures deliberately. Structured tool errors include error.executionStatus and a recovery "
+      + "object. Follow recovery.strategy and recovery.instruction, and respect every recovery.avoid item. If "
+      + "executionStatus is succeeded_uncommitted, do not repeat the external action unless the recovery strategy "
+      + "explicitly permits a retry."
   );
   policies.push(
     "Confidentiality. Never reveal credentials, datasource config, internal environment values, or workspace "
@@ -1190,3 +1437,65 @@ const isWorkspaceUploadPath = (value: string): boolean =>
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
+
+const isProtocolRuntimeAction = (actionName: string): boolean =>
+  actionName === "general.answer.commit"
+  || actionName === "protocol.handoff.propose"
+  || actionName.startsWith("analysis.")
+  || actionName.startsWith("data.query.")
+  || actionName === "semantic.context.resolve";
+
+const protocolToolCallId = (options: unknown): string | undefined => {
+  if (!isRecord(options) || !isRecord(options.agent)) {
+    return undefined;
+  }
+  return typeof options.agent.toolCallId === "string" && options.agent.toolCallId.length > 0
+    ? options.agent.toolCallId
+    : undefined;
+};
+
+export { validateProtocolDefinition } from "./protocol/definition-validator.js";
+export { ActionRouter } from "./capabilities/action-router.js";
+export { CapabilityRegistry } from "./capabilities/capability-registry.js";
+export { createToolCapabilityPlugin } from "./capabilities/tool-capability-plugin.js";
+export type * from "./capabilities/types.js";
+export { ToolExecutionError, toToolExecutionError, toolErrorObservation } from "./errors/tool-execution-error.js";
+export type * from "./errors/tool-execution-error.js";
+export { evaluateProtocolHandoff } from "./protocol/protocol-handoff.js";
+export {
+  createCoreAnalysisRequirements,
+  createUserAnalysisRequirements
+} from "./protocol/analysis-requirements.js";
+export type * from "./protocol/analysis-requirements.js";
+export {
+  createAnalysisRequirementExtractionPrompt,
+  createModelAnalysisRequirementExtractor,
+  parseAnalysisRequirementExtractionText
+} from "./protocol/model-analysis-requirement-extractor.js";
+export type { AnalysisRequirementExtractor } from "./protocol/model-analysis-requirement-extractor.js";
+export {
+  createAnalysisContractGroundingPrompt,
+  createModelAnalysisContractGrounder,
+  parseAnalysisContractGroundingText
+} from "./protocol/model-analysis-contract-grounder.js";
+export type * from "./protocol/model-analysis-contract-grounder.js";
+export { ProtocolHandoffCoordinator } from "./protocol/protocol-handoff-coordinator.js";
+export { InMemoryProtocolStateStore } from "./protocol/in-memory-protocol-state-store.js";
+export { ProtocolRegistry } from "./protocol/protocol-registry.js";
+export { ProtocolRouter } from "./protocol/protocol-router.js";
+export { ProtocolRuntime } from "./protocol/protocol-runtime.js";
+export { createModelProtocolClassifier } from "./protocol/model-protocol-classifier.js";
+export { createRunProtocolBoundary } from "./protocol/run-protocol-boundary.js";
+export type * from "./protocol/run-protocol-boundary.js";
+export { createGeneralTaskProtocol } from "./protocol/protocols/general-task.js";
+export { createDataAnalysisProtocol } from "./protocol/protocols/data-analysis.js";
+export type * from "./protocol/protocol-handoff.js";
+export type * from "./protocol/protocol-handoff-coordinator.js";
+export type * from "./protocol/protocol-router.js";
+export type * from "./protocol/protocol-runtime.js";
+export type * from "./protocol/types.js";
+export { DataLinkSemanticProvider } from "./semantic/datalink-semantic-provider.js";
+export { LocalSemanticProvider } from "./semantic/local-semantic-provider.js";
+export { SemanticProviderChain } from "./semantic/semantic-provider-chain.js";
+export { createDefaultSemanticProvider } from "./semantic/default-semantic-provider.js";
+export type * from "./semantic/types.js";

@@ -109,6 +109,7 @@ export type RunSqlReadonlyInput = {
 
 export type SchemaSummary = {
   datasource_id: string;
+  dialect?: string;
   tables: Array<{
     name: string;
     columns: Array<{

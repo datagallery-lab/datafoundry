@@ -1,3 +1,4 @@
+import { AGENT_RUNTIME_LIMITS } from "../../config/agent-runtime-limits.js";
 import {
   SCHEMA_MAX_COLUMNS_PER_TABLE,
   SCHEMA_MAX_TABLES,
@@ -13,7 +14,7 @@ export const DEFAULT_TOOL_OBSERVATION_SOURCE_LIMIT_PROFILES: Record<string, Reco
     maxTables: SCHEMA_MAX_TABLES
   },
   "mcp__*": {
-    maxChars: 12000
+    maxChars: AGENT_RUNTIME_LIMITS.toolObservationMaxChars
   },
   run_sql_readonly: {
     maxActivityRows: SQL_MAX_ACTIVITY_ROWS,

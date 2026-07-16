@@ -1,4 +1,4 @@
-import type { BaseEvent, EventType } from "@ag-ui/core";
+import { EventType, type BaseEvent } from "@ag-ui/core";
 import type { ArtifactSummary, ArtifactType, RunEventEnvelope } from "@datafoundry/contracts";
 import { createHash } from "node:crypto";
 import { mkdirSync } from "node:fs";
@@ -242,7 +242,23 @@ export type ContextPackageSnapshotRecord = {
   created_at: string;
 };
 
-export type CheckpointKind = "context-compiled" | "run-terminal" | "tool-result";
+export type ProtocolStateSnapshotRecord = {
+  user_id: string;
+  run_id: string;
+  segment_id: string;
+  protocol_id: string;
+  protocol_version: string;
+  revision: number;
+  phase: string;
+  status: string;
+  context_package_id: string;
+  context_package_revision: number;
+  state_json: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type CheckpointKind = "context-compiled" | "protocol-phase" | "run-terminal" | "tool-result";
 
 export type CheckpointStatus = "stable" | "failed" | "terminal";
 
@@ -476,6 +492,21 @@ export type CreateContextPackageSnapshotInput = {
   plan?: unknown;
 };
 
+export type CompareAndSetProtocolStateInput = {
+  user_id: string;
+  run_id: string;
+  segment_id: string;
+  expected_revision: number;
+  state: unknown;
+};
+
+export type TransitionProtocolSegmentInput = {
+  user_id: string;
+  current: Omit<CompareAndSetProtocolStateInput, "user_id">;
+  next: Omit<CompareAndSetProtocolStateInput, "user_id">;
+  events?: unknown[];
+};
+
 export type CreateCheckpointInput = {
   id: string;
   user_id: string;
@@ -622,6 +653,7 @@ export class MetadataStore {
   readonly interactions: InteractionRepository;
   readonly longTermMemories: LongTermMemoryRepository;
   readonly queryHistory: QueryHistoryRepository;
+  readonly protocolStates: ProtocolStateSnapshotRepository;
   readonly runEvents: RunEventRepository;
   readonly runs: RunRepository;
   readonly sessionBranches: SessionBranchRepository;
@@ -661,6 +693,7 @@ export class MetadataStore {
     this.interactions = new InteractionRepository(db);
     this.longTermMemories = new LongTermMemoryRepository(db);
     this.queryHistory = new QueryHistoryRepository(db);
+    this.protocolStates = new ProtocolStateSnapshotRepository(db);
     this.secrets = new EncryptedSecretStore(db, secretMasterKey);
     this.sqlAuditLogs = new SqlAuditLogRepository(db);
   }
@@ -1742,6 +1775,18 @@ export class RunEventRepository {
   constructor(private readonly db: DatabaseSync) {}
 
   append(input: WriteRunEventInput): RunEventRecord {
+    const protocolEventId = protocolEventIdFromBaseEvent(input.event);
+    if (protocolEventId) {
+      const existing = mapRunEventRow(this.db.prepare(`
+        SELECT * FROM run_events
+        WHERE user_id = ? AND run_id = ?
+          AND json_extract(payload_json, '$.value.eventId') = ?
+        LIMIT 1
+      `).get(input.user_id, input.run_id, protocolEventId));
+      if (existing) {
+        return existing;
+      }
+    }
     const seq = this.nextSeq({ user_id: input.user_id, run_id: input.run_id });
     const createdAt = new Date().toISOString();
     const id = `${input.run_id}:${seq}`;
@@ -1800,6 +1845,15 @@ export class RunEventRepository {
     return row.next_seq;
   }
 }
+
+const protocolEventIdFromBaseEvent = (event: BaseEvent): string | undefined => {
+  if (event.type !== EventType.CUSTOM || !isRecord(event) || !isRecord(event.value)) {
+    return undefined;
+  }
+  return typeof event.value.eventId === "string" && event.value.eventId.length > 0
+    ? event.value.eventId
+    : undefined;
+};
 
 export class ConversationMessageRepository {
   constructor(private readonly db: DatabaseSync) {}
@@ -1938,6 +1992,26 @@ export class ConversationMessageRepository {
     }
     sql += " ORDER BY position ASC";
     return this.db.prepare(sql).all(...params).map(mapRequiredConversationMessageRow);
+  }
+
+  findLatestAssistantByRun(input: {
+    user_id: string;
+    session_id: string;
+    run_id: string;
+  }): ConversationMessageRecord | undefined {
+    return mapConversationMessageRow(
+      this.db
+        .prepare(
+          `
+          SELECT * FROM conversation_messages
+          WHERE user_id = ? AND session_id = ? AND run_id = ?
+            AND role = 'assistant' AND message_id IS NOT NULL
+          ORDER BY position DESC
+          LIMIT 1
+        `
+        )
+        .get(input.user_id, input.session_id, input.run_id)
+    );
   }
 
   private findByMessageId(input: {
@@ -2299,6 +2373,199 @@ export class ContextPackageSnapshotRepository {
         )
         .get(input.user_id, input.run_id)
     );
+  }
+}
+
+export class ProtocolStateSnapshotRepository {
+  constructor(private readonly db: DatabaseSync) {}
+
+  compareAndSet(input: CompareAndSetProtocolStateInput): ProtocolStateSnapshotRecord {
+    const state = requireProtocolStateFields(input.state);
+    if (state.runId !== input.run_id || state.segmentId !== input.segment_id) {
+      throw new Error(`PROTOCOL_STATE_SCOPE_MISMATCH:${input.run_id}:${input.segment_id}`);
+    }
+    const current = this.find({
+      user_id: input.user_id,
+      run_id: input.run_id,
+      segment_id: input.segment_id
+    });
+    const currentRevision = current?.revision ?? -1;
+    if (currentRevision !== input.expected_revision) {
+      throw new Error(
+        `PROTOCOL_REVISION_CONFLICT:${input.run_id}:${input.segment_id}:`
+        + `${input.expected_revision}:${currentRevision}`
+      );
+    }
+    if (state.revision !== input.expected_revision + 1) {
+      throw new Error(
+        `PROTOCOL_REVISION_INVALID:${input.run_id}:${input.segment_id}:${state.revision}`
+      );
+    }
+    const contextExists = this.db.prepare(`
+      SELECT 1 AS found
+      FROM context_package_snapshots
+      WHERE user_id = ? AND package_id = ? AND revision = ?
+    `).get(input.user_id, state.contextPackageId, state.contextPackageRevision);
+    if (!contextExists) {
+      throw new Error(
+        `PROTOCOL_CONTEXT_REF_NOT_FOUND:${state.contextPackageId}@${state.contextPackageRevision}`
+      );
+    }
+    const now = new Date().toISOString();
+    if (!current) {
+      this.db.prepare(`
+        INSERT INTO protocol_state_snapshots (
+          user_id, run_id, segment_id, protocol_id, protocol_version, revision, phase, status,
+          context_package_id, context_package_revision, state_json, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        input.user_id,
+        input.run_id,
+        input.segment_id,
+        state.protocolId,
+        state.protocolVersion,
+        state.revision,
+        state.phase,
+        state.status,
+        state.contextPackageId,
+        state.contextPackageRevision,
+        JSON.stringify(input.state),
+        now,
+        now
+      );
+    } else {
+      const result = this.db.prepare(`
+        UPDATE protocol_state_snapshots
+        SET protocol_id = ?, protocol_version = ?, revision = ?, phase = ?, status = ?,
+            context_package_id = ?, context_package_revision = ?, state_json = ?, updated_at = ?
+        WHERE user_id = ? AND run_id = ? AND segment_id = ? AND revision = ?
+      `).run(
+        state.protocolId,
+        state.protocolVersion,
+        state.revision,
+        state.phase,
+        state.status,
+        state.contextPackageId,
+        state.contextPackageRevision,
+        JSON.stringify(input.state),
+        now,
+        input.user_id,
+        input.run_id,
+        input.segment_id,
+        input.expected_revision
+      );
+      if (result.changes !== 1) {
+        throw new Error(
+          `PROTOCOL_REVISION_CONFLICT:${input.run_id}:${input.segment_id}:`
+          + `${input.expected_revision}:${currentRevision}`
+        );
+      }
+    }
+    return this.get({ user_id: input.user_id, run_id: input.run_id, segment_id: input.segment_id });
+  }
+
+  compareAndSetWithEvents(
+    input: CompareAndSetProtocolStateInput,
+    events: unknown[]
+  ): ProtocolStateSnapshotRecord {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const state = this.compareAndSet(input);
+      this.appendEvents(input.user_id, events);
+      this.db.exec("COMMIT");
+      return state;
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  transitionSegment(input: TransitionProtocolSegmentInput): {
+    current: ProtocolStateSnapshotRecord;
+    next: ProtocolStateSnapshotRecord;
+  } {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const current = this.compareAndSet({ user_id: input.user_id, ...input.current });
+      const next = this.compareAndSet({ user_id: input.user_id, ...input.next });
+      this.appendEvents(input.user_id, input.events ?? []);
+      this.db.exec("COMMIT");
+      return { current, next };
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  find(input: {
+    user_id: string;
+    run_id: string;
+    segment_id: string;
+  }): Optional<ProtocolStateSnapshotRecord> {
+    return mapProtocolStateSnapshotRow(this.db.prepare(`
+      SELECT * FROM protocol_state_snapshots
+      WHERE user_id = ? AND run_id = ? AND segment_id = ?
+    `).get(input.user_id, input.run_id, input.segment_id));
+  }
+
+  get(input: { user_id: string; run_id: string; segment_id: string }): ProtocolStateSnapshotRecord {
+    const snapshot = this.find(input);
+    if (!snapshot) {
+      throw new Error(`Protocol state snapshot not found: ${input.run_id}:${input.segment_id}`);
+    }
+    return snapshot;
+  }
+
+  latestByRun(input: { user_id: string; run_id: string }): Optional<ProtocolStateSnapshotRecord> {
+    return mapProtocolStateSnapshotRow(this.db.prepare(`
+      SELECT * FROM protocol_state_snapshots
+      WHERE user_id = ? AND run_id = ?
+      ORDER BY rowid DESC
+      LIMIT 1
+    `).get(input.user_id, input.run_id));
+  }
+
+  acknowledgeEvent(input: { user_id: string; event_id: string }): void {
+    this.db.prepare(`
+      UPDATE protocol_event_journal
+      SET published_at = ?
+      WHERE user_id = ? AND event_id = ?
+    `).run(new Date().toISOString(), input.user_id, input.event_id);
+  }
+
+  pendingEvents(input: { user_id: string; run_id: string }): unknown[] {
+    return this.db.prepare(`
+      SELECT event_json FROM protocol_event_journal
+      WHERE user_id = ? AND run_id = ? AND published_at IS NULL
+      ORDER BY created_at ASC, rowid ASC
+    `).all(input.user_id, input.run_id).map((row) => {
+      if (!isRecord(row) || typeof row.event_json !== "string") {
+        throw new Error(`PROTOCOL_EVENT_JOURNAL_INVALID:${input.run_id}`);
+      }
+      return JSON.parse(row.event_json) as unknown;
+    });
+  }
+
+  private appendEvents(userId: string, events: unknown[]): void {
+    const statement = this.db.prepare(`
+      INSERT OR IGNORE INTO protocol_event_journal (
+        user_id, run_id, segment_id, event_id, revision, event_type, event_json, created_at, published_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)
+    `);
+    const now = new Date().toISOString();
+    for (const event of events) {
+      const fields = requireProtocolEventFields(event);
+      statement.run(
+        userId,
+        fields.runId,
+        fields.segmentId,
+        fields.eventId,
+        fields.revision,
+        fields.type,
+        JSON.stringify(event),
+        now
+      );
+    }
   }
 }
 
@@ -3287,6 +3554,28 @@ const runMigrations = (db: DatabaseSync): void => {
     CREATE INDEX IF NOT EXISTS idx_context_package_snapshots_user_run
       ON context_package_snapshots(user_id, run_id, revision);
 
+    CREATE TABLE IF NOT EXISTS protocol_state_snapshots (
+      user_id TEXT NOT NULL,
+      run_id TEXT NOT NULL,
+      segment_id TEXT NOT NULL,
+      protocol_id TEXT NOT NULL,
+      protocol_version TEXT NOT NULL,
+      revision INTEGER NOT NULL,
+      phase TEXT NOT NULL,
+      status TEXT NOT NULL,
+      context_package_id TEXT NOT NULL,
+      context_package_revision INTEGER NOT NULL,
+      state_json TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY (user_id, run_id, segment_id),
+      FOREIGN KEY (user_id, run_id) REFERENCES runs(user_id, id),
+      FOREIGN KEY (user_id, context_package_id, context_package_revision)
+        REFERENCES context_package_snapshots(user_id, package_id, revision)
+    );
+    CREATE INDEX IF NOT EXISTS idx_protocol_state_snapshots_user_run
+      ON protocol_state_snapshots(user_id, run_id, updated_at);
+
     CREATE TABLE IF NOT EXISTS checkpoints (
       id TEXT NOT NULL,
       user_id TEXT NOT NULL,
@@ -3511,6 +3800,12 @@ const runMigrations = (db: DatabaseSync): void => {
   runSchemaMigration(db, "0015_trace_section_phase_key", "Ensure trace section phase key", () => {
     ensureTraceSectionPhaseKeyColumn(db);
   });
+  runSchemaMigration(db, "0016_protocol_state_snapshots", "Ensure protocol state snapshot schema", () => {
+    initializeProtocolStateSnapshotSchema(db);
+  });
+  runSchemaMigration(db, "0017_protocol_event_journal", "Ensure protocol event journal schema", () => {
+    initializeProtocolEventJournalSchema(db);
+  });
 };
 
 const initializeSchemaMigrationTable = (db: DatabaseSync): void => {
@@ -3634,6 +3929,52 @@ const initializeTraceSectionSchema = (db: DatabaseSync): void => {
       ON trace_sections(user_id, session_id, created_at);
     CREATE INDEX IF NOT EXISTS idx_trace_sections_user_run
       ON trace_sections(user_id, run_id, start_event_seq, end_event_seq);
+  `);
+};
+
+const initializeProtocolStateSnapshotSchema = (db: DatabaseSync): void => {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS protocol_state_snapshots (
+      user_id TEXT NOT NULL,
+      run_id TEXT NOT NULL,
+      segment_id TEXT NOT NULL,
+      protocol_id TEXT NOT NULL,
+      protocol_version TEXT NOT NULL,
+      revision INTEGER NOT NULL,
+      phase TEXT NOT NULL,
+      status TEXT NOT NULL,
+      context_package_id TEXT NOT NULL,
+      context_package_revision INTEGER NOT NULL,
+      state_json TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY (user_id, run_id, segment_id),
+      FOREIGN KEY (user_id, run_id) REFERENCES runs(user_id, id),
+      FOREIGN KEY (user_id, context_package_id, context_package_revision)
+        REFERENCES context_package_snapshots(user_id, package_id, revision)
+    );
+    CREATE INDEX IF NOT EXISTS idx_protocol_state_snapshots_user_run
+      ON protocol_state_snapshots(user_id, run_id, updated_at);
+  `);
+};
+
+const initializeProtocolEventJournalSchema = (db: DatabaseSync): void => {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS protocol_event_journal (
+      user_id TEXT NOT NULL,
+      run_id TEXT NOT NULL,
+      segment_id TEXT NOT NULL,
+      event_id TEXT NOT NULL,
+      revision INTEGER NOT NULL,
+      event_type TEXT NOT NULL,
+      event_json TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      published_at TEXT,
+      PRIMARY KEY (user_id, event_id),
+      FOREIGN KEY (user_id, run_id) REFERENCES runs(user_id, id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_protocol_event_journal_pending
+      ON protocol_event_journal(user_id, run_id, published_at, created_at);
   `);
 };
 
@@ -4563,6 +4904,73 @@ const mapContextPackageSnapshotRow = (row: unknown): Optional<ContextPackageSnap
     payload_json: requiredString(row, "payload_json"),
     ...(planJson ? { plan_json: planJson } : {}),
     created_at: requiredString(row, "created_at")
+  };
+};
+
+const mapProtocolStateSnapshotRow = (row: unknown): Optional<ProtocolStateSnapshotRecord> => {
+  if (!isRecord(row)) {
+    return undefined;
+  }
+  return {
+    user_id: requiredString(row, "user_id"),
+    run_id: requiredString(row, "run_id"),
+    segment_id: requiredString(row, "segment_id"),
+    protocol_id: requiredString(row, "protocol_id"),
+    protocol_version: requiredString(row, "protocol_version"),
+    revision: requiredNumber(row, "revision"),
+    phase: requiredString(row, "phase"),
+    status: requiredString(row, "status"),
+    context_package_id: requiredString(row, "context_package_id"),
+    context_package_revision: requiredNumber(row, "context_package_revision"),
+    state_json: requiredString(row, "state_json"),
+    created_at: requiredString(row, "created_at"),
+    updated_at: requiredString(row, "updated_at")
+  };
+};
+
+const requireProtocolStateFields = (value: unknown): {
+  protocolId: string;
+  protocolVersion: string;
+  runId: string;
+  segmentId: string;
+  revision: number;
+  phase: string;
+  status: string;
+  contextPackageId: string;
+  contextPackageRevision: number;
+} => {
+  if (!isRecord(value) || !isRecord(value.contextPackageRef)) {
+    throw new Error("PROTOCOL_STATE_INVALID");
+  }
+  return {
+    protocolId: requiredString(value, "protocolId"),
+    protocolVersion: requiredString(value, "protocolVersion"),
+    runId: requiredString(value, "runId"),
+    segmentId: requiredString(value, "segmentId"),
+    revision: requiredNumber(value, "revision"),
+    phase: requiredString(value, "phase"),
+    status: requiredString(value, "status"),
+    contextPackageId: requiredString(value.contextPackageRef, "packageId"),
+    contextPackageRevision: requiredNumber(value.contextPackageRef, "revision")
+  };
+};
+
+const requireProtocolEventFields = (value: unknown): {
+  eventId: string;
+  runId: string;
+  segmentId: string;
+  revision: number;
+  type: string;
+} => {
+  if (!isRecord(value)) {
+    throw new Error("PROTOCOL_EVENT_INVALID");
+  }
+  return {
+    eventId: requiredString(value, "eventId"),
+    runId: requiredString(value, "runId"),
+    segmentId: requiredString(value, "segmentId"),
+    revision: requiredNumber(value, "revision"),
+    type: requiredString(value, "type")
   };
 };
 

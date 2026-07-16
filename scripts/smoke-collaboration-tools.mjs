@@ -74,7 +74,7 @@ try {
   };
   const runtime = new InteractionRuntimeAdapter(store, userId, sessionId, runId);
   const requested = runtime.capture(createCustomEvent("on_interrupt", JSON.stringify(interrupt)));
-  assert(requested?.name === "interaction.requested", "interrupt should project to interaction.requested");
+  assert(requested?.event.name === "interaction.requested", "interrupt should project to interaction.requested");
   const stored = store.interactions.getByToolCall({
     user_id: userId,
     run_id: runId,

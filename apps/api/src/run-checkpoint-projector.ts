@@ -20,6 +20,17 @@ export class RunCheckpointProjector {
       return;
     }
 
+    if (event.type === EventType.CUSTOM && event.name === "protocol.phase.entered") {
+      const value = recordValue(event.value);
+      const payload = recordValue(value?.payload);
+      this.createLatestCheckpoint(envelope, {
+        kind: "protocol-phase",
+        label: `Protocol phase: ${stringValue(payload?.phase) ?? "unknown"}`,
+        status: "stable"
+      });
+      return;
+    }
+
     if (event.type === EventType.TOOL_CALL_RESULT) {
       this.createLatestCheckpoint(envelope, {
         kind: "tool-result",

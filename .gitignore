@@ -10,6 +10,7 @@ site/
 .next/
 **/.next/
 coverage/
+artifacts/
 storage/
 **/storage/
 .cache/

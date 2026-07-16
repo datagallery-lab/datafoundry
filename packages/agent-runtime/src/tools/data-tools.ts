@@ -11,6 +11,7 @@ import { createActivitySnapshot, createArtifactEvent, createCustomEvent } from "
 import { SQL_MAX_EXECUTION_COUNT } from "../runtime-limits.js";
 import { createTokenUsageCorrelationStore } from "../stream/token-usage-correlation.js";
 import type { AgentRunContext, AgUiEventEmitter } from "../types.js";
+import { enrichSqlDialectError, validateSqlDialect } from "./sql-dialect-validation.js";
 
 type DataToolExecutionOptions = {
   toolCallId?: string;
@@ -36,6 +37,7 @@ type TokenUsageCorrelationStore = ReturnType<typeof createTokenUsageCorrelationS
 
 type SchemaCapability = {
   datasource_id: string;
+  dialect?: string;
   schema_id: string;
 };
 
@@ -44,6 +46,7 @@ type InspectSchemaResult = SchemaSummary & {
 };
 
 type RawSqlToolResult = {
+  cache_hit?: boolean;
   result: SqlExecutionResult;
   sql: string;
 };
@@ -75,6 +78,9 @@ export type ToolRegistry = {
     input: {
       schema_id: string;
       sql: string;
+      assertion_ids?: string[];
+      requirement_ids?: string[];
+      expected_columns?: string[];
       limit?: number;
       timeout_ms?: number;
     },
@@ -105,6 +111,7 @@ export const createDataFoundryToolRegistry = (input: CreateDataFoundryToolRegist
     sql_execution_count_by_datasource: new Map<string, number>()
   };
   const resultMetadata = new WeakMap<object, { datasourceId: string; stepId: string }>();
+  const sqlResultCache = new Map<string, RawSqlToolResult>();
 
   const listDataSources = async (toolInput: { enabled_only?: boolean } = {}): Promise<unknown> => {
     throwIfAborted(input.abortSignal);
@@ -156,7 +163,11 @@ export const createDataFoundryToolRegistry = (input: CreateDataFoundryToolRegist
         ...(input.abortSignal ? { signal: input.abortSignal } : {})
       });
       const schema_id = `schema_${randomUUID()}`;
-      state.schema_capabilities.set(schema_id, { datasource_id: datasourceId, schema_id });
+      state.schema_capabilities.set(schema_id, {
+        datasource_id: datasourceId,
+        ...(result.dialect ? { dialect: result.dialect } : {}),
+        schema_id
+      });
       const rawResult = { ...result, schema_id };
       resultMetadata.set(rawResult, { datasourceId, stepId });
       return rawResult;
@@ -170,6 +181,9 @@ export const createDataFoundryToolRegistry = (input: CreateDataFoundryToolRegist
     toolInput: {
       schema_id: string;
       sql: string;
+      assertion_ids?: string[];
+      requirement_ids?: string[];
+      expected_columns?: string[];
       limit?: number;
       timeout_ms?: number;
     },
@@ -181,6 +195,18 @@ export const createDataFoundryToolRegistry = (input: CreateDataFoundryToolRegist
       throw new Error("SCHEMA_REQUIRED_BEFORE_SQL");
     }
     const datasourceId = capability.datasource_id;
+    const dialectIssues = validateSqlDialect(toolInput.sql, capability.dialect);
+    if (dialectIssues.length > 0) {
+      const issue = dialectIssues[0];
+      throw new Error(`SQL_DIALECT_UNSUPPORTED:${issue?.dialect}:${issue?.code}:${issue?.hint}`);
+    }
+    const cacheKey = sqlCacheKey(toolInput);
+    const cached = sqlResultCache.get(cacheKey);
+    if (cached) {
+      const rawResult = { ...cached, cache_hit: true as const };
+      resultMetadata.set(rawResult, { datasourceId, stepId: `sql-cache-${randomUUID()}` });
+      return rawResult;
+    }
 
     state.sql_execution_count += 1;
     const datasourceCount = (state.sql_execution_count_by_datasource.get(datasourceId) ?? 0) + 1;
@@ -227,11 +253,12 @@ export const createDataFoundryToolRegistry = (input: CreateDataFoundryToolRegist
       }
       emitSqlReferences(input, datasourceId, result);
       const rawResult = { result, sql: toolInput.sql };
+      sqlResultCache.set(cacheKey, rawResult);
       resultMetadata.set(rawResult, { datasourceId, stepId });
       return rawResult;
     } catch (error) {
       emitFailedStep(input, stepId, "run_sql_readonly", "Run read-only SQL", error);
-      throw error;
+      throw enrichSqlDialectError(error, capability.dialect);
     }
   };
 
@@ -309,6 +336,18 @@ export const createDataFoundryToolRegistry = (input: CreateDataFoundryToolRegist
   };
 };
 
+const sqlCacheKey = (input: {
+  schema_id: string;
+  sql: string;
+  limit?: number;
+  timeout_ms?: number;
+}): string => [
+  input.schema_id,
+  input.sql.trim().replace(/;\s*$/u, ""),
+  input.limit ?? "default",
+  input.timeout_ms ?? "default"
+].join("\u0000");
+
 type DataToolExecutors = Pick<ToolRegistry, "inspectSchema" | "listDataSources" | "previewTable" | "runSqlReadonly">;
 
 const createMastraDataTools = (executors: DataToolExecutors): ToolRegistry["mastraTools"] => ({
@@ -357,6 +396,9 @@ const createMastraDataTools = (executors: DataToolExecutors): ToolRegistry["mast
     inputSchema: z.object({
       schema_id: z.string(),
       sql: z.string(),
+      assertion_ids: z.array(z.string().min(1)).max(32).optional(),
+      requirement_ids: z.array(z.string().min(1)).max(16).optional(),
+      expected_columns: z.array(z.string().min(1)).max(100).optional(),
       limit: z.number().int().positive().max(1000).optional(),
       timeout_ms: z.number().int().positive().max(30000).optional()
     }),
@@ -365,6 +407,9 @@ const createMastraDataTools = (executors: DataToolExecutors): ToolRegistry["mast
         {
           schema_id: toolInput.schema_id,
           sql: toolInput.sql,
+          ...(toolInput.assertion_ids ? { assertion_ids: toolInput.assertion_ids } : {}),
+          ...(toolInput.requirement_ids ? { requirement_ids: toolInput.requirement_ids } : {}),
+          ...(toolInput.expected_columns ? { expected_columns: toolInput.expected_columns } : {}),
           ...(toolInput.limit ? { limit: toolInput.limit } : {}),
           ...(toolInput.timeout_ms ? { timeout_ms: toolInput.timeout_ms } : {}),
         },

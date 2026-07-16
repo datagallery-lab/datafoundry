@@ -21,6 +21,7 @@
     "@datafoundry/knowledge": "0.2.0",
     "@datafoundry/providers": "0.2.0",
     "@datafoundry/skills": "0.2.0",
+    "node-sql-parser": "^5.4.0",
     "zod": "^4.2.1"
   }
 }

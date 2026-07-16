@@ -1,5 +1,6 @@
 import type { SchemaSummary, SqlExecutionResult } from "@datafoundry/data-gateway";
 
+import { AGENT_RUNTIME_LIMITS } from "../../config/agent-runtime-limits.js";
 import type { ArtifactRef, AuditRef, ContextTruncation } from "../inventory/context-package.js";
 import {
   CONTEXT_MAX_CHARS,
@@ -270,8 +271,8 @@ const fitSchemaToBudget = (
 const sum = (values: number[]): number => values.reduce((total, value) => total + value, 0);
 
 const describeOmittedTables = (omittedTables: number, names: string[]): string => {
-  const maxNames = 5;
-  const maxNameChars = 120;
+  const maxNames = AGENT_RUNTIME_LIMITS.toolObservationMaxNames;
+  const maxNameChars = AGENT_RUNTIME_LIMITS.toolObservationMaxNameChars;
   const preview = names.slice(0, maxNames).map((name) =>
     name.length > maxNameChars ? `${name.slice(0, maxNameChars)}...` : name
   );

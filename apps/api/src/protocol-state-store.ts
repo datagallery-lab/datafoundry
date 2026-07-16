@@ -1,0 +1,108 @@
+import type { ProtocolEvent, ProtocolRunState, ProtocolStateStore } from "@datafoundry/agent-runtime";
+import type { MetadataStore, ProtocolStateSnapshotRecord } from "@datafoundry/metadata";
+
+/** Persist Protocol Runtime snapshots through the user-scoped metadata repository. */
+export class MetadataProtocolStateStore implements ProtocolStateStore {
+  constructor(
+    private readonly metadataStore: MetadataStore,
+    private readonly userId: string
+  ) {}
+
+  create<TDomainState>(
+    state: ProtocolRunState<TDomainState>,
+    events: ProtocolEvent[] = []
+  ): ProtocolRunState<TDomainState> {
+    return this.persist(state, -1, events);
+  }
+
+  find<TDomainState>(runId: string, segmentId?: string): ProtocolRunState<TDomainState> | undefined {
+    const record = segmentId
+      ? this.metadataStore.protocolStates.find({
+          user_id: this.userId,
+          run_id: runId,
+          segment_id: segmentId
+        })
+      : this.metadataStore.protocolStates.latestByRun({ user_id: this.userId, run_id: runId });
+    return record ? parseProtocolState<TDomainState>(record) : undefined;
+  }
+
+  get<TDomainState>(runId: string, segmentId?: string): ProtocolRunState<TDomainState> {
+    const state = this.find<TDomainState>(runId, segmentId);
+    if (!state) {
+      throw new Error(`PROTOCOL_RUN_NOT_FOUND:${runId}${segmentId ? `:${segmentId}` : ""}`);
+    }
+    return state;
+  }
+
+  compareAndSet<TDomainState>(
+    state: ProtocolRunState<TDomainState>,
+    expectedRevision: number,
+    events: ProtocolEvent[] = []
+  ): ProtocolRunState<TDomainState> {
+    return this.persist(state, expectedRevision, events);
+  }
+
+  transitionSegment<TCurrentDomainState, TNextDomainState>(input: {
+    current: ProtocolRunState<TCurrentDomainState>;
+    expectedRevision: number;
+    next: ProtocolRunState<TNextDomainState>;
+    events?: ProtocolEvent[];
+  }): {
+    current: ProtocolRunState<TCurrentDomainState>;
+    next: ProtocolRunState<TNextDomainState>;
+  } {
+    const records = this.metadataStore.protocolStates.transitionSegment({
+      user_id: this.userId,
+      current: {
+        run_id: input.current.runId,
+        segment_id: input.current.segmentId,
+        expected_revision: input.expectedRevision,
+        state: input.current
+      },
+      next: {
+        run_id: input.next.runId,
+        segment_id: input.next.segmentId,
+        expected_revision: -1,
+        state: input.next
+      },
+      events: input.events ?? []
+    });
+    return {
+      current: parseProtocolState<TCurrentDomainState>(records.current),
+      next: parseProtocolState<TNextDomainState>(records.next)
+    };
+  }
+
+  acknowledgeEvent(event: ProtocolEvent): void {
+    this.metadataStore.protocolStates.acknowledgeEvent({
+      user_id: this.userId,
+      event_id: event.eventId
+    });
+  }
+
+  pendingEvents(runId: string): ProtocolEvent[] {
+    return this.metadataStore.protocolStates.pendingEvents({
+      user_id: this.userId,
+      run_id: runId
+    }) as ProtocolEvent[];
+  }
+
+  private persist<TDomainState>(
+    state: ProtocolRunState<TDomainState>,
+    expectedRevision: number,
+    events: ProtocolEvent[]
+  ): ProtocolRunState<TDomainState> {
+    const record = this.metadataStore.protocolStates.compareAndSetWithEvents({
+      user_id: this.userId,
+      run_id: state.runId,
+      segment_id: state.segmentId,
+      expected_revision: expectedRevision,
+      state
+    }, events);
+    return parseProtocolState<TDomainState>(record);
+  }
+}
+
+const parseProtocolState = <TDomainState>(
+  record: ProtocolStateSnapshotRecord
+): ProtocolRunState<TDomainState> => JSON.parse(record.state_json) as ProtocolRunState<TDomainState>;
