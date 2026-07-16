@@ -808,7 +808,7 @@
       },
       "scoreThreshold": {
         "label": "分数阈值",
-        "placeholder": "0.3",
+        "placeholder": "0.2",
         "helpText": "知识搜索与 retrieve_knowledge 的默认过滤阈值。"
       },
       "embeddingProvider": {

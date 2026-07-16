@@ -15,6 +15,7 @@ allowed-tools:
   - inspect_schema
   - preview_table
   - run_sql_readonly
+  - retrieve_knowledge
   - read_file
   - write_file
   - list_files
@@ -32,6 +33,8 @@ Chinese search aliases: 数据分析, 查数, 指标查询, 报表, SQL 分析, 
 This workflow is adapted for this workbench from public data-analysis skill patterns:
 
 - Classify the user's request before querying.
+- When a knowledge base is enabled for the run, call `retrieve_knowledge` first for definitions,
+  prior findings, or document-backed facts before guessing or writing SQL.
 - Explore schema before SQL.
 - Retrieve only the data needed for the current question.
 - Validate results before presenting them.

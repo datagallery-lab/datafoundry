@@ -808,7 +808,7 @@
       },
       "scoreThreshold": {
         "label": "Score threshold",
-        "placeholder": "0.3",
+        "placeholder": "0.2",
         "helpText": "Default filtering threshold for knowledge search and retrieve_knowledge."
       },
       "embeddingProvider": {
