@@ -145,7 +145,7 @@ export function knowledgeBaseDtoToItem(dto: KnowledgeBaseDto): WorkspaceConfigIt
     settings: {
       indexName: dto.id,
       retrievalTopK: asString(dto.retrievalTopK ?? 5),
-      scoreThreshold: asString(dto.scoreThreshold ?? 0.3),
+      scoreThreshold: asString(dto.scoreThreshold ?? 0.2),
       embeddingProvider: payloadEmbeddingProvider ?? "bailian",
       embeddingModel: payloadEmbeddingModel ?? "text-embedding-v4",
       embeddingBaseUrl:
@@ -444,7 +444,7 @@ export function itemToCreateBody(
         ...base,
         id: settings.indexName?.trim() || item.id,
         retrievalTopK: parseNumber(settings.retrievalTopK) ?? 5,
-        scoreThreshold: parseNumber(settings.scoreThreshold) ?? 0.3,
+        scoreThreshold: parseNumber(settings.scoreThreshold) ?? 0.2,
         ...(settings.embeddingProvider?.trim()
           ? { embeddingProvider: settings.embeddingProvider.trim() }
           : {}),

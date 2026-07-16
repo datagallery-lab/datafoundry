@@ -435,7 +435,23 @@ export const createDataFoundry = async (
     ...workspaceTools,
     ...skillTools
   };
-  const selectedPolicyTools = selectToolsByPolicy(availableTools, input.skillSelection);
+  // Platform tools for enabled KB / datasources must survive skill allowed-tools
+  // unions: maxSkills truncation often leaves import-oriented skills that never
+  // declare retrieve_knowledge or SQL tools.
+  const alwaysAllowTools = new Set<string>();
+  if ((input.runContext.enabled_knowledge_ids?.length ?? 0) > 0) {
+    alwaysAllowTools.add("retrieve_knowledge");
+  }
+  if (dataToolsEnabled) {
+    for (const name of DATA_AGENT_TOOL_NAMES) {
+      alwaysAllowTools.add(name);
+    }
+  }
+  const selectedPolicyTools = selectToolsByPolicy(
+    availableTools,
+    input.skillSelection,
+    alwaysAllowTools
+  );
   const selectedTools = {
     ...selectedPolicyTools,
     ...(input.mcpTools ?? {})
@@ -862,14 +878,21 @@ ${policies.map((policy, index) => `${index + 1}. ${policy}`).join("\n")}
 
 const selectToolsByPolicy = <TTool>(
   availableTools: Record<string, TTool>,
-  skillSelection: SkillSelectionResult | undefined
+  skillSelection: SkillSelectionResult | undefined,
+  alwaysAllowTools: ReadonlySet<string> = new Set()
 ): Record<string, TTool> => {
   const policy = skillSelection?.effectiveToolPolicy;
   const deniedTools = new Set(policy?.deniedTools ?? []);
   const allowedTools = policy?.allowedTools ? new Set(policy.allowedTools) : undefined;
   const skillMetaTools = new Set(["skill", "skill_search", "skill_read"]);
   return Object.fromEntries(Object.entries(availableTools).filter(([name]) =>
-    !deniedTools.has(name) && (!allowedTools || allowedTools.has(name) || skillMetaTools.has(name))
+    !deniedTools.has(name)
+    && (
+      alwaysAllowTools.has(name)
+      || !allowedTools
+      || allowedTools.has(name)
+      || skillMetaTools.has(name)
+    )
   ));
 };
 

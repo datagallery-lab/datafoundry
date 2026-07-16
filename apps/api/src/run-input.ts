@@ -271,7 +271,7 @@ const extractGoal = (runConfig: Record<string, unknown>): EffectiveRunConfig["go
 
 const extractSkillPolicy = (runConfig: Record<string, unknown>): SkillPolicyConfig => {
   const policy = recordFromUnknown(runConfig.skillPolicy ?? runConfig.skill_policy) ?? {};
-  const maxSkills = integerInRange(policy.maxSkills ?? policy.max_skills, 1, 20) ?? 5;
+  const maxSkills = integerInRange(policy.maxSkills ?? policy.max_skills, 1, 20) ?? 20;
   const allowedToolNames = unique(
     stringArrayOptionFromAliases(policy, ["allowedToolNames", "allowed_tool_names"]) ?? []
   );

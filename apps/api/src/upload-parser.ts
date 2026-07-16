@@ -10,6 +10,24 @@ const MAX_SKILL_MD_BYTES = 256 * 1024;
 const MAX_UNCOMPRESSED_BYTES = 20 * 1024 * 1024;
 const MAX_ZIP_ENTRIES = 100;
 
+/**
+ * Busboy exposes multipart filenames as binary→Latin-1 strings. When the client
+ * sent UTF-8 (typical for Chinese names), rebuild the original UTF-8 text.
+ */
+export const decodeMultipartFilename = (filename: string): string => {
+  if (!filename) {
+    return filename;
+  }
+  const asUtf8 = Buffer.from(filename, "latin1").toString("utf8");
+  if (asUtf8 === filename || asUtf8.includes("\uFFFD")) {
+    return filename;
+  }
+  if (Buffer.from(asUtf8, "utf8").toString("latin1") === filename) {
+    return asUtf8;
+  }
+  return filename;
+};
+
 export type UploadedFile = {
   content: Buffer;
   filename: string;
@@ -54,7 +72,11 @@ export const readMultipartUpload = (request: IncomingMessage): Promise<{ fields:
       stream.on("data", (chunk: Buffer) => chunks.push(chunk));
       stream.on("end", () => {
         if (!failed) {
-          uploaded = { content: Buffer.concat(chunks), filename: info.filename, mimeType: info.mimeType };
+          uploaded = {
+            content: Buffer.concat(chunks),
+            filename: decodeMultipartFilename(info.filename),
+            mimeType: info.mimeType
+          };
         }
       });
     });
@@ -116,7 +138,11 @@ export const readMultipartFiles = (
       });
       stream.on("end", () => {
         if (!failed && size > 0) {
-          files.push({ content: Buffer.concat(chunks), filename: info.filename, mimeType: info.mimeType });
+          files.push({
+            content: Buffer.concat(chunks),
+            filename: decodeMultipartFilename(info.filename),
+            mimeType: info.mimeType
+          });
         }
       });
     });

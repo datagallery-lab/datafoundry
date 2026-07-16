@@ -1307,7 +1307,7 @@ export function normalizeKbSettings(
   return {
     indexName: settings?.indexName ?? "",
     retrievalTopK: settings?.retrievalTopK ?? "5",
-    scoreThreshold: settings?.scoreThreshold ?? "0.3",
+    scoreThreshold: settings?.scoreThreshold ?? "0.2",
     embeddingProvider: settings?.embeddingProvider ?? "bailian",
     embeddingModel: settings?.embeddingModel ?? "text-embedding-v4",
     embeddingBaseUrl:
@@ -1609,7 +1609,7 @@ export const WORKSPACE_CONFIG_FIELDS: Record<
       key: "scoreThreshold",
       label: "Score threshold",
       inputType: "number",
-      placeholder: "0.3",
+      placeholder: "0.2",
       helpText: "Default filtering threshold for knowledge search and retrieve_knowledge.",
     },
     {

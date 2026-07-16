@@ -243,7 +243,7 @@ export const selectSkillsForRun = (input: SelectSkillsInput): SkillSelectionResu
     };
   }
 
-  const selected = candidates
+  const ranked = candidates
     .map((skill) => scoreSkill(skill, input, explicitIds))
     .filter((entry) => {
       if (entry.rejected) {
@@ -252,8 +252,21 @@ export const selectSkillsForRun = (input: SelectSkillsInput): SkillSelectionResu
       }
       return true;
     })
-    .sort((left, right) => right.score - left.score || left.skill.name.localeCompare(right.skill.name))
-    .slice(0, policy.maxSkills);
+    .sort((left, right) => right.score - left.score || left.skill.name.localeCompare(right.skill.name));
+
+  // Prefer the user-selected active skill when maxSkills truncates the ranked list.
+  const activeSkillId = input.runConfig.activeSkillId;
+  const selected = (() => {
+    if (!activeSkillId || policy.maxSkills <= 0) {
+      return ranked.slice(0, policy.maxSkills);
+    }
+    const activeEntry = ranked.find((entry) => entry.skill.id === activeSkillId);
+    if (!activeEntry) {
+      return ranked.slice(0, policy.maxSkills);
+    }
+    const rest = ranked.filter((entry) => entry.skill.id !== activeSkillId);
+    return [activeEntry, ...rest.slice(0, Math.max(0, policy.maxSkills - 1))];
+  })();
 
   selected.forEach((entry) => {
     audit.push({
