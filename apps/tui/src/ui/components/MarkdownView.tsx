@@ -149,9 +149,9 @@ function markdownRows(content: string, width: number): MarkdownRow[] {
       }
       case 'quote':
         pushStyledRows(parseInlineRuns(line.text), width, lineKey, push, {
-          firstPrefix: { text: '| ', color: 'gray' },
-          contPrefix: { text: '| ', color: 'gray' },
-          blockColor: 'gray',
+          firstPrefix: { text: '| ', color: inkColors.muted },
+          contPrefix: { text: '| ', color: inkColors.muted },
+          blockColor: inkColors.muted,
         });
         return;
       case 'table':
