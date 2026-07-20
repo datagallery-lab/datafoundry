@@ -109,9 +109,10 @@ The default path is formal mode (`password` + `build` / `start`); do not run `np
 
 ```bash
 npm run build && npm run build:web
-npm run start:api
-npm run start:web
+npm run start
 ```
+
+`npm run start` manages Web and API with the same local-process deployment used previously. With `DATALINK_ENABLED=true`, it additionally starts the bundled Python DataLink REST and MCP processes; with the default `false`, the original two-process topology is unchanged. Separate `start:*` commands remain available for external process supervisors.
 
 | Environment | Email | Public URL |
 | --- | --- | --- |

@@ -11,7 +11,7 @@
 
 两种正式态都**不要跑** `npm run dev` / `dev:api` / `dev:web`。贡献者本地热更新见文末附录。
 
-首次体验不需要准备业务数据库。你只需要 Node.js、npm 和一个兼容 OpenAI `/chat/completions` 接口的模型 API Key。
+首次体验不需要准备业务数据库。你只需要 Node.js、npm 和一个兼容 OpenAI `/chat/completions` 接口的模型 API Key。内置 DataLink 语义服务还需要 Python 3.10+ 与 [uv](https://docs.astral.sh/uv/)，但默认不开启。
 
 ## 环境要求
 
@@ -19,6 +19,7 @@
 - npm
 - Linux、macOS 或 Windows
 - 一个模型 API Key，例如通义千问、DeepSeek 或其他 OpenAI-compatible 服务
+- DataLink 可选依赖：Python >= 3.10 与 uv
 
 Windows 用户请在同一个系统内安装和运行项目。不要在 Windows 和 WSL 之间共用 `node_modules`。
 
@@ -62,7 +63,25 @@ LLM_BASE_URL=https://api.deepseek.com
 LLM_API_KEY=你的_API_Key
 ```
 
-### 2.2 正式测试（推荐首次验收）
+### 2.2 DataLink 语义服务（可选）
+
+DataLink 源码已内置在 `services/datalink`，默认不会随主应用启动。需要启用 REST 与 MCP 服务时先执行：
+
+```bash
+npm run install:datalink
+```
+
+然后在根目录 `.env` 中设置：
+
+```bash
+DATALINK_ENABLED=true
+```
+
+默认复用 `LLM_*` 与 `EMBEDDING_*`；如需独立配置，可使用 `.env.example` 中的 `DATALINK_LLM_*`、`DATALINK_EMBEDDING_*`、主机、端口、配置路径和图数据库路径。保持 `false` 时，原有 Web/API 部署不依赖 Python 或 uv。
+
+进程关系与拆分启动方式见 [DataLink 指南](guides/datalink.md)。
+
+### 2.3 正式测试（推荐首次验收）
 
 根目录 `.env`：
 
@@ -87,7 +106,7 @@ API_PROXY_TARGET=http://127.0.0.1:8787
 
 注册/重置密码时，验证链接会打印在 **API 进程控制台**，复制到浏览器即可。
 
-### 2.3 真实生产
+### 2.4 真实生产
 
 在正式测试配置基础上改为：
 
@@ -111,8 +130,7 @@ AUTH_SMTP_PASSWORD=
 ```bash
 npm run build
 npm run build:web
-npm run start:api    # :8787
-npm run start:web    # :3000
+npm run start        # Web :3000 + API :8787；启用时含 DataLink :8080/:8081
 ```
 
 检查：
@@ -120,7 +138,11 @@ npm run start:web    # :3000
 ```bash
 curl http://127.0.0.1:8787/healthz   # 进程存活
 curl http://127.0.0.1:8787/ready     # Mastra / builtin 就绪（含 startup_ms）
+# DATALINK_ENABLED=true 时：
+curl http://127.0.0.1:8081/healthz
 ```
+
+使用进程守护或拆分主机时，可继续分别运行 `start:api`、`start:web`、`start:datalink:mcp` 与 `start:datalink:api`；四个命令读取同一份 `.env`。
 
 打开 [http://127.0.0.1:3000/login](http://127.0.0.1:3000/login)（真实生产则打开你的公网域名）注册或登录后进入 `/data-tasks`。
 
@@ -191,7 +213,7 @@ node -v
 
 处理：
 
-- 确认 `npm run start:web` 还在运行（正式态不要开 `dev`）。
+- 确认 `npm run start` 还在运行（正式态不要开 `dev`）。
 - 检查 3000 端口是否被占用。
 - 如果 3000 被占用，查看终端输出中的实际前端端口。
 
@@ -209,12 +231,12 @@ curl http://127.0.0.1:8787/ready
 如果健康检查失败：
 
 ```bash
-npm run start:api
+npm run start
 ```
 
 ### 注册收不到邮件
 
-- **正式测试**（`AUTH_EMAIL_DELIVERY=test`）：到运行 `start:api` 的终端里找验证链接。
+- **正式测试**（`AUTH_EMAIL_DELIVERY=test`）：到运行 `npm run start` 的终端里找验证链接。
 - **真实生产**（`smtp`）：检查 `AUTH_SMTP_*` 与发信账号；确认 `AUTH_PUBLIC_BASE_URL` 与对外域名一致。
 
 ### 模型不可用
@@ -262,9 +284,12 @@ npm run dev
 # 或：npm run dev:api && npm run dev:web
 ```
 
+设置 `DATALINK_ENABLED=true` 后建议使用统一的 `npm run dev`；拆分启动时还需要运行 `dev:datalink:mcp` 与 `dev:datalink:api`。
+
 ## 下一步
 
 - 使用 Web 界面：[Web 工作台指南](guides/web-workbench.md)
 - 使用终端界面：[TUI 指南](guides/tui.md)
 - 连接自己的数据：[数据源指南](guides/data-sources.md)
+- 启用语义增强：[DataLink 指南](guides/datalink.md)
 - 查看能力边界：[能力全览](capabilities.md)

@@ -11,7 +11,7 @@ Formal mode has two environments. **Startup commands are the same**; the main di
 
 Do **not** run `npm run dev` / `dev:api` / `dev:web` in either formal environment. Contributor hot-reload is in the appendix.
 
-You do not need a business database for the first run. You only need Node.js, npm, and a model API key compatible with the OpenAI `/chat/completions` interface.
+You do not need a business database for the first run. You only need Node.js, npm, and a model API key compatible with the OpenAI `/chat/completions` interface. The built-in DataLink semantic service additionally requires Python 3.10+ and [uv](https://docs.astral.sh/uv/), but remains opt-in.
 
 ## Requirements
 
@@ -19,6 +19,7 @@ You do not need a business database for the first run. You only need Node.js, np
 - npm
 - Linux, macOS, or Windows
 - A model API key—for example Qwen, DeepSeek, or another OpenAI-compatible service
+- Optional for DataLink: Python >= 3.10 and uv
 
 On Windows, install and run the project in the same environment. Do not share `node_modules` between Windows and WSL.
 
@@ -62,7 +63,25 @@ LLM_BASE_URL=https://api.deepseek.com
 LLM_API_KEY=your-api-key
 ```
 
-### 2.2 Formal test (recommended for first acceptance)
+### 2.2 DataLink semantic service (optional)
+
+DataLink is included under `services/datalink` but does not start by default. To launch its REST and MCP processes with DataFoundry:
+
+```bash
+npm run install:datalink
+```
+
+Then set in the root `.env`:
+
+```bash
+DATALINK_ENABLED=true
+```
+
+It reuses `LLM_*` and `EMBEDDING_*` by default. `DATALINK_LLM_*`, `DATALINK_EMBEDDING_*`, host, port, config-path, and graph-path variables in `.env.example` provide explicit overrides. Keep `false` to run the existing Web/API stack without Python or uv.
+
+See [DataLink](guides/datalink.md) for process topology and split-process commands.
+
+### 2.3 Formal test (recommended for first acceptance)
 
 Root `.env`:
 
@@ -87,7 +106,7 @@ API_PROXY_TARGET=http://127.0.0.1:8787
 
 On register / password reset, copy the verification link from the **API process console**.
 
-### 2.3 Real production
+### 2.4 Real production
 
 Start from the formal-test settings, then change to:
 
@@ -111,8 +130,7 @@ Keep the frontend on `password`, empty public API URLs, and `API_PROXY_TARGET`. 
 ```bash
 npm run build
 npm run build:web
-npm run start:api    # :8787
-npm run start:web    # :3000
+npm run start        # Web :3000 + API :8787; DataLink :8080/:8081 when enabled
 ```
 
 Checks:
@@ -120,7 +138,11 @@ Checks:
 ```bash
 curl http://127.0.0.1:8787/healthz   # process up
 curl http://127.0.0.1:8787/ready     # Mastra / builtins ready (includes startup_ms)
+# When DATALINK_ENABLED=true:
+curl http://127.0.0.1:8081/healthz
 ```
+
+For a process supervisor or separate hosts, keep using `start:api` and `start:web`, plus `start:datalink:mcp` and `start:datalink:api`. The same `.env` controls all four commands.
 
 Open [http://127.0.0.1:3000/login](http://127.0.0.1:3000/login) (or your public origin in real production), register or sign in, then go to `/data-tasks`.
 
@@ -191,7 +213,7 @@ Symptom: Browser cannot open the workbench URL.
 
 Fix:
 
-- Confirm `npm run start:web` is still running (do not use `dev` in formal mode).
+- Confirm `npm run start` is still running (do not use `dev` in formal mode).
 - Check whether port 3000 is in use.
 - If 3000 is taken, use the frontend port shown in terminal output.
 
@@ -209,12 +231,12 @@ curl http://127.0.0.1:8787/ready
 If the health check fails:
 
 ```bash
-npm run start:api
+npm run start
 ```
 
 ### No verification email
 
-- **Formal test** (`AUTH_EMAIL_DELIVERY=test`): copy the link from the `start:api` terminal.
+- **Formal test** (`AUTH_EMAIL_DELIVERY=test`): copy the link from the `npm run start` terminal.
 - **Real production** (`smtp`): check `AUTH_SMTP_*` and that `AUTH_PUBLIC_BASE_URL` matches the public origin.
 
 ### Model unavailable
@@ -262,9 +284,12 @@ npm run dev
 # or: npm run dev:api && npm run dev:web
 ```
 
+With `DATALINK_ENABLED=true`, prefer the combined `npm run dev`; the split form also requires `dev:datalink:mcp` and `dev:datalink:api`.
+
 ## Next steps
 
 - Use the Web UI: [Web workbench guide](guides/web-workbench.md)
 - Use the terminal UI: [TUI guide](guides/tui.md)
 - Connect your own data: [Data sources guide](guides/data-sources.md)
+- Enable semantic grounding: [DataLink guide](guides/datalink.md)
 - Review capability boundaries: [Capabilities](capabilities.md)
