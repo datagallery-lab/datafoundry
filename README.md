@@ -63,7 +63,7 @@ DataFoundry 0.2 turns the first usable workbench into a more complete, stateful 
 
 - **Branchable, concurrent analysis** — Keep multiple sessions running, queue follow-up prompts, restore completed work, and branch from an earlier question or checkpoint without overwriting the original path.
 - **Evidence-first follow-ups** — Reference a complete output or a selected table/text region in the next question; resolved evidence is carried into the governed run context with diagnostics.
-- **Semantic trace and first-party Data Link** — Inspect checkpoint-backed run structure in a semantic Trace DAG. With our newly open-sourced [Data Link](https://github.com/datagallery-lab/datalink), connect tables and columns to business concepts, entities, joinable paths, and confidence-scored relationships for stronger agent grounding.
+- **Semantic trace and built-in DataLink** — Inspect checkpoint-backed run structure in a semantic Trace DAG. The first-party DataLink service now ships in `services/datalink`, connecting tables and columns to business concepts, entities, joinable paths, and confidence-scored relationships for stronger agent grounding.
 - **Reusable outputs and workspace assets** — Preview and export tables, charts, reports, SQL, and files; upload files into an active session, then promote supported files for reuse across sessions.
 - **Production-facing Web foundation** — Built-in password authentication, same-origin API proxying, bilingual UI, model connection tests, onboarding, and an auto-provisioned DTC growth analysis case.
 
@@ -96,6 +96,10 @@ LLM_MODEL=qwen-plus                # or deepseek-chat, gpt-4o, ...
 LLM_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
 LLM_API_KEY=replace-with-your-key
 
+# Optional: launch the built-in semantic service with the main stack.
+# Requires Python 3.10+ and uv; then run `npm run install:datalink` once.
+DATALINK_ENABLED=true
+
 DATAFOUNDRY_AUTH_MODE=password
 AUTH_SESSION_SECRET=replace-with-at-least-32-random-characters
 AUTH_PUBLIC_BASE_URL=http://127.0.0.1:3000   # real production: https://your.domain
@@ -116,9 +120,10 @@ Build and start:
 ```bash
 npm run build
 npm run build:web
-npm run start:api    # :8787  — /healthz liveness, /ready readiness
-npm run start:web    # :3000  — password mode via same-origin BFF
+npm run start        # Web :3000 + API :8787 (+ DataLink :8080/:8081 when enabled)
 ```
+
+For split-process deployment, `start:api` and `start:web` remain available; start DataLink separately with `start:datalink:mcp` and `start:datalink:api` when enabled.
 
 Open `http://127.0.0.1:3000/login`, register or sign in, go to `/data-tasks`, and ask:
 
