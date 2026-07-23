@@ -82,6 +82,9 @@ jobs:
       - name: Run authentication regression
         run: node scripts/smoke-auth.mjs
 
+      - name: Run TUI/Web auth sharing regression
+        run: npm run smoke:tui-auth-sharing
+
       - name: Run conversation memory regression
         run: node scripts/smoke-conversation-memory.mjs
 
