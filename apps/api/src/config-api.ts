@@ -55,6 +55,7 @@ import { basename, join, resolve, sep } from "node:path";
 import writeXlsxFile, { type SheetData } from "write-excel-file/node";
 
 import { resolveEffectiveRunConfig } from "./run-input.js";
+import { BUILTIN_DATALINK_SERVER_ID } from "./builtin-datalink-server.js";
 import {
   llmEnvFingerprint,
   modelProfileConnectivityPayloadChanged,
@@ -796,7 +797,7 @@ const handleDatalinkRequest = async (
   const target = segments[0];
   const action = segments[1];
   if (target === "servers" && request.method === "GET") {
-    return ok({ servers: listDatalinkServers(context) });
+    return ok({ servers: await listDatalinkServers(context) });
   }
   if (!target) {
     return methodNotAllowed();
@@ -867,12 +868,20 @@ type DatalinkApiCallResult = {
   text: string;
 };
 
-const listDatalinkServers = (context: Required<ConfigApiContext>): Record<string, unknown>[] =>
-  context.metadataStore.configResources.list({
+const listDatalinkServers = async (
+  context: Required<ConfigApiContext>
+): Promise<Record<string, unknown>[]> => {
+  const resources = context.metadataStore.configResources.list({
     workspace_id: context.workspaceId,
     user_id: context.userId,
     kind: "mcp-server"
-  }).filter(isDatalinkServer).map(datalinkServerDto);
+  }).filter(isDatalinkServer).sort((left, right) =>
+    Number(right.id === BUILTIN_DATALINK_SERVER_ID) - Number(left.id === BUILTIN_DATALINK_SERVER_ID)
+  );
+  return Promise.all(resources.map(async (resource) =>
+    datalinkServerDto(resource, await builtinDatalinkHealthStatus(resource))
+  ));
+};
 
 const getDatalinkServer = (
   context: Required<ConfigApiContext>,
@@ -903,13 +912,17 @@ const isDatalinkServer = (resource: ConfigResourceRecord): boolean => {
 const isDatalinkManifestToolName = (toolName: string): boolean =>
   toolName.startsWith("datalink_") || toolName.startsWith("datagraph_");
 
-const datalinkServerDto = (resource: ConfigResourceRecord): Record<string, unknown> => {
+const datalinkServerDto = (
+  resource: ConfigResourceRecord,
+  healthStatus = resource.status
+): Record<string, unknown> => {
   const tools = datalinkToolManifest(resource);
   return {
     id: resource.id,
     name: datalinkServerDisplayName(resource),
     description: resource.description ?? "",
-    healthStatus: resource.status,
+    healthStatus,
+    managed: resource.builtin && resource.payload.managed === true,
     serverUrl: stringValue(resource.payload.serverUrl) ?? stringValue(resource.payload.url) ?? "",
     apiUrl: stringValue(resource.payload.apiUrl) ?? "",
     transport: stringValue(resource.payload.transport) ?? "streamable-http",
@@ -917,6 +930,21 @@ const datalinkServerDto = (resource: ConfigResourceRecord): Record<string, unkno
     toolNames: tools.map((tool) => tool.name),
     updatedAt: resource.updated_at
   };
+};
+
+const builtinDatalinkHealthStatus = async (resource: ConfigResourceRecord): Promise<string> => {
+  if (resource.id !== BUILTIN_DATALINK_SERVER_ID || resource.payload.managed !== true) {
+    return resource.status;
+  }
+  try {
+    const response = await fetch(datalinkApiEndpoint(resource, "/healthz"), {
+      headers: { Accept: "application/json" },
+      signal: AbortSignal.timeout(1_000)
+    });
+    return response.ok ? "connected" : "unavailable";
+  } catch {
+    return "unavailable";
+  }
 };
 
 const datalinkServerDisplayName = (resource: ConfigResourceRecord): string => {
@@ -1636,6 +1664,9 @@ const handleGenericResourceRequest = async (
       user_id: context.userId,
       kind
     });
+    if (current.builtin && current.id === BUILTIN_DATALINK_SERVER_ID) {
+      throw new Error(`BUILTIN_RESOURCE_READONLY:${id}`);
+    }
     if (kind === "knowledge-base") {
       context.metadataStore.db.prepare(
         "DELETE FROM knowledge_embeddings WHERE user_id = ? AND collection_id = ?"
@@ -1687,6 +1718,13 @@ const saveConfigResourceInTransaction = (
     user_id: context.userId,
     kind
   });
+  if (current?.builtin && current.id === BUILTIN_DATALINK_SERVER_ID) {
+    const mutableKeys = new Set(["defaultEnabled", "revision"]);
+    const readonlyKeys = Object.keys(body).filter((key) => !mutableKeys.has(key));
+    if (readonlyKeys.length > 0) {
+      throw new Error(`BUILTIN_RESOURCE_READONLY:${id}`);
+    }
+  }
   if (current?.builtin && kind === "skill") {
     const mutableKeys = new Set(["defaultEnabled", "revision"]);
     const readonlyKeys = Object.keys(body).filter((key) => !mutableKeys.has(key));
