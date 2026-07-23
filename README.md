@@ -71,14 +71,40 @@ See the [v0.2.0 release notes](docs/en/releases/v0.2.0.md) for the complete capa
 
 ## 🚀 Formal deploy
 
-Default path is the **formal** stack: `password` auth + `build` / `start` (do **not** run `npm run dev`). No business database required — built-in demo data sources, including the DTC Growth Review case, work out of the box.
+Formal mode has two paths (do **not** run `npm run dev`). Docker / Compose is not provided in this release.
 
-Two formal environments share the **same startup commands**:
+### Recommended: Ubuntu / Debian one-click
 
-| Environment | Use for | Email | Public URL |
-| --- | --- | --- | --- |
-| **Formal test** | Local / private acceptance | `AUTH_EMAIL_DELIVERY=test` (links in API console) | `http://127.0.0.1:3000` |
-| **Real production** | Public service | `AUTH_EMAIL_DELIVERY=smtp` | Public HTTPS + reverse proxy |
+`./deploy.sh` generates configuration, installs dependencies, builds (Web, API, and TUI), and starts Web + API as a detached background process — closing the terminal does not stop the stack. The TUI is built and ready but is a foreground client: start it in another terminal with `./deploy.sh tui` (or `npm run start:tui`); it does **not** stay running with the stack. DataLink stays off by default, and no model key is required during deploy — create and enable a model profile in the Web UI after login. Does **not** support native Windows / macOS.
+
+```bash
+git clone https://github.com/datagallery-lab/datafoundry.git
+cd datafoundry
+./deploy.sh
+```
+
+If a complete `.env` already exists, interactive deploy skips the configuration questions. To change ports, DataLink, or the public URL (secrets are preserved; `.env` is backed up first):
+
+```bash
+./deploy.sh deploy --reconfigure
+```
+
+Common management commands:
+
+```bash
+./deploy.sh status
+./deploy.sh start
+./deploy.sh stop
+./deploy.sh logs
+./deploy.sh doctor
+./deploy.sh tui      # optional: foreground TUI client (API must already be up)
+```
+
+Open `http://127.0.0.1:3000/login`, register or sign in, create an OpenAI-compatible model profile, then go to `/data-tasks`. For remote hosts set `AUTH_PUBLIC_BASE_URL`. Re-running `./deploy.sh deploy` uses a maintenance window (stop the managed process group before install/build).
+
+### Windows / macOS / other: manual npm
+
+On native Windows, macOS, or other non-Ubuntu/Debian hosts, use manual npm. Install and run in the same environment; on Windows, do not share `node_modules` between Windows and WSL.
 
 ```bash
 git clone https://github.com/datagallery-lab/datafoundry.git
@@ -86,56 +112,13 @@ cd datafoundry
 npm install
 cp .env.example .env
 cp apps/web/.env.example apps/web/.env.local
-```
-
-Configure any OpenAI-compatible model in the root `.env`, plus auth for formal test or real production (sample defaults lean formal test):
-
-```bash
-LLM_PROVIDER=openai-compatible
-LLM_MODEL=qwen-plus                # or deepseek-chat, gpt-4o, ...
-LLM_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
-LLM_API_KEY=replace-with-your-key
-
-# Optional: launch the built-in semantic service with the main stack.
-# Requires Python 3.10+ and uv; then run `npm run install:datalink` once.
-DATALINK_ENABLED=true
-
-DATAFOUNDRY_AUTH_MODE=password
-AUTH_SESSION_SECRET=replace-with-at-least-32-random-characters
-AUTH_PUBLIC_BASE_URL=http://127.0.0.1:3000   # real production: https://your.domain
-AUTH_EMAIL_DELIVERY=test                     # real production: smtp + AUTH_SMTP_*
-```
-
-`apps/web/.env.local`:
-
-```bash
-NEXT_PUBLIC_DATAFOUNDRY_AUTH_MODE=password
-NEXT_PUBLIC_AGENT_RUNTIME_URL=
-NEXT_PUBLIC_CONFIG_API_URL=
-API_PROXY_TARGET=http://127.0.0.1:8787
-```
-
-Build and start:
-
-```bash
+# Edit .env / apps/web/.env.local (auth + optional model; see Quick Start)
 npm run build
 npm run build:web
-npm run start        # Web :3000 + API :8787 (+ DataLink :8080/:8081 when enabled)
+npm run start        # Web :3000 + API :8787
 ```
 
-For split-process deployment, `start:api` and `start:web` remain available; start DataLink separately with `start:datalink:mcp` and `start:datalink:api` when enabled.
-
-Open `http://127.0.0.1:3000/login`, register or sign in, go to `/data-tasks`, and ask:
-
-```text
-Show me the tables in this datasource and explain the main fields of each.
-```
-
-You will see the full chain: schema inspection → read-only SQL → SQL audit → table output → replayable run history.
-
-For real production, also configure SMTP and a reverse proxy: [`deploy/nginx.datafoundry.conf.example`](deploy/nginx.datafoundry.conf.example) (gzip/brotli static assets; keep `/api/copilotkit` uncompressed and unbuffered for SSE).
-
-> Full steps and the two-environment matrix: [Quick Start](docs/en/quick-start.md). Contributor hot-reload (`npm run dev`) is appendix-only. Connect your own PostgreSQL / MySQL / CSV and more: [Data Sources guide](docs/en/guides/data-sources.md).
+> Full steps, the two-environment matrix, and optional DataLink notes: [Quick Start](docs/en/quick-start.md). Connect your own PostgreSQL / MySQL / CSV and more: [Data Sources guide](docs/en/guides/data-sources.md).
 
 ## 🆚 How It Differs From Coding Agents And SQL Chatbots
 
