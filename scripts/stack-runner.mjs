@@ -4,7 +4,12 @@ import { loadEnvFile } from "node:process";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { datalinkEnabled, resolveDatalinkEnv } from "./datalink-stack-config.mjs";
+import { datalinkEnabled } from "./datalink-stack-config.mjs";
+import {
+  formatStackEndpoints,
+  resolveStackRuntimeConfig,
+  webProcessEnvironment,
+} from "./stack-runtime-config.mjs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -15,7 +20,8 @@ export async function runStack({ mode, args = [] }) {
   const startApi = !webOnly || apiOnly;
   const startWeb = !apiOnly || webOnly;
   const startDatalink = startApi && datalinkEnabled();
-  const datalinkEnv = resolveDatalinkEnv(root);
+  const runtimeConfig = resolveStackRuntimeConfig();
+  const datalinkEnv = runtimeConfig;
 
   if (mode === "development") {
     execSync("node scripts/ensure-dev-environment.mjs", {
@@ -25,8 +31,8 @@ export async function runStack({ mode, args = [] }) {
       shell: true,
     });
     const ports = [
-      ...(startApi ? [8787] : []),
-      ...(startWeb ? [3000] : []),
+      ...(startApi ? [Number(runtimeConfig.API_PORT)] : []),
+      ...(startWeb ? [Number(runtimeConfig.WEB_PORT)] : []),
       ...(startDatalink
         ? [Number(datalinkEnv.DATALINK_MCP_PORT), Number(datalinkEnv.DATALINK_API_PORT)]
         : []),
@@ -58,17 +64,19 @@ export async function runStack({ mode, args = [] }) {
     children.push(spawnProcess("DataFoundry API", "npm", command, datalinkEnv));
   }
   if (startWeb) {
+    const webScript = mode === "development" ? "dev" : "start";
     const command = mode === "development"
-      ? ["--workspace", "@datafoundry/web", "run", "dev"]
-      : ["--prefix", "apps/web", "run", "start"];
-    children.push(spawnProcess("DataFoundry Web", "npm", command, datalinkEnv));
+      ? ["--workspace", "@datafoundry/web", "run", webScript]
+      : ["--prefix", "apps/web", "run", webScript];
+    const webEnv = { ...datalinkEnv, ...webProcessEnvironment(runtimeConfig) };
+    children.push(spawnProcess("DataFoundry Web", "npm", command, webEnv));
   }
 
   if (children.length === 0) {
     throw new Error("Nothing to start. Use --api and/or --web.");
   }
 
-  console.log(formatEndpoints({ datalinkEnv, startApi, startDatalink, startWeb }));
+  console.log(formatStackEndpoints(runtimeConfig, { startApi, startDatalink, startWeb }));
   let shuttingDown = false;
   const shutdown = (signal) => {
     if (shuttingDown) return;
@@ -114,17 +122,6 @@ function spawnProcess(label, command, args, env) {
   });
   child.on("error", (error) => console.error(`[stack] Unable to start ${label}: ${error.message}`));
   return { child, label };
-}
-
-function formatEndpoints({ datalinkEnv, startApi, startDatalink, startWeb }) {
-  const endpoints = [];
-  if (startApi) endpoints.push("API http://127.0.0.1:8787");
-  if (startWeb) endpoints.push("Web http://localhost:3000/data-tasks");
-  if (startDatalink) {
-    endpoints.push(`DataLink MCP http://127.0.0.1:${datalinkEnv.DATALINK_MCP_PORT}/mcp`);
-    endpoints.push(`DataLink REST http://127.0.0.1:${datalinkEnv.DATALINK_API_PORT}`);
-  }
-  return `\n[stack] ${endpoints.join(" | ")}\n`;
 }
 
 function freePort(port) {

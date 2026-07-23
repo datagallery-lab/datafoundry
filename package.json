@@ -72,6 +72,8 @@
     "start:datalink:api": "node scripts/start-datalink.mjs api",
     "start:datalink:mcp": "node scripts/start-datalink.mjs mcp",
     "test:datalink-stack": "node --test scripts/datalink-stack-config.test.mjs",
+    "test:deploy": "node --test scripts/deploy/*.test.mjs scripts/stack-runtime-config.test.mjs",
+    "smoke:native-deploy": "node scripts/deploy/smoke-native-deploy.mjs",
     "test:web": "npm --workspace @datafoundry/web run test",
     "dev:tui": "npm --workspace @datafoundry/tui run dev",
     "start:tui": "npm --workspace @datafoundry/tui run start --",
